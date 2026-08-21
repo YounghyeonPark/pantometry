@@ -391,6 +391,13 @@ nothing to export: the run produced no frames"
                     for note in &out.skipped {
                         println!("  not exported: {note}");
                     }
+                    // The choices, not only the omissions. A sphere has a radius that no body set
+                    // carries, a subsampled surface is a coarser object than the one that ran, and
+                    // the colour scale here is one frame's where every other view's is the run's.
+                    // A reader who is not told is a reader who assumes otherwise.
+                    for note in &out.notes {
+                        println!("  note: {note}");
+                    }
                     if out.document.contains("\"nodes\":[]") {
                         eprintln!(
                             "\nnothing in this scene is geometry, so the file would open \

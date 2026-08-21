@@ -613,7 +613,7 @@ pipeline. A USD writer is the next rung, and only worth it if the readers really
 | | |
 | --- | --- |
 | a viewer | `runtime/viewer` — a wgpu window that reads the run **file** and does not link `pantometry` |
-| export | `pantometry_view::gltf` — no dependency, reaches Blender, three.js and USD tools |
+| export | `pantometry_view::gltf` — **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. No dependency, reaches Blender, three.js and USD tools |
 | GPU physics | `runtime/gpu` — 191× at 64³, single precision, CPU as the reference |
 | an editor | a skeleton, at `runtime/editor`: the scene's JSON checked as you type beside a wireframe of every placed extent, run and verify as buttons, `viewer-core`'s camera. The platform section below is what it grows into, under whose rules |
 

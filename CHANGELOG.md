@@ -72,7 +72,50 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   typical one. The estimate first written here was "5.21 MB to 1.48 MB" and was a guess; the table
   in `data.rs` is the measurement.
 
+### Changed
+
+- **glTF exports surfaces, not a point cloud.** A point cloud has no silhouette, takes no light
+  and casts no shadow: it is a picture of the *sampling*. A three-dimensional field is now the
+  boundary of its present cells — one quad per face whose neighbour is absent or outside — so a
+  solid 9x9x9 block writes **486 quads instead of 4,374**, 89% of them being between two cells and
+  unseeable, and a void inside a part produces a real interior surface. Bodies are spheres up to
+  256 of them. Everything carries normals.
+
+  Rendered from Blender straight off the export: scene 23 is a hot part and a cooled lid with a
+  real gap between them, and scene 16's room shows its standing wave's nodal planes as dark bands
+  across a solid. Neither was visible before.
+
+  A 2D field is geometry now too. It was refused as "a plane of samples is a graph", and the
+  reasoning had expired — it was a graph only because the run recorded no box to give it a size,
+  and `extent_m` arrived. A 1D field is still refused.
+
+  The trade is stated rather than hidden: **a surface hides the inside.** A hot spot in the middle
+  of a block exports as a block whose faces are all at ambient, because they are. The interior is
+  what the report's raycast and slice montage are for.
+
+- **Choices the export makes are reported.** `Exported::notes`, beside `skipped`: a sphere's radius
+  is **not in the data** — a body set carries positions and a value, not an extent — so it is a
+  quarter of the median nearest-neighbour distance and says so; a subsampled surface says so; and
+  the colour scale spanning one frame rather than the run says so, because every other view in the
+  crate spans the run.
+
 ### Fixed
+
+- **glTF colours were sRGB in a linear attribute.** The specification puts `COLOR_0` and
+  `baseColorFactor` in linear space and only textures in sRGB. This wrote `byte / 255` from an sRGB
+  ramp, so a mid-grey went out as 0.5 where linear wants 0.216 — every colour this workspace has
+  ever exported was decoded about **2.3x too bright in the midtones**, uniformly, and looked like a
+  plausible picture the whole time.
+
+- **An exported field was one cell larger than its extent.** Giving every sample a full cell either
+  side made a 40 mm cube 80 mm: `capture` samples corner to corner, so the first and last samples
+  sit *on* the faces of the box and an end node owns **half** a cell. Cells are clipped to the
+  extent now. That arithmetic — a boundary sample owning half a cell — is the third defect of its
+  kind here, after `Tube` and `Room` divided a wall's divergence by a whole `dx`.
+
+- **The export held a fifth copy of the four-stop colour ramp**, the one whose lightness folds back
+  on itself at 0.67. It is `pantometry-view::ramp` now, like everything else, and a signed field
+  gets the diverging scale with its neutral at the value zero.
 
 - **The editor's viewport painted a quarter of every volume in the wrong order.**
   `Camera::project` returns a depth — *distance from the eye, larger is further* — and the native

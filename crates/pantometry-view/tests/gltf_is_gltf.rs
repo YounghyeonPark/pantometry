@@ -104,17 +104,42 @@ fn each_shape_becomes_what_it_should() {
 
     assert!(doc.contains("\"version\":\"2.0\""));
     assert!(doc.contains("\"scene\":0"));
-    // Three nodes: rays, bodies, and the 3D field as a point cloud.
+    // Three nodes: rays, bodies, and the 3D field.
     assert_eq!(count(section(doc, "nodes"), "\"mesh\":"), 3, "{doc}");
     assert!(doc.contains("\"name\":\"rays\""));
     assert!(doc.contains("\"name\":\"bodies\""));
     assert!(doc.contains("\"name\":\"block\""));
 
-    // Lines for paths, points for the rest.
+    // Lines for paths, **triangles** for the rest. This asserted two POINTS meshes, which is what
+    // it wrote: a point cloud has no silhouette, takes no light and casts no shadow, so a solid
+    // exported that way is a picture of the sampling. Two bodies are two spheres and a 2x2x2 field
+    // is its surface.
     let meshes = section(doc, "meshes");
     assert_eq!(count(meshes, "\"mode\":1"), 1, "one LINES mesh");
-    assert_eq!(count(meshes, "\"mode\":0"), 2, "two POINTS meshes");
+    assert_eq!(count(meshes, "\"mode\":4"), 2, "two TRIANGLES meshes");
+    assert_eq!(
+        count(meshes, "\"mode\":0"),
+        0,
+        "nothing is a point cloud here"
+    );
     assert_eq!(count(meshes, "\"COLOR_0\""), 3, "every mesh is coloured");
+    // Lines take no light and have no normals; the two surfaces do.
+    assert_eq!(count(meshes, "\"NORMAL\""), 2, "the surfaces are shadeable");
+
+    // And the choices are stated rather than made silently: a sphere has a radius and a body set
+    // does not carry one.
+    assert!(
+        out.notes
+            .iter()
+            .any(|n| n.contains("bodies drawn as spheres")),
+        "{:?}",
+        out.notes
+    );
+    assert!(
+        out.notes.iter().any(|n| n.contains("this frame")),
+        "the scale is one frame's and that has to be said: {:?}",
+        out.notes
+    );
 
     // **The 1D field is reported, not dropped.** An empty scene that nobody was told about is the
     // failure this whole crate keeps guarding against.
@@ -145,8 +170,23 @@ fn the_accessor_counts_are_the_geometry() {
         })
         .collect();
 
-    // rays: 5 positions, 5 colours, 6 indices. bodies: 2, 2. block: 8, 8.
-    assert_eq!(counts, vec![5, 5, 6, 2, 2, 8, 8], "{accessors}");
+    // Written out, because each number is a different claim and a single total would hide all
+    // of them.
+    //
+    // rays: 5 vertices over two runs, so three segments and 6 indices; no normals.
+    // bodies: two spheres at 8 rings by 12 sectors. A ring-and-sector sphere needs a duplicated
+    //   seam column and a duplicated pole row to carry distinct normals, so it is (8+1)(12+1) =
+    //   117 vertices, not 8*12 — twice is 234 — and 8*12 quads is 576 triangles' worth of
+    //   indices each, 1152 for the pair.
+    // block: 2x2x2 with every cell present. Every cell of a 2-cube is a corner, so every one has
+    //   exactly three exposed faces: 8*3 = 24 quads, 4 vertices each for the flat normals = 96,
+    //   and 6 indices a quad = 144. The interior faces — 12 of the 48 — are culled, which is what
+    //   makes this a surface.
+    assert_eq!(
+        counts,
+        vec![5, 5, 6, 234, 234, 234, 1152, 96, 96, 96, 144],
+        "{accessors}"
+    );
 }
 
 /// **A field goes out in metres, at the box it was sampled over.**
@@ -358,15 +398,37 @@ fn the_base64_is_correct() {
 fn every_position_has_its_bounds() {
     let out = gltf::gltf("a run", &frame());
     let accessors = section(&out.document, "accessors");
-    let vec3s = count(accessors, "\"type\":\"VEC3\"");
-    assert_eq!(vec3s, 3, "one POSITION per mesh");
-    assert_eq!(count(accessors, "\"min\":["), vec3s);
-    assert_eq!(count(accessors, "\"max\":["), vec3s);
+    // Counted by the bounds themselves, not by `VEC3`: a normal is a VEC3 too, so once the
+    // surfaces gained normals that count was five for three meshes. `min` is written on a
+    // POSITION accessor and on nothing else, which makes it the marker.
+    assert_eq!(count(accessors, "\"min\":["), 3, "one POSITION per mesh");
+    assert_eq!(count(accessors, "\"max\":["), 3);
+    assert_eq!(
+        count(accessors, "\"type\":\"VEC3\""),
+        5,
+        "three positions and two sets of normals"
+    );
 
-    // And the box is the real one: the bodies span x from 0 to 3.
+    // And the box is the real one — but it is the box of the **spheres**, not of the centres,
+    // which is a whole radius wider on every axis. The centres span x from 0 to 3; a sphere has
+    // extent and the accessor's job is to bound what is actually in the buffer.
+    let bodies = accessors
+        .split("\"min\":[")
+        .nth(2)
+        .expect("the bodies' position accessor");
+    let read = |s: &str| -> Vec<f64> {
+        s[..s.find(']').unwrap()]
+            .split(',')
+            .map(|v| v.parse().unwrap())
+            .collect()
+    };
+    let min = read(bodies);
+    let max = read(&bodies[bodies.find("\"max\":[").unwrap() + 7..]);
+    let r = max[2] - 0.0; // the centres are all at z = 0, so the z half-extent is the radius
+    assert!(r > 0.0, "the spheres have no size: {max:?}");
     assert!(
-        accessors.contains("\"max\":[3.000000000,1.000000000,0.000000000]"),
-        "{accessors}"
+        (min[0] + r).abs() < 1e-5 && (max[0] - (3.0 + r)).abs() < 1e-5,
+        "the centres span 0..3 and the spheres should span -r..3+r with r = {r}: {min:?} {max:?}"
     );
 }
 

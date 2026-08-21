@@ -45,22 +45,130 @@ fn holed() -> Frame {
     }
 }
 
-/// **The glTF carries a point for what is there and none for what is not.**
+/// **The glTF has surface where the material is and a hole where it is not.**
 ///
 /// This is the one output that leaves the workspace — Blender, three.js, a USD tool — so a
-/// clearance exported as vertices becomes a wrong model in somebody else's software, where nothing
-/// about it says where it came from. Nine cells, three empty, six points.
+/// clearance exported as geometry becomes a wrong model in somebody else's software, where nothing
+/// about it says where it came from.
+///
+/// Checked **geometrically** rather than by counting vertices, because the count is a property of
+/// the meshing and the claim is a property of the object: no vertex may lie inside the empty
+/// column, and there must be faces on **both** of its walls, because a hole through a solid has
+/// two sides and a mesher that only wrote the outside would leave the block hollow-looking and
+/// closed.
+///
+/// The fixture is 3x1x3 over 60 mm x 60 mm with the middle column empty, so the samples are at
+/// x = 0, 30 and 60 mm, the cells are 30 mm wide, and the gap is the open interval
+/// (15 mm, 45 mm).
 #[test]
 fn the_gltf_leaves_the_holes_out() {
-    let doc = pantometry_view::gltf("holed", &holed()).document;
+    let out = pantometry_view::gltf("holed", &holed());
+    let doc = &out.document;
+
+    // Positions come back out of the base64 rather than being trusted from the source: this is a
+    // test about what a reader will load, and the encoder is between here and there.
+    let xs = exported_x(doc);
+    assert!(!xs.is_empty(), "the export has no geometry at all: {doc}");
+    let inside: Vec<f32> = xs
+        .iter()
+        .copied()
+        .filter(|x| *x > 0.0151 && *x < 0.0449)
+        .collect();
     assert!(
-        doc.contains("\"count\":6"),
-        "six of the nine cells have something in them, and only those are geometry: {doc}"
+        inside.is_empty(),
+        "{} vertices sit inside the empty column: {inside:?}",
+        inside.len()
     );
+
+    // Both walls of the gap. Within a tenth of a millimetre, which is float32 at this magnitude
+    // with room, and far below the 30 mm cell the assertion is about.
+    let near = |t: f32| xs.iter().any(|x| (x - t).abs() < 1e-4);
+    assert!(near(0.015), "no face on the near wall of the gap: {xs:?}");
+    assert!(near(0.045), "no face on the far wall of the gap: {xs:?}");
+
+    // And it is a surface, with normals, rather than the point cloud this used to write. A point
+    // cloud takes no light and casts no shadow, so a clearance in one is invisible either way.
+    assert!(doc.contains("\"NORMAL\""), "no normals: {doc}");
+    assert!(doc.contains("\"mode\":4"), "not triangles: {doc}");
+
+    // Six present cells: four with one exposed z face and two with none, all six exposed on both
+    // x and both y, which is 28 quads and 168 indices. Written out because a mesher that stopped
+    // culling interior faces would still pass every assertion above.
     assert!(
-        !doc.contains("\"count\":9"),
-        "and the empty three are not quietly along for the ride: {doc}"
+        doc.contains("\"count\":168"),
+        "28 quads is 168 indices, and this is not that: {doc}"
     );
+}
+
+/// The x coordinate of every exported vertex, decoded from the document's own buffer.
+fn exported_x(doc: &str) -> Vec<f32> {
+    let key = "base64,";
+    let from = doc.find(key).expect("a buffer") + key.len();
+    let to = from + doc[from..].find('"').expect("the buffer ends");
+    let bytes = un_base64(&doc[from..to]);
+
+    // The POSITION accessor's view: the first VEC3 accessor, which the writer emits first.
+    let vi = doc
+        .find("\"bufferView\":")
+        .and_then(|i| doc[i + 13..].split(',').next()?.parse::<usize>().ok())
+        .expect("a view index");
+    let view = doc
+        .match_indices("{\"buffer\":0,")
+        .nth(vi)
+        .map(|(i, _)| &doc[i..])
+        .expect("the view");
+    let field = |name: &str| -> usize {
+        let k = view.find(name).expect(name) + name.len() + 1;
+        view[k..]
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (offset, length) = (field("\"byteOffset\""), field("\"byteLength\""));
+
+    bytes[offset..offset + length]
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(i, _)| i % 3 == 0)
+        .map(|(_, c)| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Standard base64 back to bytes. The writer has its own encoder and no decoder; this is the
+/// decoder, and it lives in the test because only a test needs to read what was written.
+fn un_base64(s: &str) -> Vec<u8> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => (c - b'A') as u32,
+            b'a'..=b'z' => (c - b'a') as u32 + 26,
+            b'0'..=b'9' => (c - b'0') as u32 + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        })
+    };
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    for chunk in s.as_bytes().chunks(4) {
+        let mut n = 0u32;
+        let mut got = 0;
+        for &c in chunk {
+            n <<= 6;
+            if let Some(v) = val(c) {
+                n |= v;
+                got += 1;
+            }
+        }
+        out.push((n >> 16) as u8);
+        if got > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if got > 3 {
+            out.push(n as u8);
+        }
+    }
+    out
 }
 
 /// **The JSON writers say `null`, in the right places, and never say `NaN`.**

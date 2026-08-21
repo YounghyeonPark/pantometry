@@ -96,7 +96,7 @@ its own scheme. There are tests for those rates now.
 | `pantometry-quantum` | A wavefunction in a well: the time-dependent Schrödinger equation, marched with the same staggered leapfrog family the acoustic domain uses — real part on integer steps, imaginary on halves — so **probability is conserved as an identity of the update**, the way `∇·B` is on the Yee grid. Eigenvalues against the discrete operator's own closed form, Gaussian spreading and Ehrenfest's theorem at second order |
 | `pantometry-shape` | Designed geometry as input: an STL read and measured, and rasterised into the cells a domain fills — with a report of what the cells could **not** hold, because a rib finer than the grid does not fail, it disappears. Depends on `pantometry-units` and nothing else |
 | `pantometry-scene` | Where things are and what a run looks like: placement, capture, and the shapes a view can draw. Names no domain |
-| `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
+| `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
 | `pantometry` | A facade over the other sixteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `runtime/gpu` | `Solid3D`'s stencil as a compute shader — 191× on a 64³ grid, and single precision against the domain's double, so the CPU is the reference and the difference is measured. Its own workspace |
@@ -632,6 +632,21 @@ the montage is the reverse, and a volume gets both rather than a choice between 
 rotate and scrolled to zoom, and that is the whole camera model. It is enough to see whether a
 simulation did what you expected, and it is not a visualisation package. The JSON export exists
 for when it is not enough.
+
+The **export** is where the pictures in somebody else's renderer come from, and it stopped being a
+point cloud. A three-dimensional field is the surface of its present cells — one quad per face
+whose neighbour is absent, so 89% of a solid block's faces are culled as unseeable and a void
+inside it produces a real interior surface. Bodies are spheres. Both carry normals, so they take
+light and cast shadows, which a point cloud cannot. Rendered from Blender straight off the export,
+scene 23 is a hot part and a cooled lid with a real gap between them, and scene 16's room shows its
+standing wave's nodal planes as dark bands across a solid.
+
+Two things that came out of doing it. The colours were being written into glTF's `COLOR_0` as sRGB
+where the specification says linear, so every export this workspace has ever produced was decoded
+about 2.3x too bright in the midtones. And giving each sample a full cell made an object one whole
+cell larger than the extent it was sampled over — 2x on a two-sample axis — because `capture`
+samples corner to corner and an end node owns *half* a cell, which is the third time that
+arithmetic has been the bug here.
 
 Modest is not the same as unreadable, and the report was the second for a while. Axes are in
 metres rather than in cells, hovering reads back the sample under the cursor, the scalar chart has
