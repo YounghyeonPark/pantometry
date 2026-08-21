@@ -120,6 +120,38 @@ jobs:
             echo "::endgroup::"
           done
 
+  # The HTML report's viewer, executed rather than grepped.
+  #
+  # A separate job because it needs node, and the gate in CONTRIBUTING.md is the toolchain a Rust
+  # change needs — the same reason `bindings/python` is its own job. No npm, no lockfile, no
+  # install step: `tools/report-check` is two files and the standard library.
+  #
+  # The reason it exists at all is that the report inlines about four hundred lines of JavaScript
+  # and nothing had ever run them. Every test asserted on the HTML as a string, and a string check
+  # passes just as well when the viewer throws on its first line and the reader gets empty boxes.
+  #
+  # Eight scenes, chosen to cover all six view kinds: a profile, a heatmap, bodies, paths, a
+  # volume with its slice montage, and the scalar chart.
+  report:
+    name: report viewer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: build the reports
+        run: |
+          set -euo pipefail
+          mkdir -p target/reports
+          for scene in 04-heater-and-bar 06-orbits 10-lamp-on-a-mirror 14-a-world                        15-a-hot-spot-in-a-block 16-a-room-with-a-ceiling                        26-poiseuille-in-a-cooling-channel 27-a-cavity-ringing-at-its-own-frequency; do
+            cargo run --locked --release -p pantometry-world --               "crates/pantometry-world/scenes/$scene.json" "target/reports/$scene.html"
+          done
+      - name: run the viewer and assert on what it drew
+        run: node tools/report-check/check.js target/reports/*.html
+
   # The Python bindings, built and tested the way somebody would install them.
   #
   # A separate job because they are a separate workspace: pyo3 brings fifteen crates and links

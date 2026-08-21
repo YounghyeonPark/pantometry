@@ -37,6 +37,7 @@ fn holed() -> Frame {
                 nx: 3,
                 ny: 1,
                 nz: 3,
+                extent_m: [0.0, 0.0, 0.0, 0.06, 0.0, 0.06],
                 values,
             },
         }],
@@ -83,10 +84,14 @@ fn the_json_writers_spell_absence_null_and_leave_it_where_it_was() {
             !text.contains(",NaN") && !text.contains("[NaN") && !text.contains("NaN]"),
             "{what}: `NaN` is not a JSON token and must not reach a values array"
         );
+        // `3e2` rather than `3.000000e2`: both writers share one encoder now, and it drops
+        // trailing zeros that say nothing — the same number, 8.3% smaller on the largest report
+        // this workspace produces. What matters here is unchanged: the hole is between the two
+        // values it was between, and not swept to the end of the array.
         assert!(
-            text.contains("3.000000e2,null,3.000000e2")
-                && text.contains("3.100000e2,null,3.100000e2")
-                && text.contains("3.200000e2,null,3.200000e2"),
+            text.contains("3e2,null,3e2")
+                && text.contains("3.1e2,null,3.1e2")
+                && text.contains("3.2e2,null,3.2e2"),
             "{what}: the hole stays in the slot it was in"
         );
     }

@@ -30,6 +30,11 @@ fn frames() -> Vec<Frame> {
                             // Row-major, and deliberately not symmetric: a renderer that
                             // transposed nx and ny would still produce six cells.
                             nz: 1,
+                            // 300 mm by 200 mm, so a view that labels its axes has something to
+                            // be wrong about. Deliberately not square and deliberately not the
+                            // same aspect as the grid: 3x2 samples over 0.30 x 0.20 m is 1.5 both
+                            // ways by coincidence, so the y extent is 0.15 and it is not.
+                            extent_m: [0.0, 0.0, 0.0, 0.30, 0.15, 0.0],
                             values: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0 + t],
                         },
                     },
@@ -40,6 +45,7 @@ fn frames() -> Vec<Frame> {
                             nx: 2,
                             ny: 2,
                             nz: 3,
+                            extent_m: [0.0, 0.0, 0.0, 0.02, 0.02, 0.006],
                             // Twelve values, x fastest then y then z, and every slice different
                             // — so a view that drew slice 0 three times, or that read the array
                             // as one 2×6 plane, produces something this test can tell apart.
@@ -66,6 +72,7 @@ fn frames() -> Vec<Frame> {
                             nx: 4,
                             ny: 1,
                             nz: 1,
+                            extent_m: [0.0, 0.0, 0.0, 0.4, 0.0, 0.0],
                             values: vec![300.0, 310.0, 305.0 + t, 300.0],
                         },
                     },
@@ -253,7 +260,7 @@ fn the_json_keeps_all_three_axes() {
     let i = text.find("\"positions\":").expect("positions");
     let list = &text[i..text[i..].find(']').unwrap() + i + 1];
     assert_eq!(list.matches(',').count(), 5, "six coordinates: {list}");
-    assert!(list.contains("-1.000000e0"), "the z was lost: {list}");
+    assert!(list.contains("-1"), "the z was lost: {list}");
 }
 
 /// **Every view kind a card declares is dispatched, and every card has somewhere to write.**
@@ -285,8 +292,12 @@ fn every_declared_view_is_wired_to_something_that_draws_it() {
     // document, and passed with the dispatch deliberately broken — because the *rotation* filter
     // also names the kind, and `||v.kind==="volume"` matched there. A wiring check that any other
     // mention satisfies is not a wiring check.
+    // `drawOne`, not `drawAll`: the viewer stopped redrawing everything on every event, because
+    // rotating a cube also re-ran a 30 ms raycast for a volume nobody was touching. `render`
+    // decides *which* views are stale; `drawOne` is the dispatch, and the dispatch is what this
+    // checks.
     let body = {
-        let start = page.find("function drawAll(){").expect("drawAll exists");
+        let start = page.find("function drawOne(v){").expect("drawOne exists");
         let rest = &page[start..];
         &rest[..rest
             .find(

@@ -79,9 +79,36 @@ pub fn svg(title: &str, frames: &[Frame], columns: usize) -> String {
 /// count, so a reader is told they are looking at one plane of many rather than left to assume
 /// the block is flat — which a picture of a slice of a solid looks exactly like.
 fn slice_note(p: &Panel) -> String {
-    match p.data {
-        PanelData::Field { nz, .. } if nz > 1 => format!(" z-slice {}/{nz}", nz / 2 + 1),
+    match &p.data {
+        PanelData::Field { nz, extent_m, .. } if *nz > 1 => {
+            // Which slice, and **where** — a reader deciding whether the picture is the one they
+            // want needs the depth, and "5 of 9" only says that in cells.
+            let f = if *nz > 1 {
+                (nz / 2) as f64 / (nz - 1) as f64
+            } else {
+                0.5
+            };
+            let z = extent_m[2] + (extent_m[5] - extent_m[2]) * f;
+            format!(" z-slice {}/{nz} at z = {}", nz / 2 + 1, length(z))
+        }
         _ => String::new(),
+    }
+}
+
+/// A length in metres, written the way an engineer would say it.
+///
+/// Millimetres up to a metre, micrometres below that, metres above — chosen from the magnitude
+/// rather than fixed, because this workspace draws espresso pucks at 6 cm and rooms at 6 m and
+/// one unit cannot serve both. Three significant figures: a caption is not a data file, and
+/// `to_json` carries the full value for anything that is.
+fn length(m: f64) -> String {
+    let a = m.abs();
+    if a >= 1.0 || a == 0.0 {
+        format!("{m:.3} m")
+    } else if a >= 1e-3 {
+        format!("{:.1} mm", m * 1e3)
+    } else {
+        format!("{:.1} um", m * 1e6)
     }
 }
 
@@ -104,7 +131,9 @@ const LEVELS: i32 = 48;
 /// One panel, in whichever shape it came in.
 fn draw(p: &Panel, x0: f64, y0: f64, size: f64, extent: f64) -> String {
     let body = match &p.data {
-        PanelData::Field { nx, ny, nz, values } => {
+        PanelData::Field {
+            nx, ny, nz, values, ..
+        } => {
             // A flat canvas cannot show a volume, so it shows the middle slice — and `svg` labels
             // it, because a slice presented as the whole is the failure worth preventing rather
             // than the compromise worth making. `to_json` carries every sample.

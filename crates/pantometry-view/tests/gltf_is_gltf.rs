@@ -42,6 +42,9 @@ fn frame() -> Frame {
                     nx: 2,
                     ny: 2,
                     nz: 2,
+                    // A 40 mm cube offset from the origin, so the export has both a scale and a
+                    // placement to get wrong. Grid indices would put it at 0..1 on every axis.
+                    extent_m: [0.1, 0.2, 0.3, 0.14, 0.24, 0.34],
                     values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
                 },
             },
@@ -52,6 +55,7 @@ fn frame() -> Frame {
                     nx: 4,
                     ny: 1,
                     nz: 1,
+                    extent_m: [0.0, 0.0, 0.0, 0.4, 0.0, 0.0],
                     values: vec![1.0, 2.0, 3.0, 4.0],
                 },
             },
@@ -143,6 +147,62 @@ fn the_accessor_counts_are_the_geometry() {
 
     // rays: 5 positions, 5 colours, 6 indices. bodies: 2, 2. block: 8, 8.
     assert_eq!(counts, vec![5, 5, 6, 2, 2, 8, 8], "{accessors}");
+}
+
+/// **A field goes out in metres, at the box it was sampled over.**
+///
+/// glTF is metres by specification, and this exporter wrote grid indices — with a comment
+/// explaining that the extent was not in the frame to write, which by then it was. So a 9x9x9
+/// block arrived in Blender nine metres on a side whatever it was, and every export from this
+/// workspace was at a scale the reader had to guess and then correct by hand.
+///
+/// The `block` here is 40 mm on a side and sits at (100, 200, 300) mm, both of which a grid-index
+/// export destroys: indices would put it at 0..1 on every axis, at the origin. Read off the
+/// accessor's own `min` and `max`, which is where a loader reads it.
+///
+/// The positions are the **sample** positions, not cell centres. `capture` samples corner to
+/// corner across the extent, so the first sample is at the low corner and the last at the high
+/// one; the old code added half a cell to every axis, which for a 2x2x2 grid is half the box.
+#[test]
+fn a_field_is_exported_in_metres_where_it_was_sampled() {
+    let out = gltf::gltf("a run", &frame());
+    let accessors = section(&out.document, "accessors");
+    // The block is the third mesh, so its position accessor is the sixth: rays takes three
+    // (position, colour, indices) and bodies two.
+    let sixth = accessors
+        .split("\"min\":")
+        .nth(3)
+        .unwrap_or_else(|| panic!("three position accessors carry bounds: {accessors}"));
+    let read = |s: &str| -> Vec<f64> {
+        let inner = &s[s.find('[').unwrap() + 1..s.find(']').unwrap()];
+        inner.split(',').map(|v| v.parse().unwrap()).collect()
+    };
+    let min = read(sixth);
+    let max = read(&sixth[sixth.find("\"max\":").expect("a max beside the min")..]);
+
+    // f32, so the tolerance is the format's and not a choice: 1e-6 is well above 2^-24 relative
+    // at these magnitudes and well below anything the geometry could be wrong by.
+    for (got, want) in min.iter().zip([0.1, 0.2, 0.3]) {
+        assert!(
+            (got - want).abs() < 1e-6,
+            "the low corner is {min:?} and the extent says [0.1, 0.2, 0.3]"
+        );
+    }
+    for (got, want) in max.iter().zip([0.14, 0.24, 0.34]) {
+        assert!(
+            (got - want).abs() < 1e-6,
+            "the high corner is {max:?} and the extent says [0.14, 0.24, 0.34]"
+        );
+    }
+    // And the thing that makes this a real check rather than a coincidence: the box is 40 mm, not
+    // one grid unit. A grid-index export of a 2x2x2 field spans exactly 1.0.
+    for a in 0..3 {
+        let span = max[a] - min[a];
+        assert!(
+            (span - 0.04).abs() < 1e-6,
+            "axis {a} spans {span} m; the extent says 0.04 and a grid index would say 1"
+        );
+    }
 }
 
 /// **The buffer is exactly as long as it says, and every view lies inside it on a four-byte

@@ -102,6 +102,31 @@ CI additionally builds on Rust 1.78, builds for `wasm32-unknown-unknown`, and ru
 suite under `wasm32-wasip1` with wasmtime. Those three catch different things and none of them
 is decoration — see below.
 
+### What the gate does not cover, and where those live instead
+
+The gate is the toolchain a Rust change needs. Three things need another one, and each is its own
+CI job with its own procedure:
+
+| | needs | run it with |
+| --- | --- | --- |
+| `bindings/python` | maturin, a Python | `bindings/python/README.md` |
+| `runtime/viewer`, `runtime/editor` | their own workspaces and lockfiles | each one's README |
+| the HTML report's viewer | node | `node tools/report-check/check.js <report.html>` |
+
+The last is new and is worth a sentence, because it closes a gap that had been open since the
+report existed: `pantometry-view::report` inlines about four hundred lines of JavaScript into every
+page it writes, and **nothing had ever executed it.** Every test asserted on the HTML as a string
+— the page contains a canvas with this `data-kind`, the page mentions that unit, the page has
+seven cards — and all of those pass just as well when the viewer throws on its first line and the
+reader gets a column of empty boxes. `tools/report-check` runs it against a stub canvas and
+asserts on what it drew.
+
+Its README carries one finding worth reading before writing any harness: the first version ran the
+viewer under `vm.runInContext` and reported the volume renderer at 118 ms a frame. A `vm` context
+costs 30x on hot numeric code — 133 ms against 3964 ms on one identical loop — so the renderer was
+4 ms and an afternoon went into optimising something that was not slow. **A harness is a thing
+that produces results, and it needs the same suspicion as a test.**
+
 ## The conventions that are not obvious
 
 ### Check against a closed form, never against another implementation

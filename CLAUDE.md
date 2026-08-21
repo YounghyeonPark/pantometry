@@ -137,6 +137,7 @@ earned and was not.
 | [bindings/python/README.md](bindings/python/README.md) | touching the bindings. Its own cargo workspace, its own gate, and the two boundary decisions not to relitigate |
 | [runtime/viewer/README.md](runtime/viewer/README.md) | touching the viewer. Why it is a separate workspace and why it does not link `pantometry` |
 | [runtime/editor/README.md](runtime/editor/README.md) | touching the editor. Why it is a third workspace, why it *does* link `pantometry`, and the two halves the platform rules keep apart |
+| [tools/report-check/README.md](tools/report-check/README.md) | touching the HTML report's viewer. It is four hundred lines of JavaScript in a Rust string and this is the only thing that executes it — plus why a `vm.runInContext` harness measured a renderer 30x slower than it is |
 | [.claude/agents/README.md](.claude/agents/README.md) | adding a reviewer |
 
 Three of those exist because a dependency tree does not belong in the library's lockfile. Measured:

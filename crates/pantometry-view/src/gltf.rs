@@ -142,10 +142,36 @@ pub fn gltf(title: &str, frame: &Frame) -> Exported {
                     meshes.push(mesh);
                 }
             }
-            PanelData::Field { nx, ny, nz, values } if *nz > 1 => {
-                // Cell centres in grid units. The extent the field was sampled over is not in the
-                // frame — `Placement` held it and did not travel — so this is the grid, and a
-                // reader scaling the node is doing what the writer could not.
+            PanelData::Field {
+                nx,
+                ny,
+                nz,
+                extent_m,
+                values,
+            } if *nz > 1 => {
+                // **In metres, where the samples were taken.** This used to write grid indices,
+                // with a comment explaining that the extent was not in the frame to write — so a
+                // 9x9x9 block arrived in Blender nine metres on a side whatever it was, and every
+                // export from this workspace was at a scale the reader had to guess and fix. glTF
+                // is metres by specification; the guessing was ours.
+                //
+                // The positions are the sample positions, not cell centres offset by half a cell:
+                // `capture` samples corner to corner across the extent, and an axis asked for at
+                // one sample is sampled at its middle. Placing them at `i + 0.5` was half a cell
+                // out along every axis with more than one sample.
+                let along = |i: usize, n: usize| {
+                    if n > 1 {
+                        i as f64 / (n - 1) as f64
+                    } else {
+                        0.5
+                    }
+                };
+                let (ox, oy, oz) = (extent_m[0], extent_m[1], extent_m[2]);
+                let (sx, sy, sz) = (
+                    extent_m[3] - extent_m[0],
+                    extent_m[4] - extent_m[1],
+                    extent_m[5] - extent_m[2],
+                );
                 let (lo, hi) = span(values);
                 let mut mesh = Mesh {
                     name: panel.name.clone(),
@@ -165,8 +191,11 @@ pub fn gltf(title: &str, frame: &Frame) -> Exported {
                             if !v.is_finite() {
                                 continue;
                             }
-                            mesh.positions
-                                .push([i as f32 + 0.5, j as f32 + 0.5, k as f32 + 0.5]);
+                            mesh.positions.push([
+                                (ox + sx * along(i, *nx)) as f32,
+                                (oy + sy * along(j, *ny)) as f32,
+                                (oz + sz * along(k, *nz)) as f32,
+                            ]);
                             mesh.colours.push(ramp((v - lo) / (hi - lo)));
                         }
                     }

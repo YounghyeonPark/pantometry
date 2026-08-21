@@ -144,7 +144,7 @@ A domain that overrides `books_balance` to `true` claims its ledger changes by e
 | `pantometry-electrical` | `Winding`: `I²R` onto the heat channel, copper rising 0.393%/K, and `runaway_current` — the exact threshold `√(g/(R₂₀α))` where the feedback overtakes the heat path. `Conductor`: `∇·(σ∇φ)=0` solved on a grid, so a resistance is a property of a *shape* — `ρL/A` exactly for a bar, and whatever a notch gives for a notch |
 | `pantometry-quantum` | `Well`: a 1D wavefunction between hard walls, marched with the same staggered-leapfrog family the acoustic domain uses. `in_eigenstate(n)`, `with_gaussian(centre, sigma, k0)`, `with_harmonic(omega)`; probability sits on the ledger as an identity of the update |
 | `pantometry-scene` | One layer up. `Placement`, `Extent`, `capture` — where a domain sits and what one instant of a run looks like, as `Frame`, `Panel`, `PanelData`. Names no domain |
-| `pantometry-view` | Two layers up. `svg` filmstrip, `html` report that opens in a browser with nothing installed, `readings_csv`, `to_json`, and `gltf` for Blender/three.js/USD. The view is chosen by the shape of the data |
+| `pantometry-view` | Two layers up. `svg` filmstrip, `html` report that opens in a browser with nothing installed, `readings_csv`, `to_json`, and `gltf` for Blender/three.js/USD. The view is chosen by the shape of the data, the axes are in metres, and the colour scale is `ramp`'s — built in CIE LCh so a larger value is never darker |
 
 `Schedule` picks how they interact: `OneWay`, `Staggered` (declaration order is execution
 order), `Iterative { max_iter, tol }` for strong coupling, `Multirate` for domains with very

@@ -48,6 +48,13 @@ One scale per panel, fixed across every frame, in all four views. A frame that r
 quantity *look* constant while it changes by orders of magnitude, and that is the one thing a
 picture of a simulation must never do.
 
+And the picture has numbers on it. Every spatial axis is in metres — a room is 4.4 m by 3.1 m and
+not "61 x 43" — because a field carries the box it was sampled over; hovering reads back the
+sample under the cursor, its index, its position and its value; the scalar chart groups series by
+unit so two temperatures forty kelvin apart no longer draw the same line; and the colour scale is
+built in CIE LCh so a larger value is never darker than a smaller one. The scale that shipped
+before this ran backwards for 89 of its 255 steps.
+
 **All four writers are `pantometry-view`, and none of them is this application's.** This crate is
 `publish = false`, so while they lived here they were unreachable — a consumer who could state a
 simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_json}` takes the frames

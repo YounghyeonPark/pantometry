@@ -212,6 +212,22 @@ pub enum PanelData {
         /// `nx * (ny*nz)` grid would still *render*, as a plane with the slices stacked into a
         /// stripe, and would look like a picture rather than like a mistake.
         nz: usize,
+        /// The box that was sampled: `[x0, y0, z0, x1, y1, z1]`, in **metres**, in the domain's
+        /// own coordinates.
+        ///
+        /// Here so that a view can say how big the thing is. Without it every picture of a field
+        /// in this workspace was labelled in cells — "61 x 43", never "6.1 m by 4.3 m" — and a
+        /// cell count is the one number about a grid that says nothing about the object. An
+        /// engineer reading a thermal picture wants to know where on the part the hot spot is,
+        /// and no arrangement of cell indices answers that.
+        ///
+        /// **Not world coordinates**, unlike [`PanelData::Points`] and [`PanelData::Paths`],
+        /// which are. Two reasons: [`capture`] samples a field in the domain's own frame and
+        /// deliberately does not apply the pose, so this is the frame the values were taken in;
+        /// and a rotated pose has no axis-aligned box, so a world-space `[f64; 6]` would have to
+        /// be a bounding box, which is a different and larger thing. How long the bar is should
+        /// not change when the bar is moved.
+        extent_m: [f64; 6],
         /// `nx * ny * nz` values, x fastest, then y, then z.
         values: Vec<f64>,
     },
@@ -319,6 +335,32 @@ impl Panel {
         }
     }
 
+    /// The box this panel occupies, `[x0, y0, z0, x1, y1, z1]` in metres, whichever shape it is.
+    ///
+    /// For a field this is the sampled extent in the domain's own coordinates; for bodies and
+    /// paths it is the world-space bounds they already carried. The two frames are not the same
+    /// and a caller that overlays them is making a claim this type cannot check — which is why
+    /// this returns the numbers and not a promise about them. See [`PanelData::Field::extent_m`].
+    pub fn bounds(&self) -> [f64; 6] {
+        match &self.data {
+            PanelData::Field { extent_m, .. } => *extent_m,
+            PanelData::Points { bounds, .. } | PanelData::Paths { bounds, .. } => *bounds,
+        }
+    }
+
+    /// How long each axis of a field is, in metres, or `None` if this is not a field.
+    ///
+    /// A collapsed axis — one sample — has a real length as often as not: a plane cut through a
+    /// solid is a plane, and a slab asked for at one sample is still as thick as it is. The
+    /// length is what the extent says, and a zero here means the caller asked for a zero-thickness
+    /// slice rather than that the object is flat.
+    pub fn spans(&self) -> Option<[f64; 3]> {
+        match &self.data {
+            PanelData::Field { extent_m: e, .. } => Some([e[3] - e[0], e[4] - e[1], e[5] - e[2]]),
+            _ => None,
+        }
+    }
+
     /// One z-slice of a field, as an `nx * ny` plane, or `None` if this is not a field or the
     /// slice is out of range.
     ///
@@ -327,9 +369,9 @@ impl Panel {
     /// others; this makes the choice explicit and countable.
     pub fn slice(&self, k: usize) -> Option<&[f64]> {
         match &self.data {
-            PanelData::Field { nx, ny, nz, values } => {
-                (k < *nz).then(|| &values[k * nx * ny..(k + 1) * nx * ny])
-            }
+            PanelData::Field {
+                nx, ny, nz, values, ..
+            } => (k < *nz).then(|| &values[k * nx * ny..(k + 1) * nx * ny]),
             _ => None,
         }
     }
@@ -418,7 +460,13 @@ fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Ti
     Panel {
         name: name.to_string(),
         unit: field.unit(),
-        data: PanelData::Field { nx, ny, nz, values },
+        data: PanelData::Field {
+            nx,
+            ny,
+            nz,
+            extent_m: [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z],
+            values,
+        },
     }
 }
 

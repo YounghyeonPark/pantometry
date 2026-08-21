@@ -425,7 +425,9 @@ and the scheme has values only at nodes — so combining them at an arbitrary po
 number computed here by one computed slightly over there. And a signed field needs a
 different colour map from a positive one: a temperature climbs from a floor, a pressure swings
 about zero, and a ramp built for the first draws a room at rest as though half of it were
-cold.
+cold. The report chooses between them from the run's own range — `pantometry-view::ramp` — and
+puts the neutral colour at the value zero rather than at the middle of the range, which for
+−100 to +300 are a quarter of the scale apart.
 
 ## A boundary defect, and the thing that found it
 
@@ -630,6 +632,14 @@ the montage is the reverse, and a volume gets both rather than a choice between 
 rotate and scrolled to zoom, and that is the whole camera model. It is enough to see whether a
 simulation did what you expected, and it is not a visualisation package. The JSON export exists
 for when it is not enough.
+
+Modest is not the same as unreadable, and the report was the second for a while. Axes are in
+metres rather than in cells, hovering reads back the sample under the cursor, the scalar chart has
+an axis per unit instead of normalising every series to itself, and the colour scale is
+constructed in CIE LCh with lightness linear in the value — properties `pantometry-view::ramp`
+pins with tests rather than a designer's judgement. The viewer that draws all of it is executed by
+`tools/report-check`, which is new for the ordinary reason: it was four hundred lines of
+JavaScript that nothing had ever run.
 
 The JSON scene *format* is still `pantometry-world`'s and not the library's, which is why that crate
 is unpublished. A file format is a compatibility promise, and this one is not ready to make one:
