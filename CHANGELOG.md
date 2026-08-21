@@ -72,6 +72,55 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   typical one. The estimate first written here was "5.21 MB to 1.48 MB" and was a guess; the table
   in `data.rs` is the measurement.
 
+### Fixed
+
+- **The editor's viewport painted a quarter of every volume in the wrong order.**
+  `Camera::project` returns a depth — *distance from the eye, larger is further* — and the native
+  shell discarded it, then recovered a stand-in by projecting each point a second time one
+  millimetre along world z and taking the reciprocal of how far the two landed apart on screen.
+  That is proportional to how far **off the view axis** a point is, not to how far away. On a
+  6x6x6 lattice at the camera the app opens at it ordered **6,026 of 23,220 pairs backwards —
+  26%** — worst at the centre of the screen, which is where the object is. The browser shell had
+  always sorted by the real depth; both call `editor_core::far_to_near` now, so there is one copy
+  left to be wrong.
+
+- **The viewer refused every run file the library wrote.** Its reader is `deny_unknown_fields`,
+  deliberately, so the moment `pantometry-view` began writing `extent_m` on a field it stopped
+  parsing anything. The library's twenty-step gate could not see it — separate workspace, separate
+  CI job, and nothing in `crates/` reads that format back. `extent_m` is now `Option` with a
+  default, and the committed fixtures are deliberately left in the old format because they are the
+  only proof the old direction still works.
+
+- **Two CI jobs were already failing on `main` before any of this** — `native viewer` and
+  `gpu accelerator`, both on `cargo fmt --check`, in `runtime/viewer/viewer/src/main.rs:74` and
+  `runtime/gpu/src/lib.rs:191`. Both formatting drift; both invisible to the gate, which formats
+  only the library's workspace. Fixed, and the general point recorded: a green gate is not a green
+  CI, and this tree has five workspaces.
+
+- **The editor printed readings `{:.4}`**, so a cavity holding 3.19e-10 J showed `0.0000` beside a
+  field the same run reported at 921 V/m. The third writer in this workspace to erase a magnitude
+  that way, after `readings_csv` and `to_json`.
+
+- **A field is drawn where and how big it is.** `Panel::bounds` returned the grid in **cell units**
+  for a field — a 9x9x9 block framed as a nine-metre cube, at the origin however far from it the
+  part really was — because the run file recorded a grid and not the extent. It records the extent
+  now, so both shells prefer the run's own box and fall back to the scene's placed one.
+
+### Changed
+
+- **The editor's viewport is an instrument.** A colour bar with numbers on it, so a colour can be
+  read back to a value; a scale bar in model metres, so a wireframe says whether it is a 40 mm die
+  or a 4 m room; a probe that names whatever the cursor is over — body index or grid cell, with
+  the value and its unit — picking the nearest **to the eye** rather than the nearest on screen,
+  so the thing named is the thing visible; and a transport with play, step either way, and the
+  space bar, arrow keys, Home and End.
+
+- **One colour scale across the workspace.** Both editor shells carried their own copy of a
+  straight blue-to-red line in sRGB, which made four spellings of "cool to warm" here. It covered
+  **16.6 L\*** against the library scale's 74, and seventy-five of its 255 steps ran backwards.
+  `editor_core::value_colour` is `pantometry::view::ramp`, and a range that straddles zero gets the
+  diverging scale with its neutral at the value zero.
+
 ### Added
 
 - **`tools/report-check`** — the report's inlined viewer, executed against a stub canvas, with

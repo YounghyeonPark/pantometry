@@ -127,6 +127,37 @@ costs 30x on hot numeric code — 133 ms against 3964 ms on one identical loop �
 4 ms and an afternoon went into optimising something that was not slow. **A harness is a thing
 that produces results, and it needs the same suspicion as a test.**
 
+### A green gate is not a green CI, and this tree has five workspaces
+
+The gate formats, lints and tests **one** of them. `runtime/viewer`, `runtime/editor`,
+`runtime/gpu` and `bindings/python` each have their own lockfile, their own dependency tree and
+their own CI job, and the gate touches none of them.
+
+Found the ordinary way, which is by looking: two jobs had been failing on `main` — `native viewer`
+and `gpu accelerator` — both on `cargo fmt --check`, over one over-long `eprintln!` and one
+over-long function signature. Twenty steps had passed on every commit in between.
+
+Worse than formatting, and the reason this is a section rather than a footnote: a change *inside*
+the library can break a workspace outside it and the gate cannot see that either. Adding
+`extent_m` to `PanelData::Field` made `pantometry-view::to_json` write a key the viewer's
+`deny_unknown_fields` reader refused, so every run file the library produced stopped opening —
+while the gate stayed green, because nothing in `crates/` reads that format back.
+
+So, before a commit that changes a **wire format, a public type in `pantometry-scene`, or anything
+`pantometry-view` writes**, run the other workspaces too. Each is a `cd` and three commands:
+
+```sh
+for w in runtime/viewer runtime/editor runtime/gpu; do
+  ( cd "$w" && cargo fmt --all --check ) || echo "!! $w fmt"
+  ( cd "$w" && cargo clippy --locked --workspace --all-targets -- -D warnings ) || echo "!! $w clippy"
+  ( cd "$w" && cargo test --locked --workspace ) || echo "!! $w test"
+done
+```
+
+And read the jobs, not the roll-up: `gh run view <id> --json jobs` gives each one its own
+`conclusion`, which is how those two were found still failing under a run whose summary nobody had
+opened.
+
 ## The conventions that are not obvious
 
 ### Check against a closed form, never against another implementation

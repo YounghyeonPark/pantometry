@@ -82,6 +82,20 @@ pub enum Panel {
         ny: usize,
         /// Along z.
         nz: usize,
+        /// The box the field was sampled over, `[x0, y0, z0, x1, y1, z1]` in metres — or `None`
+        /// for a run written before the format carried it.
+        ///
+        /// **Optional, and that is the compatibility story.** This enum is
+        /// `deny_unknown_fields`, deliberately: a wire format that silently discards a key it
+        /// does not know is how a renamed field once went unnoticed here. The price is that
+        /// adding a key breaks every existing reader, and it did — the day `pantometry-view`
+        /// began writing `extent_m`, this crate refused every run file the library produced,
+        /// with the library's own twenty-step gate unable to see it because the viewer is a
+        /// separate workspace with a separate job. `Option` with a `default` is what makes the
+        /// direction work both ways: a new reader takes an old file, and an old reader is the
+        /// thing that cannot be helped.
+        #[serde(default)]
+        extent_m: Option<[f64; 6]>,
         /// `nx*ny*nz` values, x fastest then y then z.
         values: Vec<f64>,
     },
@@ -145,15 +159,40 @@ impl Panel {
         }
     }
 
-    /// The box this panel occupies, in world coordinates.
+    /// The box this panel occupies, in world coordinates and in metres.
     ///
-    /// A field carries no bounds of its own — it was sampled over an extent the writer did not
-    /// record — so its box is the grid in cell units, which is the right thing to frame it by and
-    /// is stated here rather than guessed at the call site.
+    /// A field says so directly now. It did not: the run file recorded a grid and not the extent
+    /// it was sampled over, so this returned **the grid in cell units** — a 9x9x9 block framed as
+    /// a nine-metre cube, at the origin however far from it the part really was, and a slab that
+    /// was asked for at more slices drawn taller for it. That was stated in a doc comment rather
+    /// than fixed because the number was genuinely not in the file. It is now.
+    ///
+    /// The cell-unit box is still the answer for a file written before the format carried the
+    /// extent, and [`Panel::extent_m`] is how a caller tells the two apart rather than being
+    /// handed a plausible number with no provenance.
     pub fn bounds(&self) -> [f64; 6] {
         match self {
-            Panel::Field { nx, ny, nz, .. } => [0.0, 0.0, 0.0, *nx as f64, *ny as f64, *nz as f64],
+            Panel::Field {
+                nx,
+                ny,
+                nz,
+                extent_m,
+                ..
+            } => extent_m.unwrap_or([0.0, 0.0, 0.0, *nx as f64, *ny as f64, *nz as f64]),
             Panel::Points { bounds, .. } | Panel::Paths { bounds, .. } => *bounds,
+        }
+    }
+
+    /// The box a field was sampled over, in metres, or `None` if this is not a field or the run
+    /// predates the format carrying it.
+    ///
+    /// The distinction matters to anything that would put a number on screen: [`Panel::bounds`]
+    /// falls back to cell units, and a scale bar reading "9 m" under a 40 mm part is worse than
+    /// no scale bar.
+    pub fn extent_m(&self) -> Option<[f64; 6]> {
+        match self {
+            Panel::Field { extent_m, .. } => *extent_m,
+            _ => None,
         }
     }
 }

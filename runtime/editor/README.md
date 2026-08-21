@@ -6,6 +6,11 @@ cargo run --release                 # opens on the built-in room
 cargo run --release -- scene.json   # opens on a file
 ```
 
+The viewport is an instrument, not a preview: a colour bar with numbers on it, a scale bar in
+model metres, a probe that names whatever the cursor is over, and a transport — play, step either
+way, and the space bar, the arrow keys, Home and End. What it draws is still chosen by the shape
+of the data and never by a domain's name.
+
 The left pane is the scene's JSON, checked **as you type** with the same two steps
 `pantometry-world --check` runs — parse, then build — with parse errors carried as `line:column`,
 which is what that error format was designed for. The viewport draws every placed extent as a
@@ -33,6 +38,46 @@ partial run that looks complete is a picture of something that did not happen.
 The streaming itself is `editor-core::run_streaming`, built on `World::advance` — one
 iteration of `World::run`'s loop, made public when the editor became its second consumer —
 and its tests pin that the final streamed payload is byte-identical to the batch run's.
+
+## Three things it was doing itself, and one of them wrong
+
+`editor-core` exists so that anything which could be got wrong the same way twice is written once.
+Three things had escaped it, and the failure they produced is the argument for the rule.
+
+**The paint order.** `Camera::project` returns a depth — *distance from the eye, larger is
+further* — and this shell threw it away, then recovered a stand-in by projecting each point a
+second time one millimetre along world z and taking the reciprocal of how far the two landed apart
+on screen. That is proportional to how far **off the view axis** a point is, not to how far away
+it is. On a 6×6×6 lattice of splats at the camera the app opens at, it ordered **6,026 of 23,220
+pairs backwards — 26%** — so a quarter of every translucent volume composited in the wrong order,
+worst at the centre of the screen, which is where the object is. The browser shell had always
+sorted by the real depth and was right. Both call `editor_core::far_to_near` now.
+
+**The colour.** Both shells carried a copy of a straight blue-to-red line in sRGB, which made four
+spellings of "cool to warm" in this workspace. Measured over 256 steps it covered **16.6 L\*** —
+44.1 to 60.7 — against the 74 the library's scale covers, and seventy-five of its 255 steps ran
+backwards. Lightness is what survives a greyscale print, a projector and the eight per cent of men
+with a colour-vision deficiency, and blue against red is the one pair those readers cannot
+separate. `editor_core::value_colour` is `pantometry::view::ramp`, whose properties are pinned by
+tests in the library, and it picks the diverging scale for a range that straddles zero with the
+neutral at **the value zero** rather than at the middle of the range.
+
+**The numbers.** Readings printed `{:.4}`, so a cavity holding 3.19e-10 J showed `0.0000` beside a
+field the same run had reported at 921 V/m — the third writer in this workspace to erase a
+magnitude that way, after `readings_csv` and `to_json`.
+
+## Where a field's box comes from
+
+The run says. `PanelData::Field` carries `extent_m` — the box it was sampled over — so a run opened
+without the file that produced it still draws in the right place and at the right size. The
+scene's placed box is the fallback for a run written before the format carried it.
+
+That key is also why the viewer's workspace needed a change on the same day: its reader is
+`deny_unknown_fields`, so the moment the library began writing `extent_m` it refused every run file
+the library produced — and the library's twenty-step gate could not see it, because these are
+separate workspaces with separate CI jobs and nothing in `crates/` reads that format back. Adding a
+key to the wire format is a coordinated change across three workspaces, and the gate is not what
+tells you so.
 
 ## The colour is computed, not chosen
 

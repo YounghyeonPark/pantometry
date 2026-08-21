@@ -406,3 +406,56 @@ fn the_camera_frames_whatever_shape_the_run_is() {
         );
     }
 }
+
+/// **A field says how big it is, and a run written before it could still reads.**
+///
+/// The reader is `deny_unknown_fields`, which is the right choice and has a price: the day
+/// `pantometry-view` started writing `extent_m`, this crate refused **every** run file the library
+/// produced — and the library's twenty-step gate could not see it, because the viewer is a
+/// separate workspace with a separate CI job and nothing in `crates/` reads this format back.
+///
+/// So both directions are pinned here. A new file's extent arrives in metres; an old file's is
+/// absent and `bounds` falls back to the cell-unit box it always returned, which is a fallback a
+/// caller can detect rather than a plausible number with no provenance.
+///
+/// The committed fixtures in `tests/runs/` are deliberately **not** regenerated: they are what an
+/// older library wrote, and that is the only thing that can prove the old direction still works.
+#[test]
+fn a_field_carries_the_box_it_was_sampled_over_and_an_older_run_still_loads() {
+    let with = r#"{"title":"t","frames":[{"t":0.0,"panels":[
+        {"name":"block","unit":"K","kind":"field","nx":2,"ny":2,"nz":2,
+         "extent_m":[0.1,0.2,0.3,0.14,0.24,0.34],
+         "values":[1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0]}
+    ],"readings":[]}]}"#;
+    let run = Run::from_json(with).expect("a run that states its extent");
+    let panel = &run.frames[0].panels[0];
+    let e = panel.extent_m().expect("the extent came through");
+    assert!(
+        (e[0] - 0.1).abs() < 1e-12 && (e[3] - 0.14).abs() < 1e-12,
+        "{e:?}"
+    );
+    let b = panel.bounds();
+    assert!(
+        (b[3] - b[0] - 0.04).abs() < 1e-12,
+        "40 mm on a side, not 2: {b:?}"
+    );
+
+    // The same panel without it: still reads, and still frames by the grid.
+    let without = r#"{"title":"t","frames":[{"t":0.0,"panels":[
+        {"name":"block","unit":"K","kind":"field","nx":2,"ny":2,"nz":2,
+         "values":[1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0]}
+    ],"readings":[]}]}"#;
+    let run = Run::from_json(without).expect("a run from before the format carried it");
+    let panel = &run.frames[0].panels[0];
+    assert!(panel.extent_m().is_none(), "and it says it does not know");
+    assert_eq!(panel.bounds(), [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]);
+
+    // The three committed fixtures are old-format. If regenerating them ever becomes tempting,
+    // this is the assertion that says what would be lost.
+    let block = load("block.json");
+    assert!(
+        block.frames[0].panels[0].extent_m().is_none(),
+        "tests/runs/block.json is the old format on purpose: it is the only proof that a reader \
+         built today still opens a file written before today"
+    );
+}

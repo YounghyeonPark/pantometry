@@ -450,12 +450,21 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
                         ny,
                         nz,
                         values,
+                        ..
                     } => {
-                        let Some(b) = s.checked.boxes.iter().find(|b| &b.name == name) else {
-                            continue;
+                        // The run's own extent first, the scene's placed box second: a field
+                        // carries the box it was sampled over now, so a run opened without the
+                        // file that produced it still draws where and how big it is.
+                        let from_run = panel.extent_m().map(editor_core::corners_of);
+                        let corners = match from_run {
+                            Some(c) => c,
+                            None => match s.checked.boxes.iter().find(|b| &b.name == name) {
+                                Some(b) => b.corners,
+                                None => continue,
+                            },
                         };
                         let out = editor_core::field_splats(
-                            &b.corners,
+                            &corners,
                             (*nx, *ny, *nz),
                             values,
                             unit,
@@ -464,25 +473,28 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
                         notes.push(out.note);
                         // The splat's screen size from the box's own projected span, so a coarse
                         // field draws fat cells and a fine one small ones.
-                        let (p0, p7) = (project(b.corners[0]), project(b.corners[7]));
+                        let (p0, p7) = (project(corners[0]), project(corners[7]));
                         let span = ((p0.x - p7.x).powi(2) + (p0.y - p7.y).powi(2)).sqrt();
                         let radius = (span / (*nx).max(*ny).max(*nz) as f64 * 0.35
                             / out.stride.max(1) as f64)
                             .clamp(0.002, 0.1);
                         // Painter's algorithm: far to near, so a translucent volume composites
                         // in the right order. `depth` grows away from the eye.
-                        let mut splats: Vec<(f64, viewer_core::Projected, [u8; 4])> = out
+                        //
+                        // This shell always sorted by the depth the projection returned and was
+                        // right; the native one recovered a stand-in and ordered 26% of a lattice
+                        // backwards. Both call the same function now, so there is one copy left
+                        // to be wrong. The `NaN` handling is the other reason: `partial_cmp`
+                        // with an `Ordering::Equal` fallback is not a total order, and a sort
+                        // over one is allowed to do anything.
+                        let placed: Vec<(viewer_core::Projected, [u8; 4])> = out
                             .splats
                             .iter()
-                            .map(|sp| {
-                                let q = project(sp.at);
-                                (q.depth, q, sp.rgba)
-                            })
+                            .map(|sp| (project(sp.at), sp.rgba))
                             .collect();
-                        splats.sort_by(|a, b| {
-                            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        for (_, q, c) in splats {
+                        let depths: Vec<f64> = placed.iter().map(|(q, _)| q.depth).collect();
+                        for i in editor_core::far_to_near(&depths) {
+                            let (q, c) = placed[i];
                             dots.push(serde_json::json!([
                                 q.x,
                                 q.y,
@@ -523,17 +535,15 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
 }
 
 /// A value on the run-wide scale as a CSS colour, for the shapes that are not fields.
+///
+/// `editor_core::value_colour`, which is `pantometry::view::ramp`. This file held the fourth copy
+/// of a straight blue-to-red line in sRGB — the native shell had the third — and that line covered
+/// 16.6 L\* against the library scale's 74, so it survived neither a greyscale print nor the one
+/// colour pair a deficiency collapses. Two shells drawing the same run in different colours is
+/// its own answer to whether this belonged here.
 fn shade(value: f64, scale: Option<(f64, f64)>) -> String {
-    let t = match scale {
-        Some((lo, hi)) if hi > lo => ((value - lo) / (hi - lo)).clamp(0.0, 1.0),
-        _ => 0.5,
-    };
-    format!(
-        "rgb({},{},{})",
-        (60.0 + 195.0 * t) as u8,
-        (90.0 + 40.0 * (1.0 - (2.0 * t - 1.0).abs())) as u8,
-        (230.0 - 170.0 * t) as u8
-    )
+    let [r, g, b] = editor_core::value_colour(value, scale);
+    format!("rgb({r},{g},{b})")
 }
 
 /// Union of an optional box with another box.

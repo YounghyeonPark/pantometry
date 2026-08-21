@@ -68,6 +68,15 @@ enum Job {
 struct RunView {
     run: viewer_core::Run,
     frame: usize,
+    /// Whether the frame advances on its own.
+    ///
+    /// A run is a sequence, and a slider alone makes a reader drag to see it move. What a reader
+    /// is usually here to do is compare two frames, which is a key pressed twice — so there is a
+    /// clock, a step either way, and the space bar.
+    playing: bool,
+    /// When the frame last advanced, so playback runs on a clock and not on the paint rate. At
+    /// sixty frames a second a twelve-frame run is over in a fifth of a second.
+    last_step: Option<Instant>,
     /// Whether what is on screen is a prefix of a stopped run rather than the run. Set from
     /// [`editor_core::RunEnd`], drawn on the canvas, because a prefix that looks complete is
     /// a picture of something that did not happen.
@@ -234,6 +243,8 @@ impl App {
                     self.run = Some(RunView {
                         run,
                         frame,
+                        playing: false,
+                        last_step: None,
                         partial: true,
                     });
                     self.status = format!("running: {} frame(s) so far", last + 1);
@@ -401,8 +412,104 @@ impl eframe::App for App {
                 if ui.button("fit view").clicked() {
                     self.needs_fit = true;
                 }
+                // The transport, beside the run controls rather than buried under the canvas: a
+                // reader stepping through a run reaches for it constantly.
+                if let Some(view) = &mut self.run {
+                    let frames = view.run.frames.len();
+                    if frames > 1 {
+                        ui.separator();
+                        if ui
+                            .button("|<")
+                            .on_hover_text("first frame (Home)")
+                            .clicked()
+                        {
+                            view.frame = 0;
+                            view.playing = false;
+                        }
+                        if ui
+                            .button("<")
+                            .on_hover_text("previous frame (left)")
+                            .clicked()
+                        {
+                            view.frame = (view.frame + frames - 1) % frames;
+                            view.playing = false;
+                        }
+                        let label = if view.playing { "pause" } else { "play" };
+                        if ui.button(label).on_hover_text("space").clicked() {
+                            view.playing = !view.playing;
+                            view.last_step = None;
+                        }
+                        if ui.button(">").on_hover_text("next frame (right)").clicked() {
+                            view.frame = (view.frame + 1) % frames;
+                            view.playing = false;
+                        }
+                        if ui.button(">|").on_hover_text("last frame (End)").clicked() {
+                            view.frame = frames - 1;
+                            view.playing = false;
+                        }
+                    }
+                }
             });
         });
+
+        // Keys, because comparing two frames means pressing the same thing twice and a small
+        // button is the wrong target for that. Skipped while the text pane has focus, or the
+        // space bar would step the run instead of typing a space into the scene.
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if !typing {
+            let frames = self.run.as_ref().map_or(0, |v| v.run.frames.len());
+            if frames > 1 {
+                let (mut step, mut jump, mut toggle) = (0i64, None, false);
+                ctx.input(|i| {
+                    if i.key_pressed(egui::Key::ArrowLeft) {
+                        step -= 1;
+                    }
+                    if i.key_pressed(egui::Key::ArrowRight) {
+                        step += 1;
+                    }
+                    if i.key_pressed(egui::Key::Home) {
+                        jump = Some(0);
+                    }
+                    if i.key_pressed(egui::Key::End) {
+                        jump = Some(frames - 1);
+                    }
+                    if i.key_pressed(egui::Key::Space) {
+                        toggle = true;
+                    }
+                });
+                if let Some(view) = &mut self.run {
+                    if toggle {
+                        view.playing = !view.playing;
+                        view.last_step = None;
+                    }
+                    if let Some(f) = jump {
+                        view.frame = f;
+                        view.playing = false;
+                    }
+                    if step != 0 {
+                        let n = frames as i64;
+                        view.frame = (((view.frame as i64 + step) % n + n) % n) as usize;
+                        view.playing = false;
+                    }
+                }
+            }
+        }
+
+        // Playback, on a clock. Sixteen frames a second: a run is not a film and a reader is
+        // comparing frames, not watching one.
+        if let Some(view) = &mut self.run {
+            let frames = view.run.frames.len();
+            if view.playing && frames > 1 {
+                let due = view
+                    .last_step
+                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(62));
+                if due {
+                    view.frame = (view.frame + 1) % frames;
+                    view.last_step = Some(Instant::now());
+                }
+                ctx.request_repaint_after(Duration::from_millis(20));
+            }
+        }
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             match self.checked.error.as_deref() {
@@ -483,6 +590,15 @@ impl App {
                 self.camera.zoom(0.999_f64.powf(scroll * 3.0));
             }
         }
+        // Where the cursor is, for the probe. `None` while dragging: a reader turning the model
+        // is not asking what is under their finger, and a readout that flickers through every
+        // body on the way is noise.
+        let pointer = if response.dragged() {
+            None
+        } else {
+            response.hover_pos()
+        };
+        let mut probe = Probe::default();
 
         // The world this paint frames: scene geometry, widened by whatever the run reached —
         // an orbit's bodies live far outside any placed extent.
@@ -511,13 +627,25 @@ impl App {
             self.needs_fit = false;
         }
 
-        let to_screen = |p: [f64; 3]| -> egui::Pos2 {
+        // **The projection returns a depth and this keeps it.** `Camera::project` computes
+        // "distance from the eye, larger is further"; the closure here returned only a position,
+        // so paint order was recovered afterwards by projecting each point a second time a
+        // millimetre along world z and taking the reciprocal of the screen separation. That is
+        // proportional to how far *off the view axis* a point is, not to how far away, and it
+        // ordered 26% of a 6x6x6 splat lattice backwards — worst at the centre of the screen,
+        // which is where the object is. The browser shell had always sorted by the real depth;
+        // both call `editor_core::far_to_near` now, so there is one copy to be wrong.
+        let project = |p: [f64; 3]| -> (egui::Pos2, f64) {
             let q = self.camera.project(p, &framing, aspect);
-            egui::pos2(
-                rect.center().x + (q.x as f32) * rect.width() * 0.5,
-                rect.center().y - (q.y as f32) * rect.height() * 0.5,
+            (
+                egui::pos2(
+                    rect.center().x + (q.x as f32) * rect.width() * 0.5,
+                    rect.center().y - (q.y as f32) * rect.height() * 0.5,
+                ),
+                q.depth,
             )
         };
+        let to_screen = |p: [f64; 3]| -> egui::Pos2 { project(p).0 };
 
         // The scene's own geometry: every placed extent, wireframed. Drawn from the text, not
         // the run, so layout is visible while editing and before anything is computed.
@@ -538,11 +666,22 @@ impl App {
             );
         }
 
-        // The run, by shape. Points are circles, paths are polylines, both coloured by value
-        // on the run-wide scale — one scale across the run, never per frame, for the reason
-        // viewer-core states; while a run streams, "the run" is the run so far, and the
-        // colours settle when it does. A field's box is already on screen; its values stay
-        // the HTML report's job for now, and saying so beats quietly drawing nothing.
+        // How big any of this is. A viewport with no scale is a picture of a shape and not of a
+        // part: the same wireframe serves a 40 mm die and a 4 m room, and until now nothing on
+        // screen said which. Drawn from the framing's own span, so it is the model's metres and
+        // not the window's pixels.
+        scale_bar(
+            &painter,
+            rect,
+            &project,
+            &framing,
+            ui.visuals().weak_text_color(),
+        );
+
+        // The run, by shape. Points are circles, paths are polylines, fields are splats, all
+        // coloured by value on the run-wide scale — one scale across the run, never per frame,
+        // for the reason viewer-core states; while a run streams, "the run" is the run so far,
+        // and the colours settle when it does.
         let Some(view) = &mut self.run else {
             return;
         };
@@ -561,21 +700,56 @@ impl App {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.horizontal(|ui| {
                         ui.add(egui::Slider::new(&mut view.frame, 0..=frames - 1).text("frame"));
-                        ui.label(format!("t = {:.4} s", view.run.frames[view.frame].t));
+                        ui.label(format!(
+                            "t = {} s",
+                            editor_core::magnitude(view.run.frames[view.frame].t)
+                        ));
                     });
                 });
             });
         }
         let frame = &view.run.frames[view.frame.min(frames - 1)];
+
+        // The scale the colour bar will show. The first panel that has one: a viewport holding
+        // two quantities cannot draw one bar for both, and drawing the first with its name on it
+        // beats drawing none.
+        let mut legend: Option<(f64, f64, String, bool)> = None;
+
         for panel in &frame.panels {
             let scale = view.run.scale_of(panel.name());
+            if legend.is_none() {
+                if let Some((lo, hi)) = scale {
+                    legend = Some((
+                        lo,
+                        hi,
+                        format!("{} / {}", panel.name(), panel.unit()),
+                        editor_core::scale_is_signed(scale),
+                    ));
+                }
+            }
             match panel {
                 viewer_core::Panel::Points {
-                    positions, values, ..
+                    name,
+                    unit,
+                    positions,
+                    values,
+                    ..
                 } => {
-                    for (i, value) in values.iter().enumerate() {
-                        let p = [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]];
-                        painter.circle_filled(to_screen(p), 3.5, shade(*value, scale));
+                    // Far to near, so a body in front covers one behind rather than whichever
+                    // happened to be last in the array.
+                    let pts: Vec<[f64; 3]> = (0..values.len())
+                        .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
+                        .collect();
+                    let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
+                    for i in editor_core::far_to_near(&depths) {
+                        let at = to_screen(pts[i]);
+                        painter.circle_filled(at, 3.5, shade(values[i], scale));
+                        probe.offer(pointer, at, 6.0, depths[i], || {
+                            format!(
+                                "{name} body {i}   {} {unit}",
+                                editor_core::magnitude(values[i])
+                            )
+                        });
                     }
                 }
                 viewer_core::Panel::Paths {
@@ -610,20 +784,35 @@ impl App {
                     ny,
                     nz,
                     values,
+                    ..
                 } => {
-                    let Some(b) = self.checked.boxes.iter().find(|b| &b.name == name) else {
-                        // A field with no placed extent has nowhere to be drawn, and saying so
-                        // beats an absence: the scene stated a field and the picture has none.
+                    // **The run's own extent first, the scene's placed box second.** A field
+                    // carries the box it was sampled over now, so a run opened without the file
+                    // that produced it still draws in the right place and at the right size. The
+                    // placed box is the fallback for a run written before the format carried it,
+                    // and a field with neither has nowhere to be drawn — which is said rather
+                    // than shown as an absence.
+                    let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
+                        name: name.clone(),
+                        corners: editor_core::corners_of(e),
+                    });
+                    let placed = from_run
+                        .as_ref()
+                        .or_else(|| self.checked.boxes.iter().find(|b| &b.name == name));
+                    let Some(b) = placed else {
                         continue;
                     };
                     if let Some(note) = draw_field(
                         &painter,
-                        &to_screen,
+                        &project,
                         b,
                         (*nx, *ny, *nz),
                         values,
                         unit,
                         scale,
+                        pointer,
+                        &mut probe,
+                        name,
                     ) {
                         painter.text(
                             to_screen(b.corners[0]),
@@ -637,7 +826,17 @@ impl App {
             }
         }
 
+        // The colour bar. Without it the viewport says *more* and *less* and never *how much* —
+        // which is the whole difference between a picture and a reading, and the report grew one
+        // for every view for the same reason.
+        if let Some((lo, hi, label, signed)) = legend {
+            colour_bar(&painter, rect, lo, hi, &label, signed, ui.visuals());
+        }
+
         // The frame's readings, top-right: the numbers for everything that has no picture.
+        //
+        // `editor_core::magnitude`, not `{:.4}` — a cavity holding 3.19e-10 J printed `0.0000`
+        // here beside a field the same run reported at 921 V/m.
         let readings = &frame.readings;
         if !readings.is_empty() {
             let mut y = rect.top() + 8.0;
@@ -645,35 +844,223 @@ impl App {
                 painter.text(
                     egui::pos2(rect.right() - 8.0, y),
                     egui::Align2::RIGHT_TOP,
-                    format!("{} {} {:.4} {}", r.domain, r.label, r.value, r.unit),
+                    format!(
+                        "{} {} {} {}",
+                        r.domain,
+                        r.label,
+                        editor_core::magnitude(r.value),
+                        r.unit
+                    ),
                     egui::FontId::monospace(11.0),
                     ui.visuals().text_color(),
                 );
                 y += 14.0;
             }
         }
+
+        // And what the cursor is over, if anything.
+        probe.draw(&painter, ui.visuals());
     }
 }
 
-/// The file's modified time, or `None` for a path that does not resolve to one.
-fn mtime_of(path: &str) -> Option<SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+/// The nearest thing under the cursor, and what to say about it.
+///
+/// A viewport you cannot point at makes a reader export a CSV to answer "what is that". Nearest
+/// **to the eye** rather than nearest on screen among things within reach, so the thing named is
+/// the thing they can see: two bodies overlapping in projection are two different answers and
+/// only one of them is visible.
+#[derive(Default)]
+struct Probe {
+    best: Option<(f64, egui::Pos2, String)>,
 }
 
-/// Draw a field as depth-sorted voxels, and return the note the canvas should carry.
+impl Probe {
+    fn offer(
+        &mut self,
+        pointer: Option<egui::Pos2>,
+        at: egui::Pos2,
+        reach: f32,
+        depth: f64,
+        text: impl FnOnce() -> String,
+    ) {
+        let Some(p) = pointer else { return };
+        if (p - at).length() > reach {
+            return;
+        }
+        if self.best.as_ref().is_none_or(|(d, _, _)| depth < *d) {
+            self.best = Some((depth, at, text()));
+        }
+    }
+
+    fn draw(&self, painter: &egui::Painter, visuals: &egui::Visuals) {
+        let Some((_, at, text)) = &self.best else {
+            return;
+        };
+        let font = egui::FontId::monospace(11.0);
+        let galley = painter.layout_no_wrap(text.clone(), font, visuals.strong_text_color());
+        let pad = egui::vec2(6.0, 3.0);
+        let origin = *at + egui::vec2(10.0, -galley.size().y - 10.0);
+        let box_rect = egui::Rect::from_min_size(origin, galley.size() + pad * 2.0);
+        painter.rect_filled(box_rect, 3.0, visuals.extreme_bg_color);
+        painter.rect_stroke(
+            box_rect,
+            3.0,
+            egui::Stroke::new(1.0, visuals.weak_text_color()),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(origin + pad, galley, visuals.strong_text_color());
+        painter.circle_stroke(
+            *at,
+            5.0,
+            egui::Stroke::new(1.5, visuals.strong_text_color()),
+        );
+    }
+}
+
+/// A bar of the scale in use, with the numbers a reader needs to invert it.
 ///
-/// The cells and their colours are `editor-core`'s [`field_splats`](editor_core::field_splats),
-/// shared with the browser shell for the reason the camera is shared with the viewer: the rule
-/// that decides what colour a value is could be got wrong the same way twice, and once is
-/// enough. What is left here is projection, depth sorting and a radius — geometry, painted.
+/// The ends are `editor_core::bar_value`'s, so a diverging scale is labelled with the deflection
+/// it actually covers rather than with the data's range — the two differ whenever the range is
+/// not symmetric about zero, and labelling a symmetric scale with an asymmetric range is a lie
+/// about where the neutral colour sits.
+fn colour_bar(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    lo: f64,
+    hi: f64,
+    label: &str,
+    signed: bool,
+    visuals: &egui::Visuals,
+) {
+    let scale = Some((lo, hi));
+    let w = (rect.width() * 0.28).clamp(120.0, 280.0);
+    let x0 = rect.right() - 16.0 - w;
+    let y = rect.bottom() - 34.0;
+    let steps = w as usize;
+    for i in 0..steps {
+        let u = i as f64 / (steps - 1).max(1) as f64;
+        let [r, g, b] = editor_core::value_colour(editor_core::bar_value(u, scale), scale);
+        painter.rect_filled(
+            egui::Rect::from_min_size(egui::pos2(x0 + i as f32, y), egui::vec2(1.0, 9.0)),
+            0.0,
+            egui::Color32::from_rgb(r, g, b),
+        );
+    }
+    let font = egui::FontId::monospace(10.0);
+    for (u, align) in [
+        (0.0, egui::Align2::LEFT_TOP),
+        (0.5, egui::Align2::CENTER_TOP),
+        (1.0, egui::Align2::RIGHT_TOP),
+    ] {
+        painter.text(
+            egui::pos2(x0 + (u as f32) * w, y + 11.0),
+            align,
+            editor_core::magnitude(editor_core::bar_value(u, scale)),
+            font.clone(),
+            visuals.weak_text_color(),
+        );
+    }
+    painter.text(
+        egui::pos2(x0 - 8.0, y + 4.0),
+        egui::Align2::RIGHT_CENTER,
+        if signed {
+            format!("{label}  (0 at the middle)")
+        } else {
+            label.to_string()
+        },
+        egui::FontId::monospace(10.0),
+        visuals.weak_text_color(),
+    );
+}
+
+/// A bar of known length in model metres, so the viewport says how big the thing is.
+///
+/// Measured by projecting two points a known distance apart at the centre of the framing and
+/// reading how far they land apart on screen, then rounding that length down a 1-2-5 ladder —
+/// the same reason the report's ticks use one, which is that a bar labelled 0.3714 m is a bar
+/// nobody reads.
+fn scale_bar(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    project: &impl Fn([f64; 3]) -> (egui::Pos2, f64),
+    framing: &viewer_core::Framing,
+    colour: egui::Color32,
+) {
+    let c = framing.centre;
+    let probe = framing.span.max(f64::MIN_POSITIVE);
+    let a = project(c).0;
+    let b = project([c[0] + probe, c[1], c[2]]).0;
+    let px_per_metre = ((b - a).length() as f64) / probe;
+    if !(px_per_metre.is_finite() && px_per_metre > 0.0) {
+        return;
+    }
+    // Aim for about a fifth of the window, then round down to 1, 2 or 5 times a power of ten.
+    let want = (rect.width() as f64 * 0.2) / px_per_metre;
+    let mag = 10f64.powf(want.log10().floor());
+    let n = want / mag;
+    let length = mag
+        * if n >= 5.0 {
+            5.0
+        } else if n >= 2.0 {
+            2.0
+        } else {
+            1.0
+        };
+    let px = (length * px_per_metre) as f32;
+    if !(px.is_finite() && (12.0..rect.width() * 0.8).contains(&px)) {
+        return;
+    }
+    let y = rect.bottom() - 14.0;
+    let x0 = rect.left() + 16.0;
+    let stroke = egui::Stroke::new(1.5, colour);
+    painter.line_segment([egui::pos2(x0, y), egui::pos2(x0 + px, y)], stroke);
+    for x in [x0, x0 + px] {
+        painter.line_segment([egui::pos2(x, y - 4.0), egui::pos2(x, y + 4.0)], stroke);
+    }
+    painter.text(
+        egui::pos2(x0 + px * 0.5, y - 6.0),
+        egui::Align2::CENTER_BOTTOM,
+        metres(length),
+        egui::FontId::monospace(10.0),
+        colour,
+    );
+}
+
+/// A length in metres, on the unit an engineer would say it in.
+fn metres(m: f64) -> String {
+    let a = m.abs();
+    if a >= 1e4 {
+        format!("{m:.2e} m")
+    } else if a >= 1.0 {
+        format!("{} m", trim(format!("{m:.3}")))
+    } else if a >= 1e-3 {
+        format!("{} mm", trim(format!("{:.3}", m * 1e3)))
+    } else {
+        format!("{} um", trim(format!("{:.3}", m * 1e6)))
+    }
+}
+
+/// Trailing zeros only count as trailing **after a decimal point**. Stripping them without that
+/// check turned 500 into 5 in the report, and captioned a 500 um channel as a 5 um one.
+fn trim(s: String) -> String {
+    if !s.contains('.') {
+        return s;
+    }
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_field(
     painter: &egui::Painter,
-    to_screen: &impl Fn([f64; 3]) -> egui::Pos2,
+    project: &impl Fn([f64; 3]) -> (egui::Pos2, f64),
     placed: &editor_core::PlacedBox,
     counts: (usize, usize, usize),
     values: &[f64],
     unit: &str,
     scale: Option<(f64, f64)>,
+    pointer: Option<egui::Pos2>,
+    probe: &mut Probe,
+    name: &str,
 ) -> Option<&'static str> {
     let out = editor_core::field_splats(&placed.corners, counts, values, unit, scale);
     if out.splats.is_empty() {
@@ -683,60 +1070,62 @@ fn draw_field(
     // One splat's screen size: the box's own projected span divided by its grid, so a coarse
     // field draws fat cells and a fine one draws small ones instead of both drawing dots.
     let span_px = {
-        let a = to_screen(placed.corners[0]);
-        let b = to_screen(placed.corners[7]);
-        ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+        let a = project(placed.corners[0]).0;
+        let b = project(placed.corners[7]).0;
+        (a - b).length()
     };
     let (nx, ny, nz) = counts;
     let radius =
         (span_px / (nx.max(ny).max(nz) as f32) * 0.7 / out.stride.max(1) as f32).clamp(1.0, 40.0);
 
     // Painter's algorithm, far to near, which is what makes a translucent volume composite in
-    // the right order.
-    let mut drawn: Vec<(f64, egui::Pos2, egui::Color32)> = out
-        .splats
-        .iter()
-        .map(|s| {
-            let c =
-                egui::Color32::from_rgba_unmultiplied(s.rgba[0], s.rgba[1], s.rgba[2], s.rgba[3]);
-            (depth_of(to_screen, s.at), to_screen(s.at), c)
-        })
-        .collect();
-    drawn.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    for (_, at, colour) in &drawn {
-        painter.circle_filled(*at, radius, *colour);
+    // the right order — on the depth the projection returned, not on a stand-in for it.
+    let placed_at: Vec<(egui::Pos2, f64)> = out.splats.iter().map(|s| project(s.at)).collect();
+    let depths: Vec<f64> = placed_at.iter().map(|(_, d)| *d).collect();
+    let stride = out.stride.max(1);
+    for i in editor_core::far_to_near(&depths) {
+        let s = &out.splats[i];
+        let (at, depth) = placed_at[i];
+        let c = egui::Color32::from_rgba_unmultiplied(s.rgba[0], s.rgba[1], s.rgba[2], s.rgba[3]);
+        painter.circle_filled(at, radius, c);
+        // The grid index this splat came from, recovered from its place in the strided walk, so
+        // the readout names a cell a reader can find in the CSV rather than a serial number.
+        let per_row = nx.div_ceil(stride);
+        let per_plane = per_row * ny.div_ceil(stride);
+        let (gi, gj, gk) = (
+            (i % per_row) * stride,
+            (i / per_row % ny.div_ceil(stride)) * stride,
+            (i / per_plane) * stride,
+        );
+        let v = values
+            .get(gi + nx * (gj + ny * gk))
+            .copied()
+            .unwrap_or(f64::NAN);
+        probe.offer(pointer, at, radius.max(4.0), depth, || {
+            format!(
+                "{name} [{gi},{gj},{gk}]   {} {unit}",
+                editor_core::magnitude(v)
+            )
+        });
     }
     Some(out.note)
 }
 
-/// A stand-in depth for the painter's sort: the screen position alone cannot order two points,
-/// so the world point's distance along the view is recovered by projecting a point pushed
-/// slightly away — cheaper than threading the camera through, and monotone in true depth,
-/// which is all a sort needs.
-fn depth_of(to_screen: &impl Fn([f64; 3]) -> egui::Pos2, p: [f64; 3]) -> f64 {
-    let a = to_screen(p);
-    let b = to_screen([p[0], p[1], p[2] + 1e-3]);
-    let sep = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() as f64;
-    if sep > 0.0 {
-        1.0 / sep
-    } else {
-        f64::MAX
-    }
+/// A value on the run-wide scale, as a colour.
+///
+/// `editor_core::value_colour`, which is `pantometry::view::ramp` — the same scale the HTML report
+/// draws with, built in CIE LCh with lightness linear in the value. What was here was a straight
+/// line in sRGB from blue to red, duplicated in the browser shell, covering 16.6 L\* against the
+/// library scale's 74: a scale that a greyscale print, a projector and a colour-vision deficiency
+/// all reduce to one flat block.
+fn shade(value: f64, scale: Option<(f64, f64)>) -> egui::Color32 {
+    let [r, g, b] = editor_core::value_colour(value, scale);
+    egui::Color32::from_rgb(r, g, b)
 }
 
-/// A value on the run-wide scale, as a colour. The two-ended ramp the HTML report uses in
-/// spirit: low is blue, high is warm, and a missing scale (a panel of one constant) is drawn
-/// mid-ramp rather than invisibly.
-fn shade(value: f64, scale: Option<(f64, f64)>) -> egui::Color32 {
-    let t = match scale {
-        Some((lo, hi)) if hi > lo => ((value - lo) / (hi - lo)).clamp(0.0, 1.0),
-        _ => 0.5,
-    } as f32;
-    egui::Color32::from_rgb(
-        (60.0 + 195.0 * t) as u8,
-        (90.0 + 40.0 * (1.0 - (2.0 * t - 1.0).abs())) as u8,
-        (230.0 - 170.0 * t) as u8,
-    )
+/// The file's modified time, or `None` for a path that does not resolve to one.
+fn mtime_of(path: &str) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// Union of an optional box with another box.

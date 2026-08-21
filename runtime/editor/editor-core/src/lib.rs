@@ -447,6 +447,9 @@ pub struct Splatted {
     pub stride: usize,
     /// Whether the colours are Planck's or the conventional ramp — see [`field_splats`].
     pub physical: bool,
+    /// Whether the conventional ramp used was the diverging one, so a shell's colour bar can say
+    /// so and label its ends with the deflection rather than with the data's range.
+    pub signed: bool,
     /// The note the canvas must carry, saying which of the two a reader is looking at.
     pub note: &'static str,
 }
@@ -488,6 +491,7 @@ pub fn field_splats(
             splats: Vec::new(),
             stride: 1,
             physical: false,
+            signed: false,
             note: "field: the panel's values do not fill its grid — not drawn",
         };
     }
@@ -550,8 +554,18 @@ pub fn field_splats(
                     let rel = (pantometry::view::glow_fraction(kelvin) / peak_glow).clamp(0.0, 1.0);
                     [r, g, b, ((rel.sqrt() * 235.0) as u8).max(6)]
                 } else {
-                    let (r, g, b) = ramp(s);
-                    [r, g, b, (30.0 + 200.0 * s * s) as u8]
+                    let [r, g, b] = value_colour(v, scale);
+                    // Opacity still climbs with the value's place in the range, so the quiet bulk
+                    // of a field clears out of the way. The colour is no longer computed from
+                    // that place: a signed field's colour is placed about **zero** and its
+                    // opacity about the middle of the deflection, and those are not the same
+                    // point unless the range happens to be symmetric.
+                    let a = if scale_is_signed(scale) {
+                        (2.0 * s - 1.0).abs()
+                    } else {
+                        s
+                    };
+                    [r, g, b, (30.0 + 200.0 * a * a) as u8]
                 };
                 splats.push(Splat { at, rgba });
             }
@@ -568,19 +582,132 @@ pub fn field_splats(
         splats,
         stride,
         physical,
+        signed: scale_is_signed(scale),
         note,
     }
 }
 
-/// The conventional ramp, for a quantity physics gives no colour to: cool blue through to warm.
+/// The colour of a value on a run-wide scale, for a quantity physics gives no colour to.
 ///
-/// A designer's choice and stated as one. It says *more* and *less*, which for a pressure
-/// swinging about zero is the whole truth and for a temperature is a stand-in.
-fn ramp(t: f64) -> (u8, u8, u8) {
-    let t = t.clamp(0.0, 1.0);
-    (
-        (60.0 + 195.0 * t) as u8,
-        (90.0 + 40.0 * (1.0 - (2.0 * t - 1.0).abs())) as u8,
-        (230.0 - 170.0 * t) as u8,
-    )
+/// **`pantometry::view::ramp`, not a formula written here.** What was here was a straight line in
+/// sRGB from blue to red, and both shells kept their own copy of it, so the workspace held four
+/// spellings of "cool to warm". Measured over 256 steps, that line covered **16.6 L\*** — 44.1 to
+/// 60.7 — against the 74 the library's scale covers. Lightness is where a scale survives a
+/// greyscale print, a projector, and the eight per cent of men with a colour-vision deficiency,
+/// and a scale carrying its whole signal on the blue-red axis is the one pair those readers
+/// cannot separate. Seventy-five of its 255 steps also ran backwards.
+///
+/// The library's scale is built in CIE LCh with lightness linear in the value, and its properties
+/// are pinned by tests there rather than asserted here.
+///
+/// **Which scale is chosen by the numbers.** A range that straddles zero is a signed quantity —
+/// a pressure, a component of **E** — and gets the diverging scale with its neutral at the value
+/// **zero**, not at the middle of the range: for -100 to +300 those are a quarter of the scale
+/// apart. Anything else gets the sequential one. Nothing here reads the domain's name.
+pub fn value_colour(value: f64, scale: Option<(f64, f64)>) -> [u8; 3] {
+    let Some((lo, hi)) = scale.filter(|(lo, hi)| hi > lo) else {
+        // A panel holding one constant has no scale to place a value on. Mid-ramp rather than
+        // invisible: the cell is there and the picture should say so.
+        return pantometry::view::ramp::sequential(0.5);
+    };
+    if pantometry::view::ramp::is_signed(lo, hi) {
+        let reach = lo.abs().max(hi.abs()).max(f64::MIN_POSITIVE);
+        pantometry::view::ramp::diverging(0.5 + 0.5 * value / reach)
+    } else {
+        pantometry::view::ramp::sequential((value - lo) / (hi - lo))
+    }
+}
+
+/// Whether a run-wide scale is a swing about zero, so a shell can say which scale its bar shows.
+pub fn scale_is_signed(scale: Option<(f64, f64)>) -> bool {
+    scale.is_some_and(|(lo, hi)| hi > lo && pantometry::view::ramp::is_signed(lo, hi))
+}
+
+/// The value at a position `u` in `0..=1` along the colour bar, inverting [`value_colour`].
+///
+/// A bar a reader cannot read a number off is a decoration. For a diverging scale this spans
+/// `-reach..=+reach` rather than `lo..=hi`, because that is the range the scale actually covers:
+/// it is symmetric by construction and labelling it with the data's range would mislabel it.
+pub fn bar_value(u: f64, scale: Option<(f64, f64)>) -> f64 {
+    let Some((lo, hi)) = scale.filter(|(lo, hi)| hi > lo) else {
+        return 0.0;
+    };
+    if pantometry::view::ramp::is_signed(lo, hi) {
+        let reach = lo.abs().max(hi.abs());
+        (2.0 * u - 1.0) * reach
+    } else {
+        lo + u * (hi - lo)
+    }
+}
+
+/// Indices of `depths`, furthest from the eye first.
+///
+/// **Painter's algorithm needs the depth the projection computed, and one shell had one that did
+/// not.** `Camera::project` returns a `depth` — "distance from the eye, larger is further" — and
+/// the native shell discarded it, then recovered a stand-in by projecting each point a second
+/// time one millimetre along **world z** and taking the reciprocal of how far the two landed
+/// apart on screen.
+///
+/// That separation is proportional to how far off the view axis a point is, not to how far away
+/// it is. On a 6x6x6 field of splats it ordered **6,026 of 23,220 pairs backwards — 26%** — so a
+/// quarter of a translucent volume composited in the wrong order, and worst at the centre of the
+/// screen, which is where the object is. The browser shell sorted by the real depth and was
+/// right; the native one kept its own copy and was not. This is that copy, written once.
+///
+/// A `NaN` sorts to the far end rather than panicking: `sort_by` over a partial order containing
+/// one is a panic inside a paint loop, and a splat with no depth is a splat to draw first.
+pub fn far_to_near(depths: &[f64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..depths.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (x, y) = (depths[a], depths[b]);
+        y.partial_cmp(&x)
+            .unwrap_or_else(|| y.is_nan().cmp(&x.is_nan()))
+    });
+    order
+}
+
+/// A number with its magnitude intact, for a panel of readings.
+///
+/// **Significant figures, not decimal places.** The native shell printed readings `{:.4}`, so a
+/// cavity holding 3.19e-10 J showed `0.0000` beside a field the same run reported at 921 V/m —
+/// the same erasure `readings_csv` was fixed for, and then `to_json`, and now here in the third
+/// writer. A scene format spanning nanoseconds to hours and femtojoules to kilowatts has no one
+/// scale at which a fixed-point format is right.
+pub fn magnitude(v: f64) -> String {
+    if !v.is_finite() {
+        return "-".to_string();
+    }
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let a = v.abs();
+    if !(1e-3..1e6).contains(&a) {
+        format!("{v:.4e}")
+    } else if a >= 100.0 {
+        format!("{v:.2}")
+    } else if a >= 1.0 {
+        format!("{v:.4}")
+    } else {
+        format!("{v:.6}")
+    }
+}
+
+/// The eight corners of an axis-aligned box, in the order [`PlacedBox::corners`] uses.
+///
+/// Bit 0 is x, bit 1 is y, bit 2 is z, and a clear bit takes the low face — the order [`EDGES`]
+/// is written against, so a box built here wireframes correctly with no further agreement.
+///
+/// Here because a **run** can now say where its field was sampled: `extent_m` travels in the wire
+/// format, so a shell drawing a run needs a box from six numbers without a scene beside it. That
+/// is the case the standalone viewer has always been in and the editor is in whenever a run is
+/// opened without the file that produced it.
+pub fn corners_of(extent: [f64; 6]) -> [[f64; 3]; 8] {
+    let pick = |i: usize, a: usize| {
+        if i & (1 << a) == 0 {
+            extent[a]
+        } else {
+            extent[a + 3]
+        }
+    };
+    std::array::from_fn(|i| [pick(i, 0), pick(i, 1), pick(i, 2)])
 }

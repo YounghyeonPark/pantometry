@@ -39,6 +39,24 @@ It reads all three panel shapes a run can contain, and an unknown `kind` is an *
 than a panel quietly skipped. A viewer written against an older library than the run should say
 so, not open a window with something missing.
 
+## The format grew a key, and this crate refused every file
+
+`deny_unknown_fields` is deliberate here — a reader that silently drops what it does not recognise
+is how a renamed field once went unnoticed in this workspace — and the price came due the day
+`pantometry-view` started writing `extent_m` on a field. Every run the library produced stopped
+parsing, with the message naming the key, and the library's own twenty-step gate could not see it:
+this is a separate workspace with a separate job, and nothing in `crates/` reads the format back.
+
+`extent_m` is `Option` with a `serde` default, so a reader built today opens a file written before
+today. The fixtures in `tests/runs/` are deliberately **not** regenerated: they are what an older
+library wrote, and they are the only thing that can prove the old direction still works.
+
+It is worth what it costs. Before this, a field carried a grid and not the extent it was sampled
+over, so `Panel::bounds` returned **the grid in cell units** — a 9×9×9 block framed as a nine-metre
+cube, at the origin however far from it the part really was, and a slab asked for at more slices
+drawn taller for it. That was recorded in a doc comment rather than fixed, because the number
+genuinely was not in the file.
+
 ## Where the arithmetic lives
 
 `viewer-core` has no GPU dependency and holds everything that could be got wrong the same way

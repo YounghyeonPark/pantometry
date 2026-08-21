@@ -191,7 +191,13 @@ impl GpuSolid {
     }
 
     /// Put joules into one cell, as heat that arrived there.
-    pub fn deposit(&mut self, i: usize, j: usize, k: usize, joules: pantometry_core::units::Energy) {
+    pub fn deposit(
+        &mut self,
+        i: usize,
+        j: usize,
+        k: usize,
+        joules: pantometry_core::units::Energy,
+    ) {
         let (nx, ny, nz) = self.counts;
         if i >= nx || j >= ny || k >= nz {
             return;

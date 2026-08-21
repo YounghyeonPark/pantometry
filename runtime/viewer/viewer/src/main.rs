@@ -74,7 +74,9 @@ fn main() {
         Some(p) => p,
         None => {
             eprintln!("usage: viewer <run.json>");
-            eprintln!("  produced by `pantometry-world <scene> out.json`, or by any run that calls");
+            eprintln!(
+                "  produced by `pantometry-world <scene> out.json`, or by any run that calls"
+            );
             eprintln!("  pantometry_view::to_json");
             std::process::exit(2);
         }
