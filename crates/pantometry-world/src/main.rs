@@ -9,6 +9,8 @@
 //! pantometry-world scene.json out.svg     # a filmstrip: every frame, one page, still
 //! pantometry-world scene.json out.csv     # every domain's scalars over time, one row per frame
 //! pantometry-world scene.json out.json    # the frames themselves — fields, bodies and readings
+//! pantometry-world scene.json out.usda    # the whole run as USD: geometry, colour and scalars,
+//!                                         # animated, for usdview / Omniverse / Houdini / Maya
 //! pantometry-world --check s.json         # does it parse and build, without running it
 //! pantometry-world --emit-default s.json  # write the built-in scene out to start from
 //! pantometry-world verify s.json          # the battery: margins, determinism, both sweeps
@@ -411,6 +413,26 @@ nothing to export: the run produced no frames"
                         out.document.len()
                     );
                 }
+                "usda" | "usd" => {
+                    // **The whole run, not one frame.** USD has time samples on any attribute, so
+                    // a field's colours animate and a body's positions animate, which is exactly
+                    // what glTF cannot express and why `.gltf` above takes the last frame only.
+                    let out = pantometry::view::usda(world.scene().title.as_str(), &frames);
+                    for note in &out.skipped {
+                        println!("  not exported: {note}");
+                    }
+                    for note in &out.notes {
+                        println!("  note: {note}");
+                    }
+                    write(path, &out.document)?;
+                    println!(
+                        "  wrote {path} ({} bytes, {} frames on the timeline). Open it with \
+                         `usdview {path}`, or in Omniverse, Houdini or Maya; `usdcat -o out.usdc \
+                         {path}` if a pipeline wants the binary crate",
+                        out.document.len(),
+                        frames.len()
+                    );
+                }
                 "json" => {
                     let json = to_json(world.scene().title.as_str(), &frames);
                     write(path, &json)?;
@@ -422,8 +444,9 @@ nothing to export: the run produced no frames"
                 }
                 other => {
                     eprintln!(
-                        "\ndon't know how to write {other:?}. Known: .svg a filmstrip, \
-                         .csv every domain's scalars over time, .json the frames themselves,                          .gltf the geometry."
+                        "\ndon't know how to write {other:?}. Known: .html a report, .svg a \
+                         filmstrip, .csv every domain's scalars over time, .json the frames \
+                         themselves, .gltf the last frame's geometry, .usda the whole run as USD."
                     );
                     std::process::exit(1);
                 }

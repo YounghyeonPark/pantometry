@@ -30,7 +30,8 @@ No second argument prints the numbers and checks them. A second argument writes 
 | `out.svg` | A filmstrip: every frame on one page, one colour scale throughout so frames compare |
 | `out.csv` | Every domain's scalars over time, one row per frame, units in the header |
 | `out.json` | The frames themselves — fields as grids, bodies as positions in space, readings beside them |
-| `out.gltf` | The geometry of the last frame, for Blender, three.js, Omniverse or any USD tool |
+| `out.gltf` | The last frame as **surfaces** — a field's boundary, a body's sphere, with normals — for Blender, three.js or any glTF reader |
+| `out.usda` | The **whole run** as USD: geometry, colour and every domain's scalars, animated on a timeline, for usdview, Omniverse, Houdini or Maya |
 
 `.csv` is the one that reaches the domains a picture cannot. Twelve of these twenty-eight scenes have
 a domain with no field and no bodies, and for several the scalar *is* the result: `13` is about a

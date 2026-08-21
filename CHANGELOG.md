@@ -72,6 +72,48 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   typical one. The estimate first written here was "5.21 MB to 1.48 MB" and was a guess; the table
   in `data.rs` is the measurement.
 
+### Added
+
+- **USD.** `pantometry_view::usda` writes a whole run as a `.usda` stage — `pantometry-world
+  scene.json out.usda` — so usdview, Omniverse, Houdini and Maya are the viewport.
+  `ARCHITECTURE.md` had named this "the next rung, and only worth it if the readers really are
+  Omniverse", and that condition is what made it wait.
+
+  It does what glTF structurally cannot. USD has **time samples on any attribute**, so one file
+  carries the topology once and the colours per frame, and the timeline scrubs the physics rather
+  than a camera move. A body's positions animate too. Verified through Blender's OpenUSD: scene
+  23's part is cream at frame 0 and green at frame 20 while its lid warms from navy, both on one
+  scale across the run so the two frames are comparable.
+
+  It carries the **numbers**, which no picture reaches. Twelve of the twenty-eight shipped scenes
+  have a domain with no field and no bodies, and for several of them the scalar *is* the result —
+  so every domain's readings go out as time-sampled custom attributes under `pantometry:`.
+  `ARCHITECTURE.md` is right that there is no USD schema for a `Ledger` or a `Violation`, and this
+  invents none: a custom attribute is a number with a name, which is what a reading is.
+
+  Still **no dependency**. `.usda` is USD's text serialisation and this writes it by hand, the same
+  choice glTF and SVG were written by hand for; `usdcat -o out.usdc out.usda` is one command if a
+  pipeline wants the binary crate. `metersPerUnit = 1` is stated rather than defaulted, because
+  USD's fallback is centimetres and a file that omits it has every part read a hundred times too
+  small.
+
+- **`pantometry_view::mesh`** — the geometry, once, for both exporters. A solid coming out one size
+  from the glTF and another from the USD would be worse than either being wrong, because the two
+  disagree and nothing in either file says which to believe. `the_gltf_and_the_usd_describe_the_same_solid`
+  is that claim.
+
+### Fixed
+
+- **The USD wrote a primvar's interpolation where USD does not read it.** `interpolation` is
+  attribute **metadata**, in parentheses; it was written as a separate
+  `primvars:displayColor:interpolation` property, which is the spelling a primvar's `:indices`
+  uses. With it missing the attribute falls back to `constant`, so a file carrying a colour per
+  vertex was drawn with the **first one** over the whole prim.
+
+  Found by rendering the file, where scene 23's hot part and cooled lid came out the same colour
+  while the text plainly held two. No check on the document could have said so, which is why this
+  one now checks for the metadata form and for the absence of the wrong one.
+
 ### Changed
 
 - **glTF exports surfaces, not a point cloud.** A point cloud has no silhouette, takes no light

@@ -608,12 +608,19 @@ checked against closed forms. So the move is to be *reachable from* them — `pa
 does that in a few hundred lines and no dependency, and reaches Blender, three.js and every USD
 pipeline. A USD writer is the next rung, and only worth it if the readers really are Omniverse.
 
+**The rung was taken.** `pantometry_view::usda` writes the whole run as a USD stage, in text, still
+with no dependency — the condition above is what made it wait and the condition was met. What it
+buys is the thing glTF structurally cannot do: USD has time samples on any attribute, so one file
+carries the topology once and the colours per frame, and usdview's timeline scrubs the simulation.
+It also carries the **numbers**: a domain with no geometry at all is most of what a scene here
+contains, and its scalars go out as time-sampled custom attributes under `pantometry:`.
+
 ### Where each of the four stands
 
 | | |
 | --- | --- |
 | a viewer | `runtime/viewer` — a wgpu window that reads the run **file** and does not link `pantometry` |
-| export | `pantometry_view::gltf` — **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. No dependency, reaches Blender, three.js and USD tools |
+| export | `pantometry_view::gltf` — one frame as **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. `pantometry_view::usda` — the **whole run**, animated, with every domain's scalars as time-sampled attributes. Both no dependency; the geometry is `pantometry_view::mesh`, shared, so the two cannot disagree about a solid's size |
 | GPU physics | `runtime/gpu` — 191× at 64³, single precision, CPU as the reference |
 | an editor | a skeleton, at `runtime/editor`: the scene's JSON checked as you type beside a wireframe of every placed extent, run and verify as buttons, `viewer-core`'s camera. The platform section below is what it grows into, under whose rules |
 

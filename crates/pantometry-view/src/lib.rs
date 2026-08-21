@@ -47,8 +47,10 @@ pub mod colour;
 pub mod data;
 pub mod filmstrip;
 pub mod gltf;
+pub mod mesh;
 pub mod ramp;
 pub mod report;
+pub mod usd;
 
 pub use colour::{blackbody_srgb, glow_fraction, planck_exitance, planckian_chromaticity};
 pub use data::{readings_csv, to_json};
@@ -56,3 +58,4 @@ pub use filmstrip::svg;
 pub use gltf::{gltf, Exported};
 pub use ramp::{diverging, is_signed, sequential};
 pub use report::html;
+pub use usd::{usda, Staged};

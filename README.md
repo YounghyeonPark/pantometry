@@ -641,12 +641,31 @@ light and cast shadows, which a point cloud cannot. Rendered from Blender straig
 scene 23 is a hot part and a cooled lid with a real gap between them, and scene 16's room shows its
 standing wave's nodal planes as dark bands across a solid.
 
-Two things that came out of doing it. The colours were being written into glTF's `COLOR_0` as sRGB
+**USD** is the other half of that, and it does what glTF cannot: `out.usda` is the *whole run*.
+USD has time samples on any attribute, so the topology is written once and the colours per frame,
+and usdview's timeline scrubs the physics rather than a camera move. Verified by rendering it
+through Blender's OpenUSD: scene 23's part is cream at frame 0 and green at frame 20 while its lid
+warms from navy, both on one scale across the run so the two frames are comparable.
+
+It carries the numbers too. A domain with no geometry at all — a heater, a lamp, a winding — is
+most of what a scene here contains, and its scalars go out as time-sampled custom attributes under
+`pantometry:`, which usdview shows in its property panel and scrubs with the timeline. There is no
+USD schema for a `Ledger` or a `Violation` and this invents none; a custom attribute is a number
+with a name, which is what a reading is.
+
+Still no dependency. `.usda` is USD's text serialisation and this writes it by hand, for the same
+reason glTF and SVG are written by hand here — and `usdcat -o out.usdc out.usda` is one command if
+a pipeline wants the binary crate.
+
+Three things came out of doing it. The colours were being written into glTF's `COLOR_0` as sRGB
 where the specification says linear, so every export this workspace has ever produced was decoded
 about 2.3x too bright in the midtones. And giving each sample a full cell made an object one whole
 cell larger than the extent it was sampled over — 2x on a two-sample axis — because `capture`
 samples corner to corner and an end node owns *half* a cell, which is the third time that
-arithmetic has been the bug here.
+arithmetic has been the bug here. And the USD wrote a primvar's interpolation as a separate
+property where USD reads it as attribute **metadata**, so a file holding a colour per vertex was
+drawn with the first one over the whole prim — found by rendering it, where a hot part and a cooled
+lid came out the same colour, and invisible to any check on the text.
 
 Modest is not the same as unreadable, and the report was the second for a while. Axes are in
 metres rather than in cells, hovering reads back the sample under the cursor, the scalar chart has
