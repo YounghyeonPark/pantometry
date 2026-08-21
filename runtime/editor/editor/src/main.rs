@@ -107,6 +107,9 @@ struct App {
     /// Fit the camera on the next paint. Set when geometry appears or is replaced, not every
     /// frame — a camera that re-fits while you drag is a camera you cannot aim.
     needs_fit: bool,
+    /// Frame the selection on the next paint. Separate from `needs_fit` because it fits a
+    /// different box, and because the aspect ratio it needs only exists inside the viewport.
+    pending_frame: bool,
 
     // The live loop.
     /// Poll the file for outside writes.
@@ -125,6 +128,23 @@ struct App {
     /// An auto-run is owed as soon as the current job ends — set when the file changed while
     /// something was in flight, so the picture converges on the latest text.
     rerun_owed: bool,
+
+    // The outliner and the inspector.
+    /// The selected row's path, or `None`. **A path, not an index**: the tree is rebuilt on every
+    /// check and every streamed frame, and a selection keyed by row number moves under the hand
+    /// that made it.
+    selected: Option<String>,
+    /// Paths collapsed in the outliner. Collapsed rather than expanded, so a tree that grows a
+    /// branch shows it instead of hiding it.
+    collapsed: std::collections::BTreeSet<String>,
+    /// Paths the reader has hidden. Everything under one is hidden with it.
+    hidden: std::collections::BTreeSet<String>,
+    /// Draw only the selection, for reading one thing out of a crowded scene.
+    solo: bool,
+    /// Whether the outliner and the inspector are on screen at all.
+    show_outliner: bool,
+    show_inspector: bool,
+    show_text: bool,
 }
 
 impl App {
@@ -159,12 +179,20 @@ impl App {
             status,
             camera: viewer_core::Camera::default(),
             needs_fit: true,
+            pending_frame: false,
             watch: true,
             auto_run: false,
             dirty: false,
             known_mtime,
             last_poll: None,
             rerun_owed: false,
+            selected: None,
+            collapsed: std::collections::BTreeSet::new(),
+            hidden: std::collections::BTreeSet::new(),
+            solo: false,
+            show_outliner: true,
+            show_inspector: true,
+            show_text: true,
         }
     }
 
@@ -362,32 +390,90 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(400));
         }
 
+        // A menu bar. What belongs in one is everything a reader needs occasionally and should
+        // not have to find on a crowded strip: which panels are on screen, what the viewport
+        // draws, and the two file operations.
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Load").clicked() {
+                        self.load_from_disk();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save").clicked() {
+                        self.save_to_disk();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Quit").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.show_outliner, "Outliner");
+                    ui.checkbox(&mut self.show_inspector, "Inspector");
+                    ui.checkbox(&mut self.show_text, "Scene text");
+                    ui.separator();
+                    ui.checkbox(&mut self.solo, "Solo the selection");
+                    if ui.button("Show everything").clicked() {
+                        self.hidden.clear();
+                        self.solo = false;
+                    }
+                    ui.separator();
+                    if ui.button("Fit view").clicked() {
+                        self.needs_fit = true;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.selected.is_some(),
+                            egui::Button::new("Frame selection"),
+                        )
+                        .clicked()
+                    {
+                        self.frame_selection();
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Run", |ui| {
+                    let runnable = self.checked.error.is_none() && self.busy.is_none();
+                    if ui.add_enabled(runnable, egui::Button::new("Run")).clicked() {
+                        self.start_run();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(self.busy.is_some(), egui::Button::new("Stop"))
+                        .clicked()
+                    {
+                        self.stop.store(true, Ordering::Relaxed);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(runnable, egui::Button::new("Verify"))
+                        .clicked()
+                    {
+                        self.start_verify();
+                        ui.close_menu();
+                    }
+                    ui.checkbox(&mut self.deep, "Deep");
+                });
+                ui.menu_button("Watch", |ui| {
+                    ui.checkbox(&mut self.watch, "Watch file");
+                    ui.checkbox(&mut self.auto_run, "Run on change");
+                });
+            });
+        });
+
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("file");
                 ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(220.0));
                 if ui.button("load").clicked() {
-                    match std::fs::read_to_string(&self.path) {
-                        Ok(t) => {
-                            self.text = t;
-                            self.dirty = false;
-                            self.known_mtime = mtime_of(&self.path);
-                            self.recheck();
-                            self.needs_fit = true;
-                            self.status = format!("loaded {}", self.path);
-                        }
-                        Err(e) => self.status = format!("{}: {e}", self.path),
-                    }
+                    self.load_from_disk();
                 }
                 if ui.button("save").clicked() {
-                    match std::fs::write(&self.path, &self.text) {
-                        Ok(()) => {
-                            self.dirty = false;
-                            self.known_mtime = mtime_of(&self.path);
-                            self.status = format!("saved {}", self.path);
-                        }
-                        Err(e) => self.status = format!("{}: {e}", self.path),
-                    }
+                    self.save_to_disk();
                 }
                 ui.separator();
                 let runnable = self.checked.error.is_none() && self.busy.is_none();
@@ -522,33 +608,54 @@ impl eframe::App for App {
             }
         });
 
-        egui::SidePanel::left("text")
-            .resizable(true)
-            .default_width(430.0)
-            .show(ctx, |ui| {
-                if let Some(summary) = &self.checked.summary {
-                    ui.label(summary.clone());
-                    for note in &self.checked.notes {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(230, 180, 60),
-                            format!("note: {note}"),
+        // Rebuilt every paint, from the checked scene and whatever the run has produced so far.
+        // Cheap — a few hundred rows at most — and the alternative is a cache that goes stale
+        // exactly when a streaming run is adding to it.
+        let frame_at = self.run.as_ref().map_or(0, |v| v.frame);
+        let tree = editor_core::tree(&self.checked, self.run.as_ref().map(|v| &v.run), frame_at);
+
+        if self.show_outliner {
+            egui::SidePanel::left("outliner")
+                .resizable(true)
+                .default_width(260.0)
+                .show(ctx, |ui| self.outliner(ui, &tree));
+        }
+        if self.show_inspector {
+            egui::SidePanel::right("inspector")
+                .resizable(true)
+                .default_width(320.0)
+                .show(ctx, |ui| self.inspector(ui, &tree));
+        }
+
+        if self.show_text {
+            egui::SidePanel::left("text")
+                .resizable(true)
+                .default_width(430.0)
+                .show(ctx, |ui| {
+                    if let Some(summary) = &self.checked.summary {
+                        ui.label(summary.clone());
+                        for note in &self.checked.notes {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(230, 180, 60),
+                                format!("note: {note}"),
+                            );
+                        }
+                        ui.separator();
+                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let edit = ui.add(
+                            egui::TextEdit::multiline(&mut self.text)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(34),
                         );
-                    }
-                    ui.separator();
-                }
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let edit = ui.add(
-                        egui::TextEdit::multiline(&mut self.text)
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(34),
-                    );
-                    if edit.changed() {
-                        self.dirty = true;
-                        self.recheck();
-                    }
+                        if edit.changed() {
+                            self.dirty = true;
+                            self.recheck();
+                        }
+                    });
                 });
-            });
+        }
 
         if self.verify_open {
             let mut open = true;
@@ -573,6 +680,204 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Load the file at `path` into the pane, replacing whatever is there.
+    fn load_from_disk(&mut self) {
+        match std::fs::read_to_string(&self.path) {
+            Ok(t) => {
+                self.text = t;
+                self.dirty = false;
+                self.known_mtime = mtime_of(&self.path);
+                self.recheck();
+                self.needs_fit = true;
+                self.status = format!("loaded {}", self.path);
+            }
+            Err(e) => self.status = format!("{}: {e}", self.path),
+        }
+    }
+
+    /// Write the pane to `path`.
+    fn save_to_disk(&mut self) {
+        match std::fs::write(&self.path, &self.text) {
+            Ok(()) => {
+                self.dirty = false;
+                self.known_mtime = mtime_of(&self.path);
+                self.status = format!("saved {}", self.path);
+            }
+            Err(e) => self.status = format!("{}: {e}", self.path),
+        }
+    }
+
+    /// Put the camera on the selection's box, if it has one.
+    fn frame_selection(&mut self) {
+        self.pending_frame = true;
+    }
+
+    /// Whether a row is drawn, given what is hidden and whether the selection is soloed.
+    ///
+    /// Hiding is by **path prefix**, so hiding a domain hides its field and its readings with it,
+    /// which is what a reader means by hiding a domain.
+    fn visible(&self, path: &str) -> bool {
+        if self
+            .hidden
+            .iter()
+            .any(|h| editor_core::Tree::contains(h, path))
+        {
+            return false;
+        }
+        match (&self.solo, &self.selected) {
+            (true, Some(sel)) => {
+                editor_core::Tree::contains(sel, path) || editor_core::Tree::contains(path, sel)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether a *panel or extent named `name`* is drawn. The viewport asks this.
+    ///
+    /// A name can appear in the tree twice — as a placed extent and as the panel a run filled it
+    /// with — and hiding either should hide the drawing, which is one thing.
+    fn draws(&self, name: &str) -> bool {
+        self.visible(&format!("/run/{name}")) && self.visible(&format!("/extents/{name}"))
+    }
+
+    /// The outliner: what is in this scene, as a tree you can select, hide and collapse.
+    fn outliner(&mut self, ui: &mut egui::Ui, tree: &editor_core::Tree) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Outliner").strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.checkbox(&mut self.solo, "solo")
+                    .on_hover_text("draw only the selection");
+            });
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Rows whose parent is collapsed are skipped, and so are their children: a
+                // collapsed branch has to hide the whole branch, not one level of it.
+                let mut hide_below: Option<usize> = None;
+                for (i, node) in tree.nodes.iter().enumerate() {
+                    if let Some(d) = hide_below {
+                        if node.depth > d {
+                            continue;
+                        }
+                        hide_below = None;
+                    }
+                    let has_children = tree.nodes.get(i + 1).is_some_and(|n| n.depth > node.depth);
+                    let is_collapsed = self.collapsed.contains(&node.path);
+                    if has_children && is_collapsed {
+                        hide_below = Some(node.depth);
+                    }
+                    let selected = self.selected.as_deref() == Some(node.path.as_str());
+                    let shown = self.visible(&node.path);
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(node.depth as f32 * 12.0);
+                        if has_children {
+                            let glyph = if is_collapsed { "\u{25b8}" } else { "\u{25be}" };
+                            if ui.small_button(glyph).clicked() {
+                                if is_collapsed {
+                                    self.collapsed.remove(&node.path);
+                                } else {
+                                    self.collapsed.insert(node.path.clone());
+                                }
+                            }
+                        } else {
+                            ui.add_space(18.0);
+                        }
+                        // The eye. Greyed rather than removed for a row hidden by an ancestor,
+                        // so a reader can see *that* it is hidden and where from.
+                        let own = self.hidden.contains(&node.path);
+                        let eye = if own {
+                            "\u{2013}"
+                        } else if shown {
+                            "\u{25cf}"
+                        } else {
+                            "\u{25cb}"
+                        };
+                        if ui
+                            .small_button(eye)
+                            .on_hover_text(if own { "show" } else { "hide" })
+                            .clicked()
+                        {
+                            if own {
+                                self.hidden.remove(&node.path);
+                            } else {
+                                self.hidden.insert(node.path.clone());
+                            }
+                        }
+                        let mut text = egui::RichText::new(&node.name);
+                        if !shown {
+                            text = text.weak();
+                        }
+                        if ui.selectable_label(selected, text).clicked() {
+                            self.selected = Some(node.path.clone());
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(node.kind.label())
+                                    .weak()
+                                    .monospace()
+                                    .size(10.0),
+                            );
+                        });
+                    });
+                }
+            });
+    }
+
+    /// The inspector: everything the core knows about the selected row.
+    ///
+    /// The rows come from `editor_core::Node::detail` rather than being assembled here, because
+    /// "what is this thing" is a question two shells should not answer differently.
+    fn inspector(&mut self, ui: &mut egui::Ui, tree: &editor_core::Tree) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Inspector").strong());
+        });
+        ui.separator();
+        let Some(path) = self.selected.clone() else {
+            ui.weak(
+                "nothing selected — pick a row in the outliner, or click something in the viewport",
+            );
+            return;
+        };
+        let Some(node) = tree.find(&path) else {
+            // A selection that no longer exists is worth saying rather than blanking: it means
+            // the scene was edited under it, which is a thing the reader did.
+            ui.weak(format!("{path} is no longer in this scene"));
+            return;
+        };
+        ui.label(egui::RichText::new(&node.name).heading());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(node.kind.label()).monospace().weak());
+            ui.label(
+                egui::RichText::new(&node.path)
+                    .monospace()
+                    .weak()
+                    .size(10.0),
+            );
+        });
+        if node.bounds.is_some() && ui.button("frame this").clicked() {
+            self.frame_selection();
+        }
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("props")
+                    .num_columns(2)
+                    .striped(true)
+                    .spacing([10.0, 3.0])
+                    .show(ui, |ui| {
+                        for (k, v) in &node.detail {
+                            ui.label(egui::RichText::new(k).weak().monospace().size(11.0));
+                            ui.label(egui::RichText::new(v).monospace().size(11.0));
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
     /// The 3D viewport: wireframe extents from the text, run panels over them by shape.
     fn viewport(&mut self, ui: &mut egui::Ui) {
         let (response, painter) =
@@ -599,6 +904,15 @@ impl App {
             response.hover_pos()
         };
         let mut probe = Probe::default();
+        // What the selection is, resolved to a name the panels can be matched against: the
+        // outliner's paths are `/run/<name>` and `/extents/<name>`, and the viewport draws by
+        // name.
+        let selected_name = self.selected.as_deref().and_then(|p| {
+            p.strip_prefix("/run/")
+                .or_else(|| p.strip_prefix("/extents/"))
+                .or_else(|| p.strip_prefix("/readings/"))
+                .map(|rest| rest.split('/').next().unwrap_or(rest).to_string())
+        });
 
         // The world this paint frames: scene geometry, widened by whatever the run reached —
         // an orbit's bodies live far outside any placed extent.
@@ -626,6 +940,21 @@ impl App {
             self.camera.fit(bounds, &framing, aspect, 0.85);
             self.needs_fit = false;
         }
+        // **Framing the selection keeps the whole scene's framing.** `Framing` is the run-wide
+        // centre and span every projection here shares, and re-centring it on one object would
+        // move everything else relative to it — the camera would appear to fit while the picture
+        // silently changed what it was of. So only the focal length moves: the selection's box is
+        // fitted *within* the scene's framing.
+        if self.pending_frame {
+            self.pending_frame = false;
+            let want = self
+                .selected
+                .as_deref()
+                .and_then(|p| tree_bounds(&self.checked, self.run.as_ref(), p));
+            if let Some(b) = want {
+                self.camera.fit(b, &framing, aspect, 0.85);
+            }
+        }
 
         // **The projection returns a depth and this keeps it.** `Camera::project` computes
         // "distance from the eye, larger is further"; the closure here returned only a position,
@@ -650,11 +979,21 @@ impl App {
         // The scene's own geometry: every placed extent, wireframed. Drawn from the text, not
         // the run, so layout is visible while editing and before anything is computed.
         let wire = ui.visuals().weak_text_color();
+        let highlight = egui::Color32::from_rgb(255, 190, 60);
         for placed in &self.checked.boxes {
+            if !self.draws(&placed.name) {
+                continue;
+            }
+            let picked = selected_name.as_deref() == Some(placed.name.as_str());
+            let stroke = if picked {
+                egui::Stroke::new(2.0, highlight)
+            } else {
+                egui::Stroke::new(1.0, wire)
+            };
             for (a, b) in editor_core::EDGES {
                 painter.line_segment(
                     [to_screen(placed.corners[a]), to_screen(placed.corners[b])],
-                    egui::Stroke::new(1.0, wire),
+                    stroke,
                 );
             }
             painter.text(
@@ -662,7 +1001,11 @@ impl App {
                 egui::Align2::LEFT_BOTTOM,
                 &placed.name,
                 egui::FontId::proportional(12.0),
-                ui.visuals().text_color(),
+                if picked {
+                    highlight
+                } else {
+                    ui.visuals().text_color()
+                },
             );
         }
 
@@ -682,6 +1025,20 @@ impl App {
         // coloured by value on the run-wide scale — one scale across the run, never per frame,
         // for the reason viewer-core states; while a run streams, "the run" is the run so far,
         // and the colours settle when it does.
+        // Answered before `self.run` is borrowed mutably below: `draws` reads `self`, and the
+        // borrow checker is right that it cannot do so while `view` is out.
+        let visible_names: Vec<String> = self
+            .run
+            .as_ref()
+            .and_then(|v| v.run.frames.first())
+            .map(|f| {
+                f.panels
+                    .iter()
+                    .filter(|p| self.draws(p.name()))
+                    .map(|p| p.name().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
         let Some(view) = &mut self.run else {
             return;
         };
@@ -716,6 +1073,9 @@ impl App {
         let mut legend: Option<(f64, f64, String, bool)> = None;
 
         for panel in &frame.panels {
+            if !visible_names.iter().any(|n| n == panel.name()) {
+                continue;
+            }
             let scale = view.run.scale_of(panel.name());
             if legend.is_none() {
                 if let Some((lo, hi)) = scale {
@@ -744,7 +1104,7 @@ impl App {
                     for i in editor_core::far_to_near(&depths) {
                         let at = to_screen(pts[i]);
                         painter.circle_filled(at, 3.5, shade(values[i], scale));
-                        probe.offer(pointer, at, 6.0, depths[i], || {
+                        probe.offer(pointer, at, 6.0, depths[i], &format!("/run/{name}"), || {
                             format!(
                                 "{name} body {i}   {} {unit}",
                                 editor_core::magnitude(values[i])
@@ -858,9 +1218,29 @@ impl App {
             }
         }
 
-        // And what the cursor is over, if anything.
+        // And what the cursor is over, if anything. A click on it selects.
+        if response.clicked() {
+            // A click on nothing clears the selection, which is what every outliner does and is
+            // the only way to get back to "no selection" without a keyboard.
+            self.selected = probe.path.clone();
+        }
         probe.draw(&painter, ui.visuals());
     }
+}
+
+/// The box a tree path refers to, for framing it.
+///
+/// Rebuilt from the same two sources the tree is, rather than carried on the selection: a
+/// selection is a path and paths outlive the objects they name, so resolving late is what makes
+/// a stale selection a missing box instead of a wrong one.
+fn tree_bounds(
+    checked: &editor_core::Checked,
+    run: Option<&RunView>,
+    path: &str,
+) -> Option<[f64; 6]> {
+    let frame = run.map_or(0, |v| v.frame);
+    let tree = editor_core::tree(checked, run.map(|v| &v.run), frame);
+    tree.find(path).and_then(|n| n.bounds)
 }
 
 /// The nearest thing under the cursor, and what to say about it.
@@ -872,6 +1252,10 @@ impl App {
 #[derive(Default)]
 struct Probe {
     best: Option<(f64, egui::Pos2, String)>,
+    /// The tree path of whatever the readout named, so a click selects the thing under the
+    /// cursor. The outliner and the viewport are two views of one selection; a viewport you can
+    /// read but not select from makes the reader find the row by hand.
+    path: Option<String>,
 }
 
 impl Probe {
@@ -881,6 +1265,7 @@ impl Probe {
         at: egui::Pos2,
         reach: f32,
         depth: f64,
+        path: &str,
         text: impl FnOnce() -> String,
     ) {
         let Some(p) = pointer else { return };
@@ -889,6 +1274,7 @@ impl Probe {
         }
         if self.best.as_ref().is_none_or(|(d, _, _)| depth < *d) {
             self.best = Some((depth, at, text()));
+            self.path = Some(path.to_string());
         }
     }
 
@@ -1101,12 +1487,19 @@ fn draw_field(
             .get(gi + nx * (gj + ny * gk))
             .copied()
             .unwrap_or(f64::NAN);
-        probe.offer(pointer, at, radius.max(4.0), depth, || {
-            format!(
-                "{name} [{gi},{gj},{gk}]   {} {unit}",
-                editor_core::magnitude(v)
-            )
-        });
+        probe.offer(
+            pointer,
+            at,
+            radius.max(4.0),
+            depth,
+            &format!("/run/{name}"),
+            || {
+                format!(
+                    "{name} [{gi},{gj},{gk}]   {} {unit}",
+                    editor_core::magnitude(v)
+                )
+            },
+        );
     }
     Some(out.note)
 }

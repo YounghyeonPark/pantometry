@@ -692,6 +692,466 @@ pub fn magnitude(v: f64) -> String {
     }
 }
 
+/// What kind of thing a node in the outliner is.
+///
+/// Dispatched on the **shape of the data**, never on a domain's name — the same rule the viewport
+/// paints by, and the reason an eleventh physics costs no edit here. `Placed` is the exception
+/// that proves it: a box a scene declared but no run has filled yet is a shape too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeKind {
+    /// The scene itself.
+    Scene,
+    /// A grouping row with no geometry of its own.
+    Group,
+    /// A placed extent from the scene text, before or without a run.
+    Placed,
+    /// A field sampled on a grid.
+    Field,
+    /// Bodies at positions.
+    Points,
+    /// Runs of connected points.
+    Paths,
+    /// A named scalar a domain reports.
+    Reading,
+}
+
+impl NodeKind {
+    /// A short word for the type column, the way an outliner labels one.
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeKind::Scene => "Scene",
+            NodeKind::Group => "Group",
+            NodeKind::Placed => "Extent",
+            NodeKind::Field => "Field",
+            NodeKind::Points => "Bodies",
+            NodeKind::Paths => "Paths",
+            NodeKind::Reading => "Scalar",
+        }
+    }
+}
+
+/// One row of the outliner.
+///
+/// Flat with parent indices rather than nested, because that is what an immediate-mode shell can
+/// walk without allocating a closure per level, and because a stable index is the only selection
+/// handle that survives a rebuild — the tree is rebuilt on every check and every streamed frame,
+/// and a selection keyed by pointer or by row number would move under the reader's hand.
+///
+/// The handle is [`Node::path`]: a slash-joined name like `/room/pressure`, stable across
+/// rebuilds for as long as the scene calls the thing that.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Node {
+    /// The stable handle, `/`-joined. What a selection is stored as.
+    pub path: String,
+    /// The name shown in the row.
+    pub name: String,
+    /// What it is.
+    pub kind: NodeKind,
+    /// Index of the parent row, or `None` for the root.
+    pub parent: Option<usize>,
+    /// How deep to indent.
+    pub depth: usize,
+    /// The box it occupies in world metres, if it has one.
+    pub bounds: Option<[f64; 6]>,
+    /// What its values are in, for the inspector's header.
+    pub unit: String,
+    /// The lines the inspector shows for this row, in order: label and value.
+    ///
+    /// Built here rather than in the shell because they are the answer to "what is this", and
+    /// two shells asking that question should not get two answers.
+    pub detail: Vec<(String, String)>,
+}
+
+/// The outliner, and what the inspector says about each row.
+///
+/// Built from the scene's placed extents and, when there is one, the run's panels and readings.
+/// A scene that has been checked but not run still has a tree: the boxes are there, and being
+/// able to select and inspect one before anything is computed is most of what an outliner is for.
+#[derive(Clone, Debug, Default)]
+pub struct Tree {
+    /// The rows, parents before children, in the order an outliner draws them.
+    pub nodes: Vec<Node>,
+}
+
+impl Tree {
+    /// The row with this path, if it is still in the tree.
+    pub fn find(&self, path: &str) -> Option<&Node> {
+        self.nodes.iter().find(|n| n.path == path)
+    }
+
+    /// Whether `path` is `ancestor` or sits under it, by path prefix.
+    ///
+    /// A prefix test on `/`-joined names, with the separator required — so `/room` contains
+    /// `/room/pressure` and does **not** contain `/roomier`, which a bare `starts_with` would
+    /// have said it did.
+    pub fn contains(ancestor: &str, path: &str) -> bool {
+        path == ancestor
+            || (path.starts_with(ancestor) && path.as_bytes().get(ancestor.len()) == Some(&b'/'))
+    }
+}
+
+fn fmt_box(b: [f64; 6]) -> String {
+    format!(
+        "({:.4}, {:.4}, {:.4}) .. ({:.4}, {:.4}, {:.4})",
+        b[0], b[1], b[2], b[3], b[4], b[5]
+    )
+}
+
+fn fmt_span(b: [f64; 6]) -> String {
+    format!(
+        "{} x {} x {}",
+        metres(b[3] - b[0]),
+        metres(b[4] - b[1]),
+        metres(b[5] - b[2])
+    )
+}
+
+/// A length in metres, on the unit an engineer would say it in.
+///
+/// Trailing zeros count as trailing only **after a decimal point**: stripping them without that
+/// check turns 500 into 5, which captioned a 500 um channel as a 5 um one in the HTML report
+/// before it was found.
+pub fn metres(m: f64) -> String {
+    let a = m.abs();
+    let body = |x: f64| {
+        let t = format!("{x:.3}");
+        if t.contains('.') {
+            t.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            t
+        }
+    };
+    if !a.is_finite() {
+        "-".to_string()
+    } else if a >= 1e4 {
+        format!("{m:.3e} m")
+    } else if a >= 1.0 || a == 0.0 {
+        format!("{} m", body(m))
+    } else if a >= 1e-3 {
+        format!("{} mm", body(m * 1e3))
+    } else {
+        format!("{} um", body(m * 1e6))
+    }
+}
+
+/// Build the outliner from a checked scene and, if there is one, a run.
+///
+/// A scene that has been checked but never run still has a tree — the placed extents are there,
+/// and selecting one to read its size before anything is computed is most of what an outliner is
+/// for. A run adds what it actually produced, which is not the same list: a domain can be placed
+/// and draw nothing, and a domain with no placement at all can still report scalars.
+///
+/// `frame` picks which frame's numbers the inspector shows. The **range** it shows is the run's,
+/// not the frame's, for the reason the colour scale is: a per-frame range makes a decaying mode
+/// look constant.
+pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> Tree {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut push = |n: Node| -> usize {
+        nodes.push(n);
+        nodes.len() - 1
+    };
+
+    let root = push(Node {
+        path: "/".into(),
+        name: checked
+            .summary
+            .as_deref()
+            .map(|s| s.split(" \u{2014} ").next().unwrap_or(s).to_string())
+            .unwrap_or_else(|| "scene".into()),
+        kind: NodeKind::Scene,
+        parent: None,
+        depth: 0,
+        bounds: checked.bounds,
+        unit: String::new(),
+        detail: {
+            let mut d = vec![
+                ("domains".into(), checked.boxes.len().to_string()),
+                (
+                    "frames".into(),
+                    run.map_or("-".into(), |r| r.frames.len().to_string()),
+                ),
+            ];
+            if let Some(b) = checked.bounds {
+                d.push(("bounds".into(), fmt_box(b)));
+                d.push(("size".into(), fmt_span(b)));
+            }
+            if let Some(e) = &checked.error {
+                d.push(("error".into(), e.clone()));
+            }
+            for (i, note) in checked.notes.iter().enumerate() {
+                d.push((format!("note {}", i + 1), note.clone()));
+            }
+            d
+        },
+    });
+
+    // Every domain the scene placed, whether or not a run has filled it. Grouped under one row so
+    // a scene with thirty extents does not bury the run's output.
+    if !checked.boxes.is_empty() {
+        let group = push(Node {
+            path: "/extents".into(),
+            name: "Placed extents".into(),
+            kind: NodeKind::Group,
+            parent: Some(root),
+            depth: 1,
+            bounds: checked.bounds,
+            unit: String::new(),
+            detail: vec![("count".into(), checked.boxes.len().to_string())],
+        });
+        for b in &checked.boxes {
+            let bb = box_of(&b.corners);
+            push(Node {
+                path: format!("/extents/{}", b.name),
+                name: b.name.clone(),
+                kind: NodeKind::Placed,
+                parent: Some(group),
+                depth: 2,
+                bounds: Some(bb),
+                unit: String::new(),
+                detail: vec![
+                    ("bounds".into(), fmt_box(bb)),
+                    ("size".into(), fmt_span(bb)),
+                    ("origin".into(), fmt_point(b.corners[0])),
+                ],
+            });
+        }
+    }
+
+    let Some(run) = run else {
+        return Tree { nodes };
+    };
+    let Some(f) = run
+        .frames
+        .get(frame.min(run.frames.len().saturating_sub(1)))
+    else {
+        return Tree { nodes };
+    };
+
+    if !f.panels.is_empty() {
+        let group = push(Node {
+            path: "/run".into(),
+            name: "Run".into(),
+            kind: NodeKind::Group,
+            parent: Some(root),
+            depth: 1,
+            bounds: None,
+            unit: String::new(),
+            detail: vec![
+                ("frames".into(), run.frames.len().to_string()),
+                (
+                    "frame".into(),
+                    format!("{} of {}", frame + 1, run.frames.len()),
+                ),
+                ("t".into(), format!("{} s", magnitude(f.t))),
+            ],
+        });
+        for panel in &f.panels {
+            let scale = run.scale_of(panel.name());
+            let bounds = panel.bounds();
+            let mut detail: Vec<(String, String)> = vec![
+                ("unit".into(), panel.unit().to_string()),
+                ("samples".into(), panel.values().len().to_string()),
+            ];
+            let kind = match panel {
+                viewer_core::Panel::Field {
+                    nx,
+                    ny,
+                    nz,
+                    extent_m,
+                    ..
+                } => {
+                    detail.push(("grid".into(), format!("{nx} x {ny} x {nz}")));
+                    match extent_m {
+                        Some(e) => {
+                            detail.push(("extent".into(), fmt_box(*e)));
+                            detail.push(("size".into(), fmt_span(*e)));
+                        }
+                        None => detail.push((
+                            "extent".into(),
+                            "not in this run file — framed in cell units".into(),
+                        )),
+                    }
+                    NodeKind::Field
+                }
+                viewer_core::Panel::Points { positions, .. } => {
+                    detail.push(("bodies".into(), (positions.len() / 3).to_string()));
+                    detail.push(("bounds".into(), fmt_box(bounds)));
+                    NodeKind::Points
+                }
+                viewer_core::Panel::Paths {
+                    starts, vertices, ..
+                } => {
+                    detail.push(("paths".into(), starts.len().to_string()));
+                    detail.push(("vertices".into(), (vertices.len() / 3).to_string()));
+                    detail.push(("bounds".into(), fmt_box(bounds)));
+                    NodeKind::Paths
+                }
+            };
+            // The run's range, and this frame's — both, labelled, because they answer different
+            // questions and a picture drawn on one is often read as the other.
+            match scale {
+                Some((lo, hi)) => detail.push((
+                    "range (run)".into(),
+                    format!("{} .. {}", magnitude(lo), magnitude(hi)),
+                )),
+                None => detail.push(("range (run)".into(), "one value throughout".into())),
+            }
+            let finite: Vec<f64> = panel
+                .values()
+                .iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .collect();
+            if finite.is_empty() {
+                detail.push(("this frame".into(), "no finite samples".into()));
+            } else {
+                let lo = finite.iter().copied().fold(f64::MAX, f64::min);
+                let hi = finite.iter().copied().fold(f64::MIN, f64::max);
+                let mean = finite.iter().sum::<f64>() / finite.len() as f64;
+                detail.push((
+                    "this frame".into(),
+                    format!(
+                        "{} .. {}, mean {}",
+                        magnitude(lo),
+                        magnitude(hi),
+                        magnitude(mean)
+                    ),
+                ));
+            }
+            let absent = panel.values().len() - finite.len();
+            if absent > 0 {
+                // A hole is not a value, and a count of them is the difference between "the
+                // picture has gaps" and "the picture is wrong".
+                detail.push(("absent".into(), format!("{absent} sample(s) with no value")));
+            }
+            detail.push((
+                "colour".into(),
+                if scale_is_signed(scale) {
+                    "diverging, neutral at zero".into()
+                } else {
+                    "sequential".into()
+                },
+            ));
+            push(Node {
+                path: format!("/run/{}", panel.name()),
+                name: panel.name().to_string(),
+                kind,
+                parent: Some(group),
+                depth: 2,
+                bounds: Some(bounds),
+                unit: panel.unit().to_string(),
+                detail,
+            });
+        }
+    }
+
+    // Readings, grouped by the domain that reports them — including domains with no geometry at
+    // all, which is the half of a scene an outliner built from boxes alone would lose.
+    if !f.readings.is_empty() {
+        let group = push(Node {
+            path: "/readings".into(),
+            name: "Readings".into(),
+            kind: NodeKind::Group,
+            parent: Some(root),
+            depth: 1,
+            bounds: None,
+            unit: String::new(),
+            detail: vec![("count".into(), f.readings.len().to_string())],
+        });
+        let mut domains: Vec<&str> = Vec::new();
+        for r in &f.readings {
+            if !domains.contains(&r.domain.as_str()) {
+                domains.push(&r.domain);
+            }
+        }
+        for domain in domains {
+            let mine: Vec<_> = f.readings.iter().filter(|r| r.domain == domain).collect();
+            let d = push(Node {
+                path: format!("/readings/{domain}"),
+                name: domain.to_string(),
+                kind: NodeKind::Group,
+                parent: Some(group),
+                depth: 2,
+                bounds: checked
+                    .boxes
+                    .iter()
+                    .find(|b| b.name == domain)
+                    .map(|b| box_of(&b.corners)),
+                unit: String::new(),
+                detail: vec![("scalars".into(), mine.len().to_string())],
+            });
+            for r in mine {
+                // The whole history, not just now: the range over the run and where this frame
+                // sits in it, which is what a scalar's row is actually asked.
+                let series: Vec<f64> = run
+                    .frames
+                    .iter()
+                    .filter_map(|fr| {
+                        fr.readings
+                            .iter()
+                            .find(|q| q.domain == r.domain && q.label == r.label)
+                            .map(|q| q.value)
+                    })
+                    .filter(|v| v.is_finite())
+                    .collect();
+                let mut detail = vec![
+                    ("value".into(), format!("{} {}", magnitude(r.value), r.unit)),
+                    ("unit".into(), r.unit.clone()),
+                ];
+                if !series.is_empty() {
+                    let lo = series.iter().copied().fold(f64::MAX, f64::min);
+                    let hi = series.iter().copied().fold(f64::MIN, f64::max);
+                    detail.push((
+                        "range (run)".into(),
+                        format!("{} .. {}", magnitude(lo), magnitude(hi)),
+                    ));
+                    detail.push((
+                        "first, last".into(),
+                        format!(
+                            "{}, {}",
+                            magnitude(series[0]),
+                            magnitude(series[series.len() - 1])
+                        ),
+                    ));
+                }
+                if series.len() < run.frames.len() {
+                    detail.push((
+                        "absent".into(),
+                        format!("{} frame(s)", run.frames.len() - series.len()),
+                    ));
+                }
+                push(Node {
+                    path: format!("/readings/{}/{}", r.domain, r.label),
+                    name: r.label.clone(),
+                    kind: NodeKind::Reading,
+                    parent: Some(d),
+                    depth: 3,
+                    bounds: None,
+                    unit: r.unit.clone(),
+                    detail,
+                });
+            }
+        }
+    }
+
+    Tree { nodes }
+}
+
+fn box_of(corners: &[[f64; 3]; 8]) -> [f64; 6] {
+    let mut b = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+    for c in corners {
+        for a in 0..3 {
+            b[a] = b[a].min(c[a]);
+            b[a + 3] = b[a + 3].max(c[a]);
+        }
+    }
+    b
+}
+
+fn fmt_point(p: [f64; 3]) -> String {
+    format!("({:.4}, {:.4}, {:.4})", p[0], p[1], p[2])
+}
+
 /// The eight corners of an axis-aligned box, in the order [`PlacedBox::corners`] uses.
 ///
 /// Bit 0 is x, bit 1 is y, bit 2 is z, and a clear bit takes the low face — the order [`EDGES`]
