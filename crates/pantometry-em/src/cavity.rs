@@ -159,6 +159,9 @@ pub struct Cavity {
     ///
     /// `None` before the first step, where the naive sum is the honest answer.
     invariant: Option<f64>,
+    /// The `H` lattice as it was a half step ago, kept between steps so the invariant's snapshot
+    /// costs a copy and not three allocations.
+    previous_h: (Vec<f64>, Vec<f64>, Vec<f64>),
     dissipated: f64,
     saved: Option<Box<Saved>>,
 }
@@ -237,6 +240,7 @@ impl Cavity {
             previous: None,
             started: false,
             invariant: None,
+            previous_h: (Vec::new(), Vec::new(), Vec::new()),
             dissipated: 0.0,
             saved: None,
         };
@@ -1346,26 +1350,62 @@ impl Cavity {
     fn advance_magnetic(&mut self, dt: f64) {
         let (nx, ny, nz) = self.counts;
         let g = dt / self.dx;
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..=nx {
-                    let curl = (self.ez[self.iez(i, j + 1, k)] - self.ez[self.iez(i, j, k)])
-                        - (self.ey[self.iey(i, j, k + 1)] - self.ey[self.iey(i, j, k)]);
-                    let idx = self.ihx(i, j, k);
-                    self.hx[idx] -= g / self.mu[0][idx] * curl;
+
+        // **Threaded, and this one needs no snapshot.** Each `H` component is written once from
+        // `E` alone, so the write target and every read are different arrays: unlike a diffusion
+        // stencil there is nothing to double-buffer, and contiguous chunks perform exactly the
+        // operations they performed sequentially. See `pantometry_core::sweep`.
+        //
+        // The index helpers are inlined because they take `&self`, which the borrow checker will
+        // not lend while a field of `self` is borrowed mutably — and they are two multiplies.
+        //
+        // Chunks are whole `j`-rows of the `H` lattice, so a chunk begins at `i = 0` and the
+        // arithmetic inside is what it always was.
+        {
+            let (ez, ey, mu) = (&self.ez, &self.ey, &self.mu[0]);
+            let row = nx + 1;
+            pantometry_core::sweep::fill(&mut self.hx, row, move |first, chunk| {
+                let (mut j, mut k) = ((first / row) % ny, first / (row * ny));
+                for (at, slot) in chunk.iter_mut().enumerate() {
+                    let i = (first + at) % row;
+                    let iez = |i: usize, j: usize, k: usize| i + (nx + 1) * (j + (ny + 1) * k);
+                    let iey = |i: usize, j: usize, k: usize| i + (nx + 1) * (j + ny * k);
+                    let curl = (ez[iez(i, j + 1, k)] - ez[iez(i, j, k)])
+                        - (ey[iey(i, j, k + 1)] - ey[iey(i, j, k)]);
+                    *slot -= g / mu[first + at] * curl;
+                    if i + 1 == row {
+                        j += 1;
+                        if j == ny {
+                            j = 0;
+                            k += 1;
+                        }
+                    }
                 }
-            }
+            });
         }
-        for k in 0..nz {
-            for j in 0..=ny {
-                for i in 0..nx {
-                    let curl = (self.ex[self.iex(i, j, k + 1)] - self.ex[self.iex(i, j, k)])
-                        - (self.ez[self.iez(i + 1, j, k)] - self.ez[self.iez(i, j, k)]);
-                    let idx = self.ihy(i, j, k);
-                    self.hy[idx] -= g / self.mu[1][idx] * curl;
+        {
+            let (ex, ez, mu) = (&self.ex, &self.ez, &self.mu[1]);
+            let row = nx;
+            pantometry_core::sweep::fill(&mut self.hy, row, move |first, chunk| {
+                let (mut j, mut k) = ((first / row) % (ny + 1), first / (row * (ny + 1)));
+                for (at, slot) in chunk.iter_mut().enumerate() {
+                    let i = (first + at) % row;
+                    let iex = |i: usize, j: usize, k: usize| i + nx * (j + (ny + 1) * k);
+                    let iez = |i: usize, j: usize, k: usize| i + (nx + 1) * (j + (ny + 1) * k);
+                    let curl = (ex[iex(i, j, k + 1)] - ex[iex(i, j, k)])
+                        - (ez[iez(i + 1, j, k)] - ez[iez(i, j, k)]);
+                    *slot -= g / mu[first + at] * curl;
+                    if i + 1 == row {
+                        j += 1;
+                        if j == ny + 1 {
+                            j = 0;
+                            k += 1;
+                        }
+                    }
                 }
-            }
+            });
         }
+        let _ = nz;
         for k in 0..=nz {
             for j in 0..ny {
                 for i in 0..nx {
@@ -1489,11 +1529,21 @@ impl Domain for Cavity {
         }
         // The two half-step-separated `H` fields, paired in the same statement that produces the
         // second. Nothing else can pair them: after this line the earlier one is gone.
-        let before = (self.hx.clone(), self.hy.clone(), self.hz.clone());
+        // The three `H` arrays as they were, into buffers that outlive the step. This cloned
+        // the whole lattice three times **every step**: at 96³ that is 21 MB of allocate-and-copy
+        // against a 27 ms step, paid to keep a snapshot the invariant needs for one line.
+        let mut before = std::mem::take(&mut self.previous_h);
+        before.0.clear();
+        before.0.extend_from_slice(&self.hx);
+        before.1.clear();
+        before.1.extend_from_slice(&self.hy);
+        before.2.clear();
+        before.2.extend_from_slice(&self.hz);
         self.advance_magnetic(h);
         // Here, and only here: `E` is still `Eⁿ`, `H` is `Hⁿ⁺¹ᐟ²` and `before` is `Hⁿ⁻¹ᐟ²`.
         self.invariant =
             Some(self.electric_energy().to_si() + self.paired_magnetic_energy(&before));
+        self.previous_h = before;
         self.dissipated += self.advance_electric(h);
         self.apply_boundaries(h);
         self.enforce_solid();

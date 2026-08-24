@@ -284,6 +284,23 @@ pub struct Solid3D {
     /// The one thing that decides whether the sweep has to rebuild its operator each step. A block of
     /// ice does; a block of aluminium, or of ice under the one-phase model, does not.
     two_phase: bool,
+    /// The previous state the sweep reads, kept between steps so the step does not allocate.
+    ///
+    /// `let old = self.cells.clone()` allocated and copied the whole grid every step. At 64³ that
+    /// is 2 MB of memcpy against a 1.5 ms step, and at 128³ it is 16 MB — measurable, and free to
+    /// remove once there is somewhere to put it.
+    old: Vec<f64>,
+    /// Whether any cell converts its rise through an enthalpy — see `resolve`.
+    latent_anywhere: bool,
+    /// The buffer the double-buffered sweep writes into, which becomes `cells` and hands back the
+    /// array it replaced. Kept between steps so a step allocates nothing.
+    ///
+    /// Two earlier shapes cost more than the threading they enabled. Carrying the *rise* rather
+    /// than the new value meant a third array written and read back; carrying the shed joules
+    /// beside it meant sixteen bytes a cell instead of eight. The stencil is bandwidth-bound, so
+    /// both showed up immediately: the first was slower than the sequential original at every grid
+    /// below 96³.
+    rise: Vec<f64>,
 }
 
 /// One patch of a clearance: two facing surfaces and how far apart they are.
@@ -415,6 +432,9 @@ impl Solid3D {
             lost: 0.0,
             saved_lost: 0.0,
             two_phase: false,
+            old: Vec::new(),
+            latent_anywhere: false,
+            rise: Vec::new(),
         };
         block.resolve();
         block
@@ -667,6 +687,19 @@ impl Solid3D {
                 prior
             });
         }
+
+        // **Any cell with latent heat at all**, which is not the same question as `two_phase`.
+        // `two_phase` asks whether the *operator* moves with the front; this asks whether
+        // `add_kelvin` has to convert a rise through an enthalpy. A material that melts at
+        // constant properties answers no to the first and yes to the second — and the fast sweep
+        // path, gated on the wrong one, silently skipped the latent heat and let a freezing block
+        // cool as if it were not freezing.
+        //
+        // **After the loop that fills `latent`, not before it.** The first attempt set this thirty
+        // lines earlier, where the array is still the previous resolve's — or, on the first call,
+        // empty. It read `false` every time and the same three tests failed the same way, which is
+        // the useful part: the fix looked right and the placement was the bug.
+        self.latent_anywhere = self.latent.iter().any(|l| *l > 0.0);
         // Only on a fresh build. Doing it every time would overwrite a checkpoint, and `resolve` is
         // called from the sweep now.
         if fresh {
@@ -1617,6 +1650,53 @@ impl Solid3D {
     /// several doors heat comes in through — the sweep, [`deposit`](Solid3D::deposit), and the plain
     /// channel all pass through here. A cell at its melting point takes the whole of it as melting
     /// and does not warm at all.
+    /// The net flux into cell `c`, in kelvin per second of mobility — conduction across its six
+    /// faces, less whatever the surface film takes.
+    ///
+    /// Factored out because the two apply paths differ and the arithmetic must not: a melting cell
+    /// goes through the enthalpy and a plain one is a double-buffered write, and a second copy of
+    /// a seven-point stencil is a second place for it to be wrong.
+    ///
+    /// **The film is part of this flux, not a pass after it.** Applying it separately is Lie
+    /// splitting, and the split's error carries a coefficient that grows as `1/dx` while the step
+    /// falls as `dx²` — so the product falls as `dx`, and the boundary came out **first order**
+    /// while the interior was second. Measured before it moved in here: ratios 1.27, 1.71, 1.87
+    /// per grid doubling, approaching two rather than four.
+    ///
+    /// Read off `old` like every other term, so the sweep stays a function of the state it began
+    /// with.
+    #[inline]
+    fn flux_at(&self, old: &[f64], cell: (usize, usize, usize), c: usize) -> f64 {
+        let (nx, ny, nz) = self.counts;
+        let (i, j, k) = cell;
+        let t = old[c];
+        let (xr, yr) = ((nx + 1) * (j + ny * k), nx * (j + (ny + 1) * k));
+        let mut flux = 0.0;
+        if i > 0 {
+            flux += self.kx[i + xr] * (old[c - 1] - t);
+        }
+        if i + 1 < nx {
+            flux += self.kx[i + 1 + xr] * (old[c + 1] - t);
+        }
+        if j > 0 {
+            flux += self.ky[i + yr] * (old[c - nx] - t);
+        }
+        if j + 1 < ny {
+            flux += self.ky[i + nx + yr] * (old[c + nx] - t);
+        }
+        if k > 0 {
+            flux += self.kz[c] * (old[c - nx * ny] - t);
+        }
+        if k + 1 < nz {
+            flux += self.kz[c + nx * ny] * (old[c + nx * ny] - t);
+        }
+        if self.exposed.is_empty() {
+            flux
+        } else {
+            flux - self.film_flux(old, cell, c)
+        }
+    }
+
     fn add_kelvin(&mut self, c: usize, rise: f64) {
         if self.latent[c] > 0.0 {
             // `rise` is what the cell *would* have warmed by; the joules it stands for are that times
@@ -1771,58 +1851,98 @@ impl Domain for Solid3D {
         // and it stays that way when the capacities differ, which a stencil written as
         // `f·(Σ T_n − 6T)` cannot do because there is no per-cell `f` in it.
         let (nx, ny, nz) = self.counts;
-        let old = self.cells.clone();
+        let cells = nx * ny * nz;
         let dts = dt.to_si();
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let c = i + nx * (j + ny * k);
-                    let t = old[c];
-                    let (xr, yr) = ((nx + 1) * (j + ny * k), nx * (j + (ny + 1) * k));
-                    let mut flux = 0.0;
-                    if i > 0 {
-                        flux += self.kx[i + xr] * (old[c - 1] - t);
-                    }
-                    if i + 1 < nx {
-                        flux += self.kx[i + 1 + xr] * (old[c + 1] - t);
-                    }
-                    if j > 0 {
-                        flux += self.ky[i + yr] * (old[c - nx] - t);
-                    }
-                    if j + 1 < ny {
-                        flux += self.ky[i + nx + yr] * (old[c + nx] - t);
-                    }
-                    if k > 0 {
-                        flux += self.kz[c] * (old[c - nx * ny] - t);
-                    }
-                    if k + 1 < nz {
-                        flux += self.kz[c + nx * ny] * (old[c + nx * ny] - t);
-                    }
-                    debug_assert_eq!(t, self.cells[c], "the sweep reads `old` and writes `cells`");
 
-                    // **The film is part of this flux, not a pass after it.** Applying it
-                    // separately is Lie splitting, and the split's error carries a coefficient
-                    // that grows as `1/dx` while the step falls as `dx²` — so the product falls
-                    // as `dx`, and the boundary came out **first order** while the interior was
-                    // second. Measured before this line moved here: ratios 1.27, 1.71, 1.87 per
-                    // grid doubling, approaching two rather than four. In the same update they
-                    // are one operator and the order is the interior's.
-                    //
-                    // Read off `old` like every other term, so the sweep stays a function of the
-                    // state it began with.
-                    let shed = if self.exposed.is_empty() {
-                        0.0
-                    } else {
-                        self.film_flux(&old, (i, j, k), c)
-                    };
-                    self.add_kelvin(c, dts * self.mobility[c] * (flux - shed));
-                    // What that removed, in joules, counted in the same statement that removes
-                    // it so `stored + lost` stays exact.
-                    if shed != 0.0 {
-                        self.lost += dts * self.mobility[c] * shed * self.capacity[c];
+        // The state the sweep reads, into a buffer that outlives the step.
+        let mut old = std::mem::take(&mut self.old);
+        old.clear();
+        old.extend_from_slice(&self.cells);
+
+        // **What the film took out, totalled over the exposed faces.**
+        //
+        // A sum, so it is not in the parallel pass below: floating-point addition is not
+        // associative and a total accumulated per thread would depend on the core count. Walked in
+        // index order over the cells that can shed, which is a *surface* — at 96³ that is 6% of
+        // the volume. Read off `old` and before anything is applied, so it is the same number the
+        // sweep subtracts.
+        if !self.exposed.is_empty() {
+            for k in 0..nz {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        if i > 0 && i + 1 < nx && j > 0 && j + 1 < ny && k > 0 && k + 1 < nz {
+                            continue;
+                        }
+                        let c = i + nx * (j + ny * k);
+                        let shed = self.film_flux(&old, (i, j, k), c);
+                        if shed != 0.0 {
+                            self.lost += dts * self.mobility[c] * shed * self.capacity[c];
+                        }
                     }
                 }
             }
+        }
+
+        if self.latent_anywhere {
+            // A melting block applies its own rise cell by cell: `add_kelvin` converts through the
+            // enthalpy and writes both a temperature and a melted fraction, and it reads the
+            // cell's current state to do it. In place and sequential, which is what it was — and a
+            // two-phase step already pays 2.6x to 5.2x for the `resolve` below, so this is not the
+            // grid anyone is waiting on.
+            for k in 0..nz {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let c = i + nx * (j + ny * k);
+                        let rise = dts * self.mobility[c] * self.flux_at(&old, (i, j, k), c);
+                        self.add_kelvin(c, rise);
+                    }
+                }
+            }
+        } else {
+            // **Double-buffered, and that is where the speed is.** The sweep reads `old` and writes
+            // a fresh array which then *becomes* `cells`, so the step moves one read and one write
+            // of the grid — where updating in place after a `clone` moved two of each.
+            //
+            // Measured: the stencil is bandwidth-bound at about 10 GB/s effective on this machine,
+            // so halving the traffic is worth more than any number of cores. An earlier version
+            // wrote the rise into a third array and read it back, and was **slower than the
+            // sequential original** at every grid below 96³ for exactly that reason.
+            //
+            // **Split across cores, and bit-for-bit the same answer.** Each cell's new value is a
+            // function of `old` and of read-only coefficients and of nothing another cell writes,
+            // so contiguous chunks perform exactly the operations they performed sequentially, in
+            // exactly the same order — see `pantometry_core::sweep`. Chunks are whole **planes**,
+            // so the index arithmetic inside is the arithmetic it always was.
+            let mut next = std::mem::take(&mut self.rise);
+            next.clear();
+            next.resize(cells, 0.0);
+            {
+                let this = &*self;
+                let old = &old;
+                pantometry_core::sweep::fill(&mut next, nx * ny, move |first, chunk| {
+                    // The cell's coordinates carried forward rather than divided out: three
+                    // integer divisions a cell cost 1.8x on the sequential path when this was
+                    // first written that way.
+                    let (mut i, mut j, mut k) = (first % nx, (first / nx) % ny, first / (nx * ny));
+                    for (at, slot) in chunk.iter_mut().enumerate() {
+                        let c = first + at;
+                        *slot = old[c] + dts * this.mobility[c] * this.flux_at(old, (i, j, k), c);
+                        i += 1;
+                        if i == nx {
+                            i = 0;
+                            j += 1;
+                            if j == ny {
+                                j = 0;
+                                k += 1;
+                            }
+                        }
+                    }
+                });
+            }
+            // The new grid becomes the grid, and the one it replaced becomes next step's read
+            // buffer. No copy either way.
+            std::mem::swap(&mut self.cells, &mut next);
+            self.rise = next;
         }
 
         // **What the gaps carry.** A pair of solid cells facing each other across void exchange
@@ -1897,6 +2017,8 @@ impl Domain for Solid3D {
         if self.two_phase {
             self.resolve();
         }
+        // The read buffer goes back, so the next step reuses the allocation instead of making one.
+        self.old = old;
         Ok(())
     }
 

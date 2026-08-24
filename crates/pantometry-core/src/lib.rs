@@ -137,6 +137,7 @@ pub mod rng;
 pub mod scene;
 pub mod sim;
 pub mod substance;
+pub mod sweep;
 pub mod transform;
 pub mod vector;
 
