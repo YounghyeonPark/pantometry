@@ -83,11 +83,30 @@ pub struct GpuSolid {
 }
 
 /// The device, the pipeline and the two buffers the stencil ping-pongs between.
-struct Context {
+/// The part of a device context that does not depend on the block: the adapter, the queue, the
+/// compiled shader and its layout.
+///
+/// **One per process, behind a `OnceLock`.** Every `GpuSolid::new` used to create its own
+/// `wgpu::Instance`, request its own adapter and compile the shader again. Two costs, and the second
+/// is the one that mattered: creating them **concurrently blocks**, so `cargo test --release` — the
+/// command this crate's README gives — hung at the first row of the timing sweep while four other
+/// tests held devices of their own. It ran in 32 s with `--test-threads=1` and not at all in ten
+/// minutes without. Sharing is also simply right: the shader is identical every time.
+struct Shared {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    /// What this actually ran on, from the adapter itself.
+    ///
+    /// A table of timings that does not name the device is prose nobody can check. `how_much_faster`
+    /// prints it beside the numbers so the README's table has a machine attached to it.
+    adapter: String,
+}
+
+/// One block's buffers, on the process's shared device.
+struct Context {
+    shared: std::sync::Arc<Shared>,
     cells: [wgpu::Buffer; 2],
     /// The resolved operator, uploaded once: face conductances, mobility, and the per-cell source
     /// rise. They do not change unless the block is rebuilt, so they cost one transfer and not one
@@ -95,13 +114,20 @@ struct Context {
     coefficients: [wgpu::Buffer; 5],
     uniforms: wgpu::Buffer,
     readback: wgpu::Buffer,
+    /// One per direction of the ping-pong, built once.
+    ///
+    /// **This used to be built per step.** Nothing in it changes except which of the two cell
+    /// buffers is read, so there are exactly two and they are known at construction. Six thousand
+    /// bind groups over a sweep is waste; removing it did not move the timings measurably, and the
+    /// claim here is only that the work was never needed.
+    binds: [wgpu::BindGroup; 2],
     /// Which of `cells` currently holds the state.
     front: usize,
     count: usize,
 }
 
 /// What went wrong before there was anything to compute.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Unavailable {
     /// The block asks for something the device kernel has no pass for, and the reasons.
     ///
@@ -301,6 +327,14 @@ impl GpuSolid {
         self.mirror.iter().map(|v| reference + *v as f64).collect()
     }
 
+    /// What this block is running on, as the adapter names itself.
+    ///
+    /// For a measurement to say where it was taken. A `191×` in this repository's prose had no
+    /// machine, no build profile and no test behind it, and turned out to be nearer `48×`.
+    pub fn device_name(&self) -> &str {
+        &self.gpu.shared.adapter
+    }
+
     /// Mean over every cell, summed **on the CPU in index order**.
     pub fn mean_temperature(&mut self) -> Temperature {
         self.sync();
@@ -432,9 +466,15 @@ impl Domain for GpuSolid {
         let n = self.mirror.len().max(1) as f64;
         let mean = self.reference + self.mirror.iter().map(|v| *v as f64).sum::<f64>() / n;
         let peak = self.reference + self.mirror.iter().fold(f32::MIN, |m, v| m.max(*v)) as f64;
+        let coldest = self.reference + self.mirror.iter().fold(f32::MAX, |m, v| m.min(*v)) as f64;
         vec![
             Reading::new(&self.name, "peak", peak - 273.15, "C"),
             Reading::new(&self.name, "mean", mean - 273.15, "C"),
+            // **`coldest`, which was missing.** The CPU reports four scalars and this reported
+            // three, so a scene run on the device produced a CSV with a column absent and nothing
+            // to say a column was absent. Found by comparing the two runs of one scene rather than
+            // by reading either.
+            Reading::new(&self.name, "coldest", coldest - 273.15, "C"),
             Reading::new(&self.name, "absorbed", self.absorbed, "J"),
         ]
     }
@@ -448,8 +488,48 @@ impl Domain for GpuSolid {
     }
 }
 
-impl Context {
-    fn new(count: usize, initial: f32, operator: [&[f32]; 5]) -> Result<Context, Unavailable> {
+impl Drop for Context {
+    /// **Give the buffers back to the driver now, not whenever.**
+    ///
+    /// Every `GpuSolid` used to own a whole `wgpu::Device`, so dropping one freed its allocations as
+    /// a side effect of the device dying. Sharing the device removed that, and nine buffers a block
+    /// at 8 MB each on a 128³ grid is 64 MB left to a lazy reclaim. An application that rebuilds a
+    /// scene repeatedly — an editor, a batch of runs — is the case that cares.
+    ///
+    /// **This is hygiene, not a measured fix.** It was written to explain a 5.4× slowdown in the
+    /// timing sweep and it did not explain it: the slowdown followed *position in the sweep* rather
+    /// than grid size, dragged the CPU column along with it, and turned out to be the machine
+    /// drifting under load. Kept because it is right, and recorded as unmeasured because the first
+    /// version of this comment claimed a cause it had not established.
+    fn drop(&mut self) {
+        for b in self
+            .cells
+            .iter()
+            .chain(self.coefficients.iter())
+            .chain([&self.uniforms, &self.readback])
+        {
+            b.destroy();
+        }
+        // **And no poll here.** `destroy` is the part that is safe to do from a block's own drop.
+        // Two attempts to make the device reclaim eagerly both wedged the suite past ten minutes:
+        // `Maintain::Poll` after every `submit`, and `Maintain::Wait` in this drop — the latter
+        // because `Wait` waits for the whole *device*, and three other tests were still submitting
+        // to it. A shared device is shared: one block does not get to stop it.
+    }
+}
+
+impl Shared {
+    /// The process's device, made on first use and reused after.
+    ///
+    /// A failure is cached too: a machine with no adapter should not pay a probe per block, and the
+    /// answer cannot change within a run.
+    fn get() -> Result<std::sync::Arc<Shared>, Unavailable> {
+        static SHARED: std::sync::OnceLock<Result<std::sync::Arc<Shared>, Unavailable>> =
+            std::sync::OnceLock::new();
+        SHARED.get_or_init(Shared::make).clone()
+    }
+
+    fn make() -> Result<std::sync::Arc<Shared>, Unavailable> {
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -457,6 +537,7 @@ impl Context {
             force_fallback_adapter: false,
         }))
         .ok_or(Unavailable::NoAdapter)?;
+        let info = adapter.get_info();
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("pantometry stencil"),
@@ -475,6 +556,62 @@ impl Context {
             None,
         ))
         .map_err(|e| Unavailable::NoDevice(e.to_string()))?;
+
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("stencil"),
+            entries: &[
+                entry(0, true),
+                entry(1, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                entry(3, true),
+                entry(4, true),
+                entry(5, true),
+                entry(6, true),
+                entry(7, true),
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("stencil"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("stencil"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: "sweep",
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        Ok(std::sync::Arc::new(Shared {
+            device,
+            queue,
+            pipeline,
+            layout,
+            adapter: format!("{} ({:?}, {:?})", info.name, info.device_type, info.backend),
+        }))
+    }
+}
+
+impl Context {
+    fn new(count: usize, initial: f32, operator: [&[f32]; 5]) -> Result<Context, Unavailable> {
+        let shared = Shared::get()?;
+        let device = &shared.device;
+        let queue = &shared.queue;
 
         let bytes = (count * 4) as u64;
         let make = |label: &str, usage: wgpu::BufferUsages| {
@@ -530,55 +667,59 @@ impl Context {
             mapped_at_creation: false,
         });
 
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("stencil"),
-            entries: &[
-                entry(0, true),
-                entry(1, false),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let binds = std::array::from_fn(|front| {
+            let back = 1 - front;
+            shared.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(if front == 0 {
+                    "sweep a to b"
+                } else {
+                    "sweep b to a"
+                }),
+                layout: &shared.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: cells[front].as_entire_binding(),
                     },
-                    count: None,
-                },
-                entry(3, true),
-                entry(4, true),
-                entry(5, true),
-                entry(6, true),
-                entry(7, true),
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("stencil"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("stencil"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: "sweep",
-            compilation_options: Default::default(),
-            cache: None,
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: cells[back].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: coefficients[0].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: coefficients[1].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: coefficients[2].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: coefficients[3].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: coefficients[4].as_entire_binding(),
+                    },
+                ],
+            })
         });
 
         Ok(Context {
-            device,
-            queue,
-            pipeline,
-            layout,
+            shared,
             cells,
             coefficients,
             uniforms,
             readback,
+            binds,
             front: 0,
             count,
         })
@@ -586,11 +727,14 @@ impl Context {
 
     fn upload(&mut self, cells: &[f32]) {
         let bytes: Vec<u8> = cells.iter().flat_map(|f| f.to_le_bytes()).collect();
-        self.queue.write_buffer(&self.cells[self.front], 0, &bytes);
+        self.shared
+            .queue
+            .write_buffer(&self.cells[self.front], 0, &bytes);
     }
 
     fn download(&mut self, into: &mut [f32]) {
         let mut encoder = self
+            .shared
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         encoder.copy_buffer_to_buffer(
@@ -600,14 +744,14 @@ impl Context {
             0,
             (self.count * 4) as u64,
         );
-        self.queue.submit(Some(encoder.finish()));
+        self.shared.queue.submit(Some(encoder.finish()));
 
         let slice = self.readback.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.shared.device.poll(wgpu::Maintain::Wait);
         rx.recv()
             .expect("the map completes")
             .expect("a mapped buffer");
@@ -634,49 +778,11 @@ impl Context {
         uniforms.extend((self.count as u32).to_le_bytes());
         uniforms.extend(dt.to_le_bytes());
         uniforms.extend([0u8; 12]);
-        self.queue.write_buffer(&self.uniforms, 0, &uniforms);
+        self.shared.queue.write_buffer(&self.uniforms, 0, &uniforms);
 
         let back = 1 - self.front;
-        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.cells[self.front].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.cells[back].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.coefficients[0].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.coefficients[1].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: self.coefficients[2].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: self.coefficients[3].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: self.coefficients[4].as_entire_binding(),
-                },
-            ],
-        });
-
         let mut encoder = self
+            .shared
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
@@ -684,11 +790,11 @@ impl Context {
                 label: Some("sweep"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_pipeline(&self.shared.pipeline);
+            pass.set_bind_group(0, &self.binds[self.front], &[]);
             pass.dispatch_workgroups((self.count as u32).div_ceil(64), 1, 1);
         }
-        self.queue.submit(Some(encoder.finish()));
+        self.shared.queue.submit(Some(encoder.finish()));
         self.front = back;
     }
 }
@@ -760,3 +866,75 @@ fn sweep(@builtin(global_invocation_id) id: vec3<u32>) {
     dst[n] = t + g.dt * (mobility[n] * flux + source[n]);
 }
 "#;
+
+/// The [`Accelerator`](pantometry_world::Accelerator) a scene's `"device": "gpu"` is honoured by.
+///
+/// # Why this lives here and not in the library
+///
+/// `pantometry-world` is in the library's workspace: thirteen external crates, every one
+/// licence-gated by `deny.toml`, all of them compiling to `wasm32` and to Rust 1.78. A wgpu stack is
+/// eighty-six crates and none of those three things. So the scene format *carries* the request and
+/// an application honours it, which is what this is for:
+///
+/// ```no_run
+/// use pantometry_gpu::OnTheGpu;
+/// use pantometry_world::{OnDisk, Scene, World};
+///
+/// # fn main() -> Result<(), String> {
+/// let scene: Scene = serde_json::from_str(
+///     r#"{ "title": "on the device", "duration_s": 0.02, "frames": 3,
+///          "conservation_tolerance": 1e-4,
+///          "domains": [ { "kind": "block", "name": "part", "cells": [64, 64, 64],
+///                        "cell_mm": 1.0, "material": "aluminium", "initial_c": 20.0,
+///                        "device": "gpu" } ] }"#,
+/// )
+/// .map_err(|e| e.to_string())?;
+///
+/// let mut world = World::build_with_accelerator(scene, &OnDisk, &OnTheGpu)?;
+///
+/// // `run` fails with a `Violation` — the conservation audit, which is why the scene above
+/// // loosens it: `f32` cannot hold the default `1e-9`.
+/// let frames = world.run().map_err(|v| v.to_string())?;
+/// # let _ = frames;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// `no_run` rather than `ignore`: it was `ignore`, which is a snippet nobody compiles, and the point
+/// of an example on a trait implementation is that the signature still fits.
+///
+/// # What it refuses
+///
+/// Everything `GpuSolid::mirroring` refuses, with the same reasons — a film, a gap exchange, a phase
+/// change — plus a domain kind that has no device port at all. Never a quiet fall back to the CPU:
+/// the scene said where to run and an answer from somewhere else is not the answer it asked for.
+pub struct OnTheGpu;
+
+impl pantometry_world::Accelerator for OnTheGpu {
+    fn take(
+        &self,
+        spec: &pantometry_world::DomainSpec,
+        device: pantometry_world::Device,
+        cpu: Box<dyn Domain>,
+    ) -> Result<Box<dyn Domain>, String> {
+        if device != pantometry_world::Device::Gpu {
+            return Ok(cpu);
+        }
+        // Downcast rather than rebuild from the spec: the block the library built has its materials,
+        // voids, coatings and sources already resolved, and those resolved coefficients are the
+        // whole reason the device can run a real block at all.
+        let block = cpu
+            .as_any()
+            .and_then(|a| a.downcast_ref::<Solid3D>())
+            .ok_or_else(|| {
+                format!(
+                    "{}: only a block runs on the gpu, and this domain is not one",
+                    spec.name()
+                )
+            })?;
+        match GpuSolid::mirroring(block.clone()) {
+            Ok(gpu) => Ok(Box::new(gpu)),
+            Err(why) => Err(format!("{}: {why}", spec.name())),
+        }
+    }
+}

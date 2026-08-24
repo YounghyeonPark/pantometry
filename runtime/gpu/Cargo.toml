@@ -17,8 +17,12 @@ publish = false
 [dependencies]
 pantometry-core = { path = "../../crates/pantometry-core" }
 pantometry-thermal = { path = "../../crates/pantometry-thermal" }
+# For the `Accelerator` a scene's `"device": "gpu"` is honoured by. The scene format is a
+# library crate and this is not: the arrow points one way, as it does for the viewer.
+pantometry-world = { path = "../../crates/pantometry-world" }
 pollster = "0.4"
 wgpu = "22"
 
 [dev-dependencies]
+serde_json = "1"
 pantometry-units = { path = "../../crates/pantometry-units" }

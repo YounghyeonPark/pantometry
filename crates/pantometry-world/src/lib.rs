@@ -444,6 +444,60 @@ pub enum ScheduleSpec {
     Multirate,
 }
 
+/// Where a domain runs.
+///
+/// # Why a scene says this and nothing guesses it
+///
+/// An accelerator here is not a faster version of the same arithmetic. WGSL has no `f64`, so a
+/// device runs a **lower-precision** computation: `pantometry-gpu` measures the distance rather
+/// than asserting there is none, and `Simulation`'s conservation audit defaults to a relative
+/// `1e-9` that single precision cannot meet. Choosing the device is therefore choosing what the run
+/// is allowed to lose, and that is a decision a scene makes in writing.
+///
+/// It is also not a decision a heuristic could make well. A device kernel is a stencil, and a
+/// surface film, a gap exchange and a phase change are not — so picking by grid size would have
+/// moved half the shipped scenes onto a different physics, or silently back off the device again.
+/// Asking for a device a block cannot use is an **error** naming what it cannot use, the same way
+/// the run file's reader refuses a panel kind it does not know rather than skipping it.
+///
+/// # The library cannot honour `Gpu`, and says so
+///
+/// `pantometry-world` is in the library's workspace, which resolves thirteen external crates, has
+/// every one licence-gated by `deny.toml`, and compiles to `wasm32` and to Rust 1.78. A GPU stack
+/// is eighty-six crates and none of those three things. So the scene *carries* the request and an
+/// **application** honours it — see [`World::build_with_accelerator`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum Device {
+    /// The domain's own implementation, in `f64`. What every scene got before this key existed.
+    #[default]
+    Cpu,
+    /// An accelerator, in `f32`, supplied by the application.
+    Gpu,
+}
+
+/// Something that can run a domain somewhere other than the CPU.
+///
+/// Implemented by an application, because the library's workspace cannot carry a GPU stack — see
+/// [`Device`]. `pantometry-gpu` provides one.
+///
+/// The contract is narrow on purpose: it is handed the spec and the domain the library built, and
+/// returns a replacement or an error. It may **not** hand back the CPU domain when it cannot help —
+/// a run that silently ran somewhere other than where the scene said is a run whose answer nobody
+/// asked for.
+pub trait Accelerator {
+    /// Replace `cpu` with a version that runs on `device`, or say why not.
+    ///
+    /// `cpu` is fully configured: its materials, voids, coatings and sources are resolved, which is
+    /// what an accelerator should take rather than rebuilding the operator from the spec.
+    fn take(
+        &self,
+        spec: &DomainSpec,
+        device: Device,
+        cpu: Box<dyn Domain>,
+    ) -> Result<Box<dyn Domain>, String>;
+}
+
 /// One domain in a scene.
 ///
 /// Still an enum rather than an open registry — a third party cannot add a variant — but the
@@ -712,6 +766,11 @@ pub enum DomainSpec {
     Block {
         /// Domain name.
         name: String,
+        /// Where this block runs. `"cpu"` unless the scene says otherwise.
+        ///
+        /// **Stated, never inferred** — see [`Device`].
+        #[serde(default)]
+        device: Device,
         /// Cells along x, y and z.
         cells: [usize; 3],
         /// The side of one cubic cell.
@@ -1347,6 +1406,14 @@ pub struct Boundary {
 }
 
 impl DomainSpec {
+    /// Where this domain asks to run. `Cpu` for every kind that has no device port.
+    pub fn device(&self) -> Device {
+        match self {
+            DomainSpec::Block { device, .. } => *device,
+            _ => Device::Cpu,
+        }
+    }
+
     /// The name this domain will answer to.
     pub fn name(&self) -> &str {
         match self {
@@ -2193,6 +2260,9 @@ impl DomainSpec {
                 parts,
                 cooling,
                 dissipation,
+                // The device is the application's to honour, not the builder's: this workspace
+                // cannot carry a GPU stack. `World::build` refuses `Gpu` below, by name.
+                device: _,
             } => {
                 let bulk = palette.get(name, material.as_deref().unwrap_or("aluminium"))?;
                 let mut block = pantometry::thermal::Solid3D::new(
@@ -2844,6 +2914,27 @@ impl World {
     /// runs from a terminal have to be the *same scene*, or the browser is a demo rather than the
     /// product.
     pub fn build_with(scene: Scene, files: &dyn Parts) -> Result<World, String> {
+        World::build_all(scene, files, None)
+    }
+
+    /// Build a scene, letting `accelerator` honour any domain that asked for a device.
+    ///
+    /// What an application calls. The library refuses [`Device::Gpu`] on its own — it has no device
+    /// and cannot acquire one without a dependency tree its promises forbid — so a scene that asks
+    /// for one is only runnable through here.
+    pub fn build_with_accelerator(
+        scene: Scene,
+        files: &dyn Parts,
+        accelerator: &dyn Accelerator,
+    ) -> Result<World, String> {
+        World::build_all(scene, files, Some(accelerator))
+    }
+
+    fn build_all(
+        scene: Scene,
+        files: &dyn Parts,
+        accelerator: Option<&dyn Accelerator>,
+    ) -> Result<World, String> {
         // Before anything else, and before any field is read: a file from a newer build must not
         // be half-run.
         scene.check_version()?;
@@ -2960,12 +3051,23 @@ impl World {
         let mut notes = Vec::new();
         let mut expansion: BTreeMap<String, Vec<f64>> = BTreeMap::new();
         for spec in &scene.domains {
-            sim = sim.with_boxed(spec.build(
-                &mut palette,
-                scene.environment.as_ref(),
-                files,
-                &mut notes,
-            )?);
+            let built = spec.build(&mut palette, scene.environment.as_ref(), files, &mut notes)?;
+            // **Where the scene said, or an error naming why not.** The library has no device and
+            // cannot acquire one — its workspace is thirteen licence-gated crates that compile to
+            // wasm32 and Rust 1.78 — so `Gpu` is only runnable through
+            // `World::build_with_accelerator`. Falling back to the CPU here would run a different
+            // arithmetic than the scene asked for and say nothing.
+            let built = match (spec.device(), accelerator) {
+                (Device::Cpu, _) => built,
+                (device, Some(a)) => a.take(spec, device, built)?,
+                (Device::Gpu, None) => {
+                    return Err(format!(
+                        "{}: this scene asks to run on the gpu, and this binary has no device.                          The scene format carries the request and an application honours it —                          `World::build_with_accelerator` with `pantometry-gpu`'s. Remove                          \"device\" to run on the cpu, which is the reference either way",
+                        spec.name()
+                    ));
+                }
+            };
+            sim = sim.with_boxed(built);
             // The dismissals — a stated condition a domain ignores for a measured reason.
             // Collected here, in the composition root, because the reason is about the pair
             // (this stage, this domain) and neither owns it alone. Reported by `--check` and

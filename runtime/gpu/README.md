@@ -2,8 +2,13 @@
 
 ```sh
 cd runtime/gpu
-cargo test -- --nocapture
+cargo test --release -- --nocapture
 ```
+
+`--release`. This README used to say `cargo test` without it, which turns out **not** to be why its
+figures were wrong: measured at 64³, debug costs the CPU column 6.7× and the device column 5.9×, and
+the ratio survives (37× against 33×). The per-step host work — encoder, submit, uniform write — is
+Rust too.
 
 `GpuSolid` runs `Solid3D`'s seven-point stencil as a WGSL compute shader and implements `Domain`,
 so it drops into a `Simulation` like anything else.
@@ -16,27 +21,142 @@ is the only arrangement under which the library's promises survive a GPU at all.
 
 ## What it costs and what it buys
 
-Measured on this machine, 400 steps, the same deposit in the same cell:
+`how_much_faster` measures **one** grid, named by `PANTOMETRY_SWEEP`, and prints the adapter it ran
+on. The table is a shell loop over it:
 
-| grid | CPU | GPU | |
-| --- | --- | --- | --- |
-| 16³ | 0.185 s | 0.053 s | 3.5× |
-| 32³ | 1.308 s | 0.054 s | 24× |
-| 48³ | 4.692 s | 0.055 s | 85× |
-| 64³ | 11.418 s | 0.060 s | **191×** |
+```sh
+for n in 16 24 32 48 64 96 128; do
+  PANTOMETRY_SWEEP=$n cargo test --release --test against_the_cpu how_much_faster -- --nocapture
+done
+```
 
-The GPU column is flat. At these sizes it is bound by dispatch overhead rather than by the
-stencil, so the speedup is really the CPU's `n³` growing away from a constant — which is the shape
-that makes a GPU worth having and also the reason 16³ barely pays.
+One process per grid, and that is the finding rather than a detail — see below. On an **NVIDIA
+GeForce RTX 4090 Laptop GPU (Vulkan)**, release, same deposit in the same cell, each row the best of
+three:
+
+| grid | steps | cpu threads | gpu s/step | cpu s/step | speedup |
+| --- | --- | --- | --- | --- | --- |
+| 16³ | 400 | 1 | 2.2–2.6e-5 | 2.2e-5 | **0.87–0.98×** |
+| 24³ | 400 | 1 | 2.8e-5 | 7.6–8.0e-5 | 2.7–2.9× |
+| 32³ | 400 | 1 | 2.4–2.7e-5 | 1.8e-4 | 6.9–7.9× |
+| 48³ | 400 | 1 | 2.7–3.4e-5 | 6.1–6.2e-4 | 18–23× |
+| 64³ | 400 | 2 | 2.9–4.0e-5 | 1.1–2.3e-3 | **33–67×** |
+| 96³ | 100 | 4 | 7.1–7.2e-5 | 3.4–3.6e-3 | 49–50× |
+| 128³ | 100 | 7 | 1.6e-4 | 6.7–6.9e-3 | 41–43× |
+
+**The bands are the CPU column's, not the device's.** 64³ was run eight times: the device held
+`2.9e-5` to `4.0e-5` s a step — ±20% — while this laptop's CPU stencil ran anywhere from `1.1e-3` to
+`2.3e-3`, a factor of two, and the ratio followed it from 33× to 67×. The other rows are two runs
+each, so read them as the shape rather than as six significant figures. The device column is the one
+this crate controls and it is the steady one.
+
+**It peaks around 64³ and comes back down.** The device column is flat from 16³ to 64³ — bound by
+dispatch, not by the stencil — so up to there the ratio is the CPU's `n³` growing away from a
+constant. Past 64³ the device starts paying for cells too, and the CPU's sweep picks up threads
+(2 → 4 → 7), so both columns grow and the ratio settles in the forties.
+
+**At 16³ it is a wash**, and the first row says so rather than rounding `0.87` to `1×`. By 24³ it is
+2.8×, so the crossover is between those two.
+
+**The cpu threads column is what the CPU actually used**, not what the machine has: `threads_for` is
+`√(cells/39000)` capped at the cores, so 48³ and under run on one thread on a 32-core machine. A
+"32 threads" claim was in the first draft of this table and was wrong.
+
+### One process per grid, because seven in one measured the order instead
+
+The first replacement for the 191× was a sweep over all seven sizes in one test. It did not work, and
+how it failed is the useful part.
+
+**This machine slows under sustained load, and both columns slow together** — so it is neither the
+device nor the allocator. The drift is seconds fast. Whatever size went last was penalised by a
+factor of two to three: run backwards, 128³ read **42×** where forwards it read **21×**, and 16³ went
+from `2.2e-5` to `4.7e-5` s a step for identical work. Best of three did not help, because all three
+reps of a row sit at the same place in the sweep. Round-robining the reps did not help either — it
+only made the spread column honest about the size of the drift, which is 100% to 400%.
+
+What is reproducible is **the first thing measured in a fresh process**, to ±5% across runs. Hence
+the loop. Ascending and descending now agree row for row, which is the check that the instrument is
+fixed and not merely quieter.
+
+Two things were chased before the machine was suspected, and neither was the cause — but both were
+worth keeping and are in `src/lib.rs`:
+
+- Every `GpuSolid::new` created its own `wgpu::Instance`, requested its own adapter and compiled the
+  shader again. That is now one `Shared` per process behind a `OnceLock`, and it fixed a **real**
+  bug: `cargo test --release` — the command this README gives — never finished, because creating
+  those concurrently blocks. It ran in 32 s with `--test-threads=1` and not at all in ten minutes
+  without. It is 12 s now.
+- The bind group was rebuilt every step. Nothing in it changes except which of the two cell buffers
+  is read, so there are two and they are built once.
+
+Two attempts to make the device reclaim eagerly both **wedged the suite past ten minutes** and are
+recorded in the source as such: `Maintain::Poll` after every submit, and `Maintain::Wait` in a
+block's drop — the second because `Wait` waits for the whole device, and other tests were still
+submitting to it.
+
+### The 191× that stood here
+
+It said **191× at 64³**, and `ARCHITECTURE.md` said it twice and the root README once. **Nothing
+measured it.** This test ran at one hard-coded grid size and printed one row; the four-row table was
+a hand measurement with no test, no adapter named and no build profile.
+
+Both columns have since got faster, the CPU far more so, which is the whole of why the ratio fell:
+the old table's CPU figure is 2.85e-2 s/step at 64³ against 1.1–2.3e-3 now, and its device figure is
+1.5e-4 against 2.9–4.0e-5 — so the accelerator is **4–5× faster per step** than the number that was
+used to advertise it. `Solid3D` stopped cloning the whole grid every step and gained a threaded sweep; the
+kernel became the conductance form, which reads five coefficient arrays where the old one read a
+scalar. Beyond that the difference is not attributable, because there is no measurement of the old
+code to attribute it to. That is the actual lesson.
 
 Accuracy, after 60 steps with the field still structured:
 
 | | |
 | --- | --- |
-| worst relative difference from the reference | `2.7e-7` |
+| worst relative difference from the reference | `1.07e-7` |
 | what single precision predicts over 60 steps | `7.7e-7` |
 | conservation drift, CPU (`f64`) | `9.1e-15` |
-| conservation drift, GPU (`f32`) | `5.0e-11` |
+| conservation drift, GPU (`f32`) | `1.45e-11` |
+
+## How a run asks for this
+
+A scene says so, in the domain that wants it:
+
+```json
+{
+  "title": "a block that says where it runs",
+  "duration_s": 0.02,
+  "frames": 3,
+  "conservation_tolerance": 1e-4,
+  "domains": [
+    { "kind": "block", "name": "part", "cells": [64, 64, 64], "cell_mm": 1.0,
+      "material": "aluminium", "initial_c": 20.0, "device": "gpu" }
+  ]
+}
+```
+
+`conservation_tolerance` is the scene's, not the block's, and `1e-4` rather than the default `1e-9`
+because single precision cannot hold that on a long run. `the_readme_scene_parses` parses this exact
+block out of this file — the first draft of it put the tolerance inside the domain, where
+`deny_unknown_fields` would have refused it and the README would have gone on saying so.
+
+`pantometry-world` **refuses** that on its own, by name, and says what would honour it. It has no
+device and cannot acquire one: its workspace is thirteen licence-gated crates that compile to
+`wasm32` and to Rust 1.78, and a GPU stack is none of those things. So the scene carries the request
+and an application honours it:
+
+```rust
+let mut world = World::build_with_accelerator(scene, &OnDisk, &pantometry_gpu::OnTheGpu)?;
+```
+
+**Never inferred, and never fallen back from.** A device is a lower-precision computation, not a
+faster one, so choosing it is choosing what the run may lose — and a heuristic on grid size would
+have moved half the shipped scenes onto a different physics, or silently back off the device again.
+A block the device has no pass for is an error naming the reason, the same way the run file's reader
+refuses a panel kind it does not know rather than skipping it.
+
+`tests/a_scene_that_says_where_to_run.rs` runs one such scene **both ways and compares the
+readings** — which is how `coldest` was found missing from the device's four scalars, so a run on
+the device had been writing a CSV with a column absent and nothing saying it was absent.
 
 ## Why this is a different computation, not a faster one
 
@@ -53,7 +173,8 @@ what the run is allowed to lose. `GpuSolid` also declines `books_balance` for th
 The first version stored absolute kelvin and diverged from the reference by `1.4e-3` after two
 hundred steps — a thousand times what accumulation predicts. The cause was not accumulation.
 
-The update is `centre + F·(sum − 6·centre)`. On absolute temperatures near 293 K that `sum` is
+The update **then** was `centre + F·(sum − 6·centre)`; it is the conductance form now, for a
+different reason — see below. On absolute temperatures near 293 K that `sum` is
 about 1759, where `f32`'s resolution is `1.2e-4`, and the difference being extracted from it is of
 order `1e-3` K. Subtracting two numbers that agree to five digits **keeps less than one digit of
 the answer**, every step, forever.

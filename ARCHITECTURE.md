@@ -587,9 +587,20 @@ accelerator**, with a test that measures how far apart they land. The stencil it
 each cell reads six neighbours and writes itself, with no reduction and so no order to depend on
 — and reductions stay on the CPU, summed in index order after a readback.
 
-The measurement is 191× on a 64³ grid, and it comes with a cost that is not about speed: WGSL has
+The measurement is **33–67× on a 64³ grid**, a wash at 16³, and 41–43× at 128³ — it peaks near 64³
+and comes back down, because past there the device pays for cells too and the CPU sweep picks up
+threads. The band is the CPU column's: the device holds `2.9e-5` to `4.0e-5` s a step over eight runs
+while this laptop's CPU stencil ranges over a factor of two.
+
+The `191×` that stood in this paragraph for months had **nothing measuring it** — the test ran at one
+hard-coded grid size and printed one row. Replacing it needed the instrument fixed before the number
+could be: seven sizes in one process measured the *order* of the sweep, by a factor of two to three,
+because the machine drifts under load and whichever went last paid for the rest. One process per
+grid, ascending and descending agreeing row for row, is the check. `runtime/gpu/README.md` has it.
+
+It comes with a cost that is not about speed: WGSL has
 no `f64`, so an accelerated domain is single precision against the library's double. It conserves
-to `5e-11` where the CPU holds `9e-15`, which is below `Simulation`'s default `1e-9` audit — so a
+to `1.45e-11` where the CPU holds `9.1e-15`, which is below `Simulation`'s default `1e-9` audit — so a
 scene using one has to loosen `conservation_tolerance_for(ENERGY, ..)`, and choosing that number
 is choosing what the run may lose.
 
@@ -621,7 +632,7 @@ contains, and its scalars go out as time-sampled custom attributes under `pantom
 | --- | --- |
 | a viewer | `runtime/viewer` — a wgpu window that reads the run **file** and does not link `pantometry` |
 | export | `pantometry_view::gltf` — one frame as **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. `pantometry_view::usda` — the **whole run**, animated, with every domain's scalars as time-sampled attributes. Both no dependency; the geometry is `pantometry_view::mesh`, shared, so the two cannot disagree about a solid's size |
-| GPU physics | `runtime/gpu` — 191× at 64³, single precision, CPU as the reference |
+| GPU physics | `runtime/gpu` — 33–67× at 64³, a wash at 16³, single precision, CPU as the reference. A scene states `"device": "gpu"` and an **application** honours it through `Accelerator`, because the library's workspace cannot carry the stack |
 | an editor | a skeleton, at `runtime/editor`: the scene's JSON checked as you type beside a wireframe of every placed extent, run and verify as buttons, `viewer-core`'s camera. The platform section below is what it grows into, under whose rules |
 
 **The editor was last for a reason that is now gone.** An editor writes files, and the scene

@@ -228,19 +228,99 @@ fn past_the_limit_is_refused() {
     assert_eq!(err.quantity, "Fourier number");
 }
 
-/// **It is actually faster, and by how much is measured rather than assumed.**
+/// **It is actually faster, and the README's table is this test's output.**
 ///
 /// Reported rather than asserted. A timing threshold on somebody else's machine fails for reasons
-/// that have nothing to do with the code, and a GPU that is slower than a CPU on a small grid is a
-/// true fact about small grids rather than a defect.
+/// that have nothing to do with the code, and a GPU slower than a CPU on a small grid is a true fact
+/// about small grids rather than a defect.
+///
+/// # One size per process, and that is the whole finding
+///
+/// The README claimed **191× at 64³** and `ARCHITECTURE.md` claimed it twice, and nothing in the
+/// repository measured it: this test ran at one hard-coded size and printed one row.
+///
+/// Replacing it with a sweep over seven sizes did not work, and the way it failed is worth keeping.
+/// This machine slows under sustained load — **both columns together**, so it is neither the device
+/// nor the allocator — and the drift is seconds fast. Whatever size went last was penalised, by a
+/// factor of two to three: run backwards, 128³ read **42×** where forwards it read **21×**, and 16³
+/// went from `2.2e-5` to `4.7e-5` s a step for identical work. Best-of-three did not help, because
+/// all three reps of a row sit at the same place in the sweep. Round-robining the reps did not help
+/// either; it only made the spread column honest about how large the drift is — 100% to 400%.
+///
+/// What *is* reproducible is the first thing measured in a fresh process: to ±5% across runs, every
+/// time. So the size comes from `PANTOMETRY_SWEEP` and the README loops the shell over it. Each
+/// number is then a first measurement, and rows compare because none of them paid for the others.
 #[test]
 fn how_much_faster() {
-    let Some((mut cpu, mut gpu)) = pair() else {
-        return;
+    let n: usize = std::env::var("PANTOMETRY_SWEEP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(64);
+    // Fewer steps on the big grids: 128³ at 400 is minutes of wall clock to sharpen a ratio that is
+    // clear at 100.
+    let steps = if n > 64 { 100 } else { 400 };
+
+    // Best of three of *this* size, back to back. Same-size reps sit close enough together that the
+    // drift inside them is a few per cent, which the spread column reports either way.
+    const REPS: usize = 3;
+    let mut cpu = Spread::new();
+    let mut gpu = Spread::new();
+    let mut where_it_ran = String::new();
+    for _ in 0..REPS {
+        let Some((cpu_time, gpu_time, on)) = speed_at(n, steps) else {
+            return;
+        };
+        cpu.saw(cpu_time);
+        gpu.saw(gpu_time);
+        where_it_ran = on;
+    }
+
+    println!(
+        "  | {n}³ | {steps} | {} | {:.3e} | {:.3e} | **{}** | {:.0}% / {:.0}% |",
+        // **What the CPU column actually used**, not what the machine has: `threads_for` is
+        // `√(cells/39000)` capped at the cores, so 48³ and under run on one thread however many
+        // the machine has. A "32 threads" claim was in the first draft of the README's table.
+        pantometry_core::sweep::threads_for(n * n * n),
+        cpu.best / steps as f64,
+        gpu.best / steps as f64,
+        // **Two significant figures below ten.** `{:.0}` printed the 16³ ratio of 0.69 as `1×`,
+        // which is a table rounding a loss into a tie.
+        ratio(cpu.best / gpu.best.max(1e-9)),
+        cpu.spread_percent(),
+        gpu.spread_percent(),
+    );
+    println!("  on {where_it_ran}");
+    println!("  PANTOMETRY_SWEEP picks the grid; a readback is one transfer, so a run that audits");
+    println!("  every step pays for it");
+}
+
+/// Wall clock for `steps` on both, at `n³`, and what the device calls itself. `None` when this
+/// machine has no adapter.
+fn speed_at(n: usize, steps: usize) -> Option<(f64, f64, String)> {
+    let mut cpu = Solid3D::new(
+        "cpu",
+        Substance::aluminium_6061(),
+        (n, n, n),
+        Length::from_si(DX),
+        Temperature::celsius(20.0),
+    );
+    let mut gpu = match GpuSolid::new(
+        "gpu",
+        Substance::aluminium_6061(),
+        (n, n, n),
+        Length::from_si(DX),
+        Temperature::celsius(20.0),
+    ) {
+        Ok(gpu) => gpu,
+        Err(why) => {
+            println!("  skipped at {n}³: {why}");
+            return None;
+        }
     };
-    seed(&mut cpu, &mut gpu);
+    cpu.deposit(n / 2, n / 2, n / 2, Energy::from_si(2.0));
+    gpu.deposit(n / 2, n / 2, n / 2, Energy::from_si(2.0));
+
     let dt = Time::from_si(cpu.max_stable_dt(Time::from_si(0.0)).to_si() * 0.5);
-    let steps = 400;
     let mut bus = Exchange::new();
 
     let start = std::time::Instant::now();
@@ -256,13 +336,41 @@ fn how_much_faster() {
     // Force the queue to drain, or this times the submission and not the work.
     let _ = gpu.mean_temperature();
     let gpu_time = start.elapsed().as_secs_f64();
+    Some((cpu_time, gpu_time, gpu.device_name().to_string()))
+}
 
-    println!(
-        "  {}^3 cells, {steps} steps: cpu {:.3} s, gpu {:.3} s — {:.2}x",
-        N,
-        cpu_time,
-        gpu_time,
-        cpu_time / gpu_time.max(1e-9)
-    );
-    println!("  a readback is one transfer, so a run that audits every step pays for it");
+/// Best and worst of a few timings of the same thing.
+struct Spread {
+    best: f64,
+    worst: f64,
+}
+
+impl Spread {
+    fn new() -> Spread {
+        Spread {
+            best: f64::MAX,
+            worst: 0.0,
+        }
+    }
+
+    fn saw(&mut self, t: f64) {
+        self.best = self.best.min(t);
+        self.worst = self.worst.max(t);
+    }
+
+    /// How much the slowest run exceeded the fastest. Printed because a column with a 100% spread
+    /// is a column whose single-shot number means nothing — which is how a 96³ row once came out
+    /// *below* the 64³ one.
+    fn spread_percent(&self) -> f64 {
+        100.0 * (self.worst - self.best) / self.best.max(1e-12)
+    }
+}
+
+/// Two significant figures below ten, none above: `0.69×`, `4.8×`, `87×`.
+fn ratio(r: f64) -> String {
+    if r < 10.0 {
+        format!("{r:.2}×")
+    } else {
+        format!("{r:.0}×")
+    }
 }

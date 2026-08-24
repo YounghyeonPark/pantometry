@@ -892,6 +892,7 @@ impl DomainSpec {
                 parts,
                 cooling,
                 dissipation,
+                device,
             } => {
                 if hot_spot.is_some() {
                     return Err(format!(
@@ -903,6 +904,9 @@ impl DomainSpec {
                 }
                 Some(DomainSpec::Block {
                     name: name.clone(),
+                    // A refinement runs where the original ran: a sweep that changed device
+                    // halfway would be comparing two arithmetics and calling it a grid study.
+                    device: *device,
                     cells: [cells[0] * 2, cells[1] * 2, cells[2] * 2],
                     cell_mm: cell_mm / 2.0,
                     initial_c: *initial_c,
