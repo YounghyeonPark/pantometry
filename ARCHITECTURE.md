@@ -613,6 +613,13 @@ The other three belong **above the layers**, in workspaces of their own, for the
 `bindings/python` already established. Measured: the library resolves 12 external crates, the
 python bindings 15, and a wgpu stack **86**. `runtime/viewer` is the first of those.
 
+**A shaded viewport is not a renderer, and the distinction is the whole of this section.** The
+editor draws surfaces with a depth buffer and two lights — which is what every DCC viewport does,
+and what tells a reader the shape of the thing they are looking at. It is a few hundred lines of
+GLSL and glow inside a workspace that already carries a GUI stack. What is *not* being built is
+below: no path tracing, no global illumination, no material model. The picture that leaves this
+workspace for a photoreal render leaves as USD.
+
 And on the rest, the recommendation is not to build them. Omniverse and Isaac Sim exist and are
 enormous; what this workspace has that they do not is physics that is audited, deterministic and
 checked against closed forms. So the move is to be *reachable from* them — `pantometry_view::gltf`
@@ -633,7 +640,7 @@ contains, and its scalars go out as time-sampled custom attributes under `pantom
 | a viewer | `runtime/viewer` — a wgpu window that reads the run **file** and does not link `pantometry` |
 | export | `pantometry_view::gltf` — one frame as **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. `pantometry_view::usda` — the **whole run**, animated, with every domain's scalars as time-sampled attributes. Both no dependency; the geometry is `pantometry_view::mesh`, shared, so the two cannot disagree about a solid's size |
 | GPU physics | `runtime/gpu` — 33–67× at 64³, a wash at 16³, single precision, CPU as the reference. A scene states `"device": "gpu"` and an **application** honours it through `Accelerator`, because the library's workspace cannot carry the stack |
-| an editor | a skeleton, at `runtime/editor`: the scene's JSON checked as you type beside a wireframe of every placed extent, run and verify as buttons, `viewer-core`'s camera. The platform section below is what it grows into, under whose rules |
+| an editor | `runtime/editor`: the scene's JSON checked as you type, an outliner and an inspector, run and verify as buttons, and a **shaded viewport** — surfaces from `pantometry_view::mesh` on the GPU with a depth buffer, lit, with the extents as wire boxes occluded by what is in front of them. `viewer-core`'s camera, now also as a matrix, and `one_camera_two_paths` holds the two expressions of it to `2.4e-7` |
 
 **The editor was last for a reason that is now gone.** An editor writes files, and the scene
 format is `pantometry-world`'s, which is `publish = false` precisely because a file format is a

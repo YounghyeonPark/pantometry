@@ -42,15 +42,44 @@
 use editor_core::OnDisk;
 use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+mod render;
+
 fn main() -> eframe::Result {
-    let path = std::env::args().nth(1);
+    // `--run` starts the run on load, so `editor scene.json --run` opens on the picture rather than
+    // on three clicks. Written because there was no way to *see* the shaded viewport without a
+    // human at the keyboard, which made a rendering change unverifiable.
+    let mut path = None;
+    let mut run_at_once = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--run" => run_at_once = true,
+            other if other.starts_with('-') => {
+                eprintln!("editor: unknown option {other}");
+                eprintln!("usage: editor [scene.json] [--run]");
+                std::process::exit(2);
+            }
+            other => path = Some(other.to_string()),
+        }
+    }
     eframe::run_native(
         "pantometry editor",
-        eframe::NativeOptions::default(),
-        Box::new(|_cc| Ok(Box::new(App::new(path)))),
+        eframe::NativeOptions {
+            // **Big enough that the viewport exists.** Three side panels have minimum widths, and a
+            // `SidePanel` is served before the `CentralPanel` is — so on the default 533-point
+            // window the outliner, the text and the inspector took all of it and the paint callback
+            // was handed a rect of **zero width**. It drew nothing, correctly, and looked exactly
+            // like a renderer that did not work.
+            viewport: egui::ViewportBuilder::default().with_inner_size([1500.0, 950.0]),
+            ..eframe::NativeOptions::default()
+        },
+        Box::new(move |_cc| {
+            let mut app = App::new(path);
+            app.run_at_once = run_at_once;
+            Ok(Box::new(app))
+        }),
     )
 }
 
@@ -62,6 +91,16 @@ enum Job {
     RunEnded(Result<editor_core::RunEnd, String>),
     /// The battery's rendered report and its findings count, or why it could not start.
     Verified(Result<(String, usize), String>),
+}
+
+/// One thing the cursor can be over in the shaded view, with its readout already written.
+///
+/// The text is built when the geometry is, because that is when the value is in hand and because a
+/// readout assembled per paint is a `format!` per candidate per frame.
+struct Probed {
+    at: [f64; 3],
+    path: String,
+    label: String,
 }
 
 /// A parsed run being scrubbed through.
@@ -141,6 +180,29 @@ struct App {
     hidden: std::collections::BTreeSet<String>,
     /// Draw only the selection, for reading one thing out of a crowded scene.
     solo: bool,
+    // The shaded viewport.
+    /// The meshes on the GPU, shared with the paint callback.
+    ///
+    /// Behind a lock because `egui::PaintCallback` holds an `Arc<dyn Any + Send + Sync>`: the
+    /// closure cannot borrow from `App`, so the two take turns on this instead.
+    gpu: Arc<Mutex<render::Shared>>,
+    /// What the meshes on the GPU were built from. A drag repaints sixty times a second and the
+    /// geometry has not changed; rebuilding a 200 000-face boundary each time is the difference
+    /// between a viewport you can aim and one you fight.
+    built: Option<u64>,
+    /// Draw surfaces at all. Off falls back to the flat splat painter, which is a *different
+    /// picture* and not a style — see `viewport`.
+    shaded: bool,
+    /// Start a run on the first update. Set by `--run`; cleared once it has fired.
+    run_at_once: bool,
+    /// What the cursor can be over in the shaded view, and the note each field's canvas carries.
+    ///
+    /// **Built with the meshes, not per paint.** The first version rebuilt every field's surface
+    /// inside the readout, so a 128 cubed boundary — 200 000 faces — was meshed sixty times a
+    /// second to answer a question about one pixel.
+    shaded_probes: Vec<Probed>,
+    shaded_notes: Vec<(String, &'static str)>,
+
     /// Whether the outliner and the inspector are on screen at all.
     show_outliner: bool,
     show_inspector: bool,
@@ -190,6 +252,12 @@ impl App {
             collapsed: std::collections::BTreeSet::new(),
             hidden: std::collections::BTreeSet::new(),
             solo: false,
+            gpu: Arc::new(Mutex::new(render::Shared::default())),
+            built: None,
+            shaded: true,
+            run_at_once: false,
+            shaded_probes: Vec::new(),
+            shaded_notes: Vec::new(),
             show_outliner: true,
             show_inspector: true,
             show_text: true,
@@ -290,6 +358,12 @@ impl App {
                     Ok(editor_core::RunEnd::Finished) => {
                         if let Some(v) = &mut self.run {
                             v.partial = false;
+                            // **And show the last frame.** Pressing run means "compute this and
+                            // show me", and what was on screen when a run finished was frame
+                            // zero — the initial condition, which is the one frame the reader
+                            // already knew. Only on a *finished* run: a stopped one is a prefix,
+                            // and jumping to the end of a prefix says it ended there.
+                            v.frame = v.run.frames.len().saturating_sub(1);
                             self.status = format!("ran: {} frames", v.run.frames.len());
                         }
                     }
@@ -380,7 +454,27 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Give the GPU objects back while there is still a context to give them to.
+    ///
+    /// The only place it can be done: a `Drop` on the meshes would run after the window is gone and
+    /// would have nothing to call, so the buffers and the two programs would stay allocated for the
+    /// process's life. Harmless at exit and not harmless as a habit — the same reason
+    /// `runtime/gpu`'s context destroys its buffers rather than leaving them to a lazy reclaim.
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let (Some(gl), Ok(shared)) = (gl, self.gpu.lock()) {
+            shared.destroy(gl);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.run_at_once {
+            self.run_at_once = false;
+            if self.checked.error.is_none() {
+                self.start_run();
+            } else {
+                self.status = format!("--run: the scene does not check out: {}", self.status);
+            }
+        }
         self.poll_jobs();
         self.poll_disk();
         if self.busy.is_some() {
@@ -410,6 +504,15 @@ impl eframe::App for App {
                     }
                 });
                 ui.menu_button("View", |ui| {
+                    // **Two pictures, not two styles.** Shaded draws the boundary of what is
+                    // present, lit and depth-tested, which is what a solid looks like. Cells draws
+                    // every sample as a translucent splat composited far to near, which is what is
+                    // *inside* it. Neither is a rendering of the other and the labels say which
+                    // question each answers.
+                    ui.label(egui::RichText::new("Viewport").weak().size(11.0));
+                    ui.radio_value(&mut self.shaded, true, "Shaded surfaces");
+                    ui.radio_value(&mut self.shaded, false, "Cells (see inside)");
+                    ui.separator();
                     ui.checkbox(&mut self.show_outliner, "Outliner");
                     ui.checkbox(&mut self.show_inspector, "Inspector");
                     ui.checkbox(&mut self.show_text, "Scene text");
@@ -614,16 +717,24 @@ impl eframe::App for App {
         let frame_at = self.run.as_ref().map_or(0, |v| v.frame);
         let tree = editor_core::tree(&self.checked, self.run.as_ref().map(|v| &v.run), frame_at);
 
+        // **A width range on every panel, because `default_width` is only where they start.**
+        // A `SidePanel` grows to whatever its widest child asks for, and one outliner row is a
+        // scene's title: "a hot spot in aluminium, meeting a wall of borosilicate halfway: 1
+        // domain(s), 0.500 s in 11 frames". Measured on a 1706-pixel window, that row took the
+        // outliner to **940 px** and left the viewport nothing at all — a 3D editor showing no 3D,
+        // because of a caption. The rows truncate now and the panels have a ceiling.
         if self.show_outliner {
             egui::SidePanel::left("outliner")
                 .resizable(true)
                 .default_width(260.0)
+                .width_range(170.0..=440.0)
                 .show(ctx, |ui| self.outliner(ui, &tree));
         }
         if self.show_inspector {
             egui::SidePanel::right("inspector")
                 .resizable(true)
                 .default_width(320.0)
+                .width_range(200.0..=460.0)
                 .show(ctx, |ui| self.inspector(ui, &tree));
         }
 
@@ -631,6 +742,7 @@ impl eframe::App for App {
             egui::SidePanel::left("text")
                 .resizable(true)
                 .default_width(430.0)
+                .width_range(240.0..=560.0)
                 .show(ctx, |ui| {
                     if let Some(summary) = &self.checked.summary {
                         ui.label(summary.clone());
@@ -810,15 +922,34 @@ impl App {
                         if !shown {
                             text = text.weak();
                         }
-                        if ui.selectable_label(selected, text).clicked() {
-                            self.selected = Some(node.path.clone());
-                        }
+                        // The kind tag first, from the right, so the name gets what is left and
+                        // truncates into it rather than widening the panel. The full name is on
+                        // hover, which is where a name too long to show belongs.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(node.kind.label())
                                     .weak()
                                     .monospace()
                                     .size(10.0),
+                            );
+                            ui.with_layout(
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    // `Button::selected` with the frame only when selected,
+                                    // rather than `SelectableLabel`: the two draw the same thing
+                                    // and only one of them can truncate.
+                                    let row = ui
+                                        .add(
+                                            egui::Button::new(text)
+                                                .selected(selected)
+                                                .frame(selected)
+                                                .truncate(),
+                                        )
+                                        .on_hover_text(&node.name);
+                                    if row.clicked() {
+                                        self.selected = Some(node.path.clone());
+                                    }
+                                },
                             );
                         });
                     });
@@ -876,6 +1007,226 @@ impl App {
                         }
                     });
             });
+    }
+
+    /// What the meshes on the GPU depend on, as one number.
+    ///
+    /// Everything that changes the *geometry* and nothing that does not: the camera is a uniform and
+    /// the frame counter is not, so a drag rebuilds nothing and a step rebuilds everything.
+    ///
+    /// A hash rather than a comparison of the parts, because the parts are a scene's text and a set
+    /// of names and the alternative is keeping a copy of both. `DefaultHasher` is deterministic
+    /// within a process, which is all a cache key needs — this is not a result, and nothing is
+    /// pinned to it.
+    fn geometry_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.text.hash(&mut h);
+        self.hidden.hash(&mut h);
+        self.solo.hash(&mut h);
+        self.selected.hash(&mut h);
+        if let Some(view) = &self.run {
+            view.frame.hash(&mut h);
+            view.run.frames.len().hash(&mut h);
+            // A streaming run replaces its frames as it goes, so the count alone would leave the
+            // last frame's geometry stale by one. The final frame's time settles it.
+            if let Some(f) = view.run.frames.last() {
+                f.t.to_bits().hash(&mut h);
+            }
+        } else {
+            0u8.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// The two batches the shaded pass draws: surfaces, and lines.
+    ///
+    /// Framing-local, in `f64` until the last step — see `render`'s module docs on why the centre
+    /// must not be folded into the matrix instead.
+    #[allow(clippy::type_complexity)]
+    fn batches(
+        &self,
+        framing: &viewer_core::Framing,
+    ) -> (
+        render::Batch,
+        render::Batch,
+        Vec<Probed>,
+        Vec<(String, &'static str)>,
+    ) {
+        let mut solid = render::Batch::new();
+        let mut lines = render::Batch::new();
+        let mut probes: Vec<Probed> = Vec::new();
+        let mut notes: Vec<(String, &'static str)> = Vec::new();
+
+        // The scene's placed extents, as wire boxes. Depth-tested with everything else, so a box
+        // behind a solid is behind it.
+        let wire = [0.42f32, 0.45, 0.5];
+        let picked_colour = [1.0f32, 0.62, 0.12];
+        let selected_name = self.selected.as_deref().and_then(|p| {
+            p.strip_prefix("/run/")
+                .or_else(|| p.strip_prefix("/extents/"))
+                .or_else(|| p.strip_prefix("/readings/"))
+                .map(|rest| rest.split('/').next().unwrap_or(rest).to_string())
+        });
+        for placed in &self.checked.boxes {
+            if !self.draws(&placed.name) {
+                continue;
+            }
+            let c = if selected_name.as_deref() == Some(placed.name.as_str()) {
+                picked_colour
+            } else {
+                wire
+            };
+            let base = lines.vertices();
+            for corner in placed.corners {
+                lines.push(framing.local(corner), [0.0, 0.0, 1.0], c);
+            }
+            for (a, b) in editor_core::EDGES {
+                lines.indices.push(base + a as u32);
+                lines.indices.push(base + b as u32);
+            }
+        }
+
+        let Some(view) = &self.run else {
+            return (solid, lines, probes, notes);
+        };
+        let Some(frame) = view
+            .run
+            .frames
+            .get(view.frame.min(view.run.frames.len().saturating_sub(1)))
+        else {
+            return (solid, lines, probes, notes);
+        };
+
+        for panel in &frame.panels {
+            if !self.draws(panel.name()) {
+                continue;
+            }
+            let scale = view.run.scale_of(panel.name());
+            match panel {
+                viewer_core::Panel::Field {
+                    name,
+                    unit,
+                    nx,
+                    ny,
+                    nz,
+                    values,
+                    ..
+                } => {
+                    // The run's own extent first, the scene's placed box second — the same order
+                    // the flat path uses, and for the same reason: a run opened without the file
+                    // that produced it still knows where it was.
+                    let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
+                        name: name.clone(),
+                        corners: editor_core::corners_of(e),
+                    });
+                    let Some(b) = from_run
+                        .as_ref()
+                        .or_else(|| self.checked.boxes.iter().find(|b| &b.name == name))
+                    else {
+                        continue;
+                    };
+                    let shell =
+                        editor_core::field_shell(&b.corners, (*nx, *ny, *nz), values, unit, scale);
+                    let base = solid.vertices();
+                    for i in 0..shell.positions.len() {
+                        solid.push(
+                            framing.local(shell.positions[i]),
+                            shell.normals[i],
+                            shell.colours[i],
+                        );
+                    }
+                    solid.indices.extend(shell.indices.iter().map(|i| base + i));
+
+                    notes.push((name.clone(), shell.note));
+                    // The readout offers the **surface's** vertices, because that is what is on
+                    // screen: naming an interior cell a reader cannot see would answer about a
+                    // different object.
+                    let path = format!("/run/{name}");
+                    for (at, cell) in shell.probes() {
+                        let c = cell as usize;
+                        let (i, j, k) = (
+                            c % (*nx).max(1),
+                            c / (*nx).max(1) % (*ny).max(1),
+                            c / (nx * ny).max(1),
+                        );
+                        let v = values.get(c).copied().unwrap_or(f64::NAN);
+                        probes.push(Probed {
+                            at,
+                            path: path.clone(),
+                            label: format!(
+                                "{name} [{i},{j},{k}]   {} {unit}",
+                                editor_core::magnitude(v)
+                            ),
+                        });
+                    }
+                }
+                viewer_core::Panel::Points {
+                    positions, values, ..
+                } => {
+                    let pts: Vec<[f64; 3]> = (0..values.len())
+                        .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
+                        .collect();
+                    if pts.is_empty() {
+                        continue;
+                    }
+                    // The radius the exports use, so a body is the same size in the viewport, in
+                    // Blender and in usdview. `mesh::body_radius` sizes it from the run's own
+                    // bounds rather than from a constant, which is why an orbit and a block do not
+                    // both get a dot.
+                    let bounds = panel.bounds();
+                    let radius = pantometry::view::mesh::body_radius(&pts, &bounds);
+                    let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
+                    for (i, centre) in pts.iter().enumerate() {
+                        let sphere = pantometry::view::mesh::body_spheres(&[*centre], radius);
+                        let colour = colouring.linear(values[i]);
+                        let base = solid.vertices();
+                        for (p, n) in sphere.positions.iter().zip(&sphere.normals) {
+                            solid.push(
+                                framing.local([p[0] as f64, p[1] as f64, p[2] as f64]),
+                                *n,
+                                colour,
+                            );
+                        }
+                        solid
+                            .indices
+                            .extend(sphere.indices.iter().map(|k| base + k));
+                    }
+                }
+                viewer_core::Panel::Paths {
+                    starts,
+                    vertices,
+                    values,
+                    ..
+                } => {
+                    let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
+                    for (r, value) in values.iter().enumerate() {
+                        let lo = starts[r] as usize;
+                        let hi = starts
+                            .get(r + 1)
+                            .map_or(vertices.len() / 3, |s| *s as usize);
+                        let colour = colouring.linear(*value);
+                        let base = lines.vertices();
+                        for w in lo..hi {
+                            lines.push(
+                                framing.local([
+                                    vertices[3 * w],
+                                    vertices[3 * w + 1],
+                                    vertices[3 * w + 2],
+                                ]),
+                                [0.0, 0.0, 1.0],
+                                colour,
+                            );
+                        }
+                        for step in 0..hi.saturating_sub(lo).saturating_sub(1) {
+                            lines.indices.push(base + step as u32);
+                            lines.indices.push(base + step as u32 + 1);
+                        }
+                    }
+                }
+            }
+        }
+        (solid, lines, probes, notes)
     }
 
     /// The 3D viewport: wireframe extents from the text, run panels over them by shape.
@@ -956,6 +1307,56 @@ impl App {
             }
         }
 
+        // **The shaded pass.** Everything with a surface goes to the GPU with a depth buffer;
+        // everything that is a *number* — labels, the colour bar, the readout — stays on egui on
+        // top. The split is not stylistic: a caption has to be legible over whatever is behind it,
+        // and geometry has to be occluded by whatever is in front of it, and one painter cannot do
+        // both.
+        if self.shaded {
+            let key = self.geometry_key();
+            if self.built != Some(key) {
+                let (solid, lines, probes, notes) = self.batches(&framing);
+                if let Ok(mut gpu) = self.gpu.lock() {
+                    gpu.pending_solid = Some(solid);
+                    gpu.pending_lines = Some(lines);
+                }
+                self.shaded_probes = probes;
+                self.shaded_notes = notes;
+                self.built = Some(key);
+            }
+            let clip = self.camera.matrix(aspect);
+            let gpu = self.gpu.clone();
+            if std::env::var_os("PANTOMETRY_VIEWPORT").is_some() {
+                eprintln!("viewport: adding a callback for rect {rect:?}");
+            }
+            painter.add(egui::PaintCallback {
+                rect,
+                callback: std::sync::Arc::new(eframe::egui_glow::CallbackFn::new(
+                    move |info, glow_painter| {
+                        if std::env::var_os("PANTOMETRY_VIEWPORT").is_some() {
+                            eprintln!("viewport: the callback ran");
+                        }
+                        let px = info.viewport_in_pixels();
+                        if let Ok(mut shared) = gpu.lock() {
+                            shared.paint(
+                                glow_painter.gl(),
+                                &clip,
+                                [px.left_px, px.from_bottom_px, px.width_px, px.height_px],
+                            );
+                        }
+                    },
+                )),
+            });
+            // A driver that would not give a 3.3 core context loses the surfaces and keeps the
+            // editor — and is told which of those happened, here, rather than shown an empty
+            // rectangle that looks exactly like a scene with nothing in it.
+            let failed = self.gpu.lock().ok().and_then(|g| g.error.clone());
+            if let Some(why) = failed {
+                self.shaded = false;
+                self.status = format!("{why} — flat view instead");
+            }
+        }
+
         // **The projection returns a depth and this keeps it.** `Camera::project` computes
         // "distance from the eye, larger is further"; the closure here returned only a position,
         // so paint order was recovered afterwards by projecting each point a second time a
@@ -978,6 +1379,11 @@ impl App {
 
         // The scene's own geometry: every placed extent, wireframed. Drawn from the text, not
         // the run, so layout is visible while editing and before anything is computed.
+        //
+        // **Painted flat only when the shaded pass is off.** With surfaces on screen a wireframe
+        // has to be behind them where it is behind them, and egui has no depth buffer to do that
+        // with — so it moves into the line pass, which shares one. A box outline drawn over a solid
+        // it is inside says the solid is not there.
         let wire = ui.visuals().weak_text_color();
         let highlight = egui::Color32::from_rgb(255, 190, 60);
         for placed in &self.checked.boxes {
@@ -990,11 +1396,13 @@ impl App {
             } else {
                 egui::Stroke::new(1.0, wire)
             };
-            for (a, b) in editor_core::EDGES {
-                painter.line_segment(
-                    [to_screen(placed.corners[a]), to_screen(placed.corners[b])],
-                    stroke,
-                );
+            if !self.shaded {
+                for (a, b) in editor_core::EDGES {
+                    painter.line_segment(
+                        [to_screen(placed.corners[a]), to_screen(placed.corners[b])],
+                        stroke,
+                    );
+                }
             }
             painter.text(
                 to_screen(placed.corners[0]),
@@ -1103,7 +1511,9 @@ impl App {
                     let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
                     for i in editor_core::far_to_near(&depths) {
                         let at = to_screen(pts[i]);
-                        painter.circle_filled(at, 3.5, shade(values[i], scale));
+                        if !self.shaded {
+                            painter.circle_filled(at, 3.5, shade(values[i], scale));
+                        }
                         probe.offer(pointer, at, 6.0, depths[i], &format!("/run/{name}"), || {
                             format!(
                                 "{name} body {i}   {} {unit}",
@@ -1123,6 +1533,9 @@ impl App {
                         let hi = starts
                             .get(r + 1)
                             .map_or(vertices.len() / 3, |s| *s as usize);
+                        if self.shaded {
+                            continue;
+                        }
                         for w in lo..hi.saturating_sub(1) {
                             let a = [vertices[3 * w], vertices[3 * w + 1], vertices[3 * w + 2]];
                             let b = [
@@ -1162,18 +1575,26 @@ impl App {
                     let Some(b) = placed else {
                         continue;
                     };
-                    if let Some(note) = draw_field(
-                        &painter,
-                        &project,
-                        b,
-                        (*nx, *ny, *nz),
-                        values,
-                        unit,
-                        scale,
-                        pointer,
-                        &mut probe,
-                        name,
-                    ) {
+                    let note = if self.shaded {
+                        self.shaded_notes
+                            .iter()
+                            .find(|(n, _)| n == name)
+                            .map(|(_, note)| *note)
+                    } else {
+                        draw_field(
+                            &painter,
+                            &project,
+                            b,
+                            (*nx, *ny, *nz),
+                            values,
+                            unit,
+                            scale,
+                            pointer,
+                            &mut probe,
+                            name,
+                        )
+                    };
+                    if let Some(note) = note {
                         painter.text(
                             to_screen(b.corners[0]),
                             egui::Align2::LEFT_TOP,
@@ -1215,6 +1636,29 @@ impl App {
                     ui.visuals().text_color(),
                 );
                 y += 14.0;
+            }
+        }
+
+        // The shaded view's readout, from the cache rather than from a fresh mesh.
+        if self.shaded {
+            for t in &self.shaded_probes {
+                let (at, depth) = project(t.at);
+                probe.offer(pointer, at, 6.0, depth, &t.path, || t.label.clone());
+            }
+        }
+
+        // What the shaded pass actually drew. Every DCC viewport has this readout, and it is also
+        // the only thing that distinguishes a pass drawing nothing from a pass never asked to run.
+        if self.shaded {
+            if let Ok(gpu) = self.gpu.lock() {
+                let (tris, lines, paints) = gpu.drawn;
+                painter.text(
+                    egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    format!("{tris} triangles, {lines} lines, {paints} paints"),
+                    egui::FontId::monospace(10.0),
+                    ui.visuals().weak_text_color(),
+                );
             }
         }
 

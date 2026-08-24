@@ -305,10 +305,6 @@ impl Camera {
         self.distance = (self.distance * factor).clamp(1.2, 9.0);
     }
 
-    /// Project a world point into normalised device coordinates, with its depth.
-    ///
-    /// `x` and `y` run `-1..1` across the shorter side; `depth` grows away from the eye and is
-    /// what a renderer sorts or tests by. `aspect` is width over height.
     /// Choose the focal length that makes the run's bounding box fill the frame.
     ///
     /// # Why this is the focal length and not the distance
@@ -345,31 +341,98 @@ impl Camera {
         }
     }
 
+    /// The rotation this camera applies, as three rows.
+    ///
+    /// **Written once** because two things need it: [`Camera::project`], which a 2D painter uses a
+    /// point at a time, and [`Camera::matrix`], which a GPU uses for every vertex at once. A camera
+    /// with two ideas of which way is up puts the labels somewhere the geometry is not.
+    fn rotation(&self) -> [[f64; 3]; 3] {
+        let (ca, sa) = (self.azimuth.cos(), self.azimuth.sin());
+        let (ce, se) = (self.elevation.cos(), self.elevation.sin());
+        [
+            [ca, 0.0, -sa],
+            [-sa * se, ce, -ca * se],
+            [sa * ce, se, ca * ce],
+        ]
+    }
+
+    /// The near plane. The same number [`Camera::project`] clamps its divisor to, so the flat path
+    /// and the GPU path lose a point at the same place.
+    pub const NEAR: f64 = 0.05;
+
+    /// The far plane. The framed box is a unit cube, so its half-diagonal is 0.87 and two units
+    /// past the pivot clears it with room for a run that reached outside the box it was framed on.
+    pub fn far(&self) -> f64 {
+        self.distance + 2.0
+    }
+
+    /// The projection as a 4×4, column-major, ready for `glUniformMatrix4fv`.
+    ///
+    /// Clip space, so `w` is exactly the depth [`Camera::project`] reports and `x/w`, `y/w` are
+    /// exactly its `x` and `y` — `the_matrix_and_the_projection_agree` holds that. What the matrix
+    /// adds is a `z` for a depth buffer and honest clipping at the near plane, where `project` can
+    /// only clamp because a 2D painter has nothing to clip against.
+    ///
+    /// # It takes framing-local coordinates, not world ones
+    ///
+    /// Feed it [`Framing::local`]. There is no centre or span in here, and that is deliberate: a
+    /// matrix that folded them in would carry `centre / span` as an `f32`, and a pantometry scene is
+    /// routinely a 9 mm block sitting 200 mm from the origin. Measured, that arrangement disagreed
+    /// with [`Camera::project`] by `4.4e-6` — two numbers near 22 subtracting to 0.1, which is
+    /// `f32` keeping two digits of seven. `runtime/gpu`'s README has the same finding about storing
+    /// absolute kelvin, and it is the same fix: subtract in `f64`, hand the GPU the small number.
+    pub fn matrix(&self, aspect: f64) -> [f32; 16] {
+        let r = self.rotation();
+        let fy = 0.6 * self.scale;
+        let fx = fy / aspect.max(1e-6);
+
+        // Depth: `z/w` runs -1 at the near plane to 1 at the far one, the OpenGL convention, and
+        // `w` is the eye distance so the mapping is the usual `1/z` one.
+        let (n, f) = (Camera::NEAR, self.far());
+        let a = (f + n) / (f - n);
+        let b = -2.0 * f * n / (f - n);
+
+        let rows = [
+            [fx * r[0][0], fx * r[0][1], fx * r[0][2], 0.0],
+            [fy * r[1][0], fy * r[1][1], fy * r[1][2], 0.0],
+            [a * r[2][0], a * r[2][1], a * r[2][2], a * self.distance + b],
+            [r[2][0], r[2][1], r[2][2], self.distance],
+        ];
+
+        // Column-major: `m[4 * column + row]`.
+        let mut m = [0.0f32; 16];
+        for (i, r) in rows.iter().enumerate() {
+            for (j, v) in r.iter().enumerate() {
+                m[4 * j + i] = *v as f32;
+            }
+        }
+        m
+    }
+
     /// Project a world point into normalised device coordinates, with its depth.
     ///
     /// `x` and `y` run `-1..1` across the shorter side; `depth` grows away from the eye and is
     /// what a renderer sorts or tests by. `aspect` is width over height.
     pub fn project(&self, p: [f64; 3], frame: &Framing, aspect: f64) -> Projected {
-        let x = (p[0] - frame.centre[0]) / frame.span;
-        let y = (p[1] - frame.centre[1]) / frame.span;
-        let z = (p[2] - frame.centre[2]) / frame.span;
-
-        let (ca, sa) = (self.azimuth.cos(), self.azimuth.sin());
-        let (ce, se) = (self.elevation.cos(), self.elevation.sin());
-        let x1 = x * ca - z * sa;
-        let z1 = x * sa + z * ca;
-        let y1 = y * ce - z1 * se;
-        let z2 = y * se + z1 * ce;
+        let d = frame.span.max(1e-12);
+        let v = [
+            (p[0] - frame.centre[0]) / d,
+            (p[1] - frame.centre[1]) / d,
+            (p[2] - frame.centre[2]) / d,
+        ];
+        let r = self.rotation();
+        let at = |row: [f64; 3]| row[0] * v[0] + row[1] * v[1] + row[2] * v[2];
+        let (x1, y1, z2) = (at(r[0]), at(r[1]), at(r[2]));
 
         // Never divide by a depth at or behind the eye: a point there has no screen position, and
         // returning a huge coordinate instead of clamping is how a renderer draws a streak across
         // the window and calls it geometry.
-        let d = (z2 + self.distance).max(0.05);
-        let f = 0.6 * self.scale / d;
+        let depth = (z2 + self.distance).max(Camera::NEAR);
+        let f = 0.6 * self.scale / depth;
         Projected {
             x: x1 * f / aspect.max(1e-6),
             y: y1 * f,
-            depth: d,
+            depth,
         }
     }
 }
@@ -383,6 +446,22 @@ pub struct Projected {
     pub y: f64,
     /// Distance from the eye. Larger is further.
     pub depth: f64,
+}
+
+impl Framing {
+    /// A world point in this framing's own units: centred on the subject, one unit across.
+    ///
+    /// The subtraction happens in `f64` and only the result narrows, which is the whole point —
+    /// see [`Camera::matrix`]. Vertices are then order one however far from the origin the scene
+    /// sits and however small it is, which is the range `f32` is good at.
+    pub fn local(&self, p: [f64; 3]) -> [f32; 3] {
+        let d = self.span.max(1e-12);
+        [
+            ((p[0] - self.centre[0]) / d) as f32,
+            ((p[1] - self.centre[1]) / d) as f32,
+            ((p[2] - self.centre[2]) / d) as f32,
+        ]
+    }
 }
 
 /// The box a panel is drawn in, reduced to a centre and one span.

@@ -2,8 +2,9 @@
 
 ```sh
 cd runtime/editor
-cargo run --release                 # opens on the built-in room
-cargo run --release -- scene.json   # opens on a file
+cargo run --release                          # opens on the built-in room
+cargo run --release -- scene.json            # opens on a file
+cargo run --release -- scene.json --run      # and runs it at once
 ```
 
 The viewport is an instrument, not a preview: a colour bar with numbers on it, a scale bar in
@@ -18,6 +19,57 @@ wireframe, live from the text before anything runs. **Run** streams the run in a
 — each frame appears when it is captured, the slider grows, **stop** ends a long run between
 frames — and **Verify** runs the battery from `pantometry-world verify` and shows the report the
 CLI prints, with the findings count in the window title. Drag to rotate, scroll to zoom.
+
+## The viewport is shaded, on the GPU, with a depth buffer
+
+**View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that
+hold a value* — one quad per cell face whose neighbour is absent — lit by a key and a fill, depth
+tested against everything else in the scene, with the placed extents as wire boxes that are hidden
+where they are behind a solid. A body is a sphere at the radius the exports use. Paths are lines.
+
+**View → Cells (see inside)** is the other picture, and the menu says so: every sample as a
+translucent splat composited far to near. Neither is a rendering of the other. A surface says what
+the shape is and a splat cloud says what is *inside* it, and the block whose hot spot is in the
+middle looks uniform from outside because it **is** uniform from outside.
+
+Three things this is careful about, each because of a defect this workspace has already shipped:
+
+| | |
+| --- | --- |
+| the geometry is `pantometry_view::mesh` | the same function that writes glTF and USD. A 40 mm cube once exported 80 mm across — a field is sampled corner to corner, so an end node owns half a cell — and a second copy of that arithmetic here would be a second chance at it |
+| the colour is `editor_core::Colouring` | Planck's law where the field is hot enough to glow, `pantometry_view::ramp` where it is not, converted to **linear** for the shader. The glTF exporter shipped sRGB into a linear slot and every export was about 2.3× too bright in the midtones |
+| vertices are framing-local | `Framing::local` subtracts the centre in `f64` and only the result narrows. Folding the centre into the matrix instead was measured disagreeing with `Camera::project` by `4.4e-6` on a 9 mm block sitting 200 mm out — `f32` keeping two digits of seven out of a subtraction |
+
+`Camera::matrix` and `Camera::project` are **one camera**: the flat painter walks points through the
+second, the GPU multiplies every vertex by the first, and `one_camera_two_paths` holds them to
+`2.4e-7` of each other over 23 000 points. They have to be, because the shaded pass is underneath
+and every caption, the colour bar and the probe are egui on top of it. A camera with two ideas of
+which way is up puts the labels where the geometry is not.
+
+### Reading the viewport back, because a screenshot is not evidence
+
+```sh
+PANTOMETRY_VIEWPORT=1 PANTOMETRY_VIEWPORT_SHOT=out.ppm cargo run --release -- scene.json --run
+```
+
+`PANTOMETRY_VIEWPORT` prints the callback's rect and what each paint drew; `PANTOMETRY_VIEWPORT_SHOT`
+reads the pixels back out of the framebuffer with `glReadPixels` and writes them as a PPM, with a
+count of how many are not the background.
+
+That exists because **capturing the window from outside does not work and does not fail loudly**.
+`PrintWindow` returned a convincing image of the panels with the 3D content simply absent, and a
+plain screen grab returned a *different application's* window, because a background process cannot
+raise a window on Windows. Both looked exactly like a renderer that drew nothing. What settled it
+was the pass reporting `1620 triangles, 12 lines` and then handing over its own pixels.
+
+Two real defects were behind that hunt, and neither was the renderer:
+
+- The default window is 533 points wide. Three side panels have minimum widths, and a `SidePanel`
+  is served before the `CentralPanel` is — so the viewport was handed a rect of **zero width**. It
+  drew nothing, correctly. The window opens at 1500 × 950 now and the panels have a ceiling.
+- One outliner row is a scene's title. On a 1706-pixel window that row took the outliner to
+  **940 px** and left the viewport nothing: a 3D editor showing no 3D because of a caption. The rows
+  truncate now, with the full name on hover.
 
 ## The live loop
 
@@ -150,8 +202,8 @@ costs no editor edit.
 ## What the first version does not do
 
 No structured editing — the text *is* the model, and `deny_unknown_fields` plus the version
-check are what stand between a typo and a silently different scene. No field rendering in the
-viewport — a field's box carries a note pointing at the HTML report, which is stated on the
-canvas rather than quietly drawn as nothing. No file dialogs, no undo beyond the text box's
+check are what stand between a typo and a silently different scene. No shadows, no ambient
+occlusion and no anti-aliasing beyond whatever the context gives: the lighting is a key, a fill and
+an ambient, which is the least that shows a shape. No file dialogs, no undo beyond the text box's
 own. Each of those is worth adding only after using this one reports back what actually
 chafes; that method has a name here, and `FRICTION.md` is where its findings go.

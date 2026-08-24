@@ -8,7 +8,8 @@
 //!   parse error carried as `line:column` because that is what an editor puts a squiggle
 //!   under.
 //! - **Placement geometry** — every placed extent as eight posed corners, ready to wireframe,
-//!   with the union bounds a camera fits to. The corners go through [`Pose::point_to_world`]
+//!   with the union bounds a camera fits to. The corners go through
+//!   [`pantometry::core::Pose::point_to_world`]
 //!   even though no scene can state a pose yet, so the day the format grows one this crate
 //!   does not need to learn about it.
 //! - **Running and verifying** — thin passes over [`World::run`] and
@@ -454,6 +455,121 @@ pub struct Splatted {
     pub note: &'static str,
 }
 
+/// How a field's values become colours: the decision, made once and shared.
+///
+/// Two callers need it and must not disagree — [`field_splats`], which the flat painter used, and
+/// [`field_shell`], which the shaded viewport uses. The decision is not a preference: whether a
+/// field glows is a fact about its temperature, and a viewport that answered it differently from
+/// the picture beside it would be showing two physics.
+#[derive(Clone, Debug)]
+pub struct Colouring {
+    /// Whether the colours are Planck's rather than a ramp.
+    physical: bool,
+    /// The glow fraction of the hottest cell, which brightness is relative to.
+    peak_glow: f64,
+    /// How to read a value as kelvin, or `None` if the unit is not a temperature.
+    kelvin_offset: Option<f64>,
+    scale: Option<(f64, f64)>,
+    signed: bool,
+}
+
+impl Colouring {
+    /// Decide, from the unit and what the field actually holds.
+    ///
+    /// The dispatch is on the **unit**, which is data rather than a domain name, so a physics added
+    /// next year is coloured correctly with no edit here.
+    pub fn of(unit: &str, values: &[f64], scale: Option<(f64, f64)>) -> Colouring {
+        let kelvin_offset = match unit {
+            "K" => Some(0.0),
+            "C" => Some(273.15),
+            _ => None,
+        };
+        let hottest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let peak_glow = kelvin_offset
+            .filter(|_| hottest.is_finite())
+            .map_or(0.0, |o| pantometry::view::glow_fraction(hottest + o));
+        Colouring {
+            physical: peak_glow > 1e-6,
+            peak_glow,
+            kelvin_offset,
+            scale,
+            signed: scale_is_signed(scale),
+        }
+    }
+
+    /// Whether these colours are Planck's. Public because the note a canvas carries depends on it.
+    pub fn physical(&self) -> bool {
+        self.physical
+    }
+
+    /// Whether the ramp in use is the diverging one, so a colour bar can label its ends right.
+    pub fn signed(&self) -> bool {
+        self.signed
+    }
+
+    /// A value's place in the run-wide range, `0..=1`. `0.5` when there is no range.
+    pub fn place(&self, v: f64) -> f64 {
+        match self.scale {
+            Some((lo, hi)) if hi > lo => ((v - lo) / (hi - lo)).clamp(0.0, 1.0),
+            _ => 0.5,
+        }
+    }
+
+    /// The colour of a value, straight sRGB.
+    pub fn srgb(&self, v: f64) -> [u8; 3] {
+        if self.physical {
+            let kelvin = v + self.kelvin_offset.unwrap_or(0.0);
+            pantometry::view::blackbody_srgb(kelvin)
+        } else {
+            value_colour(v, self.scale)
+        }
+    }
+
+    /// How bright a glowing cell is relative to this field's hottest, `0..=1`.
+    ///
+    /// A cool corner of a glowing block should be dark rather than merely bluer, which is what a
+    /// photograph of it looks like. One for a field that is not glowing: a ramp carries its own
+    /// lightness and dimming it would undo the property the ramp was built for.
+    pub fn brightness(&self, v: f64) -> f64 {
+        if !self.physical {
+            return 1.0;
+        }
+        let kelvin = v + self.kelvin_offset.unwrap_or(0.0);
+        (pantometry::view::glow_fraction(kelvin) / self.peak_glow.max(f64::MIN_POSITIVE))
+            .clamp(0.0, 1.0)
+            .sqrt()
+    }
+
+    /// The colour of a value in **linear** RGB, dimmed by [`Colouring::brightness`].
+    ///
+    /// Linear because a shader interpolates across a triangle and multiplies by a light, and both
+    /// of those are wrong in sRGB — the glTF exporter shipped that defect and every export came out
+    /// about 2.3× too bright in the midtones.
+    pub fn linear(&self, v: f64) -> [f32; 3] {
+        let srgb = self.srgb(v);
+        let b = self.brightness(v) as f32;
+        std::array::from_fn(|a| {
+            let c = srgb[a] as f32 / 255.0;
+            let linear = if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            };
+            linear * b
+        })
+    }
+
+    /// The sentence a canvas must carry, saying which of the two colourings a reader is looking at.
+    pub fn note(&self, stride: usize) -> &'static str {
+        match (self.physical, stride) {
+            (true, 1) => "field: colour is Planck's, not a palette",
+            (true, _) => "field: Planck colour, subsampled — see the report for every cell",
+            (false, 1) => "field: false colour — nothing here is hot enough to glow",
+            (false, _) => "field: false colour, subsampled — see the report for every cell",
+        }
+    }
+}
+
 /// The most cells one field may draw in a frame.
 ///
 /// A 100³ field is a million splats and a painter that stops painting. Past this the field is
@@ -502,14 +618,8 @@ pub fn field_splats(
     let axis = |c: [f64; 3]| [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
     let (ax, ay, az) = (axis(corners[1]), axis(corners[2]), axis(corners[4]));
 
-    let to_kelvin = |v: f64| match unit {
-        "K" => Some(v),
-        "C" => Some(v + 273.15),
-        _ => None,
-    };
-    let hottest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let peak_glow = to_kelvin(hottest).map_or(0.0, pantometry::view::glow_fraction);
-    let physical = peak_glow > 1e-6;
+    let colouring = Colouring::of(unit, values, scale);
+    let physical = colouring.physical();
 
     let total = nx * ny * nz;
     let stride = if total > MAX_SPLATS {
@@ -541,26 +651,17 @@ pub fn field_splats(
                 ];
                 // One scale across the whole run, never per frame, for the reason
                 // `viewer-core` states.
-                let s = match scale {
-                    Some((lo, hi)) if hi > lo => ((v - lo) / (hi - lo)).clamp(0.0, 1.0),
-                    _ => 0.5,
-                };
+                let s = colouring.place(v);
+                let [r, g, b] = colouring.srgb(v);
                 let rgba = if physical {
-                    let kelvin = to_kelvin(v).unwrap_or(0.0);
-                    let [r, g, b] = pantometry::view::blackbody_srgb(kelvin);
-                    // Brightness is the glow relative to this field's own hottest cell, so a
-                    // cool corner of a glowing block is dark rather than merely bluer — which
-                    // is what a photograph of it looks like.
-                    let rel = (pantometry::view::glow_fraction(kelvin) / peak_glow).clamp(0.0, 1.0);
-                    [r, g, b, ((rel.sqrt() * 235.0) as u8).max(6)]
+                    [r, g, b, ((colouring.brightness(v) * 235.0) as u8).max(6)]
                 } else {
-                    let [r, g, b] = value_colour(v, scale);
-                    // Opacity still climbs with the value's place in the range, so the quiet bulk
-                    // of a field clears out of the way. The colour is no longer computed from
+                    // Opacity climbs with the value's place in the range, so the quiet bulk
+                    // of a field clears out of the way. The colour is not computed from
                     // that place: a signed field's colour is placed about **zero** and its
                     // opacity about the middle of the deflection, and those are not the same
                     // point unless the range happens to be symmetric.
-                    let a = if scale_is_signed(scale) {
+                    let a = if colouring.signed() {
                         (2.0 * s - 1.0).abs()
                     } else {
                         s
@@ -572,19 +673,200 @@ pub fn field_splats(
         }
     }
 
-    let note = match (physical, stride) {
-        (true, 1) => "field: colour is Planck's, not a palette",
-        (true, _) => "field: Planck colour, subsampled — see the report for every cell",
-        (false, 1) => "field: false colour — nothing here is hot enough to glow",
-        (false, _) => "field: false colour, subsampled — see the report for every cell",
-    };
     Splatted {
         splats,
         stride,
         physical,
-        signed: scale_is_signed(scale),
-        note,
+        signed: colouring.signed(),
+        note: colouring.note(stride),
     }
+}
+
+/// A field's boundary as a shaded surface, in world metres, ready for a GPU.
+///
+/// # Why the boundary and not the cells
+///
+/// The flat painter drew every cell as a translucent circle sorted far to near. It composites
+/// correctly and it reads as a point cloud, which is the criticism the HTML report's first draft
+/// earned and the difference between this viewport and the one in usdview. A solid has a surface,
+/// and one quad per cell face whose neighbour is absent is that surface: on a solid 9 cubed that is
+/// 486 quads against 4374, so 89% of the work was hidden anyway.
+///
+/// # The geometry is the library's
+///
+/// [`pantometry::view::mesh::field_surface`] builds it -- the same function that writes glTF and
+/// USD, so this viewport cannot disagree with an export about how big a solid is. That arithmetic
+/// has been wrong once: a 40 mm cube exported 80 mm across, because a field sampled corner to
+/// corner means the end node owns half a cell. A second copy here would be a second chance at it.
+///
+/// The box may be **placed**, so it is not axis-aligned in general. The mesh is built in the unit
+/// cube and mapped through the box's own three axes; the normals are mapped as the cross products
+/// of the axis pairs, which is exact for a rotated and non-uniformly scaled box where transforming
+/// the normal by the same matrix would not be.
+pub fn field_shell(
+    corners: &[[f64; 3]; 8],
+    counts: (usize, usize, usize),
+    values: &[f64],
+    unit: &str,
+    scale: Option<(f64, f64)>,
+) -> Shelled {
+    let colouring = Colouring::of(unit, values, scale);
+    let mesh =
+        pantometry::view::mesh::field_surface(counts, [0.0, 0.0, 0.0, 1.0, 1.0, 1.0], values);
+    if mesh.indices.is_empty() {
+        return Shelled {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            colours: Vec::new(),
+            source: Vec::new(),
+            indices: Vec::new(),
+            stride: mesh.stride,
+            // A field of one dimension is a graph, not geometry -- `field_surface` says so by
+            // returning nothing, and saying nothing here would leave a reader with an empty
+            // viewport and no reason for it.
+            // **The same condition `field_surface` uses**, not a paraphrase of it. The first
+            // spelling here asked whether *any* axis had more than one cell, which a 32-by-1-by-1
+            // row of samples satisfies -- so a graph was reported as an empty solid.
+            note: if [counts.0, counts.1, counts.2]
+                .iter()
+                .filter(|&&n| n > 1)
+                .count()
+                < 2
+            {
+                "field: one dimension -- a graph, not geometry"
+            } else {
+                "field: nothing present to draw a surface of"
+            },
+            physical: colouring.physical(),
+            signed: colouring.signed(),
+        };
+    }
+
+    // The box's origin and three edge vectors. Corner 0 is the low one and bits 0, 1, 2 step one
+    // axis each, which is the order `EDGES` is written against.
+    let o = corners[0];
+    let axis = |c: [f64; 3]| [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
+    let e = [axis(corners[1]), axis(corners[2]), axis(corners[4])];
+
+    // The world normal of each local face direction. `+x` faces along `e1 x e2`, and so round,
+    // with the sign following the local direction.
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let unit_of = |v: [f64; 3]| {
+        let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if n > 0.0 {
+            [(v[0] / n) as f32, (v[1] / n) as f32, (v[2] / n) as f32]
+        } else {
+            [0.0, 0.0, 1.0]
+        }
+    };
+    let faces = [
+        unit_of(cross(e[1], e[2])),
+        unit_of(cross(e[2], e[0])),
+        unit_of(cross(e[0], e[1])),
+    ];
+
+    let mut out = Shelled {
+        positions: Vec::with_capacity(mesh.positions.len()),
+        normals: Vec::with_capacity(mesh.positions.len()),
+        colours: Vec::with_capacity(mesh.positions.len()),
+        source: mesh.source.clone(),
+        indices: mesh.indices.clone(),
+        stride: mesh.stride,
+        note: colouring.note(mesh.stride),
+        physical: colouring.physical(),
+        signed: colouring.signed(),
+    };
+    for (i, p) in mesh.positions.iter().enumerate() {
+        let (u, v, w) = (p[0] as f64, p[1] as f64, p[2] as f64);
+        out.positions.push([
+            o[0] + e[0][0] * u + e[1][0] * v + e[2][0] * w,
+            o[1] + e[0][1] * u + e[1][1] * v + e[2][1] * w,
+            o[2] + e[0][2] * u + e[1][2] * v + e[2][2] * w,
+        ]);
+
+        // The local normal is one of the six axis directions, so the axis it names is the one
+        // whose component is largest, and the sign carries straight through.
+        let n = mesh.normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]);
+        let a = (0..3)
+            .max_by(|x, y| n[*x].abs().total_cmp(&n[*y].abs()))
+            .unwrap_or(2);
+        let s = if n[a] < 0.0 { -1.0 } else { 1.0 };
+        out.normals
+            .push([faces[a][0] * s, faces[a][1] * s, faces[a][2] * s]);
+
+        let value = mesh
+            .source
+            .get(i)
+            .and_then(|c| values.get(*c as usize))
+            .copied()
+            .unwrap_or(f64::NAN);
+        out.colours.push(if value.is_finite() {
+            colouring.linear(value)
+        } else {
+            // A vertex whose cell has no value is not a vertex `field_surface` emits -- a cell has
+            // to be present to have a face. Mid-ramp rather than black, so if that ever changes
+            // the picture says something instead of drawing a hole.
+            colouring.linear(0.0)
+        });
+    }
+    out
+}
+
+/// The most surface vertices one field offers the cursor.
+///
+/// A readout has to walk its candidates, and a 128 cubed boundary is 200 000 faces and 800 000
+/// vertices — a walk per pointer position at sixty frames a second. The old splat path had the same
+/// bound for the same reason and called it `MAX_SPLATS`; this is the same idea about a surface, and
+/// the readout names the nearest *sampled* vertex rather than pretending to the nearest cell.
+pub const MAX_PROBES: usize = 3000;
+
+impl Shelled {
+    /// Vertices to offer the cursor, as `(world position, index into the panel's values)`.
+    ///
+    /// Strided, so a fine field costs the same as a coarse one. Deduplicating by cell would be the
+    /// nicer answer and is not free either: a flat-shaded quad has four vertices of one cell, so the
+    /// stride is four times coarser than it looks and that is stated rather than hidden.
+    pub fn probes(&self) -> Vec<([f64; 3], u32)> {
+        if self.positions.is_empty() {
+            return Vec::new();
+        }
+        let stride = self.positions.len().div_ceil(MAX_PROBES).max(1);
+        self.positions
+            .iter()
+            .zip(&self.source)
+            .step_by(stride)
+            .map(|(p, c)| (*p, *c))
+            .collect()
+    }
+}
+
+/// A field's boundary, mapped into the world.
+#[derive(Clone, Debug)]
+pub struct Shelled {
+    /// Vertex positions in world metres.
+    pub positions: Vec<[f64; 3]>,
+    /// Unit world normals, one per vertex.
+    pub normals: Vec<[f32; 3]>,
+    /// Linear RGB, one per vertex, already dimmed by the glow where the colour is Planck's.
+    pub colours: Vec<[f32; 3]>,
+    /// For each vertex, the index into the panel's values that coloured it -- for a readout.
+    pub source: Vec<u32>,
+    /// Triangles, three indices to a face.
+    pub indices: Vec<u32>,
+    /// Cells skipped per axis. One means every cell's faces are drawn.
+    pub stride: usize,
+    /// The note the canvas must carry.
+    pub note: &'static str,
+    /// Whether the colours are Planck's.
+    pub physical: bool,
+    /// Whether the ramp is the diverging one.
+    pub signed: bool,
 }
 
 /// The colour of a value on a run-wide scale, for a quantity physics gives no colour to.

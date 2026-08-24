@@ -190,6 +190,57 @@ jobs:
         working-directory: runtime/viewer
         run: cargo build --workspace
 
+  # **The editor had no job at all**, which is the hole the `python` job's comment warns about:
+  # a nested workspace is excluded from the root one, so `lint` and `test` never reached it. It is
+  # the largest of the four — 371 external crates against the library's 12 — and it had gone
+  # unchecked since it was written.
+  #
+  # The shaded viewport needs a GL context and a runner has none, so `editor-core` runs here and the
+  # shell is built. `editor-core` is where the decisions are: the surface's size against the box it
+  # was placed in, its normals facing outwards, and its colours following the ramp. The GL pass
+  # itself is checked by hand with `PANTOMETRY_VIEWPORT_SHOT`, which reads the framebuffer back —
+  # see this workspace's README on why a screenshot from outside the process is not evidence.
+  editor:
+    name: scene editor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runtime/editor
+      # eframe needs these to link on a runner. The equivalents come with the SDK on the other two
+      # platforms, which is why only this job lists them.
+      - name: the toolkit the window needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      # `cargo doc` is in here and not in the viewer's or the gpu's job because this workspace had
+      # a broken intra-doc link in it from the day it was written -- `Pose::point_to_world`, with no
+      # `Pose` in scope -- and nothing was ever going to find it. That is what an unchecked
+      # workspace costs.
+      - name: fmt, clippy, docs
+        working-directory: runtime/editor
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+      - name: the decisions, which need no window
+        working-directory: runtime/editor
+        run: cargo test -p editor-core
+      - name: the native shell still compiles
+        working-directory: runtime/editor
+        run: cargo build --workspace
+      # The browser shell shares `editor-core` rather than carrying a copy, so this is the check
+      # that the shared half stays free of anything native.
+      - name: and so does the browser one
+        working-directory: runtime/editor
+        run: cargo build -p editor-wasm --target wasm32-unknown-unknown
+
   gpu:
     name: gpu accelerator
     runs-on: ubuntu-latest
