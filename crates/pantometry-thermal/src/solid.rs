@@ -143,6 +143,25 @@ pub enum Face {
     ZMax,
 }
 
+/// The resolved seven-point operator, borrowed — see [`Solid3D::coefficients`].
+///
+/// Named rather than a tuple of five slices, because five slices of the same type in a row is a
+/// signature where two can be swapped and nothing complains.
+#[derive(Clone, Copy, Debug)]
+pub struct Coefficients<'a> {
+    /// Conductance of each face normal to x, `(nx+1)·ny·nz` of them.
+    pub kx: &'a [f64],
+    /// Conductance of each face normal to y, `nx·(ny+1)·nz`.
+    pub ky: &'a [f64],
+    /// Conductance of each face normal to z, `nx·ny·(nz+1)`.
+    pub kz: &'a [f64],
+    /// `dx/Cᵢ` for each cell, which turns a face flux into a rate of temperature. Zero in a void:
+    /// nothing moves in a cell that holds nothing.
+    pub mobility: &'a [f64],
+    /// Watts generated in each cell.
+    pub source: &'a [f64],
+}
+
 impl Face {
     /// All six, in a fixed order — for a block exposed on every side.
     pub const ALL: [Face; 6] = [
@@ -574,6 +593,51 @@ impl Solid3D {
     /// [`fill`]: Solid3D::fill
     pub fn substances(&self) -> usize {
         self.materials.len()
+    }
+
+    /// The resolved coefficients of the seven-point stencil, for an accelerator that wants to run
+    /// **this** operator rather than one of its own.
+    ///
+    /// See [`Coefficients`] for what each array is and how long it is.
+    ///
+    /// # Why an accelerator should take these and not the material list
+    ///
+    /// Every difficult thing about a real block is **already in here**. Two materials meeting are
+    /// a face conductance that is neither one's; a void is a face conductance of zero and a
+    /// mobility of zero; a coating is a thin row of cells with its own `k`. A port that read the
+    /// substances and rebuilt the operator would be a second implementation of `resolve`, and the
+    /// first defect it had would be a physics difference nobody could see.
+    ///
+    /// It also fixes what a uniform-coefficient kernel cannot. `f·(Σ T_n − 6T)` has no per-cell
+    /// `f`, so it conserves `Σ Cᵢ Tᵢ` only when every capacity is the same — which is why the GPU
+    /// port could do one material and nothing else until it took these.
+    pub fn coefficients(&self) -> Coefficients<'_> {
+        Coefficients {
+            kx: &self.kx,
+            ky: &self.ky,
+            kz: &self.kz,
+            mobility: &self.mobility,
+            source: &self.source,
+        }
+    }
+
+    /// What an accelerator cannot run about this block, and why — empty when it can.
+    ///
+    /// A device is asked for **in the scene**, and a request that cannot be honoured is an error
+    /// rather than a quiet fall back to the CPU: a run that silently changed where it ran is a run
+    /// whose answer nobody asked for. This is the list of reasons, so the refusal can name them.
+    pub fn unsupported_on_a_device(&self) -> Vec<&'static str> {
+        let mut why = Vec::new();
+        if !self.exposed.is_empty() {
+            why.push("a surface film: `losing_from` is a boundary flux with no device pass yet");
+        }
+        if !self.gaps.is_empty() {
+            why.push("radiation across a gap: a pair exchange, which is not a stencil");
+        }
+        if self.latent_anywhere {
+            why.push("phase change: a rise is converted through an enthalpy, cell by cell");
+        }
+        why
     }
 
     /// The conductance of the face between two cells, or `None` if they are not face neighbours.
@@ -1467,6 +1531,15 @@ impl Solid3D {
     /// about a row of the update matrix and each cell has its own.
     pub fn stability_ratio(&self, dt: Time) -> f64 {
         dt.to_si() * self.worst_rate_now()
+    }
+
+    /// Each cell's own heat capacity, in J/K, in index order.
+    ///
+    /// For an accelerator that must divide joules by the capacity of the cell they landed in: a
+    /// block of two materials has two, and a void has none. [`Solid3D::heat_capacity`] is their
+    /// total and cannot answer that.
+    pub fn cell_capacities(&self) -> &[f64] {
+        &self.capacity
     }
 
     /// The heat capacity of the whole block, which for a filled one is a sum and not a product.

@@ -56,7 +56,7 @@
 use pantometry_core::conserved::quantity;
 use pantometry_core::units::{Length, Temperature, Time};
 use pantometry_core::{Domain, Exchange, Ledger, Reading, Substance, Violation};
-use pantometry_thermal::STABLE_FOURIER_3D;
+use pantometry_thermal::{Solid3D, STABLE_FOURIER_3D};
 
 /// The heat channel, the same name the thermal crate publishes on.
 pub const HEAT: &str = quantity::ENERGY;
@@ -71,7 +71,9 @@ pub struct GpuSolid {
     counts: (usize, usize, usize),
     dx: f64,
     alpha: f64,
-    capacity: f64,
+    /// Heat capacity per cell, in J/K. **Per cell, not one number**: a block of two materials has
+    /// two, and a void has none. `deposit` and `stored_heat` both divide by it.
+    capacity: Vec<f64>,
     reference: f64,
     absorbed: f64,
     gpu: Context,
@@ -87,6 +89,10 @@ struct Context {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     cells: [wgpu::Buffer; 2],
+    /// The resolved operator, uploaded once: face conductances, mobility, and the per-cell source
+    /// rise. They do not change unless the block is rebuilt, so they cost one transfer and not one
+    /// a step.
+    coefficients: [wgpu::Buffer; 5],
     uniforms: wgpu::Buffer,
     readback: wgpu::Buffer,
     /// Which of `cells` currently holds the state.
@@ -97,6 +103,11 @@ struct Context {
 /// What went wrong before there was anything to compute.
 #[derive(Debug)]
 pub enum Unavailable {
+    /// The block asks for something the device kernel has no pass for, and the reasons.
+    ///
+    /// Not a fall back to the CPU: a device is what a scene *states*, and a run that silently
+    /// changed where it ran is a run whose answer nobody asked for.
+    Unsupported(String),
     /// No GPU this process can reach.
     NoAdapter,
     /// One was found and would not give a device.
@@ -108,6 +119,9 @@ pub enum Unavailable {
 impl std::fmt::Display for Unavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Unavailable::Unsupported(why) => {
+                write!(f, "this block cannot run on a device: {why}")
+            }
             Unavailable::NoAdapter => write!(f, "no GPU adapter"),
             Unavailable::NoDevice(e) => write!(f, "no GPU device: {e}"),
             Unavailable::NotConducting => write!(f, "the substance has no diffusivity"),
@@ -130,30 +144,95 @@ impl GpuSolid {
         dx: Length,
         initial: Temperature,
     ) -> Result<GpuSolid, Unavailable> {
-        let counts = (counts.0.max(1), counts.1.max(1), counts.2.max(1));
-        let n = counts.0 * counts.1 * counts.2;
-        let alpha = substance
-            .diffusivity()
-            .ok_or(Unavailable::NotConducting)?
-            .to_si();
-        let cell_volume = dx.to_si().powi(3);
-        let capacity = substance
-            .heat_capacity(pantometry_core::units::Volume::from_si(cell_volume))
-            .ok_or(Unavailable::NotConducting)?
-            .to_si();
+        GpuSolid::mirroring(Solid3D::new(name, substance, counts, dx, initial))
+    }
 
-        // Zero, because the buffer holds `T - T0` and `T` starts at `T0`.
-        let gpu = Context::new(n, 0.0)?;
+    /// Run **this** block's operator on the device.
+    ///
+    /// The CPU domain resolves the stencil — face conductances, mobility, sources — and this
+    /// uploads what it resolved. Everything difficult about a real block is already in those
+    /// arrays: two materials meeting are a face conductance that is neither one's, a void is a
+    /// conductance and a mobility of zero, a coating is a thin row with its own `k`. Reading the
+    /// substances and rebuilding the operator here would be a second implementation of `resolve`,
+    /// and the first defect it had would be a physics difference nobody could see.
+    ///
+    /// # What it refuses, and why refusing is right
+    ///
+    /// A film, a gap exchange or a phase change is not a stencil, and the device has no pass for
+    /// one. Asking for the device with any of those present is an **error** — see
+    /// [`Unsupported`](Unavailable::Unsupported) — rather than a quiet fall back to the CPU. A run
+    /// that silently changed where it ran is a run whose answer nobody asked for, and the device is
+    /// something a scene *states*, not something a heuristic picks.
+    pub fn mirroring(cpu: Solid3D) -> Result<GpuSolid, Unavailable> {
+        let why = cpu.unsupported_on_a_device();
+        if !why.is_empty() {
+            return Err(Unavailable::Unsupported(why.join("; ")));
+        }
+        let counts = cpu.counts();
+        let n = counts.0 * counts.1 * counts.2;
+        let dx = cpu.spacing().to_si();
+        let alpha = STABLE_FOURIER_3D * dx * dx / cpu.max_stable_dt(Time::from_si(0.0)).to_si();
+
+        let c = cpu.coefficients();
+        let (kx, ky, kz, mobility, source) = (c.kx, c.ky, c.kz, c.mobility, c.source);
+        let down = |v: &[f64]| v.iter().map(|x| *x as f32).collect::<Vec<f32>>();
+        // The source is watts; the kernel adds a rise, so the conversion happens once here rather
+        // than every step on the device. `mobility` is `dx/C`, so `S·dt/C` is `S·dt·mobility/dx`.
+        let rise: Vec<f32> = source
+            .iter()
+            .zip(mobility)
+            .map(|(w, m)| (w * m / dx) as f32)
+            .collect();
+        let (fx, fy, fz, fm) = (down(kx), down(ky), down(kz), down(mobility));
+
+        let reference = cpu.mean_temperature().to_si();
+        let capacity: Vec<f64> = (0..n)
+            .map(|c| {
+                let (nx, ny, _) = counts;
+                let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+                let _ = (i, j, k);
+                cpu.cell_capacities()[c]
+            })
+            .collect();
+
+        // Zero, because the buffer holds `T - T0` and `T` starts uniform at `T0`. A block whose
+        // cells already differ is uploaded below.
+        let mut gpu = Context::new(n, 0.0, [&fx, &fy, &fz, &fm, &rise])?;
+        let mut mirror = vec![0.0f32; n];
+        let (nx, ny, _) = counts;
+        for (c, slot) in mirror.iter_mut().enumerate() {
+            let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+            let t = cpu.temperature_at(i, j, k).to_si();
+            // **A void arrives as zero, not as the absence the CPU reports.**
+            //
+            // `Solid3D::temperature_at` answers `NaN` for a void, deliberately: a void has no
+            // temperature and a zero or an ambient there is a value somebody would plot. A device
+            // buffer has no way to say that — and worse, `0.0 * NaN` is `NaN`, so a single absent
+            // cell uploaded as one poisoned the whole grid within a few steps *even though its
+            // face conductances are zero*. The first version of this did exactly that and every
+            // cell came back `NaN`.
+            //
+            // Zero is safe because the cell cannot move: its mobility is zero, so the kernel
+            // writes back what it read. What it holds means nothing, and nothing reads it — the
+            // CPU is the reference and answers the question about voids.
+            *slot = if t.is_finite() {
+                (t - reference) as f32
+            } else {
+                0.0
+            };
+        }
+        gpu.upload(&mirror);
+
         Ok(GpuSolid {
-            name: name.into(),
+            name: pantometry_core::Domain::name(&cpu).to_string(),
             counts,
-            dx: dx.to_si(),
+            dx,
             alpha,
             capacity,
-            reference: initial.to_si(),
+            reference,
             absorbed: 0.0,
             gpu,
-            mirror: vec![0.0; n],
+            mirror,
             mirror_valid: true,
         })
     }
@@ -204,7 +283,7 @@ impl GpuSolid {
         }
         self.sync();
         let idx = i + nx * (j + ny * k);
-        self.mirror[idx] += (joules.to_si() / self.capacity) as f32;
+        self.mirror[idx] += (joules.to_si() / self.capacity[idx]) as f32;
         self.absorbed += joules.to_si();
         self.gpu.upload(&self.mirror);
     }
@@ -255,7 +334,11 @@ impl GpuSolid {
     pub fn stored_heat(&mut self) -> pantometry_core::units::Energy {
         self.sync();
         pantometry_core::units::Energy::from_si(
-            self.capacity * self.mirror.iter().map(|v| *v as f64).sum::<f64>(),
+            self.capacity
+                .iter()
+                .zip(&self.mirror)
+                .map(|(c, d)| c * *d as f64)
+                .sum::<f64>(),
         )
     }
 
@@ -295,7 +378,15 @@ impl Domain for GpuSolid {
         if gained != 0.0 {
             self.absorbed += gained;
             self.sync();
-            let per_cell = (gained / (self.mirror.len() as f64 * self.capacity)) as f32;
+            // Spread to a uniform **rise**, in proportion to each cell's capacity rather than in
+            // equal joules — equal joules would warm the low-capacity material more and so would
+            // say where the heat landed, which the bus never carried. The CPU domain's rule.
+            let total: f64 = self.capacity.iter().sum();
+            let per_cell = if total > 0.0 {
+                (gained / total) as f32
+            } else {
+                0.0
+            };
             for cell in self.mirror.iter_mut() {
                 *cell += per_cell;
             }
@@ -303,8 +394,13 @@ impl Domain for GpuSolid {
         }
 
         let (nx, ny, nz) = self.counts;
+        // **Seconds, not the Fourier number.** The uniform-coefficient kernel folded `α dt/dx²`
+        // into one scalar; the conductance form needs the step itself, because the coefficients
+        // carry the rest. Passing the old scalar made the rise about eight hundred times too
+        // large, and two hundred steps of that is a grid of `NaN`.
         self.gpu
-            .dispatch(f as f32, [nx as u32, ny as u32, nz as u32]);
+            .dispatch(dt.to_si() as f32, [nx as u32, ny as u32, nz as u32]);
+        let _ = f;
         self.mirror_valid = false;
         Ok(())
     }
@@ -317,7 +413,11 @@ impl Domain for GpuSolid {
         // so in practice this is current. Stated because a stale ledger is an audit that passes.
         Ledger::new().with(
             quantity::ENERGY,
-            self.capacity * self.mirror.iter().map(|v| *v as f64).sum::<f64>(),
+            self.capacity
+                .iter()
+                .zip(&self.mirror)
+                .map(|(c, d)| c * *d as f64)
+                .sum::<f64>(),
         )
     }
 
@@ -349,7 +449,7 @@ impl Domain for GpuSolid {
 }
 
 impl Context {
-    fn new(count: usize, initial: f32) -> Result<Context, Unavailable> {
+    fn new(count: usize, initial: f32, operator: [&[f32]; 5]) -> Result<Context, Unavailable> {
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -361,7 +461,15 @@ impl Context {
             &wgpu::DeviceDescriptor {
                 label: Some("pantometry stencil"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                // **Seven storage buffers, and the downlevel default is four.** The uniform-
+                // coefficient kernel needed two — a source and a destination — and the conductance
+                // form needs five more: three face conductances, the mobility and the source.
+                // Asked for explicitly so an adapter that cannot provide them fails here, with a
+                // reason, rather than at `create_bind_group_layout` with a validation panic.
+                required_limits: wgpu::Limits {
+                    max_storage_buffers_per_shader_stage: 8,
+                    ..wgpu::Limits::downlevel_defaults()
+                },
                 memory_hints: wgpu::MemoryHints::default(),
             },
             None,
@@ -381,6 +489,25 @@ impl Context {
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
         let cells = [make("cells a", storage), make("cells b", storage)];
+        // One buffer each, sized to its own array: the face conductances are not cell-sized.
+        let labels = ["kx", "ky", "kz", "mobility", "source"];
+        let coefficients: [wgpu::Buffer; 5] = std::array::from_fn(|a| {
+            let b = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(labels[a]),
+                size: ((operator[a].len() * 4) as u64).max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(
+                &b,
+                0,
+                &operator[a]
+                    .iter()
+                    .flat_map(|f| f.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            );
+            b
+        });
         queue.write_buffer(
             &cells[0],
             0,
@@ -418,6 +545,11 @@ impl Context {
                     },
                     count: None,
                 },
+                entry(3, true),
+                entry(4, true),
+                entry(5, true),
+                entry(6, true),
+                entry(7, true),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -444,6 +576,7 @@ impl Context {
             pipeline,
             layout,
             cells,
+            coefficients,
             uniforms,
             readback,
             front: 0,
@@ -493,13 +626,13 @@ impl Context {
     /// some neighbours already updated and some not — a Gauss-Seidel sweep pretending to be
     /// Jacobi, which is a different scheme with a different stability limit and no ordering
     /// anybody chose.
-    fn dispatch(&mut self, fourier: f32, counts: [u32; 3]) {
+    fn dispatch(&mut self, dt: f32, counts: [u32; 3]) {
         let mut uniforms = Vec::with_capacity(32);
         uniforms.extend(counts[0].to_le_bytes());
         uniforms.extend(counts[1].to_le_bytes());
         uniforms.extend(counts[2].to_le_bytes());
         uniforms.extend((self.count as u32).to_le_bytes());
-        uniforms.extend(fourier.to_le_bytes());
+        uniforms.extend(dt.to_le_bytes());
         uniforms.extend([0u8; 12]);
         self.queue.write_buffer(&self.uniforms, 0, &uniforms);
 
@@ -519,6 +652,26 @@ impl Context {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.coefficients[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.coefficients[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.coefficients[2].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.coefficients[3].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.coefficients[4].as_entire_binding(),
                 },
             ],
         });
@@ -553,21 +706,32 @@ fn entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// The seven-point stencil, with insulated faces by mirroring — the same update `Solid3D` does,
-/// in `f32`.
+/// The seven-point stencil **in conductance form** — the same update `Solid3D` does, in `f32`.
+///
+/// `Cᵢ ΔTᵢ = dt Σ_f G_f (T_f − Tᵢ)`, with the per-face conductances and the per-cell mobility the
+/// CPU domain resolved. It was `centre + F·(sum − 6·centre)`, which has no per-cell coefficient and
+/// so is only the same operator when every cell is the same material — a limit the CPU's own
+/// comment names, and the reason this port could run a homogeneous block and nothing else.
+///
+/// What the coefficients already carry, so the kernel does not have to: two materials meeting are a
+/// face conductance that is neither one's; a **void** is a face conductance of zero and a mobility
+/// of zero; a coating is a thin row with its own `k`. An outer face contributes no term at all,
+/// which is the mirror boundary — a zero neighbour would be a wall at absolute zero and would drain
+/// the block.
 const SHADER: &str = r#"
 struct Grid {
     nx: u32, ny: u32, nz: u32, total: u32,
-    fourier: f32, _pad0: f32, _pad1: f32, _pad2: f32,
+    dt: f32, _pad0: f32, _pad1: f32, _pad2: f32,
 };
 
 @group(0) @binding(0) var<storage, read>       src: array<f32>;
 @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(2) var<uniform>             g: Grid;
-
-fn at(i: u32, j: u32, k: u32) -> f32 {
-    return src[i + g.nx * (j + g.ny * k)];
-}
+@group(0) @binding(3) var<storage, read>       kx: array<f32>;
+@group(0) @binding(4) var<storage, read>       ky: array<f32>;
+@group(0) @binding(5) var<storage, read>       kz: array<f32>;
+@group(0) @binding(6) var<storage, read>       mobility: array<f32>;
+@group(0) @binding(7) var<storage, read>       source: array<f32>;
 
 @compute @workgroup_size(64)
 fn sweep(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -578,20 +742,21 @@ fn sweep(@builtin(global_invocation_id) id: vec3<u32>) {
     let j = (n / g.nx) % g.ny;
     let k = n / (g.nx * g.ny);
 
-    // A mirror at a face, not a zero: a zero neighbour is a wall held at absolute zero and would
-    // drain the block, where a mirror is a face with no gradient across it and so no flow.
-    let lo_i = select(i - 1u, i, i == 0u);
-    let hi_i = select(i + 1u, i, i + 1u == g.nx);
-    let lo_j = select(j - 1u, j, j == 0u);
-    let hi_j = select(j + 1u, j, j + 1u == g.ny);
-    let lo_k = select(k - 1u, k, k == 0u);
-    let hi_k = select(k + 1u, k, k + 1u == g.nz);
+    let t = src[n];
+    let xr = (g.nx + 1u) * (j + g.ny * k);
+    let yr = g.nx * (j + (g.ny + 1u) * k);
+    var flux = 0.0;
+    if (i > 0u)          { flux = flux + kx[i + xr]      * (src[n - 1u] - t); }
+    if (i + 1u < g.nx)   { flux = flux + kx[i + 1u + xr] * (src[n + 1u] - t); }
+    if (j > 0u)          { flux = flux + ky[i + yr]      * (src[n - g.nx] - t); }
+    if (j + 1u < g.ny)   { flux = flux + ky[i + g.nx + yr] * (src[n + g.nx] - t); }
+    if (k > 0u)          { flux = flux + kz[n]           * (src[n - g.nx * g.ny] - t); }
+    if (k + 1u < g.nz)   { flux = flux + kz[n + g.nx * g.ny] * (src[n + g.nx * g.ny] - t); }
 
-    let centre = at(i, j, k);
-    let sum = at(lo_i, j, k) + at(hi_i, j, k)
-            + at(i, lo_j, k) + at(i, hi_j, k)
-            + at(i, j, lo_k) + at(i, j, hi_k);
-
-    dst[n] = centre + g.fourier * (sum - 6.0 * centre);
+    // A source is a constant over the step and commutes with the stencil exactly, so adding it
+    // after costs nothing in order — unlike a flux proportional to `T`, which would be Lie
+    // splitting. `mobility` is `dx/C`, and a source is watts, so the rise is `S·dt/C`: the
+    // division is folded into the coefficient the same way the CPU folds it.
+    dst[n] = t + g.dt * (mobility[n] * flux + source[n]);
 }
 "#;
