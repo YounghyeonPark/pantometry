@@ -36,6 +36,7 @@ pub mod beam;
 pub mod fit;
 pub mod heater;
 pub mod light;
+pub mod templates;
 pub mod verify;
 
 use beam::Beam;

@@ -22,6 +22,38 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Changed
 
+- **A domain can be added and removed from the editor.** Before this, creating one meant typing
+  an object into the JSON pane from memory — the format defines nineteen kinds and the editor
+  offered none of them. **Domain → Add** inserts a starting example, named so it does not collide
+  with what is already there; **Domain → Delete** takes the selected one out with the comma that
+  held it in place.
+
+  **Where the nineteen examples live is the whole design question**, because Rust cannot enumerate
+  an enum's variants and a hand-kept list of that size is wrong between an addition and somebody
+  noticing. They live in `pantometry_world::templates`, beside the format, and a test compares
+  them against a set maintained somewhere else entirely: the kinds the twenty-eight shipped scenes
+  actually use. That works because the two sets are equal today — nineteen variants, nineteen
+  distinct kinds — which was measured rather than hoped, and the comparison runs **in both
+  directions**, so a template with no scene fires one half and a twentieth domain with a scene
+  fires the other. The same shape as `counts_in_prose`.
+
+  They are hand-formatted JSON text rather than serialised values, for the same reason the rest of
+  the write path is a byte splice: serialising would insert an alphabetised object into a file
+  written `kind` and `name` first.
+
+  Three things the extraction found by trying rather than assuming. Every `structure` in every
+  shipped scene layers materials its own scene *declares*, so none of them stands alone and that
+  one template is hand-written with the borrowing regions dropped. And two kinds cannot be
+  complete on their own at all — a `beam` states what it shines `onto`, a `structure` the block it
+  `follows` — which the format catches at two different times: `follows` is refused by the build,
+  while a dangling `onto` **builds** and is stopped by the conservation audit at the first step
+  with "published but not consumed". Both are pinned by tests, so a third reference arriving is a
+  failure rather than a surprise in the menu.
+
+  Adding each of the nineteen and removing it again returns the file byte-for-byte, which is the
+  strongest thing either operation can promise and holds only if the insertion takes exactly the
+  bytes the removal gives back.
+
 - **The editor's inspector writes.** Counted rather than assumed: across 2101 lines of editor
   shell there were exactly **two** widgets that could change anything — the file path, and one
   multiline text box holding the whole scene as raw JSON. The inspector showed values and could

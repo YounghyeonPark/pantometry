@@ -24,9 +24,19 @@ the text and re-checks on the same frame. `kind` and `name` are the two it holds
 because they identify rather than describe — the format refuses unknown fields when a `kind`
 changes, and five other keys refer to a domain by `name`.
 
+**Domain → Add** puts a new domain in, from a starting example of each of the nineteen kinds the
+format defines, named so it does not collide with anything already there; **Domain → Delete**
+takes the selected one out along with the comma that held it. The list lives in
+`pantometry_world::templates`, beside the format rather than beside the editor, and a test
+compares it against the kinds the shipped scenes use **in both directions** — so a twentieth
+domain appears in this menu without the shell learning about it, and cannot quietly not appear.
+Two kinds arrive incomplete because the format will not let them stand alone: a `beam` states
+what it shines `onto` and a `structure` states the block it `follows`, and neither can be guessed.
+
 It is a byte splice rather than a re-serialise, so the file keeps its own formatting and key
-order — `editor_core::set_number` and `set_text` are where that lives and where the tests for it
-are. Nothing in it enumerates domain kinds, so a domain written out of tree is as editable as a
+order — `editor_core::set_number`, `set_text`, `add_domain` and `remove_domain` are where that
+lives and where the tests for it are, including one that adds each of the nineteen and removes it
+again and asserts the file is byte-identical to what it started as. Nothing in it enumerates domain kinds, so a domain written out of tree is as editable as a
 shipped one. The read-only rows below say what came *out*, and the two halves are kept apart on
 purpose: a peak temperature is not a thing to drag.
 

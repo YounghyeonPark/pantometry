@@ -178,7 +178,7 @@ pub fn editable(text: &str, path: &str) -> Vec<Editable> {
         return out;
     }
 
-    let Some(name) = domain_of(path) else {
+    let Some(name) = domain_named(path) else {
         return out;
     };
     let Some(domains) = root.get("domains").and_then(|d| d.as_array()) else {
@@ -204,6 +204,10 @@ pub fn editable(text: &str, path: &str) -> Vec<Editable> {
 
 /// The domain an outliner path is about, if it is about one.
 ///
+/// Public because a shell needs the same answer for a different question — whether the selected
+/// row is a thing that can be deleted — and two crates deciding separately what counts as a
+/// domain row is two chances to disagree about it.
+///
 /// A domain occupies **three** rows: `/extents/<name>` before a run, and `/run/<name>` and
 /// `/readings/<name>` after one. All three are the same object and all three offer the same
 /// inputs, because the row a person is looking at after a run is one of the last two and making
@@ -212,7 +216,7 @@ pub fn editable(text: &str, path: &str) -> Vec<Editable> {
 /// Deeper paths are not: `/readings/<name>/<label>` is one scalar a domain reported, which is
 /// output, and the group rows `/extents`, `/run` and `/readings` are about a set rather than a
 /// domain.
-fn domain_of(path: &str) -> Option<&str> {
+pub fn domain_named(path: &str) -> Option<&str> {
     let rest = ["/extents/", "/run/", "/readings/"]
         .iter()
         .find_map(|prefix| path.strip_prefix(prefix))?;
@@ -574,6 +578,123 @@ fn span_of(b: &[u8], start: usize, segments: &[String]) -> Option<Range<usize>> 
     }
 }
 
+/// Add a domain of `kind` to the scene, with a name nothing else is using.
+///
+/// The template comes from [`pantometry_world::templates::TEMPLATES`], which lives beside the
+/// format rather than here — see that module for how a list of nineteen is kept in step with an
+/// enum nobody can enumerate.
+///
+/// # What "a name nothing else is using" costs
+///
+/// A template's name is its kind, so adding two blocks would produce two domains called `block`,
+/// and the format's own error for that arrives at build time as a name collision. The second gets
+/// `block 2`, the third `block 3`. The number is a suffix rather than a rename of the first,
+/// because renaming a domain the scene already has would break every key pointing at it — the
+/// same reason `name` is not draggable in the inspector.
+///
+/// # Two kinds arrive incomplete, and that is the format's doing
+///
+/// `beam` states what it shines `onto` and `structure` states the block it `follows`. Both are
+/// required and neither can be guessed, so the template carries a placeholder and the scene has
+/// to be told where to point it. `structure`'s is refused by the build, which the inspector shows
+/// immediately; `beam`'s builds and is stopped by the conservation audit at the first step, which
+/// only appears when the scene is run. Both are pinned by tests in `pantometry-world`.
+pub fn add_domain(text: &str, kind: &str) -> Result<String, String> {
+    let template = pantometry_world::templates::TEMPLATES
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map(|(_, t)| *t)
+        .ok_or_else(|| format!("no template for a {kind}"))?;
+
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    let domains = root
+        .get("domains")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "this scene has no `domains` array to add to".to_string())?;
+
+    let taken: Vec<&str> = domains
+        .iter()
+        .filter_map(|d| d.get("name").and_then(|n| n.as_str()))
+        .collect();
+    let mut name = kind.to_string();
+    let mut n = 1;
+    while taken.contains(&name.as_str()) {
+        n += 1;
+        name = format!("{kind} {n}");
+    }
+    let template = set_text(template, "/name", &name)?;
+
+    // Where the last element starts on its line, so the new one lines up with it rather than
+    // with the margin. A scene written by hand keeps its shape when the editor adds to it.
+    let array = value_span(text, "/domains").ok_or_else(|| "no `domains` array".to_string())?;
+    match domains.len() {
+        0 => {
+            // `[]` or `[ ]`: put the element between the brackets and let the one-line form be.
+            let inner = array.start + 1..array.end - 1;
+            Ok(splice(text, inner, &format!(" {template} ")))
+        }
+        last => {
+            let end = value_span(text, &format!("/domains/{}", last - 1))
+                .ok_or_else(|| "the last domain has no span".to_string())?;
+            let indent = indent_of(text, end.start);
+            Ok(splice(
+                text,
+                end.end..end.end,
+                &format!(",\n{indent}{template}"),
+            ))
+        }
+    }
+}
+
+/// Remove the domain called `name`, and the comma that held it in place.
+///
+/// **Nothing here follows the references.** A `tracks`, a `follows`, an `onto` or a `poses` key
+/// naming the removed domain is left as it is, because the alternative is this function deciding
+/// what a dangling coupling should become — and there is no answer to that which is right more
+/// often than the person's. The check runs on the same frame and names what is now dangling,
+/// which is the report a person can act on.
+pub fn remove_domain(text: &str, name: &str) -> Result<String, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    let domains = root
+        .get("domains")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "this scene has no `domains` array".to_string())?;
+    let i = domains
+        .iter()
+        .position(|d| d.get("name").and_then(|n| n.as_str()) == Some(name))
+        .ok_or_else(|| format!("this scene defines no domain called {name:?}"))?;
+
+    let span = value_span(text, &format!("/domains/{i}"))
+        .ok_or_else(|| format!("{name}: no span for domains[{i}]"))?;
+
+    // The element alone is not a valid removal: the comma beside it would be left behind. Take
+    // the gap on whichever side has one, which is the previous element's end when there is a
+    // previous element and the next element's start otherwise.
+    let cut = if i > 0 {
+        let prev = value_span(text, &format!("/domains/{}", i - 1))
+            .ok_or_else(|| "no span for the previous domain".to_string())?;
+        prev.end..span.end
+    } else if i + 1 < domains.len() {
+        let next = value_span(text, &format!("/domains/{}", i + 1))
+            .ok_or_else(|| "no span for the next domain".to_string())?;
+        span.start..next.start
+    } else {
+        span
+    };
+    Ok(splice(text, cut, ""))
+}
+
+/// The whitespace between the start of `at`'s line and `at` itself.
+fn indent_of(text: &str, at: usize) -> String {
+    let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+    text[line_start..at]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -912,6 +1033,122 @@ mod tests {
         assert!(why.contains("not a string"), "{why}");
         let why = set_number(SCENE, "/title", 3.0).expect_err("refused");
         assert!(why.contains("not a number"), "{why}");
+    }
+
+    /// **A domain comes out, and the file is still a scene.**
+    ///
+    /// The comma is the whole difficulty: removing the element alone leaves one behind and the
+    /// file stops parsing. Checked from all three positions, because each takes a different side.
+    #[test]
+    fn a_domain_can_be_removed_from_any_position() {
+        let three = r#"{
+  "title": "three",
+  "duration_s": 1.0,
+  "frames": 1,
+  "domains": [
+    { "kind": "heater", "name": "a", "watts": 20.0, "reserve_j": 1200.0 },
+    { "kind": "heater", "name": "b", "watts": 20.0, "reserve_j": 1200.0 },
+    { "kind": "heater", "name": "c", "watts": 20.0, "reserve_j": 1200.0 }
+  ]
+}"#;
+        for (gone, left) in [("a", ["b", "c"]), ("b", ["a", "c"]), ("c", ["a", "b"])] {
+            let out = remove_domain(three, gone).unwrap_or_else(|e| panic!("{gone}: {e}"));
+            let root: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| {
+                panic!(
+                    "{gone}: {e}
+{out}"
+                )
+            });
+            let names: Vec<&str> = root["domains"]
+                .as_array()
+                .expect("still an array")
+                .iter()
+                .map(|d| d["name"].as_str().expect("a name"))
+                .collect();
+            assert_eq!(
+                names, left,
+                "removing {gone} left {names:?}
+{out}"
+            );
+        }
+    }
+
+    /// **The last one out leaves an empty array, not a broken one.**
+    #[test]
+    fn removing_the_only_domain_leaves_a_scene_that_parses() {
+        let one = r#"{ "title": "one", "duration_s": 1.0, "frames": 1,
+  "domains": [ { "kind": "heater", "name": "a", "watts": 20.0, "reserve_j": 1200.0 } ] }"#;
+        let out = remove_domain(one, "a").expect("the only domain comes out");
+        let root: serde_json::Value = serde_json::from_str(&out).expect("and it still parses");
+        assert!(
+            root["domains"].as_array().expect("an array").is_empty(),
+            "{out}"
+        );
+    }
+
+    /// **Removing something that is not there is refused by name.**
+    #[test]
+    fn removing_a_domain_that_is_not_there_says_so() {
+        let why = remove_domain(SCENE, "ghost").expect_err("refused");
+        assert!(why.contains("ghost"), "{why}");
+    }
+
+    /// **Every template can be added to a scene, and the result still parses.**
+    ///
+    /// Nineteen kinds through the splice, which is the check that the insertion point and the
+    /// indentation are right for all of them rather than for the one that was tried by hand.
+    #[test]
+    fn every_kind_can_be_added() {
+        for (kind, _) in pantometry_world::templates::TEMPLATES {
+            let out = add_domain(SCENE, kind).unwrap_or_else(|e| panic!("{kind}: {e}"));
+            let root: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| {
+                panic!(
+                    "{kind}: {e}
+{out}"
+                )
+            });
+            let domains = root["domains"].as_array().expect("an array");
+            assert_eq!(domains.len(), 3, "{kind}: the scene had two");
+            assert_eq!(domains[2]["kind"].as_str(), Some(kind), "{kind}");
+            // And nothing that was there moved.
+            assert!(out.contains(r#""cell_mm": 2.0"#), "{kind}: {out}");
+        }
+    }
+
+    /// **A second domain of the same kind gets a name of its own.**
+    ///
+    /// The template's name is its kind, so adding two would otherwise make two domains called
+    /// `heater` — which the format refuses at build time, from a menu click that looks harmless.
+    #[test]
+    fn a_repeated_kind_is_numbered_rather_than_colliding() {
+        let mut text = SCENE.to_string();
+        for expected in ["heater", "heater 2", "heater 3"] {
+            text = add_domain(&text, "heater").expect("a heater goes in");
+            let root: serde_json::Value = serde_json::from_str(&text).expect("it parses");
+            let names: Vec<&str> = root["domains"]
+                .as_array()
+                .expect("an array")
+                .iter()
+                .filter_map(|d| d["name"].as_str())
+                .collect();
+            assert!(names.contains(&expected), "{expected} not in {names:?}");
+        }
+    }
+
+    /// **Added and removed is the file it started as**, byte for byte.
+    ///
+    /// The strongest thing either operation can promise, and it holds only if the insertion takes
+    /// exactly the bytes the removal gives back — the comma, the newline and the indent included.
+    #[test]
+    fn adding_then_removing_returns_the_original_text() {
+        for (kind, _) in pantometry_world::templates::TEMPLATES {
+            let added = add_domain(SCENE, kind).unwrap_or_else(|e| panic!("{kind}: {e}"));
+            let back = remove_domain(&added, kind).unwrap_or_else(|e| panic!("{kind}: {e}"));
+            assert_eq!(
+                back, SCENE,
+                "{kind}: the round trip did not land where it started"
+            );
+        }
     }
 
     /// **Text that does not parse offers nothing**, rather than pointing into a file whose shape

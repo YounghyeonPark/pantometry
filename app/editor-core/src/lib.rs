@@ -34,7 +34,13 @@
 
 pub mod edit;
 
-pub use edit::{editable, set_number, set_text, Editable, Value};
+pub use edit::{
+    add_domain, domain_named, editable, remove_domain, set_number, set_text, Editable, Value,
+};
+
+/// A starting example of every domain the format defines, re-exported so a shell talks to this
+/// crate and not past it. See [`pantometry_world::templates`] for how the list is kept in step.
+pub use pantometry_world::templates::TEMPLATES;
 
 use pantometry::units::LengthVec;
 use pantometry_world::{Parts, Scene, World};

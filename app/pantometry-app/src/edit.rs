@@ -596,6 +596,61 @@ impl eframe::App for App {
                         ui.close_menu();
                     }
                 });
+                // Adding and removing a domain, which used to mean typing an object into the
+                // text pane from memory. The list is `pantometry-world`'s, so a twentieth domain
+                // appears here without this file learning about it.
+                ui.menu_button("Domain", |ui| {
+                    let mut wanted: Option<&str> = None;
+                    ui.menu_button("Add", |ui| {
+                        for (kind, _) in editor_core::TEMPLATES {
+                            if ui.button(kind).clicked() {
+                                wanted = Some(kind);
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    if let Some(kind) = wanted {
+                        match editor_core::add_domain(&self.text, kind) {
+                            Ok(text) => {
+                                self.text = text;
+                                self.dirty = true;
+                                self.recheck();
+                                self.status = format!("added a {kind}");
+                            }
+                            Err(why) => self.status = why,
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    // Only a row that *is* a domain. `selected` can be a reading or a group, and
+                    // the core answers `None` for those rather than this file deciding.
+                    let selected = self
+                        .selected
+                        .as_deref()
+                        .and_then(editor_core::domain_named)
+                        .map(str::to_string);
+                    let label = match &selected {
+                        Some(name) => format!("Delete {name}"),
+                        None => "Delete (select a domain)".to_string(),
+                    };
+                    if ui
+                        .add_enabled(selected.is_some(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        let name = selected.expect("enabled only when there is one");
+                        match editor_core::remove_domain(&self.text, &name) {
+                            Ok(text) => {
+                                self.text = text;
+                                self.dirty = true;
+                                self.selected = None;
+                                self.recheck();
+                                self.status = format!("removed {name}");
+                            }
+                            Err(why) => self.status = why,
+                        }
+                        ui.close_menu();
+                    }
+                });
                 ui.menu_button("Run", |ui| {
                     let runnable = self.checked.error.is_none() && self.busy.is_none();
                     if ui.add_enabled(runnable, egui::Button::new("Run")).clicked() {
