@@ -57,6 +57,21 @@ fn main() {
             0
         }
 
+        // **What the editor's panels do at a given window width, without a window.** The viewport
+        // once got a rect of zero width because three side panels are laid out before the central
+        // one, and that decision is a pure function of one number — so it is checked as one, by
+        // `the_viewport_always_has_room`, rather than by resizing a window and looking.
+        Some("--layout-at") => match rest.first().and_then(|w| w.parse::<f32>().ok()) {
+            Some(width) => {
+                println!("{}", edit::layout_at(width));
+                0
+            }
+            None => {
+                eprintln!("usage: pantometry --layout-at <width in points>");
+                2
+            }
+        },
+
         // `verify`, `fit`, `--check`, `--emit-default`, a bare scene path, or nothing.
         _ => cli::run(&args),
     };

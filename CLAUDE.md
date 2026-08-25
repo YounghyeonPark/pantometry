@@ -34,6 +34,13 @@ Reading a partial file is the same mistake as reading a roll-up. Wait for the ex
 *that*. The claim that a test suite passed is the one claim in this repository that has never
 survived being inferred.
 
+**The tenth was not the shell, the tool boundary or the tree — it was the compiler.** Nothing here
+pins a toolchain and CI takes `dtolnay/rust-toolchain@stable`, so **stable is the contract** and this
+gate was two releases behind it: clippy **1.96** locally against CI's **1.98**. Two lints that do not
+exist in 1.96 were failing every job that runs clippy, and both workspaces' gates were green.
+`rustup update` before trusting a green. A gate on an older toolchain than CI's is a gate reporting
+about a different repository, and it fails in the direction that looks like success.
+
 ```sh
 # Correct in a file, inert when pasted -- see above.
 set -euo pipefail
@@ -68,6 +75,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 ```
 

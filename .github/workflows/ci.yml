@@ -198,6 +198,14 @@ jobs:
       - name: the browser shell compiles too
         working-directory: app
         run: cargo build -p editor-wasm --target wasm32-unknown-unknown
+      # Its own `deny.toml`, written because the merge took `pantometry-world` out of the library's.
+      # Its first run found four advisories, all through `eframe` and none fixable from here; they
+      # are in the ignore list with a reachability argument each rather than as bare ids.
+      - name: licences and advisories
+        working-directory: app
+        run: |
+          cargo install --locked cargo-deny --version ^0.20 || true
+          cargo deny check
       # And every shipped scene, through the binary rather than the test harness. `tests/scene.rs`
       # already runs them and asserts a number each; this runs the real binary on the real files,
       # which is the thing a reader will type. It used to be in the library's `examples` job, where

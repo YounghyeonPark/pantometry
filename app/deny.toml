@@ -1,0 +1,102 @@
+# cargo-deny for the app workspace.
+#
+# **This exists because the merge took something away.** `pantometry-world` used to be a member of
+# the library's workspace, so its dependencies were licence-gated with the library's twelve. It is
+# here now, beside a GPU stack and a GUI shell that were never gated at all — three workspaces above
+# the library, none of them with a `deny.toml`, for as long as they existed.
+#
+# So the honest thing was not to note the loss and move on. It is 374 crates, and nobody audits that
+# by reading; the library's own file says as much about the flood it saw coming. The list below was
+# built by censusing what is actually here rather than by copying the library's and hoping.
+#
+#     cd app && cargo deny check
+
+[graph]
+# What this workspace is actually built for. No `wasm32-wasip1` and no `x86_64-apple-darwin`: the
+# native shell is built on the three desktop platforms CI and the maintainer use, and `editor-wasm`
+# is `wasm32-unknown-unknown`. Listing a target nobody builds would make this argue about
+# dependencies that never get compiled.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "wasm32-unknown-unknown",
+]
+
+[licenses]
+# An allow-list, for the reason the library's file gives: a licence nobody thought about should stop
+# the build and be considered, not slip through for not being on a list of bad ones.
+allow = [
+    # What this workspace is under, and what 317 of the 374 are under.
+    "MIT",
+    "Apache-2.0",
+    # `rustix` and `linux-raw-sys` offer Apache with the LLVM exception beside plain Apache and MIT.
+    "Apache-2.0 WITH LLVM-exception",
+    # Public-domain dedications. `memchr` and `byteorder-lite` offer Unlicense beside MIT;
+    # `hexf-parse` is CC0 alone and `adler2` offers 0BSD.
+    #
+    # CC0 is worth a sentence rather than a nod: it is a dedication with a fallback licence and no
+    # explicit patent grant, which some organisations decline on that basis. One crate, a hex float
+    # parser reached through `naga`, and the alternative is vendoring twenty lines of parsing.
+    "Unlicense",
+    "CC0-1.0",
+    "0BSD",
+    # Required *in addition* to MIT or Apache by `unicode-ident` and the ICU crates, hence `AND` in
+    # the expression rather than `OR`. OSI-approved in 2024, BSD-style, obligation is the notice.
+    "Unicode-3.0",
+    # `bytemuck`, `cursor-icon`, `foldhash`, `slotmap`. Permissive, notice-in-source only.
+    "Zlib",
+    # Boost, for `clipboard-win` and `error-code`. Permissive and explicitly requires no notice in
+    # binary form.
+    "BSL-1.0",
+    # `arrayref`, `zerocopy`, `tiny-skia`, `moxcms`, `pxfm`. Notice and no-endorsement.
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    # `libloading`.
+    "ISC",
+    # **The two font licences, and they are not like the others.** `epaint_default_fonts` ships
+    # Hack and Ubuntu Mono, and OFL-1.1 and Ubuntu-font-1.0 are copyleft *for the font*: a modified
+    # font stays under them and may not be sold on its own. Neither reaches the program — a font
+    # embedded in a binary is not a derivative work of the binary — so what they oblige is that the
+    # editor's fonts stay redistributable under their own terms, which they are. Named here rather
+    # than lumped in with the permissive ones because the obligation is real, just not ours.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.93
+# Same reason the library's file gives: the list says what is acceptable, not what happens to be in
+# the tree this week.
+unused-allowed-license = "allow"
+
+[bans]
+# Path dependencies inside this workspace carry no version, which cargo-deny reads as a wildcard.
+# The library's crates are published and carry one; nothing here is. A `{ path = ... }` within one
+# workspace is not a wildcard on crates.io, and denying it would mean writing a version number on
+# every internal edge for a workspace whose members are all `publish = false`.
+allow-wildcard-paths = true
+# **Warn, not deny, and this tree has a real one.** `eframe` declares `egui-wgpu` optionally, so
+# `wgpu 24` sits in the lockfile beside the `wgpu 22` the viewer and the accelerator build with.
+# Nothing enables it — `cargo tree -e normal -i egui-wgpu` prints nothing — so only one is ever
+# compiled. That is worth seeing on every run and is not worth failing over.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+# **Four entries, all reached only through `eframe`, none fixable from here.** Written out because
+# the first run of this file found them, and an ignore list without reasons is a list nobody can
+# audit later. Each was checked for reachability and for whether `cargo update` could move it; none
+# can be, and every one of them is a dependency of a dependency of the window toolkit.
+#
+# This is what the merge's cost looks like *paid* rather than noted: `pantometry-world` left the
+# library's `deny.toml`, and what it joined is a tree with four open advisories in it. The library's
+# own twelve remain clean, and nothing in `crates/` depends on anything here.
+ignore = [
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.30's attribute-duplicate check is quadratic in the number of attributes on one start tag. Reached only by accesskit_unix -> atspi -> zbus_xml, which parses **D-Bus introspection XML from the local session bus** — the accessibility service's own descriptions of itself, not a document from anywhere else. Linux only. `zbus_xml 4.0` requires `^0.30` and 0.30.0 is the latest in that range, so `cargo update` moves nothing; the fix is upstream. Denial of service." },
+    { id = "RUSTSEC-2026-0195", reason = "The same crate, the same path, the same reasoning: quick-xml's `NsReader` allocates per namespace declaration before handing the event back, with no bound. Memory-exhaustion denial of service on input that here is the local accessibility bus." },
+    { id = "RUSTSEC-2024-0436", reason = "`paste` is unmaintained rather than defective — no advisory of a fault, only of an absent maintainer. It is a **proc macro**: it runs at compile time and no part of it reaches a binary. Reached by accesskit_windows -> accesskit_winit -> egui-winit -> eframe." },
+    { id = "RUSTSEC-2026-0192", reason = "`ttf-parser` is unmaintained, again with no fault reported. It parses the fonts egui embeds, which are `epaint_default_fonts`' own Hack and Ubuntu Mono — shipped in the binary, not loaded from anywhere a reader controls. Reached by ab_glyph -> epaint -> egui." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

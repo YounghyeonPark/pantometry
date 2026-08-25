@@ -127,6 +127,21 @@ costs 30x on hot numeric code — 133 ms against 3964 ms on one identical loop �
 4 ms and an afternoon went into optimising something that was not slow. **A harness is a thing
 that produces results, and it needs the same suspicion as a test.**
 
+### The gate has to be on the toolchain CI uses
+
+Nothing pins a version — CI takes `dtolnay/rust-toolchain@stable`, so **stable is the contract** and
+a local gate on anything older is reporting about a different repository.
+
+It has happened, and it looked like success: the gate was clippy **1.96** while CI had moved to
+**1.98**, and two lints that do not exist in 1.96 were failing every job that runs clippy. Both
+gates were green. `rustup update` first, and if that brings new lints in, they were already failing
+CI and this is when you find out rather than after a push.
+
+The MSRV job is the other half of the same rule and points the other way: `crates/` is built with
+**1.78** and a lint suggesting something stabilised after that is a suggestion to break a promise.
+Both `#[allow]`s in `pantometry-shape/src/voxels.rs` are there for exactly that, with the version
+each suggestion needs written beside it. `app/` has no floor and takes the suggestions.
+
 ### A green gate is not a green CI, and this tree has three workspaces
 
 The gate formats, lints and tests **one** of them. `app/` and `bindings/python` each have their own
@@ -157,6 +172,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 ```
 

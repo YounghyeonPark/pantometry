@@ -17,6 +17,16 @@
 //!
 //! What this cannot check is the whole CFF schema. It checks the parts that broke and the parts a
 //! release depends on, which is the difference between a test and a wish.
+//! # Not under `wasm32`
+//!
+//! Every test here reads a file out of the repository, and a `wasm32-wasip1` runner has no
+//! repository — no preopened directory, and nothing at the paths these walk to. They used to live in
+//! `pantometry-world`, which the wasm jobs excluded with a flag; the crate moved to `app/` and these
+//! two came here instead, where nothing excluded them and five `test` jobs went red.
+//!
+//! A `cfg` rather than a flag on the job: the reason is a property of the *test* — it needs a
+//! filesystem — and a flag on a CI line is a fact about the tests kept somewhere the tests are not.
+#![cfg(not(target_family = "wasm"))]
 
 use std::path::PathBuf;
 

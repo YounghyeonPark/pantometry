@@ -290,6 +290,12 @@ impl Voxels {
                         continue;
                     }
                     crossings.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+                    // And the same again, one lint later: clippy suggests `as_chunks::<2>()`,
+                    // stabilised in 1.88. The MSRV job builds this with 1.78 and would not compile
+                    // it. Two `#[allow]`s in five lines for the same reason is what a declared floor
+                    // costs while stable keeps moving — and the alternative, taking the suggestion,
+                    // breaks a promise to a consumer to satisfy a suggestion to a maintainer.
+                    #[allow(clippy::chunks_exact_to_as_chunks)]
                     for pair in crossings.chunks_exact(2) {
                         for i in 0..counts.0 {
                             let x = origin.x + (i as f64 + 0.5) * dx;

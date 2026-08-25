@@ -214,6 +214,17 @@ mod tests {
     }
 
     /// Threading is not attempted for work too small to pay for it.
+    ///
+    /// # This test used to say `4` and `7`, which is this machine's core count in disguise
+    ///
+    /// `threads_for` is `sqrt(cells / CELLS_PER_SPAWN)` **clamped to the cores**, and the two exact
+    /// values were written down on a thirty-two core machine where the clamp never binds. On a
+    /// two-core CI runner they are 2 and 2, and the first push after this test was written turned
+    /// every `test` job red — five of them, on every platform.
+    ///
+    /// What is checked below is what is true on any machine. The exact values are still checked,
+    /// where there are enough cores for them to be about the law rather than about the hardware,
+    /// and the skip says so rather than passing quietly.
     #[test]
     fn a_small_sweep_stays_on_one_thread() {
         std::env::remove_var("PANTOMETRY_THREADS");
@@ -224,7 +235,42 @@ mod tests {
             1,
             "a 32-cube is not worth a spawn"
         );
-        // The square-root law, at the sizes it was derived for.
+
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        // True everywhere: at least one, never more than the machine has, and never falling as the
+        // work grows. A law that went *down* with more cells would be a sign error nobody would
+        // notice from one grid size.
+        let mut previous = 0;
+        for cells in [
+            0,
+            1,
+            CELLS_PER_SPAWN,
+            32 * 32 * 32,
+            96 * 96 * 96,
+            128 * 128 * 128,
+        ] {
+            let t = threads_for(cells);
+            assert!(t >= 1, "{cells} cells asked for {t} threads");
+            assert!(
+                t <= cores.max(1),
+                "{cells} cells asked for {t} of {cores} cores"
+            );
+            assert!(
+                t >= previous,
+                "{cells} cells asked for fewer threads than a smaller sweep"
+            );
+            previous = t;
+        }
+
+        // The square-root law, at the sizes it was derived for. Guarded, because below seven cores
+        // these are a measurement of the runner.
+        if cores < 7 {
+            println!("skipped the exact counts: {cores} cores, and 128³ wants 7");
+            return;
+        }
         assert_eq!(threads_for(96 * 96 * 96), 4);
         assert_eq!(threads_for(128 * 128 * 128), 7);
     }

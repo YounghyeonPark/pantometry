@@ -57,11 +57,18 @@ three lines.
 
 ### What it cost, stated rather than hidden
 
-**`pantometry-world` left `deny.toml`.** It was a member of the library's workspace, so its
-dependencies were licence-gated with the library's twelve. It is here now, beside stacks that were
-never gated and would be a large allow-list to start. The library's own twelve are unaffected. A
-`deny.toml` for this workspace is worth having on its own terms rather than as a side effect of
-where a crate happened to live.
+**`pantometry-world` left the library's `deny.toml`, so this workspace grew one.** It was a member
+there, so its dependencies were licence-gated with the library's twelve; it is here now beside
+stacks that had never been gated at all. `app/deny.toml` gates all 374, and its allow-list was built
+by censusing what is actually here rather than by copying the library's.
+
+Its first run found **four advisories**, all reached through `eframe` and none fixable from here:
+two denial-of-service vulnerabilities in `quick-xml 0.30` (via `accesskit_unix` → `atspi` →
+`zbus_xml`, which parses D-Bus introspection XML from the *local* accessibility bus, and whose
+requirement `^0.30` has no patched release in range), and `paste` and `ttf-parser` unmaintained —
+a proc macro that never reaches a binary, and the parser for the fonts egui embeds. Each is in the
+ignore list with that argument beside it rather than as a bare id. The library's own twelve remain
+clean, and nothing in `crates/` depends on anything here.
 
 **The twenty-eight scenes left the library's gate.** Their closed-form checks — scene 21's
 `8.3e-15`, scene 24's `1.1e-4`, scene 25's 8.4× relaxation — are among the strongest physics tests
@@ -102,6 +109,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 ```
 

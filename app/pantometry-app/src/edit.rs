@@ -106,6 +106,38 @@ enum Job {
     Verified(Result<(String, usize), String>),
 }
 
+/// What the panels do at a given window width, as one line.
+///
+/// The `--layout-at` subcommand's whole body. `panels_that_fit` is a method on `App` because it
+/// reads the `show_*` flags; this asks it with all three on, which is the state a reader starts in
+/// and the only one where the fitting has anything to decide.
+pub fn layout_at(width: f32) -> String {
+    let app = App::new(None);
+    let (fits, dropped) = app.panels_that_fit(width);
+    let taken = (if fits.outliner { 170.0 } else { 0.0 })
+        + (if fits.text { 240.0 } else { 0.0 })
+        + (if fits.inspector { 200.0 } else { 0.0 });
+    format!(
+        "width={width} view={} outliner={} text={} inspector={} dropped={}",
+        width - taken,
+        if fits.outliner { "on" } else { "off" },
+        if fits.text { "on" } else { "off" },
+        if fits.inspector { "on" } else { "off" },
+        dropped.unwrap_or("none"),
+    )
+}
+
+/// Which side panels are on screen this frame.
+///
+/// Not the same as the `show_*` flags: those are what the reader asked for, this is what there is
+/// room for. Keeping them apart is what makes a widened window restore the panel by itself.
+#[derive(Clone, Copy, Debug)]
+struct Panels {
+    outliner: bool,
+    text: bool,
+    inspector: bool,
+}
+
 /// One thing the cursor can be over in the shaded view, with its readout already written.
 ///
 /// The text is built when the geometry is, because that is when the value is in hand and because a
@@ -736,14 +768,30 @@ impl eframe::App for App {
         // domain(s), 0.500 s in 11 frames". Measured on a 1706-pixel window, that row took the
         // outliner to **940 px** and left the viewport nothing at all — a 3D editor showing no 3D,
         // because of a caption. The rows truncate now and the panels have a ceiling.
-        if self.show_outliner {
+        //
+        // **And the viewport gets a floor**, which the ceiling alone does not give it. Every
+        // `SidePanel` is laid out before the `CentralPanel`, so the panels take what they ask for
+        // and the viewport gets the remainder — including when the remainder is **nothing**. On the
+        // default window before this it was exactly that: the paint callback was handed a rect of
+        // zero width and drew nothing, correctly, looking precisely like a renderer that did not
+        // work. Opening the window larger hid that rather than fixing it.
+        //
+        // So the panels yield, in the order they are worth least to somebody looking at a picture,
+        // and the status bar says which one went. Their `show_*` flags are untouched, so widening
+        // the window brings the panel back without anybody having to find the menu item again.
+        let (fits, squeezed) = self.panels_that_fit(ctx.screen_rect().width());
+        if let Some(dropped) = squeezed {
+            self.status =
+                format!("{dropped} hidden — the window is too narrow for it and the view");
+        }
+        if fits.outliner {
             egui::SidePanel::left("outliner")
                 .resizable(true)
                 .default_width(260.0)
                 .width_range(170.0..=440.0)
                 .show(ctx, |ui| self.outliner(ui, &tree));
         }
-        if self.show_inspector {
+        if fits.inspector {
             egui::SidePanel::right("inspector")
                 .resizable(true)
                 .default_width(320.0)
@@ -751,7 +799,7 @@ impl eframe::App for App {
                 .show(ctx, |ui| self.inspector(ui, &tree));
         }
 
-        if self.show_text {
+        if fits.text {
             egui::SidePanel::left("text")
                 .resizable(true)
                 .default_width(430.0)
@@ -1242,6 +1290,45 @@ impl App {
         (solid, lines, probes, notes)
     }
 
+    /// Which side panels there is room for, and the first one that had to go.
+    ///
+    /// Widths are the minimums the panels are given below; `FLOOR` is what the viewport must keep.
+    /// 280 points is about the smallest a shaded scene reads at — narrower and the colour bar, the
+    /// readings and the geometry are competing for the same forty pixels.
+    fn panels_that_fit(&self, width: f32) -> (Panels, Option<&'static str>) {
+        const FLOOR: f32 = 280.0;
+        let mut fits = Panels {
+            outliner: self.show_outliner,
+            text: self.show_text,
+            inspector: self.show_inspector,
+        };
+        let taken = |p: &Panels| {
+            (if p.outliner { 170.0 } else { 0.0 })
+                + (if p.text { 240.0 } else { 0.0 })
+                + (if p.inspector { 200.0 } else { 0.0 })
+        };
+        let mut dropped = None;
+
+        // **Three steps, written out.** Least useful first for somebody looking at a picture: the
+        // inspector describes the selection, which the viewport is already showing; the text is the
+        // scene, which is not what a view is for; the outliner is how you *choose* what to look at,
+        // so it goes last. A loop over closures here was a type clippy refused and three constants
+        // nobody can get wrong quietly are what the twelve edges of a box are written out for.
+        if width - taken(&fits) < FLOOR && fits.inspector {
+            fits.inspector = false;
+            dropped = Some("the inspector");
+        }
+        if width - taken(&fits) < FLOOR && fits.text {
+            fits.text = false;
+            dropped = dropped.or(Some("the scene text"));
+        }
+        if width - taken(&fits) < FLOOR && fits.outliner {
+            fits.outliner = false;
+            dropped = dropped.or(Some("the outliner"));
+        }
+        (fits, dropped)
+    }
+
     /// The 3D viewport: wireframe extents from the text, run panels over them by shape.
     fn viewport(&mut self, ui: &mut egui::Ui) {
         let (response, painter) =
@@ -1405,9 +1492,9 @@ impl App {
             }
             let picked = selected_name.as_deref() == Some(placed.name.as_str());
             let stroke = if picked {
-                egui::Stroke::new(2.0, highlight)
+                egui::Stroke::new(2.0_f32, highlight)
             } else {
-                egui::Stroke::new(1.0, wire)
+                egui::Stroke::new(1.0_f32, wire)
             };
             if !self.shaded {
                 for (a, b) in editor_core::EDGES {
@@ -1558,7 +1645,7 @@ impl App {
                             ];
                             painter.line_segment(
                                 [to_screen(a), to_screen(b)],
-                                egui::Stroke::new(1.5, shade(*value, scale)),
+                                egui::Stroke::new(1.5_f32, shade(*value, scale)),
                             );
                         }
                     }
@@ -1748,14 +1835,14 @@ impl Probe {
         painter.rect_stroke(
             box_rect,
             3.0,
-            egui::Stroke::new(1.0, visuals.weak_text_color()),
+            egui::Stroke::new(1.0_f32, visuals.weak_text_color()),
             egui::StrokeKind::Inside,
         );
         painter.galley(origin + pad, galley, visuals.strong_text_color());
         painter.circle_stroke(
             *at,
             5.0,
-            egui::Stroke::new(1.5, visuals.strong_text_color()),
+            egui::Stroke::new(1.5_f32, visuals.strong_text_color()),
         );
     }
 }
@@ -1855,7 +1942,7 @@ fn scale_bar(
     }
     let y = rect.bottom() - 14.0;
     let x0 = rect.left() + 16.0;
-    let stroke = egui::Stroke::new(1.5, colour);
+    let stroke = egui::Stroke::new(1.5_f32, colour);
     painter.line_segment([egui::pos2(x0, y), egui::pos2(x0 + px, y)], stroke);
     for x in [x0, x0 + px] {
         painter.line_segment([egui::pos2(x, y - 4.0), egui::pos2(x, y + 4.0)], stroke);

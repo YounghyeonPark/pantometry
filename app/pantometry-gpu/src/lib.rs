@@ -857,8 +857,17 @@ impl Context {
             .expect("a mapped buffer");
         {
             let mapped = slice.get_mapped_range();
-            for (out, chunk) in into.iter_mut().zip(mapped.chunks_exact(4)) {
-                *out = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            // `as_chunks` rather than `chunks_exact`, which clippy asks for from 1.88. This
+            // workspace has no MSRV — the library's 1.78 floor is a promise to people who depend on
+            // the published crates, and nothing here is published — so the suggestion is free.
+            // `pantometry-shape` has the same lint two lines from an `#[allow]`, for the opposite
+            // reason: it *is* held to 1.78, and a lint is not a reason to break a promise.
+            //
+            // It is also the better code: each chunk is a `[u8; 4]` by type, so `from_le_bytes`
+            // takes it whole instead of being handed four indexes that could be mistyped.
+            let (quads, _) = mapped.as_chunks::<4>();
+            for (out, bytes) in into.iter_mut().zip(quads) {
+                *out = f32::from_le_bytes(*bytes);
             }
         }
         self.readback.unmap();

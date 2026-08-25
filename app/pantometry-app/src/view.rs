@@ -155,12 +155,13 @@ pub fn run(args: &[String]) -> i32 {
                 // pixel in the image a line and reported 100%, which is exactly the kind of
                 // "measurement" a renderer check exists to avoid.
                 let background = [pixels[0], pixels[1], pixels[2]];
-                let lit = pixels
-                    .chunks_exact(4)
-                    .filter(|p| p[..3] != background)
-                    .count();
+                // `as_chunks` rather than `chunks_exact`: each pixel is a `[u8; 4]` by type, which
+                // is what it is. This workspace has no MSRV to keep it off — see the note beside
+                // the same call in `pantometry-gpu`.
+                let (rgba, _) = pixels.as_chunks::<4>();
+                let lit = rgba.iter().filter(|p| p[..3] != background).count();
                 let mut shades: Vec<[u8; 3]> = Vec::new();
-                for p in pixels.chunks_exact(4) {
+                for p in rgba {
                     let c = [p[0], p[1], p[2]];
                     if c != background && !shades.contains(&c) {
                         shades.push(c);
@@ -573,7 +574,8 @@ impl App {
 /// A plain PPM, because a picture nothing can open is not evidence and an encoder is a dependency.
 fn write_ppm(path: &str, width: u32, height: u32, rgba: &[u8]) {
     let mut out = format!("P6\n{width} {height}\n255\n").into_bytes();
-    for p in rgba.chunks_exact(4) {
+    let (pixels, _) = rgba.as_chunks::<4>();
+    for p in pixels {
         out.extend_from_slice(&p[..3]);
     }
     if let Err(e) = std::fs::write(path, out) {
