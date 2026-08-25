@@ -17,9 +17,15 @@ __pycache__/
 /*.svg
 /*.html
 /*.csv
-/world.json
-/orbits*.json
-/atoms*.json
+# JSON is the one extension a run shares with something worth committing, so this is a
+# denylist with two named exceptions rather than three named generated files. It used to be
+# `/world.json`, `/orbits*.json`, `/atoms*.json` — the names that had happened so far — and the
+# next name was `run.json`, which reached a commit. A rule that has to be extended every time
+# somebody writes an asset is a rule that is wrong between the writing and the noticing; this
+# one is wrong in the other direction, where the cost is a deliberate `git add -f`.
+/*.json
+!/.zenodo.json
+!/scene.json
 
 # The app's build output. Its workspace is excluded from the root one, so the anchored `/target`
 # rule above does not reach it — and neither did the three `/runtime/*/target/` lines this
