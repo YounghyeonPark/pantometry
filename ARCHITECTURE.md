@@ -578,7 +578,7 @@ but a test that fails if they ever stop being two limits of one physics.
 RTX rendering, GPU physics, USD and an interactive editor were asked about directly. Three of the
 four are additive and only heavy; the fourth is not.
 
-**GPU physics conflicts with rule 5**, and `runtime/gpu` is the first answer to that. Atomics
+**GPU physics conflicts with rule 5**, and `app/pantometry-gpu` is the first answer to that. Atomics
 and warp scheduling reorder floating-point reductions, and addition is not associative — so
 bit-for-bit, which `rng::tests::the_stream_is_pinned` holds to a digest, would be given up.
 
@@ -596,7 +596,7 @@ The `191×` that stood in this paragraph for months had **nothing measuring it**
 hard-coded grid size and printed one row. Replacing it needed the instrument fixed before the number
 could be: seven sizes in one process measured the *order* of the sweep, by a factor of two to three,
 because the machine drifts under load and whichever went last paid for the rest. One process per
-grid, ascending and descending agreeing row for row, is the check. `runtime/gpu/README.md` has it.
+grid, ascending and descending agreeing row for row, is the check. `app/pantometry-gpu/README.md` has it.
 
 It comes with a cost that is not about speed: WGSL has
 no `f64`, so an accelerated domain is single precision against the library's double. It conserves
@@ -611,7 +611,9 @@ which the linear stencil commutes with exactly — improved the divergence 1660�
 
 The other three belong **above the layers**, in workspaces of their own, for the reason
 `bindings/python` already established. Measured: the library resolves 12 external crates, the
-python bindings 15, and a wgpu stack **86**. `runtime/viewer` is the first of those.
+python bindings 15, and a wgpu stack **86**. They are one workspace, `app/` — the argument is about
+the boundary between the library and everything above it, and one is all it supports. See
+`app/README.md`.
 
 **A shaded viewport is not a renderer, and the distinction is the whole of this section.** The
 editor draws surfaces with a depth buffer and two lights — which is what every DCC viewport does,
@@ -637,10 +639,10 @@ contains, and its scalars go out as time-sampled custom attributes under `pantom
 
 | | |
 | --- | --- |
-| a viewer | `runtime/viewer` — a wgpu window that reads the run **file** and does not link `pantometry` |
+| a viewer | `pantometry view` — a wgpu window that reads the run **file**. `viewer-core` does not link `pantometry`, and `the_wire_format_is_enough` holds that now the workspace boundary does not |
 | export | `pantometry_view::gltf` — one frame as **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. `pantometry_view::usda` — the **whole run**, animated, with every domain's scalars as time-sampled attributes. Both no dependency; the geometry is `pantometry_view::mesh`, shared, so the two cannot disagree about a solid's size |
-| GPU physics | `runtime/gpu` — 33–67× at 64³, a wash at 16³, single precision, CPU as the reference. A scene states `"device": "gpu"` and an **application** honours it through `Accelerator`, because the library's workspace cannot carry the stack |
-| an editor | `runtime/editor`: the scene's JSON checked as you type, an outliner and an inspector, run and verify as buttons, and a **shaded viewport** — surfaces from `pantometry_view::mesh` on the GPU with a depth buffer, lit, with the extents as wire boxes occluded by what is in front of them. `viewer-core`'s camera, now also as a matrix, and `one_camera_two_paths` holds the two expressions of it to `2.4e-7` |
+| GPU physics | `app/pantometry-gpu` — 33–67× at 64³, a wash at 16³, single precision, CPU as the reference. A scene states `"device": "gpu"` and an **application** honours it through `Accelerator`, because the library's workspace cannot carry the stack |
+| an editor | `pantometry edit`: the scene's JSON checked as you type, an outliner and an inspector, run and verify as buttons, and a **shaded viewport** — surfaces from `pantometry_view::mesh` on the GPU with a depth buffer, lit, with the extents as wire boxes occluded by what is in front of them. `viewer-core`'s camera, now also as a matrix, and `one_camera_two_paths` holds the two expressions of it to `2.4e-7` |
 
 **The editor was last for a reason that is now gone.** An editor writes files, and the scene
 format is `pantometry-world`'s, which is `publish = false` precisely because a file format is a
@@ -659,7 +661,7 @@ number closes.
 typing, and CI runs it over every scene so it is not the one entry point nothing exercises.
 
 What is left for an editor is a GUI, and that is a product decision rather than an architectural
-one. The format is ready to be edited — and `runtime/editor` is the first GUI over it: a third
+one. The format is ready to be edited — and `pantometry edit` is the first GUI over it: a
 workspace, linking `pantometry` where the viewer deliberately does not, reusing `viewer-core`'s
 camera rather than writing that arithmetic a third time, and split into a GUI-free
 `editor-core` (checked, placed, run, verified — tested headlessly) and a shell that paints only
@@ -765,7 +767,7 @@ allowed to name them — it is the composition root, which is already true today
    demo, which is a thing that looks like the product and answers a slightly different question.
    The general form is worth keeping: **an interface that names a location has assumed a machine.**
 
-   [`Parts`]: crates/pantometry-world/src/lib.rs
+   [`Parts`]: app/pantometry-world/src/lib.rs
 
 ---
 

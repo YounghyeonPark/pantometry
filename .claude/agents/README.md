@@ -60,7 +60,7 @@ Run the first three together on anything substantial; they fan out well in paral
 
 `CONTRIBUTING.md` states the conventions for humans; these agents encode the same ones with the
 specific failure modes attached. If the two ever disagree, `CONTRIBUTING.md` is the source and
-the agent needs updating. `crates/pantometry-world/FRICTION.md` is the standing record of what the
+the agent needs updating. `app/pantometry-world/FRICTION.md` is the standing record of what the
 API is like from outside, and `consumer-advocate` reads it first so it does not report what is
 already known.
 

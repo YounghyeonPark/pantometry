@@ -1,0 +1,62 @@
+# **One workspace above the library, and one binary out of it.**
+#
+# What used to be four things: `crates/pantometry-world` (the scene format and a CLI),
+# `runtime/viewer` (a wgpu window), `runtime/editor` (an egui shell) and `runtime/gpu` (a compute
+# accelerator) — four workspaces, four lockfiles, four CI jobs, and four names to know before you
+# could ask "how do I run a scene".
+#
+# They were split for one reason and it is still true: **a GUI stack, a GPU stack and a libpython
+# link are dependency trees the published crates must not carry.** Measured — the library resolves
+# 12 external crates, `bindings/python` 15, a wgpu window 86, and a GUI shell 371. `deny.toml` gates
+# every one of the library's twelve, CI builds it with `--locked`, and the same crates go to
+# `wasm32` and to Rust 1.78, none of which can carry any of the above.
+#
+# That argument is about the boundary between the **library** and everything above it. It was never
+# an argument for three boundaries above it: the viewer, the editor and the accelerator are all
+# things you do *to a run*, they share the camera, the colour scale and the scene format, and they
+# were held apart by nothing but the order they were written in. The arrow still points one way —
+# nothing in `crates/` depends on anything here.
+#
+# What the merge buys, concretely: `"device": "gpu"` in a scene now works from the command line.
+# `pantometry-world` refuses it on its own — it has no device and cannot acquire one — so honouring
+# it needed an application that linked both the scene format and the accelerator. There was no such
+# application. There is one binary now and it links both.
+[workspace]
+members = [
+    "pantometry-app",
+    "pantometry-world",
+    "pantometry-gpu",
+    "viewer-core",
+    "editor-core",
+    "editor-wasm",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Younghyeon Park and pantometry contributors"]
+repository = "https://github.com/YounghyeonPark/pantometry"
+publish = false
+
+[workspace.dependencies]
+# The library, by path. Every one of these is a normal dependency in one direction only.
+pantometry = { path = "../crates/pantometry" }
+pantometry-core = { path = "../crates/pantometry-core" }
+pantometry-thermal = { path = "../crates/pantometry-thermal" }
+pantometry-units = { path = "../crates/pantometry-units" }
+pantometry-view = { path = "../crates/pantometry-view" }
+
+# This workspace's own.
+pantometry-world = { path = "pantometry-world" }
+pantometry-gpu = { path = "pantometry-gpu" }
+viewer-core = { path = "viewer-core" }
+editor-core = { path = "editor-core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# For the vector constructors the mechanics domains take, and for the molecular crate's
+# reduced-unit helpers, which the facade does not re-export. Pinned to the same minor the library
+# uses: a `Vec3` built here and passed to a domain there has to be the same type.
+glam = { version = "0.29", features = ["serde"] }

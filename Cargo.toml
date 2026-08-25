@@ -20,23 +20,17 @@ members = [
     "crates/pantometry-scene",
     "crates/pantometry-view",
     "crates/pantometry",
-    # The first consumer. Not published — it exists to find out where the SDK is awkward,
-    # which is a question no test in the library can answer about itself.
-    "crates/pantometry-world",
 ]
 exclude = [
-    # Its own workspace: pyo3 brings fifteen crates and a libpython link, and the library's
+    # Its own workspace: pyo3 brings fifteen crates and a libpython link, and this workspace's
     # lockfile, `deny.toml` allow-list and wasm jobs are promises that should not have to
     # accommodate a Python extension. See its Cargo.toml.
     "bindings/python",
-    # And its own for the same reason, measured rather than assumed: pyo3 adds seven external
-    # crates and that was enough to split it out. A GPU stack is far past that, and none of the
-    # eleven published crates may carry it. See runtime/viewer/Cargo.toml.
-    "runtime/viewer",
-    # And the GPU accelerator, which is the same argument again plus one that is not about
-    # dependencies at all: WGSL has no f64, so a compute kernel is a *different computation* from
-    # the domain it accelerates. See runtime/gpu/README.md.
-    "runtime/gpu",
+    # And everything a person *runs*: the CLI, the viewer, the editor and the GPU accelerator, in
+    # one workspace above this one. Same argument, measured rather than assumed — this workspace
+    # resolves 12 external crates and a GUI shell is 371 — and it is the only boundary that
+    # argument supports. It used to be three. See app/Cargo.toml.
+    "app",
 ]
 resolver = "2"
 

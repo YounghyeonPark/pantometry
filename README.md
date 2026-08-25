@@ -47,7 +47,7 @@ Where no closed form exists, the README says so.
 
 There is now one consumer, `pantometry-world`, and its first job was not to be a good application
 but to use the SDK the way a stranger would.
-[`crates/pantometry-world/FRICTION.md`](crates/pantometry-world/FRICTION.md) is what it came back with:
+[`app/pantometry-world/FRICTION.md`](app/pantometry-world/FRICTION.md) is what it came back with:
 **thirty-four findings, twenty-eight fixed and six argued down in writing.** The first twelve came from
 writing the application. The next four came from running the subagents that were built out of
 what the first twelve taught — and one of those is a first-order accuracy defect in the
@@ -99,8 +99,8 @@ its own scheme. There are tests for those rates now.
 | `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
 | `pantometry` | A facade over the other sixteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
-| `runtime/gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. Its own workspace |
-| `runtime/viewer` | A native window for a run: rotate, zoom, scrub. Its own workspace, because a GPU stack is 86 external crates against the library's 12 — and it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
+| `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
+| `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because a GPU stack is 86 external crates and a GUI shell 371 against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
 | `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with twenty-eight scenes across all eleven domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
 
 The last three are the workspace's answer to the same question from three sides: what a
@@ -340,7 +340,7 @@ cargo run --example beam_hot_spot out.svg    # and a picture
 | `room_in_three_dimensions` | The same room as `room_modes`, with a ceiling. The floor-to-ceiling mode at 71 Hz that a floor plan does not have *at all*, and a mode count growing as `f³` rather than `f²` |
 | `optical_bench` | **A 3D instrument, not a graph.** A doublet, a fold mirror turning the axis through 90°, three field angles — prescribed, traced, refocused, then *bent* until the spot falls inside the Airy disc. `optical_bench bench.html` gives a layout you rotate in a browser |
 | `espresso_shot` | **A machine, and the inside of what it is doing.** An espresso basket from the pump to the cup: Darcy's law solved on the permeability the grind gives, the dissolution that rides on the flow, and a vertical cut through three baskets — even, channelled, and pulled into a cold portafilter — as the shot runs. Grind, temperature and pressure each swept on their own, against the exponent each is supposed to carry |
-| `portafilter_flow` | **The machine, and the water going through it.** A shower screen, a basket, a body and a spout, with parcels of water leaving the screen and working down through the grounds — advected by the solved Darcy field at the *pore* velocity, and darkening as they pick up what they cross. Two baskets side by side, differing only in a loose ring at the wall. `flow.html` turns in a browser, `flow.gltf` opens in Blender, and `flow.json` opens in the native window under `runtime/viewer` |
+| `portafilter_flow` | **The machine, and the water going through it.** A shower screen, a basket, a body and a spout, with parcels of water leaving the screen and working down through the grounds — advected by the solved Darcy field at the *pore* velocity, and darkening as they pick up what they cross. Two baskets side by side, differing only in a loose ring at the wall. `flow.html` turns in a browser, `flow.gltf` opens in Blender, and `flow.json` opens in the native window with `pantometry view` |
 | `busbar_rating` | **A design study rather than a demonstration.** A bolted busbar joint, from geometry to a production yield: the contact resistance solved as a field, the thermal path from a network, the electro-thermal fixed point, a rating by bisection, the margin to runaway, and 20 000 units against manufacturing tolerance. Every step against a closed form |
 
 Two more are run by CI without being in the table, because they are checks rather than
@@ -783,7 +783,7 @@ The three `--exclude`s are deliberate: WebAssembly, determinism and the 1.78 flo
 promises the *library* makes to the people who depend on it, and `pantometry-world` is an
 unpublished application with no dependents. CI additionally *runs* every example and every
 scene rather than only compiling them — see [Examples](#examples) and
-`crates/pantometry-world/scenes/`.
+`app/pantometry-world/scenes/`.
 
 Two of those exist to enforce claims rather than to catch typos. The test suite runs
 on Linux, macOS and Windows because `rng::tests::the_stream_is_pinned` asserts a

@@ -1,0 +1,41 @@
+# The one binary. Everything above the library that a person runs is a subcommand of this.
+[package]
+name = "pantometry-app"
+description = "Run, check, verify, view and edit pantometry scenes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+# `pantometry` is what you type. The package cannot be called that — the library facade already
+# is — but the binary can, and the binary is the thing with a name a person says out loud.
+[[bin]]
+name = "pantometry"
+path = "src/main.rs"
+
+[dependencies]
+pantometry = { workspace = true }
+pantometry-world = { workspace = true }
+# **The reason the merge was worth doing.** `pantometry-world` refuses `"device": "gpu"` on its own
+# — it has no device and cannot acquire one — so honouring a scene that asks for one needed an
+# application linking both the format and an accelerator. Before this there was no such application
+# and the key could only be used from code somebody else wrote.
+pantometry-gpu = { workspace = true }
+viewer-core = { workspace = true }
+editor-core = { workspace = true }
+glam = { workspace = true }
+serde_json = { workspace = true }
+
+# The two windows. Mutually exclusive at runtime — one process, one event loop — and both here
+# because both are things you do to a run.
+eframe = "0.31"
+wgpu = "22"
+winit = "0.30"
+pollster = "0.4"
+
+[dev-dependencies]
+# The regression test runs one scene both ways and reads the result back through the run file's own
+# reader, which is what the viewer, the editor and the report all use.
+viewer-core = { workspace = true }

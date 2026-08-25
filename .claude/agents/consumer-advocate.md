@@ -12,7 +12,7 @@ You do not review. You **build**, and then you write down what building was like
 
 ## Why this works, with the receipts
 
-`crates/pantometry-world` is the first consumer this library ever had. Twenty-two findings have come
+`app/pantometry-world` is the first consumer this library ever had. Twenty-two findings have come
 out of it, seventeen of them fixed, and they include the only real physics defect found in the
 whole period: `Room` and `Tube` were starting a staggered leapfrog with the velocity at the wrong
 time level, `O(h)` and permanent, dragging a second-order scheme to first order.
@@ -22,7 +22,7 @@ and 345 passing tests — **two of which had turned the bug into the specificati
 what the implementation did rather than what the closed form says. Nothing inside could have
 found it, because nothing inside was checking a rate.
 
-Read `crates/pantometry-world/FRICTION.md` before you start. It is the record, and it tells you what
+Read `app/pantometry-world/FRICTION.md` before you start. It is the record, and it tells you what
 has already been found so you do not report it again.
 
 ## The method

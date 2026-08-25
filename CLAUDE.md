@@ -48,15 +48,31 @@ for e in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots \
          espresso_shot portafilter_flow agents_quickstart readme_check; do
   cargo run --locked --release --example "$e"
 done
-# MSRV, library only: `--exclude` needs `--workspace` beside it, and the app is not
-# held to 1.78 because nothing depends on it.
-cargo +1.78 build --locked --workspace --exclude pantometry-world
+# MSRV. No `--exclude` any more: everything in this workspace is published and every one of
+# it is held to 1.78. The application lives in `app/`, which cargo keeps out.
+cargo +1.78 build --locked --workspace
 
 echo "the gate passed"     # and if this line does not appear, it did not
 ```
 
 CI also builds `wasm32-unknown-unknown` and runs the suite under `wasm32-wasip1`. It does **not**
-cover `bindings/python` from this gate — that has its own job and its own procedure.
+cover `bindings/python` or `app/` from this gate — each has its own job and its own procedure.
+
+**`app/` has its own gate and it is not optional.** Everything a person *runs* lives there — the
+CLI, the viewer, the editor and the GPU accelerator — and so do the twenty-eight scenes and their
+closed-form checks, which used to run in the line above. Two workspaces, two gates:
+
+```sh
+cd app
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
+```
+
+The device tests there skip loudly on a machine with no adapter. A skip that says why is a
+result; a skip that says nothing is the shape of a suite that has stopped testing anything.
 
 **Read a result from the thing that produced it, and read whether the check *ran* rather than what it
 printed.** Six times this gate has said `ok` while failing, and once that reached `main`. A CI run's
@@ -133,22 +149,29 @@ earned and was not.
 | --- | --- |
 | [RELEASING.md](RELEASING.md) | any release. Cadence, the **eight** places a version lives, the crate order, the wheel, what the pipeline has actually been run through — and what it costs to change the project's name, which is not a rename because a published name is permanent |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | changing a test or a tolerance. The authority on the gate and on the five conventions in full |
-| [crates/pantometry-world/FRICTION.md](crates/pantometry-world/FRICTION.md) | changing the public API. Thirty-four findings from using the SDK as a stranger, five of them the same underlying decision |
+| [app/pantometry-world/FRICTION.md](app/pantometry-world/FRICTION.md) | changing the public API. Thirty-four findings from using the SDK as a stranger, five of them the same underlying decision |
 | [bindings/python/README.md](bindings/python/README.md) | touching the bindings. Its own cargo workspace, its own gate, and the two boundary decisions not to relitigate |
-| [runtime/viewer/README.md](runtime/viewer/README.md) | touching the viewer. Why it is a separate workspace and why it does not link `pantometry` |
-| [runtime/editor/README.md](runtime/editor/README.md) | touching the editor. Why it is a third workspace, why it *does* link `pantometry`, and the two halves the platform rules keep apart |
+| [app/README.md](app/README.md) | touching anything a person *runs*. One workspace, one binary: the CLI, the viewer, the editor and the GPU accelerator. What the merge bought, what it cost, and the gate it has of its own |
+| [app/viewer-core/README.md](app/viewer-core/README.md) | touching the viewer. Why it does not link `pantometry`, and the test that holds that now the workspace boundary does not |
+| [app/editor-core/README.md](app/editor-core/README.md) | touching the editor. Why it *does* link `pantometry`, the shaded viewport, and the two halves the platform rules keep apart |
 | [tools/report-check/README.md](tools/report-check/README.md) | touching the HTML report's viewer. It is four hundred lines of JavaScript in a Rust string and this is the only thing that executes it — plus why a `vm.runInContext` harness measured a renderer 30x slower than it is |
 | [.claude/agents/README.md](.claude/agents/README.md) | adding a reviewer |
 
-Three of those exist because a dependency tree does not belong in the library's lockfile. Measured:
-the library resolves **12** external crates, `bindings/python` **15**, the viewer's wgpu stack
-**86**, and the editor's GUI stack **371**. `deny.toml` gates every one of the library's twelve, CI
+Two of those are separate workspaces because a dependency tree does not belong in the library's
+lockfile. Measured: the library resolves **12** external crates, `bindings/python` **15**, a wgpu
+window **86**, and a GUI shell **371**. `deny.toml` gates every one of the library's twelve, CI
 builds with `--locked`, and the same crates go to `wasm32` and Rust 1.78 — none of which can carry
 a GPU stack, a libpython link, or a window toolkit.
 
-`crates/pantometry-world` is the fourth: an application, `publish = false`, whose purpose is to use the
-SDK the way a stranger would and report back. Anything you find yourself adding to it that a
-*consumer* would want is in the wrong crate.
+It was **four** workspaces above the library and is now one. That argument is about the boundary
+between the library and everything above it, and it was never an argument for three boundaries
+*above* it — the viewer, the editor, the CLI and the accelerator are all things you do to a run and
+share the camera, the colour scale and the scene format. `app/README.md` has what the merge bought
+and what it cost.
+
+`app/pantometry-world` is the scene format and the first consumer: an application, `publish = false`,
+whose purpose is to use the SDK the way a stranger would and report back. Anything you find yourself
+adding to it that a *consumer* would want is in the wrong crate.
 
 ## What is deliberately not here
 

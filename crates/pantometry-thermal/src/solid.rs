@@ -2237,68 +2237,8 @@ impl ScalarField for Solid3D {
     /// weights are renormalised over the solid corners, so a sample at a cell centre is that cell
     /// exactly, a sample inside a clearance is `NaN`, and a sample straddling the two is the
     /// material's own value rather than a blend with something that is not there.
-    fn at(&self, p: LengthVec, _t: Time) -> f64 {
-        let (nx, ny, nz) = self.counts;
-        let q = p.to_si() / self.dx.to_si() - DVec3::splat(0.5);
-        // NaN spelled out rather than folded into a comparison: a visualiser can hand one over,
-        // and it must not reach the cast below. Answered with a `NaN` rather than with cell zero —
-        // a question about nowhere has no answer, and cell zero may itself be empty, in which case
-        // the old fallback returned a frozen number for a point that was never asked about.
-        if q.is_nan() {
-            return f64::NAN;
-        }
-        let axis = |v: f64, n: usize| -> (usize, f64) {
-            let last = n.saturating_sub(1);
-            if v <= 0.0 {
-                return (0, 0.0);
-            }
-            if v >= last as f64 {
-                return (last, 0.0);
-            }
-            let i = v.floor();
-            (i as usize, v - i)
-        };
-        let (i, fx) = axis(q.x, nx);
-        let (j, fy) = axis(q.y, ny);
-        let (k, fz) = axis(q.z, nz);
-
-        // **A sample belongs to the cell it is in**, and if that cell is empty there is nothing
-        // there to sample. Without this the masked weights below still answer — with the value of
-        // whichever solid neighbour the sample leans towards — and a panel that samples across the
-        // extent rather than on cell centres lands most of a clearance's first layer inside the
-        // material's half. Measured on a two-layer gap: 36 of the 72 empty cells came out solid.
-        let nearest = |v: f64, n: usize| (v.round().max(0.0) as usize).min(n.saturating_sub(1));
-        if self.void[nearest(q.x, nx) + nx * (nearest(q.y, ny) + ny * nearest(q.z, nz))] {
-            return f64::NAN;
-        }
-        let (i1, j1, k1) = (
-            (i + 1).min(nx - 1),
-            (j + 1).min(ny - 1),
-            (k + 1).min(nz - 1),
-        );
-
-        let mut sum = 0.0;
-        let mut weight = 0.0;
-        for (a, wa) in [(i, 1.0 - fx), (i1, fx)] {
-            for (b, wb) in [(j, 1.0 - fy), (j1, fy)] {
-                for (c, wc) in [(k, 1.0 - fz), (k1, fz)] {
-                    let w = wa * wb * wc;
-                    let at = a + nx * (b + ny * c);
-                    // A corner with no weight is not a corner, so a sample sitting on a cell
-                    // centre never consults the neighbour it does not use — which is what makes
-                    // an exactly-sampled grid exact rather than nearly so.
-                    if w > 0.0 && !self.void[at] {
-                        sum += w * self.cells[at];
-                        weight += w;
-                    }
-                }
-            }
-        }
-        if weight > 0.0 {
-            sum / weight
-        } else {
-            f64::NAN
-        }
+    fn at(&self, p: LengthVec, t: Time) -> f64 {
+        self.sample_with(p, t, &self.cells)
     }
 
     /// Central differences on the cell grid, mirrored at the faces **and at void**.
@@ -2451,5 +2391,94 @@ impl Solid3D {
             }
         };
         (one(q.x), one(q.y), one(q.z))
+    }
+}
+
+impl Solid3D {
+    /// Sample this block's **geometry** with somebody else's values.
+    ///
+    /// The trilinear interpolation, the clamping at the faces and — the part that is easy to get
+    /// wrong — the void handling, applied to a slice of kelvin the caller supplies instead of to
+    /// `self.cells`.
+    ///
+    /// # Why this is public
+    ///
+    /// `pantometry-gpu` holds a block's values on a device and mirrors them back in `f32`. It has to
+    /// answer [`ScalarField::at`] for the same grid, and the alternative is a second copy of the
+    /// arithmetic above — where "a sample belongs to the cell it is in, and if that cell is empty
+    /// there is nothing there to sample" is a rule that took a measurement to get right: 36 of 72
+    /// empty cells in a two-layer gap came out solid before it existed. A second copy is a second
+    /// chance at that.
+    ///
+    /// Read-only on purpose. A setter that let a caller overwrite a block's cells would let it put
+    /// one in a state its own conservation bookkeeping never agreed to.
+    ///
+    /// `kelvin` shorter than the grid answers `NaN` beyond its end rather than panicking, because
+    /// the caller is a mirror of a device and a short mirror is a bug worth *seeing* as a hole.
+    pub fn sample_with(&self, p: LengthVec, _t: Time, kelvin: &[f64]) -> f64 {
+        let (nx, ny, nz) = self.counts;
+        let q = p.to_si() / self.dx.to_si() - DVec3::splat(0.5);
+        // NaN spelled out rather than folded into a comparison: a visualiser can hand one over,
+        // and it must not reach the cast below. Answered with a `NaN` rather than with cell zero —
+        // a question about nowhere has no answer, and cell zero may itself be empty, in which case
+        // the old fallback returned a frozen number for a point that was never asked about.
+        if q.is_nan() {
+            return f64::NAN;
+        }
+        let axis = |v: f64, n: usize| -> (usize, f64) {
+            let last = n.saturating_sub(1);
+            if v <= 0.0 {
+                return (0, 0.0);
+            }
+            if v >= last as f64 {
+                return (last, 0.0);
+            }
+            let i = v.floor();
+            (i as usize, v - i)
+        };
+        let (i, fx) = axis(q.x, nx);
+        let (j, fy) = axis(q.y, ny);
+        let (k, fz) = axis(q.z, nz);
+
+        // **A sample belongs to the cell it is in**, and if that cell is empty there is nothing
+        // there to sample. Without this the masked weights below still answer — with the value of
+        // whichever solid neighbour the sample leans towards — and a panel that samples across the
+        // extent rather than on cell centres lands most of a clearance's first layer inside the
+        // material's half. Measured on a two-layer gap: 36 of the 72 empty cells came out solid.
+        let nearest = |v: f64, n: usize| (v.round().max(0.0) as usize).min(n.saturating_sub(1));
+        if self.void[nearest(q.x, nx) + nx * (nearest(q.y, ny) + ny * nearest(q.z, nz))] {
+            return f64::NAN;
+        }
+        let (i1, j1, k1) = (
+            (i + 1).min(nx - 1),
+            (j + 1).min(ny - 1),
+            (k + 1).min(nz - 1),
+        );
+
+        let mut sum = 0.0;
+        let mut weight = 0.0;
+        for (a, wa) in [(i, 1.0 - fx), (i1, fx)] {
+            for (b, wb) in [(j, 1.0 - fy), (j1, fy)] {
+                for (c, wc) in [(k, 1.0 - fz), (k1, fz)] {
+                    let w = wa * wb * wc;
+                    let at = a + nx * (b + ny * c);
+                    // A corner with no weight is not a corner, so a sample sitting on a cell
+                    // centre never consults the neighbour it does not use — which is what makes
+                    // an exactly-sampled grid exact rather than nearly so.
+                    if w > 0.0 && !self.void[at] {
+                        let Some(v) = kelvin.get(at) else {
+                            return f64::NAN;
+                        };
+                        sum += w * v;
+                        weight += w;
+                    }
+                }
+            }
+        }
+        if weight > 0.0 {
+            sum / weight
+        } else {
+            f64::NAN
+        }
     }
 }

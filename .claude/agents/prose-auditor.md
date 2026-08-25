@@ -22,7 +22,7 @@ cargo clippy --workspace --lib -- -W missing_docs 2>&1 | grep -c "^warning: miss
 cargo metadata --format-version 1 | python -c "import json,sys; d=json.load(sys.stdin); print(len([p for p in d['packages'] if p.get('source')]), 'external deps')"
 find crates -path '*examples*' -name '*.rs' -not -path '*common*' | wc -l   # NOT just crates/pantometry
 ls crates/*/Cargo.toml | wc -l                                             # crates, published + not
-ls crates/pantometry-world/scenes/*.json | wc -l
+ls app/pantometry-world/scenes/*.json | wc -l
 gh repo view --json description,repositoryTopics
 ```
 

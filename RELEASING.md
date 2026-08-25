@@ -62,7 +62,7 @@ Count them rather than remembering them:
 ```sh
 ls crates | wc -l                                    # crates
 find crates -path '*examples*' -name '*.rs' -not -path '*common*' | wc -l   # examples: 15
-ls crates/pantometry-world/scenes/*.json | wc -l         # scenes
+ls app/pantometry-world/scenes/*.json | wc -l         # scenes
 cargo test --locked --workspace --release 2>&1 | grep -E "test result:" \
   | awk -F'[; ]' '{p+=$4} END {print p}'             # tests
 ```
@@ -208,7 +208,7 @@ fi
 occurrences. Move the crate directories with `git mv` first so the rename shows as renames in the
 history rather than as eighteen deletions.
 
-Then regenerate **three** lockfiles — the root, `bindings/python`, and `runtime/editor` — because
+Then regenerate **three** lockfiles — the root, `bindings/python`, and `app` — because
 `--locked` refuses a lockfile naming crates that no longer exist.
 
 What the grep does not reach is anything outside the tree. The gate script kept
@@ -333,7 +333,7 @@ said so only as a red *Failed* on its own web page — nothing in the release, t
 One line: `license: MIT OR Apache-2.0`. That is a valid SPDX **expression** and `Cargo.toml` is right
 to use it; CFF's schema takes an identifier or a **list** of them and an expression matches neither.
 
-`crates/pantometry-world/tests/citation_is_valid.rs` now checks that and the other fields a deposition is
+`app/pantometry-world/tests/citation_is_valid.rs` now checks that and the other fields a deposition is
 built from, so the next one fails in the gate instead of on a web page. Before a release, also check
 the page itself: **zenodo.org → GitHub → the repository** lists every release Zenodo has seen and what
 it did with each.

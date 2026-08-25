@@ -110,7 +110,7 @@ CI job with its own procedure:
 | | needs | run it with |
 | --- | --- | --- |
 | `bindings/python` | maturin, a Python | `bindings/python/README.md` |
-| `runtime/viewer`, `runtime/editor` | their own workspaces and lockfiles | each one's README |
+| `app/` — the CLI, the viewer, the editor, the accelerator | its own workspace and lockfile, and a GL context for the shaded viewport | `app/README.md` |
 | the HTML report's viewer | node | `node tools/report-check/check.js <report.html>` |
 
 The last is new and is worth a sentence, because it closes a gap that had been open since the
@@ -127,11 +127,15 @@ costs 30x on hot numeric code — 133 ms against 3964 ms on one identical loop �
 4 ms and an afternoon went into optimising something that was not slow. **A harness is a thing
 that produces results, and it needs the same suspicion as a test.**
 
-### A green gate is not a green CI, and this tree has five workspaces
+### A green gate is not a green CI, and this tree has three workspaces
 
-The gate formats, lints and tests **one** of them. `runtime/viewer`, `runtime/editor`,
-`runtime/gpu` and `bindings/python` each have their own lockfile, their own dependency tree and
-their own CI job, and the gate touches none of them.
+The gate formats, lints and tests **one** of them. `app/` and `bindings/python` each have their own
+lockfile, their own dependency tree and their own CI job, and the gate touches none of them.
+
+It was five. `runtime/viewer`, `runtime/editor` and `runtime/gpu` were three separate workspaces
+above the library, which is three boundaries where the argument only ever supported one — see
+`app/README.md`. Merging them did not make this section unnecessary: it made it two workspaces to
+remember instead of four.
 
 Found the ordinary way, which is by looking: two jobs had been failing on `main` — `native viewer`
 and `gpu accelerator` — both on `cargo fmt --check`, over one over-long `eprintln!` and one
@@ -144,14 +148,16 @@ the library can break a workspace outside it and the gate cannot see that either
 while the gate stayed green, because nothing in `crates/` reads that format back.
 
 So, before a commit that changes a **wire format, a public type in `pantometry-scene`, or anything
-`pantometry-view` writes**, run the other workspaces too. Each is a `cd` and three commands:
+`pantometry-view` writes**, run `app/` too — and in fact run it before any commit, because the
+twenty-eight scenes and their closed-form checks live there now:
 
 ```sh
-for w in runtime/viewer runtime/editor runtime/gpu; do
-  ( cd "$w" && cargo fmt --all --check ) || echo "!! $w fmt"
-  ( cd "$w" && cargo clippy --locked --workspace --all-targets -- -D warnings ) || echo "!! $w clippy"
-  ( cd "$w" && cargo test --locked --workspace ) || echo "!! $w test"
-done
+cd app
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 ```
 
 And read the jobs, not the roll-up: `gh run view <id> --json jobs` gives each one its own
