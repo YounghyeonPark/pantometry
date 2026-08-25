@@ -694,13 +694,24 @@ the platform's specification rather than a feature backlog:
 - **A collapsed convergence order.** Refining the grid halved the error instead of quartering it,
   which is what found both acoustic boundary defects; no single run could have.
 - **Rasterisation loss.** A rib finer than the grid does not fail, it disappears. `Loss` measures
-  that, and nothing yet turns the measurement into a verdict a person reads.
+  that, and `verify` now reads the measurement: every designed part gets a row in the report and
+  a part the grid could not hold is a **finding**, with the exit code that goes with one.
+
+  The verdict is `Loss::is_clean`'s own rather than a second opinion — a second threshold here
+  would be a second number to keep in step, so the bar lives on the library's constant and the
+  finding quotes it. What is added is the case a `Loss` structurally cannot see, because it is
+  about a *part* and not about a rasterisation: **zero cells filled**. `World::build` refuses the
+  assembly where every part vanished and nothing looked at one of two; that scene built, ran,
+  conserved, drew and answered about an assembly with a piece missing.
 - **Margins, not verdicts.** How far each dt sits from `max_stable_dt`, and how many digits each
   audit residual has left against its tolerance, per quantity — a pass with no margin is a
   different fact from a pass.
 
-Every one of these needs *reruns* — a second resolution, a halved window — so a tool that only
-reads a run file cannot do it. The platform links `pantometry` where the viewer deliberately does
+Every one of these needs more than the run file. Three need *reruns* — a second resolution, a
+halved window, the same scene twice — and the fourth needs the **build**, because what a
+rasterisation lost is not in the frames it produced: the joules the missing rib would have held
+are not small in the output, they are absent from the problem. Either way a tool that only reads
+a run file cannot do it. The platform links `pantometry` where the viewer deliberately does
 not, and that is the structural reason the panel is native: an incumbent without the audit and
 the determinism underneath cannot build it. Determinism adds one thing free of charge: a run
 digest, so "this result reproduces bit for bit on any machine" is a checkable fact on a report

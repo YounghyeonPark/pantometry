@@ -13,7 +13,7 @@
 //!                                       # animated, for usdview / Omniverse / Houdini / Maya
 //! pantometry check s.json               # does it parse and build, without running it
 //! pantometry emit s.json                # write the built-in scene out to start from
-//! pantometry verify s.json              # the battery: margins, determinism, both sweeps
+//! pantometry verify s.json              # the battery: margins, determinism, sweeps, geometry
 //! pantometry verify s.json --deep       # and a third run per sweep, measuring the order
 //! ```
 //!
@@ -207,9 +207,10 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // The measurements a passing audit does not make: margins, determinism, and what moves
-    // when the coupling window halves or every grid refines. See `pantometry_world::verify` for
-    // what each is and which shipped error it exists because of.
+    // The measurements a passing audit does not make: margins, determinism, what moves when the
+    // coupling window halves or every grid refines, and what the grid could not hold of a
+    // designed part. See `pantometry_world::verify` for what each is and which shipped error it
+    // exists because of.
     if args.first().map(String::as_str) == Some("verify") {
         let path = args.get(1).ok_or("verify needs a path")?;
         // The whole tail is matched, not just the third argument — `verify s.json --deep

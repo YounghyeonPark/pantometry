@@ -397,3 +397,179 @@ fn a_missing_upload_is_refused_by_name_and_lists_what_is_held() {
         "a near miss should show the spellings that are here: {err}"
     );
 }
+
+/// **A part the grid loses builds, runs and conserves — and `verify` is the only thing that says
+/// so.**
+///
+/// The failure this whole file is about, in the one arrangement nothing catches: two parts, one
+/// of them finer than a cell. The build refuses an assembly where *every* part vanished — that is
+/// `a_missing_file_and_an_empty_assembly_are_both_refused` above — and one of two coming out at
+/// zero cells trips nothing at all. It is not a coarse answer about the assembly; it is a correct
+/// answer about a different one.
+///
+/// The geometry is closed form rather than measured. The block is 20 x 10 x 10 mm at a 2 mm cell,
+/// so cell centres sit at odd millimetres — 1, 3, 5 … 19. The keeper spans 0–12 mm and takes the
+/// six centres below 12; the plate spans 14.0–14.4 mm and contains **no centre at all**, because
+/// the nearest are 13 and 15. Nothing here depends on how the rasteriser breaks a tie.
+#[test]
+fn a_part_the_grid_loses_is_a_verify_finding_and_nothing_else_says_so() {
+    let dir = scratch("lost");
+    let keeper = brick_stl(&dir, "keeper.stl", [0.0, 0.0, 0.0], [12.0, 10.0, 10.0]);
+    let plate = brick_stl(&dir, "plate.stl", [14.0, 0.0, 0.0], [14.4, 10.0, 10.0]);
+
+    let json = format!(
+        r#"{{
+  "title": "one part the grid loses",
+  "duration_s": 0.5,
+  "frames": 2,
+  "domains": [
+    {{ "kind": "block", "name": "assembly", "cells": [10, 5, 5], "cell_mm": 2.0,
+      "initial_c": 20.0,
+      "parts": [
+        {{ "stl": "{keeper}", "material": "copper" }},
+        {{ "stl": "{plate}", "material": "aluminium" }}
+      ] }}
+  ]
+}}"#
+    );
+
+    // It builds. That is the defect, stated as an assertion so a future refusal at build time is
+    // a deliberate change to this file rather than a surprise.
+    let world = World::build(scene(&json)).expect("an assembly with a lost part still builds");
+    let rows = world.rasterised();
+    assert_eq!(rows.len(), 2, "one row per part: {rows:?}");
+
+    // The keeper's closed form: 6 x 5 x 5 centres, and a brick on cell boundaries rasterises to
+    // exactly its own volume — 150 cells of 8 mm3 against 12 x 10 x 10 mm3.
+    assert_eq!(rows[0].filled, 150, "{:?}", rows[0]);
+    assert!(
+        rows[0].loss.volume_error.abs() < 1e-12,
+        "a grid-aligned brick has no volume error to have: {:?}",
+        rows[0]
+    );
+    assert_eq!(rows[1].filled, 0, "the plate is thinner than a cell");
+
+    let battery = pantometry_world::verify::verify(&scene(&json), false).expect("the battery runs");
+    let lost: Vec<&String> = battery
+        .findings
+        .iter()
+        .filter(|f| f.contains("plate.stl"))
+        .collect();
+    assert_eq!(
+        lost.len(),
+        1,
+        "the lost part is exactly one finding: {:?}",
+        battery.findings
+    );
+    assert!(
+        lost[0].contains("parts[1]") && lost[0].contains("absent"),
+        "the finding says which part and what happened: {}",
+        lost[0]
+    );
+    assert!(
+        !battery.findings.iter().any(|f| f.contains("keeper.stl")),
+        "the part the grid held is not a finding: {:?}",
+        battery.findings
+    );
+
+    // And the report carries the measurement the finding was drawn from, so a reader can disagree
+    // with the verdict by reading the row rather than by rerunning anything.
+    let report = battery.render();
+    assert!(report.contains("rasterisation"), "{report}");
+    assert!(report.contains("keeper.stl"), "{report}");
+}
+
+/// **An assembly the grid holds produces no rasterisation finding**, which is what makes the test
+/// above worth having.
+///
+/// A check that fires on everything is not a check. Same brick, same grid, same battery — and the
+/// row is still printed, because a section that appears only on failure cannot be told apart from
+/// a pass that never ran.
+#[test]
+fn an_assembly_the_grid_holds_has_no_rasterisation_finding() {
+    let dir = scratch("held");
+    let keeper = brick_stl(&dir, "held.stl", [0.0, 0.0, 0.0], [12.0, 10.0, 10.0]);
+
+    let json = format!(
+        r#"{{
+  "title": "an assembly the grid holds",
+  "duration_s": 0.5,
+  "frames": 2,
+  "domains": [
+    {{ "kind": "block", "name": "assembly", "cells": [10, 5, 5], "cell_mm": 2.0,
+      "initial_c": 20.0,
+      "parts": [ {{ "stl": "{keeper}", "material": "copper" }} ] }}
+  ]
+}}"#
+    );
+
+    let battery = pantometry_world::verify::verify(&scene(&json), false).expect("the battery runs");
+    assert!(
+        battery.findings.is_empty(),
+        "a brick on cell boundaries loses nothing: {:?}",
+        battery.findings
+    );
+    assert_eq!(battery.rasterised.len(), 1, "the part was still measured");
+    let report = battery.render();
+    assert!(
+        report.contains("held.stl") && report.contains("150 cells"),
+        "{report}"
+    );
+}
+
+/// **A part that is present but unresolved is a finding too, and it says which clause fired.**
+///
+/// The other half of the verdict, and the half with no test until this one: a part that filled
+/// cells, so it is not absent, but filled them two deep. A seven-point stencil has no interior in
+/// a run two cells thick and a trilinear element has one element, so the feature is in the picture
+/// and not in the physics.
+///
+/// Closed form again, and chosen so exactly one clause can fire. The plate spans 14–18 mm on a
+/// 2 mm cell, taking the centres at 15 and 17 — two cells across, 5 x 5 of them, `50 x 8 = 400`
+/// mm3 against a mesh volume of `4 x 10 x 10`. The volume is **exact**, so a finding that also
+/// complained about volume error would be reporting a clause that did not fire.
+#[test]
+fn a_part_two_cells_thick_is_a_finding_that_names_the_reason() {
+    let dir = scratch("thin");
+    let plate = brick_stl(&dir, "thin.stl", [14.0, 0.0, 0.0], [18.0, 10.0, 10.0]);
+
+    let json = format!(
+        r#"{{
+  "title": "a part the grid keeps and cannot resolve",
+  "duration_s": 0.5,
+  "frames": 2,
+  "domains": [
+    {{ "kind": "block", "name": "assembly", "cells": [10, 5, 5], "cell_mm": 2.0,
+      "initial_c": 20.0,
+      "parts": [ {{ "stl": "{plate}", "material": "copper" }} ] }}
+  ]
+}}"#
+    );
+
+    let world = World::build(scene(&json)).expect("a two-cell plate still builds");
+    let row = &world.rasterised()[0];
+    assert_eq!(row.filled, 50, "{row:?}");
+    assert!(
+        row.loss.volume_error.abs() < 1e-12,
+        "two cells across is the whole of this brick, exactly: {row:?}"
+    );
+    // One run per (j, k) row along x, and the y and z runs are five cells and not thin.
+    assert_eq!(row.loss.thin_runs, 25, "{row:?}");
+
+    let battery = pantometry_world::verify::verify(&scene(&json), false).expect("the battery runs");
+    assert_eq!(
+        battery.findings.len(),
+        1,
+        "one part, one reason: {:?}",
+        battery.findings
+    );
+    let finding = &battery.findings[0];
+    assert!(
+        finding.contains("thin.stl") && finding.contains("two cells thick"),
+        "{finding}"
+    );
+    assert!(
+        !finding.contains("volume"),
+        "the volume clause did not fire and must not be quoted: {finding}"
+    );
+}

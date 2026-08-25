@@ -85,9 +85,17 @@ pub struct Loss {
 }
 
 impl Loss {
+    /// The volume error [`Loss::is_clean`] tolerates: **2%**.
+    ///
+    /// A constant rather than a literal inside the comparison, because a caller that reports *why* a
+    /// rasterisation is unclean has to name the bar, and a second copy of `0.02` in that message is a
+    /// number that can drift away from the one actually applied. `pantometry-world`'s verify battery
+    /// is that caller.
+    pub const CLEAN_VOLUME_ERROR: f64 = 0.02;
+
     /// Whether anything was lost that a caller should look at.
     ///
-    /// The thresholds are deliberately loose and deliberately stated: **2% of volume**, and *any* thin run
+    /// The thresholds are deliberately loose and deliberately stated: [`Loss::CLEAN_VOLUME_ERROR`], and *any* thin run
     /// or ambiguous row at all. Volume error is a smooth thing that a caller trades against cost, so it
     /// gets a number; a feature one cell thick and a row that could not be filled are not trade-offs, they
     /// are things that either happened or did not.
@@ -103,7 +111,9 @@ impl Loss {
     ///
     /// [`Loss::retried_rows`] is left out because it is not a loss. Those rows came out right.
     pub fn is_clean(&self) -> bool {
-        self.volume_error.abs() < 0.02 && self.thin_runs == 0 && self.ambiguous_rows == 0
+        self.volume_error.abs() < Self::CLEAN_VOLUME_ERROR
+            && self.thin_runs == 0
+            && self.ambiguous_rows == 0
     }
 }
 

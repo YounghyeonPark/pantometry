@@ -4,7 +4,7 @@
 //! pantometry                              the built-in scene, checked, nothing written
 //! pantometry check   scene.json           does it parse and build, without running it
 //! pantometry run     scene.json out.html  run it and write an asset, chosen by the extension
-//! pantometry verify  scene.json [--deep]  the battery: margins, determinism, both sweeps
+//! pantometry verify  scene.json [--deep]  the battery: margins, determinism, sweeps, geometry
 //! pantometry emit    scene.json           write the built-in scene out to start from
 //! pantometry fit     part.stl ...         choose a cell size by measuring the geometry
 //! pantometry view    run.json             a window: rotate, zoom, scrub
@@ -93,7 +93,7 @@ fn usage() -> String {
          \x20 pantometry check   scene.json           does it parse and build, without running it\n\
          \x20 pantometry run     scene.json out.html  run it and write an asset, by extension:\n\
          \x20                                         .html .svg .csv .json .gltf .usda\n\
-         \x20 pantometry verify  scene.json [--deep]  the battery: margins, determinism, sweeps\n\
+         \x20 pantometry verify  scene.json [--deep]  the battery: margins, determinism, sweeps, geometry\n\
          \x20 pantometry emit    scene.json           write the built-in scene out to start from\n\
          \x20 pantometry fit     part.stl ...         choose a cell size by measuring the geometry\n\
          \x20 pantometry view    run.json             a window: rotate, zoom, scrub\n\

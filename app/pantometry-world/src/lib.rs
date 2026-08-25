@@ -1466,7 +1466,7 @@ impl DomainSpec {
         palette: &mut Palette,
         environment: Option<&EnvironmentSpec>,
         files: &dyn Parts,
-        notes: &mut Vec<String>,
+        log: &mut BuildLog,
     ) -> Result<Box<dyn Domain>, String> {
         let domain: Box<dyn Domain> = match self {
             DomainSpec::Room {
@@ -2241,7 +2241,7 @@ impl DomainSpec {
                     _ => {}
                 }
                 if follows.is_some() && alpha.iter().all(|a| *a == 0.0) {
-                    notes.push(format!(
+                    log.notes.push(format!(
                         "{name}: follows a block, and nothing it is made of has an expansion \
                          coefficient — the temperature will move it by exactly nothing"
                     ));
@@ -2298,7 +2298,10 @@ impl DomainSpec {
                         // does not fail, it disappears, and the run is perfectly well behaved
                         // about a different object.
                         let loss = voxels.loss();
-                        notes.push(format!(
+                        // The note and the record are the same measurement rendered twice: one
+                        // for a person reading `--check`, one for `verify` to judge. Pushed from
+                        // the same values so the sentence and the finding cannot disagree.
+                        log.notes.push(format!(
                             "{site}: {} filled {} cells at {cell_mm} mm — volume {:+.2}%, {:.0}% of it \
                              in boundary cells, {} thin run(s), {} triangle(s) under a cell{}",
                             part.stl,
@@ -2313,6 +2316,13 @@ impl DomainSpec {
                                 String::new()
                             }
                         ));
+                        log.rasterised.push(Rasterised {
+                            site: site.clone(),
+                            stl: part.stl.clone(),
+                            cell_mm: *cell_mm,
+                            filled: voxels.filled(),
+                            loss,
+                        });
                         block.fill(substance, |i, j, k| voxels.contains(i, j, k));
                         for k in 0..counts.2 {
                             for j in 0..counts.1 {
@@ -2463,7 +2473,7 @@ impl DomainSpec {
                     if f >= 0.95 {
                         continue;
                     }
-                    notes.push(format!(
+                    log.notes.push(format!(
                         "{name}: a clearance of {:.1} mm across {:.1} x {:.1} mm carries the infinite-plate \
                          exchange, exact for the mirrored sides this block has. Open to space the \
                          same pair would see {:.3} of each other, so that reading is worth {:.1}x here{}",
@@ -2534,6 +2544,42 @@ pub struct PartSpec {
     pub stl: String,
     /// What the part is made of: a catalogue name or one of [`Scene::materials`].
     pub material: String,
+}
+
+/// One designed part after it met the grid: the measurement, not the sentence about it.
+///
+/// `--check` has printed a [`pantometry::shape::Loss`] per part since parts existed, and a
+/// printed number is a number somebody has to read. This is the same measurement in a shape a
+/// program can judge, which is what [`crate::verify`] turns into a finding — the difference
+/// between reporting rasterisation loss and *failing* on it.
+#[derive(Clone, Debug)]
+pub struct Rasterised {
+    /// Where in the scene this part was stated: `"block/parts[0]"`.
+    pub site: String,
+    /// The STL the part was read from, as the scene spelled it.
+    pub stl: String,
+    /// The cell it was rasterised onto, in millimetres — the number a caller would change.
+    pub cell_mm: f64,
+    /// Cells the part filled. **Zero is the failure with no symptom**: the part is not coarse,
+    /// it is absent, and only [`World::build`]'s all-parts-empty refusal catches the case where
+    /// *every* part vanished. One of several is silent.
+    pub filled: usize,
+    /// What the grid could not hold, as [`pantometry::shape::Voxels::loss`] measured it.
+    pub loss: pantometry::shape::Loss,
+}
+
+/// What building a scene recorded on the way, for the two readers a build has.
+///
+/// [`BuildLog::notes`] is prose for a person; [`BuildLog::rasterised`] is measurement for a
+/// check. Both come out of the same construction rather than one being re-derived from the
+/// other, because a second rasterisation to verify the first would be a second implementation
+/// of the thing under test.
+#[derive(Debug, Default)]
+pub struct BuildLog {
+    /// Dismissals and reports, as `--check` prints them — see [`World::notes`].
+    pub notes: Vec<String>,
+    /// One entry per designed part, in the order the scene states them.
+    pub rasterised: Vec<Rasterised>,
 }
 
 /// How a face of a structure is held.
@@ -2886,6 +2932,8 @@ pub struct World {
     pub(crate) sim: Simulation,
     /// What the build dismissed and why — see [`World::notes`].
     notes: Vec<String>,
+    /// What each designed part cost the grid — see [`World::rasterised`].
+    rasterised: Vec<Rasterised>,
     /// Linear expansion per kelvin, per element, for each structure that follows a block.
     ///
     /// Kept here rather than in the elastic domain because a domain carrying a thermal coefficient
@@ -3048,10 +3096,10 @@ impl World {
             pose.to_pose(name)?;
         }
         let mut palette = Palette::with_composites(&scene.materials, &scene.composites)?;
-        let mut notes = Vec::new();
+        let mut log = BuildLog::default();
         let mut expansion: BTreeMap<String, Vec<f64>> = BTreeMap::new();
         for spec in &scene.domains {
-            let built = spec.build(&mut palette, scene.environment.as_ref(), files, &mut notes)?;
+            let built = spec.build(&mut palette, scene.environment.as_ref(), files, &mut log)?;
             // **Where the scene said, or an error naming why not.** The library has no device and
             // cannot acquire one — its workspace is thirteen licence-gated crates that compile to
             // wasm32 and Rust 1.78 — so `Gpu` is only runnable through
@@ -3075,7 +3123,7 @@ impl World {
             // silence it exists to replace.
             if let (DomainSpec::Atoms { name, .. }, Some(env)) = (spec, &scene.environment) {
                 if env.gravity_m_per_s2 != 0.0 {
-                    notes.push(format!(
+                    log.notes.push(format!(
                         "{name}: the stated gravity is dismissed at this scale — the \
                          gravitational energy across one molecular diameter, m·g·σ, is about \
                          1.3e-13 of the Lennard-Jones well depth for argon, and the fluid's \
@@ -3212,7 +3260,8 @@ impl World {
         let mut world = World {
             scene,
             sim,
-            notes,
+            notes: log.notes,
+            rasterised: log.rasterised,
             expansion,
         };
         // **Once before anything runs**, so the first captured frame already carries the strain the
@@ -3270,6 +3319,17 @@ impl World {
     /// disappears, and the run is perfectly well behaved about a different object.
     pub fn notes(&self) -> &[String] {
         &self.notes
+    }
+
+    /// What every designed part cost the grid it was rasterised onto, in scene order.
+    ///
+    /// Empty for a scene with no `parts`, which is most of them. The prose half of this is in
+    /// [`World::notes`]; this is the half [`crate::verify`] can judge, and the reason it exists
+    /// is that the build refuses only the case where **every** part vanished — one part of
+    /// several coming out at zero cells builds, runs, conserves and answers about an assembly
+    /// with a piece missing.
+    pub fn rasterised(&self) -> &[Rasterised] {
+        &self.rasterised
     }
 
     /// The simulation underneath, for a caller that wants the kernel's own accessors —

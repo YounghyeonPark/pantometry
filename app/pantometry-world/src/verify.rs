@@ -20,6 +20,11 @@
 //!   because a ledger has no representation for *when*.
 //! - **Resolution sensitivity.** The scene rerun with every discretised domain refined 2×.
 //!   What moves is discretisation error, measured rather than assumed.
+//! - **Rasterisation loss.** What each designed part cost the grid it was rasterised onto, and
+//!   a finding for the ones the grid could not hold. This is the only entry that needs no
+//!   second run, and the only one whose subject has no symptom at all: a rib finer than the
+//!   cell does not fail, it disappears. `--check` has printed the measurement since parts
+//!   existed; a printed number is one somebody has to read, and this is the pass that reads it.
 //!
 //! `--deep` adds a third run to each sweep (window quartered, resolution 4×) and measures the
 //! **order**: `p = log2(d1/d2)` where `d1` and `d2` are successive differences of the same
@@ -57,7 +62,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{DissipationSpec, DomainSpec, OnDisk, Parts, Scene, World};
+use crate::{DissipationSpec, DomainSpec, OnDisk, Parts, Rasterised, Scene, World};
 use pantometry::core::Reading;
 use pantometry::prelude::*;
 
@@ -455,11 +460,115 @@ pub struct Battery {
     /// sweep section listing every *other* domain looks complete, and an absence a reader can
     /// see beats one they cannot. The same lesson `main.rs` learned about undrawable domains.
     pub unread: Vec<String>,
+    /// What each designed part cost the grid it was rasterised onto — empty for a scene with no
+    /// `parts`, which is most of them.
+    ///
+    /// Printed whole rather than only when something went wrong, because a section that appears
+    /// only on failure cannot be told apart from a check that did not run.
+    pub rasterised: Vec<Rasterised>,
     /// Structural defects found. Any entry here is an exit-code failure: a run that is not
     /// deterministic, a staggered schedule past a stability limit, a sweep whose run the audit
-    /// refused, a reading that vanished under a sweep, or arithmetic that stopped being
-    /// arithmetic.
+    /// refused, a reading that vanished under a sweep, arithmetic that stopped being
+    /// arithmetic, or a designed part the grid could not hold.
     pub findings: Vec<String>,
+}
+
+/// What one **built, unrun** world already says, before any of it is stepped.
+///
+/// Two questions, one construction. Building twice to ask them separately would be a second
+/// build that can differ from the first — and the second question here is precisely about what
+/// the build did to the geometry.
+struct BeforeTheRun {
+    /// Stability limits a non-subcycling schedule would overrun.
+    hazards: Vec<String>,
+    /// What every designed part cost the grid, kept whole rather than reduced to findings: the
+    /// rows a reader checks a finding against, and — on a scene where nothing was lost — the
+    /// evidence that this pass ran at all.
+    rasterised: Vec<Rasterised>,
+}
+
+/// Build the scene once and ask both.
+fn before_the_run(scene: &Scene, files: &dyn Parts) -> Result<BeforeTheRun, String> {
+    let world = World::build_with(scene.clone(), files)?;
+    Ok(BeforeTheRun {
+        hazards: stability_hazard(&world, scene),
+        rasterised: world.rasterised().to_vec(),
+    })
+}
+
+/// Designed parts whose rasterisation lost something the grid cannot give back.
+///
+/// **This is the one check here whose subject never fails on its own.** A stability hazard ends
+/// in a crash, a non-deterministic run ends in two digests, a poisoned ledger ends in a `NaN` —
+/// each has a symptom somewhere. A rib finer than the cell has none: it does not error, it does
+/// not `NaN`, it does not move the audit by a joule, because the joules it would have held are
+/// simply not in the problem. The run is well behaved about a different object, and
+/// `ARCHITECTURE.md` names that as the shape of error this workspace is organised around not
+/// having.
+///
+/// The verdict is [`pantometry::shape::Loss::is_clean`]'s, not a second opinion invented here —
+/// so the bar is stated in one place and the message quotes it rather than restating it. What is
+/// added is the case `is_clean` cannot see, because it is about a part rather than about a
+/// rasterisation: **zero cells filled**. [`World::build`] refuses only the assembly where *every*
+/// part vanished; one of several coming out absent builds, runs and conserves.
+fn rasterisation_loss(rasterised: &[Rasterised]) -> Vec<String> {
+    use pantometry::shape::Loss;
+
+    let mut out = Vec::new();
+    for r in rasterised {
+        if r.filled == 0 {
+            out.push(format!(
+                "{}: {} filled no cells at {} mm — the part is not coarse at this grid, it is \
+                 absent, and nothing downstream will say so: the run is well behaved about an \
+                 assembly with a piece missing",
+                r.site, r.stl, r.cell_mm
+            ));
+            continue;
+        }
+        if r.loss.is_clean() {
+            continue;
+        }
+        let mut why = Vec::new();
+        if r.loss.volume_error.abs() >= Loss::CLEAN_VOLUME_ERROR {
+            why.push(format!(
+                "volume {:+.2}% against the {:.0}% `Loss::is_clean` allows",
+                r.loss.volume_error * 100.0,
+                Loss::CLEAN_VOLUME_ERROR * 100.0
+            ));
+        }
+        if r.loss.thin_runs > 0 {
+            why.push(format!(
+                "{} solid run(s) one or two cells thick, which no scheme here resolves — a \
+                 seven-point stencil has no interior in one and a trilinear element has one \
+                 element",
+                r.loss.thin_runs
+            ));
+        }
+        if r.loss.ambiguous_rows > 0 {
+            why.push(format!(
+                "{} row(s) no ray could decide, left empty",
+                r.loss.ambiguous_rows
+            ));
+        }
+        if why.is_empty() {
+            // `is_clean` said unclean and none of its clauses explained why, which means it
+            // grew one this function does not know about. Printing the whole measurement is the
+            // one answer that cannot be wrong, and a finding with no reason is the failure shape
+            // this module exists to refuse.
+            why.push(format!(
+                "`Loss::is_clean` is false for a reason this report does not enumerate: {:?}",
+                r.loss
+            ));
+        }
+        out.push(format!(
+            "{}: {} at {} mm — {}",
+            r.site,
+            r.stl,
+            r.cell_mm,
+            why.join("; ")
+        ));
+    }
+    out
 }
 
 /// The evolving domains whose stability limit a non-subcycling schedule would overrun.
@@ -468,11 +577,10 @@ pub struct Battery {
 /// base run from finishing at all: a staggered or one-way schedule takes the whole window in
 /// one step, and a window past a wave domain's CFL limit amplifies every mode it has. Waiting
 /// for the run to measure this would report the crash and not the cause.
-fn stability_hazard(scene: &Scene, files: &dyn Parts) -> Result<Vec<String>, String> {
+fn stability_hazard(world: &World, scene: &Scene) -> Vec<String> {
     if matches!(scene.schedule, crate::ScheduleSpec::Multirate) {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let world = World::build_with(scene.clone(), files)?;
     let window_s = scene.duration_s / scene.frames as f64;
     let mut hazards = Vec::new();
     for d in world.sim.domains() {
@@ -490,7 +598,7 @@ fn stability_hazard(scene: &Scene, files: &dyn Parts) -> Result<Vec<String>, Str
             ));
         }
     }
-    Ok(hazards)
+    hazards
 }
 
 /// Run the battery.
@@ -509,17 +617,30 @@ pub fn verify(scene: &Scene, deep: bool) -> Result<Battery, String> {
 /// a viewer rather than an IDE — the refinement runs need the same bytes the base run had, and
 /// there is nowhere in a page to put them.
 pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Battery, String> {
-    let mut findings = stability_hazard(scene, files)?;
+    let before = before_the_run(scene, files)?;
+    let mut findings = before.hazards;
 
     let base = match run_measured(scene, files) {
         Ok(b) => b,
-        // A base run the audit refused still gets the hazard reported, because the hazard is
-        // usually *why*: an over-limit staggered window amplifies until the books cannot close.
-        Err(e) if !findings.is_empty() => {
-            return Err(format!("{e}\n  likely why: {}", findings.join("; ")))
+        Err(e) => {
+            let mut context = String::new();
+            // A base run the audit refused still gets the hazard reported, because the hazard is
+            // usually *why*: an over-limit staggered window amplifies until the books cannot
+            // close.
+            if !findings.is_empty() {
+                context.push_str(&format!("\n  likely why: {}", findings.join("; ")));
+            }
+            // Rasterisation loss is never *why* — a part that vanished takes its joules with it
+            // and the books close over what is left. It is carried anyway, because a defect only
+            // this pass can see must not be swallowed by an unrelated failure of the run.
+            let lost = rasterisation_loss(&before.rasterised);
+            if !lost.is_empty() {
+                context.push_str(&format!("\n  also: {}", lost.join("; ")));
+            }
+            return Err(format!("{e}{context}"));
         }
-        Err(e) => return Err(e),
     };
+    findings.extend(rasterisation_loss(&before.rasterised));
     let again = run_measured(scene, files)?;
     let deterministic = base.digest == again.digest;
 
@@ -592,6 +713,7 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
         window,
         resolution,
         unread,
+        rasterised: before.rasterised,
         findings,
     })
 }
@@ -1153,6 +1275,31 @@ impl Battery {
             &self.resolution,
             false,
         );
+
+        // Only for a scene that states `parts`. A heading over an empty list would be this
+        // report claiming to have checked geometry a scene does not have; a scene that *does*
+        // have it gets every row, clean or not, so "no finding" is visibly a measurement rather
+        // than a section that never ran.
+        if !self.rasterised.is_empty() {
+            let _ = writeln!(
+                out,
+                "\nrasterisation (what the grid could not hold; zero cells is absent, not coarse)"
+            );
+            for r in &self.rasterised {
+                let _ = writeln!(
+                    out,
+                    "  {:<18} {:<14} at {} mm: {} cells, volume {:+.2}%, {:.0}% boundary, {} thin, {} undecided",
+                    r.site,
+                    r.stl,
+                    r.cell_mm,
+                    r.filled,
+                    r.loss.volume_error * 100.0,
+                    r.loss.boundary_fraction * 100.0,
+                    r.loss.thin_runs,
+                    r.loss.ambiguous_rows,
+                );
+            }
+        }
 
         if self.findings.is_empty() {
             let _ = writeln!(out, "\nno structural findings");

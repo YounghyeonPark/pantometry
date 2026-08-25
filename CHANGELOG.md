@@ -22,6 +22,29 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Changed
 
+- **`verify` reads the rasterisation report instead of printing it.** `ARCHITECTURE.md` listed
+  rasterisation loss among the four errors a passing audit cannot see and said "nothing yet turns
+  the measurement into a verdict a person reads". `--check` had printed a `Loss` per designed part
+  since parts existed, and a printed number is one somebody has to notice.
+
+  The battery now carries every part's measurement as a row and turns the ones the grid could not
+  hold into findings, which are an exit code. The verdict is `Loss::is_clean`'s — the 2% bar moved
+  out of the comparison into `Loss::CLEAN_VOLUME_ERROR` so the finding can quote the number that
+  was actually applied rather than a second copy of it.
+
+  **The case that had nothing watching it is a part filling zero cells.** `World::build` refuses an
+  assembly where *every* part vanished; one of two coming out absent built, ran, conserved, drew
+  and reported — a correct answer about an assembly with a piece missing. Measured on a 20 mm block
+  at a 2 mm cell: a 12 mm brick takes 150 cells and exactly its own volume, and a 0.4 mm plate
+  beside it takes none, because the nearest cell centres are at 13 and 15 mm. That scene is now one
+  finding rather than a clean pass.
+
+  The rows print whether or not anything was lost, for the reason this repository keeps
+  rediscovering: a section that appears only on failure cannot be told apart from a check that did
+  not run. Scenes with no `parts` — which is all twenty-eight of the shipped ones — print no
+  section, because a heading over an empty list is a claim to have checked geometry the scene does
+  not have.
+
 - **The HTML report shows numbers, not only pictures.** Every view had a colour bar and a cell
   count, which is enough to see *that* something happened and not enough to say *what*. Four
   separate gaps, all now closed:
