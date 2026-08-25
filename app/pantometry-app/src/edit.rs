@@ -1053,6 +1053,64 @@ impl App {
             self.frame_selection();
         }
         ui.separator();
+
+        // What the scene *states* about this row, and can be changed. Above the read-only detail
+        // because it is the half a person came here to act on, and separated from it because the
+        // difference between "this is what you asked for" and "this is what came out" is the
+        // difference between an input and a result — an inspector that mixed them would invite
+        // dragging a peak temperature.
+        let fields = editor_core::editable(&self.text, &path);
+        let mut change: Option<(String, f64)> = None;
+        if !fields.is_empty() {
+            ui.label(egui::RichText::new("scene").weak().size(11.0));
+            egui::Grid::new("scene values")
+                .num_columns(2)
+                .striped(true)
+                .spacing([10.0, 3.0])
+                .show(ui, |ui| {
+                    for field in &fields {
+                        let label = if field.unit.is_empty() {
+                            field.label.clone()
+                        } else {
+                            format!("{} ({})", field.label, field.unit)
+                        };
+                        ui.label(egui::RichText::new(label).weak().monospace().size(11.0));
+                        let mut value = field.value;
+                        // A rate, not a range. Nothing here clamps: the scene's own check is the
+                        // authority on what is legal and it runs on every change already, so a
+                        // limit invented in the shell would be a second opinion that can only be
+                        // wrong — and wrong in the direction of refusing a value the format takes.
+                        let drag = if field.integral {
+                            egui::DragValue::new(&mut value)
+                                .speed(1.0)
+                                .fixed_decimals(0)
+                        } else {
+                            egui::DragValue::new(&mut value)
+                                .speed(field.value.abs().max(1.0) * 0.01)
+                        };
+                        if ui.add(drag).changed() {
+                            change = Some((field.pointer.clone(), value));
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.separator();
+        }
+        if let Some((pointer, value)) = change {
+            match editor_core::set_number(&self.text, &pointer, value) {
+                Ok(text) => {
+                    self.text = text;
+                    self.dirty = true;
+                    self.recheck();
+                }
+                // A refused change says why and leaves the file alone. The reachable case is a
+                // fraction dragged onto a count, which the widget's own step of one already makes
+                // hard — but "hard to reach" is not "cannot happen", and a splice that half
+                // applied would be the worst outcome available here.
+                Err(why) => self.status = why,
+            }
+        }
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {

@@ -14,7 +14,17 @@ of the data and never by a domain's name.
 
 The left pane is the scene's JSON, checked **as you type** with the same two steps
 `pantometry-world --check` runs — parse, then build — with parse errors carried as `line:column`,
-which is what that error format was designed for. The viewport draws every placed extent as a
+which is what that error format was designed for.
+
+The right pane is the inspector, and it **writes**. Selecting a row that names a domain — its
+extent before a run, its field or its readings after one — lists every number the scene states
+about it, each one draggable, and a change goes back into the text and re-checks on the same
+frame. It is a byte splice rather than a re-serialise, so the file keeps its own formatting and
+key order; `editor_core::set_number` is where that lives and where the tests for it are. Nothing
+in it enumerates domain kinds — every number in the domain's object is offered, whatever the
+object is — so a domain written out of tree is as editable as a shipped one. The read-only rows
+below say what came *out*, and the two are kept apart on purpose: a peak temperature is not a
+thing to drag. The viewport draws every placed extent as a
 wireframe, live from the text before anything runs. **Run** streams the run in as it computes
 — each frame appears when it is captured, the slider grows, **stop** ends a long run between
 frames — and **Verify** runs the battery from `pantometry-world verify` and shows the report the

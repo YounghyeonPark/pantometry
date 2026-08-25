@@ -12,6 +12,9 @@
 //!   [`pantometry::core::Pose::point_to_world`]
 //!   even though no scene can state a pose yet, so the day the format grows one this crate
 //!   does not need to learn about it.
+//! - **Editing** — the inspector's half of the loop: which numbers a selected row lets a person
+//!   change, and a splice that changes one of them in the text without touching any other byte.
+//!   See [`edit`] for why it is a splice and not a `Value` round trip.
 //! - **Running and verifying** — thin passes over [`World::run`] and
 //!   [`pantometry_world::verify::verify`], returning the run's JSON (which `viewer-core` reads)
 //!   and the battery's rendered report.
@@ -28,6 +31,10 @@
 //! open to domains that do not exist yet.
 
 #![deny(missing_docs)]
+
+pub mod edit;
+
+pub use edit::{editable, set_number, Editable};
 
 use pantometry::units::LengthVec;
 use pantometry_world::{Parts, Scene, World};

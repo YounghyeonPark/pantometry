@@ -22,6 +22,35 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Changed
 
+- **The editor's inspector writes.** Counted rather than assumed: across 2101 lines of editor
+  shell there were exactly **two** widgets that could change anything — the file path, and one
+  multiline text box holding the whole scene as raw JSON. The inspector showed values and could
+  not alter one, so every edit was a JSON edit.
+
+  Selecting a row that names a domain now lists every number the scene states about it, each
+  draggable, and a change goes into the text and re-checks on the same frame. Three rows resolve
+  to the same domain — its extent before a run, its field and its readings after one — because
+  after a run the reader is looking at the last two.
+
+  **It is a byte splice, not a re-serialise, and the reason is measured.** `serde_json` without
+  `preserve_order`, which this workspace does not enable, backs an object with a `BTreeMap`: a
+  `Value` round trip alphabetises every key. The shipped scenes are hand-formatted with `kind` and
+  `name` first, so one drag would have reordered and reflowed the whole file. `set_number` replaces
+  the bytes of the one value and copies the rest verbatim, and the test asserts that literally
+  rather than by comparing parsed values — a round trip that produced an equivalent scene would
+  pass a value comparison having destroyed the formatting.
+
+  A literal's kind is read off the file, not from a list of key names: `frames` is a `usize` and
+  `11.0` is a scene that stops parsing, so a value written without `.`, `e` or `E` stays whole and
+  a fraction dragged onto one is refused; a value written with them keeps its decimal point even
+  when it lands on an integer.
+
+  Nothing enumerates domain kinds — every number in the domain's object is offered, whatever the
+  object is, which is ARCHITECTURE.md's rule for the inspection half. Nothing clamps either: the
+  scene's own check is the authority on what is legal and it runs on every change, measured at
+  **0.0–0.4 ms** across the shipped scenes, so a limit invented in the shell could only be a second
+  opinion that refuses a value the format takes.
+
 - **`verify` reads the rasterisation report instead of printing it.** `ARCHITECTURE.md` listed
   rasterisation loss among the four errors a passing audit cannot see and said "nothing yet turns
   the measurement into a verdict a person reads". `--check` had printed a `Loss` per designed part
