@@ -48,6 +48,9 @@ set -euo pipefail
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
+# CI runs this as `test (release, LTO)` and CONTRIBUTING.md has always listed it. This block did
+# not, for long enough that a gate built from it ran debug only and said "the gate passed".
+cargo test --locked --workspace --release
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check
 for e in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots \

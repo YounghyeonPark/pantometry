@@ -64,7 +64,7 @@ fn read(path: &str) -> Result<String, String> {
         if e.kind() == std::io::ErrorKind::NotFound {
             format!(
                 "{path}: {e}\n  write one to start from with `--emit-default {path}`, or run a \
-                 shipped scene from crates/pantometry-world/scenes/"
+                 shipped scene from app/pantometry-world/scenes/"
             )
         } else {
             format!("{path}: {e}")

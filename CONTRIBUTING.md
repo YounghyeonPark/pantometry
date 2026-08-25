@@ -23,6 +23,11 @@ for e in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots  
   cargo run --locked --release --example "$e"
 done
 
+# MSRV. CI has a `build (Rust 1.78)` job and this block did not have the step, while CLAUDE.md's
+# copy of the same gate did — the two documents described two different gates, in both
+# directions, and each was missing what the other had.
+cargo +1.78 build --locked --workspace
+
 echo "the gate passed"     # and if this line does not appear, it did not
 ```
 

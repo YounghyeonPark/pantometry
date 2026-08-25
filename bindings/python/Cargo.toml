@@ -17,9 +17,14 @@ publish = false
 # same lockfile and the same allow-list, and would make `cargo build --workspace` require a
 # Python development environment to compile a physics library.
 #
-# So: separate workspace, separate `Cargo.lock`, separate CI job. This is the escalation the
-# repository wrote down for itself in `crates/pantometry-world/Cargo.toml`'s sibling note — "move
-# to a nested workspace when a heavy dependency arrives" — and pyo3 is that dependency.
+# So: separate workspace, separate `Cargo.lock`, separate CI job. That is the rule the repository
+# follows whenever a heavy dependency arrives, and pyo3 was the first to trigger it; `app/` is the
+# second, for a GPU stack and a window toolkit, and `ARCHITECTURE.md` carries the measured
+# dependency counts that make the argument.
+#
+# This used to cite a note in `crates/pantometry-world/Cargo.toml`. That crate is `app/` now and
+# the note did not survive the move, so the citation pointed at a file with nothing in it to
+# point at — the rule is stated here instead of borrowed from somewhere that no longer says it.
 [workspace]
 
 [lib]

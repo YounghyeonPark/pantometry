@@ -52,8 +52,44 @@ fn a_missing_scene_is_named_and_answered() {
         "the error does not name the file: {text}"
     );
     assert!(
-        text.contains("--emit-default") && text.contains("scenes/"),
-        "the error does not say how to get a scene: {text}"
+        text.contains("--emit-default"),
+        "the error does not say how to write a scene: {text}"
+    );
+
+    // **The directory it points at has to exist.** This used to be `text.contains("scenes/")`,
+    // which is satisfied by any string ending in those seven characters — so when the
+    // consolidation moved the crate out of `crates/` and into `app/`, the message went on
+    // telling people to look in `crates/pantometry-world/scenes/` and the test went on passing.
+    // A person following it finds nothing and has no way to tell whether the scenes were
+    // deleted or the sentence was.
+    //
+    // Resolving the path closes the class rather than the instance: the next move breaks the
+    // test instead of the advice.
+    let named = text
+        .split_whitespace()
+        .find(|word| word.trim_end_matches('.').ends_with("scenes/"))
+        .unwrap_or_else(|| panic!("the error does not point at a scene directory: {text}"))
+        .trim_end_matches('.');
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("this crate sits two levels under the repository root");
+    let pointed_at = root.join(named);
+    assert!(
+        pointed_at.is_dir(),
+        "the error points at {}, which does not exist (resolved to {})",
+        named,
+        pointed_at.display()
+    );
+    let scenes = std::fs::read_dir(&pointed_at)
+        .expect("the directory reads")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .count();
+    assert!(
+        scenes > 0,
+        "{} holds no scenes, so the advice is still wrong",
+        pointed_at.display()
     );
 }
 

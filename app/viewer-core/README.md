@@ -41,7 +41,7 @@ so, not open a window with something missing.
 `deny_unknown_fields` is deliberate here — a reader that silently drops what it does not recognise
 is how a renamed field once went unnoticed in this workspace — and the price came due the day
 `pantometry-view` started writing `extent_m` on a field. Every run the library produced stopped
-parsing, with the message naming the key, and the library's own twenty-step gate could not see it:
+parsing, with the message naming the key, and the library's own gate could not see it:
 this is a separate workspace with a separate job, and nothing in `crates/` reads the format back.
 
 `extent_m` is `Option` with a `serde` default, so a reader built today opens a file written before

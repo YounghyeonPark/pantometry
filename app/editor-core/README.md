@@ -30,7 +30,8 @@ are. Nothing in it enumerates domain kinds, so a domain written out of tree is a
 shipped one. The read-only rows below say what came *out*, and the two halves are kept apart on
 purpose: a peak temperature is not a thing to drag.
 
-The viewport draws every placed extent as a wireframe, live from the text before anything runs. **Run** streams the run in as it computes
+The viewport draws every placed extent as a wireframe, live from the text before anything runs.
+**Run** streams the run in as it computes
 — each frame appears when it is captured, the slider grows, **stop** ends a long run between
 frames — and **Verify** runs the battery from `pantometry-world verify` and shows the report the
 CLI prints, with the findings count in the window title. Drag to rotate, scroll to zoom.
@@ -141,7 +142,7 @@ scene's placed box is the fallback for a run written before the format carried i
 
 That key is also why the viewer's workspace needed a change on the same day: its reader is
 `deny_unknown_fields`, so the moment the library began writing `extent_m` it refused every run file
-the library produced — and the library's twenty-step gate could not see it, because these are
+the library produced — and the library's gate could not see it, because these are
 separate workspaces with separate CI jobs and nothing in `crates/` reads that format back. Adding a
 key to the wire format is a coordinated change across three workspaces, and the gate is not what
 tells you so.
