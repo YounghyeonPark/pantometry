@@ -93,14 +93,19 @@ alters that constant, that is the finding** — it is never the fix.
 cargo clippy --workspace --lib -- -W missing_docs 2>&1 | grep -c "^warning: missing"
 ```
 
-Must be `0`. All eighteen crates carry `#![deny(missing_docs)]` — the seventeen published ones
-and `pantometry-world` — so a regression is a build
-failure — but check that the attribute is still present and still positioned before any item,
-since an inner attribute after the first item is a compile error and it is easy to reintroduce
-while editing the top of a file.
+Must be `0`. All **twenty-two** crates carry `#![deny(missing_docs)]` — the seventeen in `crates/`
+and the five libraries in `app/` — so a regression is a build failure. But check that the attribute
+is still present and still positioned before any item, since an inner attribute after the first item
+is a compile error and it is easy to reintroduce while editing the top of a file.
+
+**Both workspaces**, which is the part that went wrong: this said "eighteen crates" and named
+`pantometry-world` as the eighteenth, and the count was never re-measured when four crates moved to
+`app/`. `editor-wasm` had never carried the attribute at all — its items were all documented, so
+nothing failed and nothing said so.
 
 ```sh
-grep -c "deny(missing_docs)" crates/*/src/lib.rs   # twelve ones
+grep -l "deny(missing_docs)" crates/*/src/lib.rs app/*/src/lib.rs | wc -l   # 22
+ls -d crates/*/src/lib.rs app/*/src/lib.rs | wc -l                          # 22, and they must match
 ```
 
 ## 5. The promises CI makes

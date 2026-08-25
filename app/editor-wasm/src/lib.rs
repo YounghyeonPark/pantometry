@@ -29,6 +29,11 @@
 //! calls [`pantometry_free`] with the pointer and `4 + length`. Every return is JSON, errors
 //! included, so a caller has one shape to parse rather than two.
 
+// **The one crate in the tree without this, until it was counted.** Four documents said the rule
+// held in "all eighteen crates"; measured, it held in seventeen of `crates/` and four of the five
+// libraries in `app/`. A count that is checked is worth more than a count that is round.
+#![deny(missing_docs)]
+
 /// What the page keeps between calls, held here so a megabyte of frames does not cross the
 /// boundary once per repaint.
 struct State {

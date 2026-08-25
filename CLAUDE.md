@@ -103,7 +103,9 @@ Stated in full in CONTRIBUTING.md. The compressed version:
    counts, and there is a pinned digest that says so.
 4. **The kernel must never depend on a domain**, and no domain may depend on another. That
    claim is the reason for the crate split and has now been held through eleven domains.
-5. **Every public item is documented.** `#![deny(missing_docs)]` in all eighteen crates.
+5. **Every public item is documented.** `#![deny(missing_docs)]` in all **twenty-two** crates: the
+   seventeen in `crates/` and the five libraries in `app/`. It said eighteen through the
+   consolidation and one crate had never had the rule at all.
 
 ## Commit messages
 
