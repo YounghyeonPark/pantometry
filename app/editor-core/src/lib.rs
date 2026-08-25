@@ -34,7 +34,7 @@
 
 pub mod edit;
 
-pub use edit::{editable, set_number, Editable};
+pub use edit::{editable, set_number, set_text, Editable, Value};
 
 use pantometry::units::LengthVec;
 use pantometry_world::{Parts, Scene, World};

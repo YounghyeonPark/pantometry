@@ -1,9 +1,28 @@
-//! Changing one number in the scene, without touching any other byte of it.
+//! Changing one value in the scene, without touching any other byte of it.
 //!
 //! The editor's inspector could show a value and not change it, so the only editable widget in
 //! the whole shell was a text box holding the raw JSON. This is the machinery that fixes that,
 //! and it lives here rather than in the shell for the reason everything else does: a splice that
 //! silently corrupts a file is a thing to have a test for, not an event handler.
+//!
+//! # What it covers, counted rather than assumed
+//!
+//! A census of every value in the twenty-eight shipped scenes: **358 numbers, 237 strings, 59
+//! arrays of numbers, 46 arrays of objects, 44 nested objects, one array of arrays — and no
+//! booleans at all.** Three things follow, and none of them was obvious before the count.
+//!
+//! Strings are not a minority case; they are two fifths of the file, and an inspector without
+//! them is an inspector that cannot change a material. Nesting is not exotic either: a
+//! `hot_spot`'s `above_k` and a `region`'s `material` are exactly the numbers a person reaches
+//! for, and a one-level walk — which is what this module did first — shows a domain while hiding
+//! half of what the domain says. So the walk is a full one.
+//!
+//! And [`Value`] has no flag variant, because there is nothing for it to point at.
+//! It goes in the day the format grows a boolean.
+//!
+//! The walk is uncapped, which is also measured: the widest domain in any shipped scene yields
+//! **55** fields and the median is **8**. A cap would have to drop rows, and a panel that
+//! silently omits part of the scene it claims to describe is this workspace's oldest failure.
 //!
 //! # Why a byte splice and not a round trip
 //!
@@ -31,10 +50,11 @@
 
 use std::ops::Range;
 
-/// One number in the scene text that the inspector can change.
+/// One value in the scene text that the inspector can change.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Editable {
-    /// The key, as the scene spells it: `cell_mm`, or `cells[0]` for an element of an array.
+    /// The key as the scene spells it, with the route to it when it is not at the top level:
+    /// `cell_mm`, `cells[0]`, `hot_spot.above_k`, `regions[1].material`.
     pub label: String,
     /// Where it is, as an RFC 6901 JSON pointer: `/domains/2/cell_mm`.
     ///
@@ -42,15 +62,42 @@ pub struct Editable {
     /// the file is keyed by position — and the two disagree the moment a domain has no extent,
     /// since [`crate::check`] skips those when it builds its boxes.
     pub pointer: String,
-    /// What it is now.
-    pub value: f64,
-    /// Whether the literal in the file is a whole number, so a shell knows to step by one and
-    /// not to offer a fractional drag. See this module's note on why it is read and not guessed.
-    pub integral: bool,
+    /// What it is now, and what kind of widget it wants.
+    pub value: Value,
     /// The unit the key names, or empty when the key does not name one. **Empty rather than
     /// guessed**: a unit invented for a key this table has not met is a wrong label on a number,
     /// which is worse than no label on a number.
     pub unit: &'static str,
+}
+
+/// What kind of value an [`Editable`] is, and what it would take to change it.
+///
+/// Two variants and not three: a census of all twenty-eight shipped scenes counts **358 numbers,
+/// 237 strings and no booleans at all**, so a flag variant would be a widget with nothing to
+/// point at. It goes in the day the format grows one.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    /// A number, and whether the file writes it as a whole one — see this module's note on why
+    /// that is read off the literal rather than decided from the key.
+    Number {
+        /// What it is now.
+        now: f64,
+        /// Whether the literal has no `.`, `e` or `E`, so a shell steps it by one and this
+        /// module refuses a fraction for it.
+        integral: bool,
+    },
+    /// A string.
+    Text {
+        /// What it is now.
+        now: String,
+        /// The values this key is known to accept, or empty when it is free text.
+        ///
+        /// Non-empty for exactly one key today, `material`, and the list is **the catalogue plus
+        /// whatever the scene declared** rather than the catalogue alone — a menu that omitted a
+        /// scene's own `materials` and `composites` would be a menu that cannot express the file
+        /// it is editing.
+        choices: Vec<String>,
+    },
 }
 
 /// The unit a key names, by the suffix convention the scene format already uses.
@@ -85,16 +132,18 @@ fn unit_of(key: &str) -> &'static str {
     ""
 }
 
-/// Every number the inspector can change for the selected outliner row.
+/// Every value the inspector can change for the selected outliner row.
 ///
-/// `path` is a [`crate::Node::path`]: `/` for the scene itself, `/extents/<name>` for a domain.
-/// Anything else — a run's field, a reading — yields nothing, because those are output and the
-/// only honest way to change one is to change the scene that produced it.
+/// `path` is a [`crate::Node::path`]: `/` for the scene itself, `/extents/<name>` for a domain —
+/// and `/run/<name>` or `/readings/<name>`, which are the same domain seen after a run. Anything
+/// else yields nothing, because a reading is output and the only honest way to change one is to
+/// change the scene that produced it.
 ///
-/// **Nothing here enumerates domain kinds.** Every number at the top level of a domain object is
-/// offered, whatever the object is, which is ARCHITECTURE.md's rule for the inspection half: a
-/// panel written per domain shows an out-of-tree domain nothing at all. The cost is that a key
-/// this crate has never heard of is draggable, which is the right failure — the scene's own
+/// **Nothing here enumerates domain kinds.** Every value in a domain's object is offered, at
+/// whatever depth, whatever the object is — which is ARCHITECTURE.md's rule for the inspection
+/// half: a panel written per domain shows an out-of-tree domain nothing at all. The two keys held
+/// back, `kind` and `name`, are about the format rather than about any domain. The cost is that a
+/// key this crate has never heard of is editable, which is the right failure — the scene's own
 /// check is the authority on whether the result is legal, and it runs on every keystroke already.
 ///
 /// Empty when the text does not parse. A file that is not JSON has no values to point at, and
@@ -104,10 +153,28 @@ pub fn editable(text: &str, path: &str) -> Vec<Editable> {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
+    let choices = Choices::of(&root);
     let mut out = Vec::new();
 
     if path == "/" {
-        collect(&root, "", &mut out);
+        // Everything the scene says about itself, and **not** `domains` — every domain has rows
+        // of its own, and folding them in here would put the whole file under one selection.
+        // `materials` and `composites` are collected, because a declared substance is a thing the
+        // scene states and nothing else in the outliner speaks for it.
+        if let Some(object) = root.as_object() {
+            for (key, member) in object {
+                if key == "domains" || STRUCTURAL.contains(&key.as_str()) {
+                    continue;
+                }
+                collect(
+                    member,
+                    &format!("/{}", escape(key)),
+                    key,
+                    &choices,
+                    &mut out,
+                );
+            }
+        }
         return out;
     }
 
@@ -125,7 +192,13 @@ pub fn editable(text: &str, path: &str) -> Vec<Editable> {
     else {
         return out;
     };
-    collect(&domains[i], &format!("/domains/{i}"), &mut out);
+    collect(
+        &domains[i],
+        &format!("/domains/{i}"),
+        "",
+        &choices,
+        &mut out,
+    );
     out
 }
 
@@ -146,38 +219,138 @@ fn domain_of(path: &str) -> Option<&str> {
     (!rest.is_empty() && !rest.contains('/')).then_some(rest)
 }
 
-/// Every number directly inside `value`, and inside any array of numbers directly inside it.
+/// Keys that are **structure** rather than value, and are not offered.
 ///
-/// One level of array, not a general walk: `cells` and a colour are lists of numbers a person
-/// edits, and a nested object is a different row of the outliner's job rather than this one's.
-fn collect(value: &serde_json::Value, prefix: &str, out: &mut Vec<Editable>) {
-    let Some(object) = value.as_object() else {
-        return;
+/// `kind`, because every other key in the object is only meaningful for the kind it is and the
+/// format is `deny_unknown_fields` — changing `"room"` to `"block"` makes the eight keys beside
+/// it unknown at once, so every edit of it would be an error. A widget whose every use fails is
+/// a trap rather than a feature.
+///
+/// `name`, for two reasons that are both about it being an **identifier and not a value**.
+/// Counted across the shipped scenes it appears 65 times and is referred to by five other keys —
+/// `tracks`, `follows`, `onto`, `from`, `to` — plus every key of `poses`, so a rename is a
+/// multi-site edit this cannot make atomically. And the outliner's own selection is keyed by the
+/// name, so typing a new one a character at a time would delete the row being typed into after
+/// the first keystroke: the field would vanish under the cursor.
+///
+/// Both stay jobs for the text box, which is where a change that rewrites more than one place
+/// belongs. Naming two keys of the format is not enumerating domains: nothing here knows what
+/// kinds exist, only that whatever they are, these two keys are how the file refers to them.
+const STRUCTURAL: [&str; 2] = ["kind", "name"];
+
+/// Every value inside `value` a person could change, however deeply it sits.
+///
+/// A full walk, not one level. Measured on the shipped scenes, the levels matter: a `hot_spot`'s
+/// `above_k` and a `region`'s `material` are nested, and there are **44 nested objects and 46
+/// arrays of objects** across the twenty-eight of them. A one-level inspector shows a domain and
+/// hides half of what the domain says.
+///
+/// No cap on how many come out, and that is measured rather than hoped: the widest domain in any
+/// shipped scene yields **55** fields and the median is **8**, which is a scroll area's business
+/// and not this function's. A cap would have to drop rows, and a panel that silently omits part
+/// of the scene it claims to describe is the failure shape this workspace keeps finding.
+fn collect(
+    value: &serde_json::Value,
+    pointer: &str,
+    label: &str,
+    choices: &Choices,
+    out: &mut Vec<Editable>,
+) {
+    let join = |key: &str| {
+        if label.is_empty() {
+            key.to_string()
+        } else {
+            format!("{label}.{key}")
+        }
     };
-    for (key, member) in object {
-        match member {
-            serde_json::Value::Number(n) => out.push(Editable {
-                label: key.clone(),
-                pointer: format!("{prefix}/{}", escape(key)),
-                value: n.as_f64().unwrap_or(f64::NAN),
-                integral: n.is_i64() || n.is_u64(),
-                unit: unit_of(key),
-            }),
-            serde_json::Value::Array(items)
-                if !items.is_empty() && items.iter().all(|i| i.is_number()) =>
-            {
-                for (j, item) in items.iter().enumerate() {
-                    let n = item.as_number().expect("checked above");
-                    out.push(Editable {
-                        label: format!("{key}[{j}]"),
-                        pointer: format!("{prefix}/{}/{j}", escape(key)),
-                        value: n.as_f64().unwrap_or(f64::NAN),
-                        integral: n.is_i64() || n.is_u64(),
-                        unit: unit_of(key),
-                    });
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, member) in object {
+                if STRUCTURAL.contains(&key.as_str()) {
+                    continue;
                 }
+                collect(
+                    member,
+                    &format!("{pointer}/{}", escape(key)),
+                    &join(key),
+                    choices,
+                    out,
+                );
             }
-            _ => {}
+        }
+        serde_json::Value::Array(items) => {
+            for (j, item) in items.iter().enumerate() {
+                collect(
+                    item,
+                    &format!("{pointer}/{j}"),
+                    &format!("{label}[{j}]"),
+                    choices,
+                    out,
+                );
+            }
+        }
+        serde_json::Value::Number(n) => out.push(Editable {
+            label: label.to_string(),
+            pointer: pointer.to_string(),
+            value: Value::Number {
+                now: n.as_f64().unwrap_or(f64::NAN),
+                integral: n.is_i64() || n.is_u64(),
+            },
+            unit: unit_of(last_key(label)),
+        }),
+        serde_json::Value::String(s) => out.push(Editable {
+            label: label.to_string(),
+            pointer: pointer.to_string(),
+            value: Value::Text {
+                now: s.clone(),
+                choices: choices.for_key(last_key(label)),
+            },
+            unit: "",
+        }),
+        // `true`, `false` and `null`. No shipped scene contains one; a widget for a shape the
+        // format does not use would be a widget nothing has ever exercised.
+        _ => {}
+    }
+}
+
+/// The key at the end of a dotted label, with any `[i]` stripped.
+///
+/// `hot_spot.above_k` is a `_k`, and `radii_m[2]` is an `_m`. Taking the unit from the whole
+/// label would find neither, and taking it from the outermost key would call a nested
+/// temperature by its parent's name.
+fn last_key(label: &str) -> &str {
+    let tail = label.rsplit('.').next().unwrap_or(label);
+    tail.split('[').next().unwrap_or(tail)
+}
+
+/// The values a string key is known to accept.
+///
+/// Built from the scene rather than from a constant, because a scene declares its own materials
+/// and composites and a menu that offered only the catalogue could not express the file it was
+/// editing. Empty for every key but `material`, which is the one place the format has a set and
+/// [`crate::MATERIALS`] is already re-exported for a shell's menus.
+struct Choices {
+    materials: Vec<String>,
+}
+
+impl Choices {
+    fn of(root: &serde_json::Value) -> Choices {
+        let mut materials: Vec<String> = crate::MATERIALS.iter().map(|m| m.to_string()).collect();
+        for declared in ["materials", "composites"] {
+            if let Some(object) = root.get(declared).and_then(|d| d.as_object()) {
+                materials.extend(object.keys().cloned());
+            }
+        }
+        materials.sort();
+        materials.dedup();
+        Choices { materials }
+    }
+
+    fn for_key(&self, key: &str) -> Vec<String> {
+        if key == "material" {
+            self.materials.clone()
+        } else {
+            Vec::new()
         }
     }
 }
@@ -239,11 +412,41 @@ pub fn set_number(text: &str, pointer: &str, value: f64) -> Result<String, Strin
         }
     };
 
+    Ok(splice(text, span, &rendered))
+}
+
+/// Replace the string at `pointer` with `value`, leaving every other byte of `text` alone.
+///
+/// The counterpart to [`set_number`], and the same promise. `value` is written through
+/// `serde_json`, so a name with a quote, a backslash or a newline in it comes out as valid JSON
+/// rather than as a file that stops parsing — which is the one way a text field can break a scene
+/// that a number field cannot.
+///
+/// Fails when the pointer names nothing or names something that is not a string. Refusing on the
+/// second is the useful half: a pointer aimed at a number would otherwise turn `2.0` into `"2.0"`,
+/// and the scene would fail to load with an error about a type rather than about an edit.
+pub fn set_text(text: &str, pointer: &str, value: &str) -> Result<String, String> {
+    let span = value_span(text, pointer)
+        .ok_or_else(|| format!("{pointer}: no such value in this scene"))?;
+    if !text[span.clone()].starts_with('"') {
+        return Err(format!(
+            "{pointer}: {} is not a string",
+            &text[span.clone()]
+        ));
+    }
+    let rendered = serde_json::to_string(value).map_err(|e| format!("{pointer}: {e}"))?;
+    Ok(splice(text, span, &rendered))
+}
+
+/// `text` with `span` replaced by `rendered`, and every other byte copied.
+///
+/// One place, so the two setters cannot differ about what "leaving the rest alone" means.
+fn splice(text: &str, span: Range<usize>, rendered: &str) -> String {
     let mut out = String::with_capacity(text.len() + rendered.len());
     out.push_str(&text[..span.start]);
-    out.push_str(&rendered);
+    out.push_str(rendered);
     out.push_str(&text[span.end..]);
-    Ok(out)
+    out
 }
 
 /// The byte range of the value at `pointer`, or `None` if the pointer names nothing.
@@ -375,8 +578,17 @@ fn span_of(b: &[u8], start: usize, segments: &[String]) -> Option<Range<usize>> 
 mod tests {
     use super::*;
 
+    fn labels(fields: &[Editable]) -> Vec<String> {
+        fields.iter().map(|e| e.label.clone()).collect()
+    }
+
     /// Hand-formatted the way the shipped scenes are: several keys to a line, `kind` and `name`
     /// first. Every test that asserts nothing else moved is asserting about *this* shape.
+    ///
+    /// It carries one of each shape the census of the twenty-eight shipped scenes found — a
+    /// nested object (`hot_spot`), an array of objects (`regions`), an array of numbers
+    /// (`cells`), strings and numbers — because a fixture that only holds the easy shapes is a
+    /// fixture that agrees with a one-level walk.
     const SCENE: &str = r#"{
   "title": "a block and a lamp",
   "duration_s": 0.006,
@@ -385,7 +597,11 @@ mod tests {
     { "kind": "lump", "name": "lamp", "volume_cm3": 12.0, "thickness_mm": 3.0,
       "initial_c": 80.0, "ambient_c": 20.0, "area_cm2": 30.0 },
     { "kind": "block", "name": "buffer", "cells": [11, 11, 11], "cell_mm": 2.0,
-      "initial_c": 20.0, "material": "aluminium" }
+      "initial_c": 20.0, "material": "aluminium",
+      "hot_spot": { "at": [5, 5, 5], "above_k": 60.0 },
+      "regions": [
+        { "material": "copper", "from": [0, 0, 0], "to": [2, 2, 2] }
+      ] }
   ]
 }"#;
 
@@ -477,8 +693,13 @@ mod tests {
             .find(|e| e.label == "cell_mm")
             .expect("the block's cell size is editable");
         assert_eq!(cell.pointer, "/domains/1/cell_mm");
-        assert_eq!(cell.value, 2.0);
-        assert!(!cell.integral);
+        assert_eq!(
+            cell.value,
+            Value::Number {
+                now: 2.0,
+                integral: false
+            }
+        );
         assert_eq!(cell.unit, "mm");
 
         // And the array came through element by element, in order.
@@ -488,23 +709,31 @@ mod tests {
             .collect();
         assert_eq!(cells.len(), 3);
         assert_eq!(cells[0].pointer, "/domains/1/cells/0");
-        assert!(cells[0].integral, "a cell count is a whole number");
+        assert_eq!(
+            cells[0].value,
+            Value::Number {
+                now: 11.0,
+                integral: true
+            },
+            "a cell count is a whole number"
+        );
     }
 
-    /// **The scene's own numbers are editable from the root row**, and its strings are not.
+    /// **The root row offers what the scene says about itself, and not its domains.**
+    ///
+    /// The title is there — a string is editable now — and nothing under `domains` is, because
+    /// every domain has rows of its own and folding them in here would put the whole file under
+    /// one selection.
     #[test]
-    fn the_root_row_offers_the_scenes_own_numbers() {
+    fn the_root_row_offers_the_scene_and_not_its_domains() {
         let fields = editable(SCENE, "/");
         let labels: Vec<&str> = fields.iter().map(|e| e.label.as_str()).collect();
         assert!(labels.contains(&"duration_s"), "{labels:?}");
         assert!(labels.contains(&"frames"), "{labels:?}");
+        assert!(labels.contains(&"title"), "{labels:?}");
         assert!(
-            !labels.contains(&"title"),
-            "a string is not a number: {labels:?}"
-        );
-        assert!(
-            !labels.contains(&"domains"),
-            "an array of objects is not: {labels:?}"
+            !labels.iter().any(|l| l.starts_with("domains")),
+            "a domain has its own row: {labels:?}"
         );
     }
 
@@ -563,6 +792,126 @@ mod tests {
             let checked = crate::check(&out, &crate::OnDisk);
             assert!(checked.error.is_none(), "{pointer}: {:?}", checked.error);
         }
+    }
+
+    /// **A value nested inside an object is reached, and it is labelled by its route.**
+    ///
+    /// `hot_spot.above_k` is the case the one-level walk missed: a number a person plainly wants
+    /// to change, sitting one object down, invisible to an inspector that only read the top.
+    #[test]
+    fn a_nested_object_is_walked_into() {
+        let fields = editable(SCENE, "/extents/buffer");
+        let above = fields
+            .iter()
+            .find(|e| e.label == "hot_spot.above_k")
+            .unwrap_or_else(|| panic!("{:?}", labels(&fields)));
+        assert_eq!(above.pointer, "/domains/1/hot_spot/above_k");
+        assert_eq!(
+            above.value,
+            Value::Number {
+                now: 60.0,
+                integral: false
+            }
+        );
+        // The unit comes from the *last* key. Taking it from the whole label would find nothing,
+        // and taking it from the outermost key would call this a `hot_spot`.
+        assert_eq!(above.unit, "K");
+
+        let at = fields
+            .iter()
+            .find(|e| e.label == "hot_spot.at[2]")
+            .unwrap_or_else(|| panic!("{:?}", labels(&fields)));
+        assert_eq!(at.pointer, "/domains/1/hot_spot/at/2");
+    }
+
+    /// **An array of objects is walked into too**, which is how `regions`, `parts` and `held` get
+    /// an inspector at all.
+    #[test]
+    fn an_array_of_objects_is_walked_into() {
+        let fields = editable(SCENE, "/extents/buffer");
+        let material = fields
+            .iter()
+            .find(|e| e.label == "regions[0].material")
+            .unwrap_or_else(|| panic!("{:?}", labels(&fields)));
+        assert_eq!(material.pointer, "/domains/1/regions/0/material");
+        let Value::Text { now, choices } = &material.value else {
+            panic!("a material is text: {:?}", material.value);
+        };
+        assert_eq!(now, "copper");
+        assert!(choices.contains(&"aluminium".to_string()), "{choices:?}");
+    }
+
+    /// **The two identifying keys are not offered**, and the second one is a defect caught before
+    /// it shipped rather than a design.
+    ///
+    /// `kind` because every other key in the object depends on it. `name` because the outliner's
+    /// selection is keyed by it: a text field committing per keystroke would rename the domain to
+    /// `buffe` on the first backspace, the row `/extents/buffer` would stop existing, and the
+    /// field being typed into would vanish. Five other keys point at names as well.
+    #[test]
+    fn the_identifying_keys_are_not_editable() {
+        let fields = labels(&editable(SCENE, "/extents/buffer"));
+        for identifier in ["kind", "name"] {
+            assert!(
+                !fields.iter().any(|l| l == identifier),
+                "{identifier} is structure, not a value: {fields:?}"
+            );
+        }
+        // The values beside them still are — this must not have turned the panel off.
+        assert!(fields.iter().any(|l| l == "cell_mm"), "{fields:?}");
+        assert!(fields.iter().any(|l| l == "material"), "{fields:?}");
+    }
+
+    /// **A material menu offers what the scene declared, not only the catalogue.**
+    ///
+    /// A menu built from `MATERIALS` alone could not express a file that names its own substance,
+    /// which is a menu that silently cannot say what the scene already says.
+    #[test]
+    fn the_material_menu_includes_the_scenes_own_substances() {
+        let declared = SCENE.replace(
+            r#""domains": ["#,
+            r#""materials": { "mystery_alloy": { "density_kg_per_m3": 3000.0,
+      "specific_heat_j_per_kg_k": 800.0, "conductivity_w_per_m_k": 50.0 } },
+  "domains": ["#,
+        );
+        let fields = editable(&declared, "/extents/buffer");
+        let material = fields
+            .iter()
+            .find(|e| e.label == "material")
+            .unwrap_or_else(|| panic!("{:?}", labels(&fields)));
+        let Value::Text { choices, .. } = &material.value else {
+            panic!("a material is text");
+        };
+        assert!(
+            choices.contains(&"mystery_alloy".to_string()),
+            "{choices:?}"
+        );
+        assert!(choices.contains(&"copper".to_string()), "{choices:?}");
+    }
+
+    /// **A string is spliced like a number, and JSON-escaped on the way in.**
+    ///
+    /// The one way a text field can break a scene that a number field cannot: a quote or a
+    /// backslash written raw would end the string early and the file would stop parsing.
+    #[test]
+    fn a_string_is_replaced_and_escaped() {
+        let out = set_text(SCENE, "/title", r#"a "quoted" title\"#).expect("the pointer resolves");
+        let round: serde_json::Value = serde_json::from_str(&out).expect("it still parses");
+        assert_eq!(round["title"], r#"a "quoted" title\"#);
+        assert!(
+            out.contains(r#""duration_s": 0.006"#),
+            "nothing else moved: {out}"
+        );
+    }
+
+    /// **A pointer aimed at a number refuses a string**, rather than quoting it and producing a
+    /// scene that fails to load with an error about a type.
+    #[test]
+    fn a_number_cannot_be_turned_into_a_string() {
+        let why = set_text(SCENE, "/frames", "eleven").expect_err("refused");
+        assert!(why.contains("not a string"), "{why}");
+        let why = set_number(SCENE, "/title", 3.0).expect_err("refused");
+        assert!(why.contains("not a number"), "{why}");
     }
 
     /// **Text that does not parse offers nothing**, rather than pointing into a file whose shape

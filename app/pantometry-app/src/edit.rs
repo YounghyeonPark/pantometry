@@ -148,6 +148,19 @@ struct Probed {
     label: String,
 }
 
+/// One change the inspector collected this frame, held until the widgets let go of the text.
+///
+/// A pointer and a value rather than the spliced result: the splice reads `self.text`, and the
+/// widgets are still borrowing it while the grid is being drawn. Applying it inside the loop
+/// would also invalidate every pointer after the edited one, since a pointer is a position in a
+/// string that just changed length.
+enum Edited {
+    /// A number a `DragValue` moved.
+    Number(String, f64),
+    /// A string a menu picked or a text field typed.
+    Text(String, String),
+}
+
 /// A parsed run being scrubbed through.
 struct RunView {
     run: viewer_core::Run,
@@ -1060,7 +1073,10 @@ impl App {
         // difference between an input and a result — an inspector that mixed them would invite
         // dragging a peak temperature.
         let fields = editor_core::editable(&self.text, &path);
-        let mut change: Option<(String, f64)> = None;
+        // One change per frame, applied after the grid. Collected rather than applied in place
+        // because the closure cannot hold `&mut self` while `self.text` is being read for the
+        // widgets, and because a splice mid-iteration would invalidate every pointer after it.
+        let mut change: Option<Edited> = None;
         if !fields.is_empty() {
             ui.label(egui::RichText::new("scene").weak().size(11.0));
             egui::Grid::new("scene values")
@@ -1075,29 +1091,74 @@ impl App {
                             format!("{} ({})", field.label, field.unit)
                         };
                         ui.label(egui::RichText::new(label).weak().monospace().size(11.0));
-                        let mut value = field.value;
-                        // A rate, not a range. Nothing here clamps: the scene's own check is the
-                        // authority on what is legal and it runs on every change already, so a
-                        // limit invented in the shell would be a second opinion that can only be
-                        // wrong — and wrong in the direction of refusing a value the format takes.
-                        let drag = if field.integral {
-                            egui::DragValue::new(&mut value)
-                                .speed(1.0)
-                                .fixed_decimals(0)
-                        } else {
-                            egui::DragValue::new(&mut value)
-                                .speed(field.value.abs().max(1.0) * 0.01)
-                        };
-                        if ui.add(drag).changed() {
-                            change = Some((field.pointer.clone(), value));
+                        match &field.value {
+                            editor_core::Value::Number { now, integral } => {
+                                let mut value = *now;
+                                // A rate, not a range. Nothing here clamps: the scene's own check
+                                // is the authority on what is legal and it runs on every change
+                                // already, so a limit invented in the shell would be a second
+                                // opinion that can only be wrong — and wrong in the direction of
+                                // refusing a value the format takes.
+                                let drag = if *integral {
+                                    egui::DragValue::new(&mut value)
+                                        .speed(1.0)
+                                        .fixed_decimals(0)
+                                } else {
+                                    egui::DragValue::new(&mut value)
+                                        .speed(now.abs().max(1.0) * 0.01)
+                                };
+                                if ui.add(drag).changed() {
+                                    change = Some(Edited::Number(field.pointer.clone(), value));
+                                }
+                            }
+                            // A menu where the format has a set and a text box where it does not.
+                            // The menu is not a restriction: `choices` is the catalogue plus the
+                            // scene's own declarations, so anything the file could already say is
+                            // in it, and a key with no known set stays free text rather than
+                            // being offered a list this shell invented.
+                            editor_core::Value::Text { now, choices } if !choices.is_empty() => {
+                                let mut picked = now.clone();
+                                egui::ComboBox::from_id_salt(&field.pointer)
+                                    .selected_text(now.as_str())
+                                    .show_ui(ui, |ui| {
+                                        for choice in choices {
+                                            ui.selectable_value(
+                                                &mut picked,
+                                                choice.clone(),
+                                                choice.as_str(),
+                                            );
+                                        }
+                                    });
+                                if picked != *now {
+                                    change = Some(Edited::Text(field.pointer.clone(), picked));
+                                }
+                            }
+                            editor_core::Value::Text { now, .. } => {
+                                let mut typed = now.clone();
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut typed)
+                                            .desired_width(f32::INFINITY),
+                                    )
+                                    .changed()
+                                {
+                                    change = Some(Edited::Text(field.pointer.clone(), typed));
+                                }
+                            }
                         }
                         ui.end_row();
                     }
                 });
             ui.separator();
         }
-        if let Some((pointer, value)) = change {
-            match editor_core::set_number(&self.text, &pointer, value) {
+        if let Some(edit) = change {
+            let spliced = match &edit {
+                Edited::Number(pointer, value) => {
+                    editor_core::set_number(&self.text, pointer, *value)
+                }
+                Edited::Text(pointer, value) => editor_core::set_text(&self.text, pointer, value),
+            };
+            match spliced {
                 Ok(text) => {
                     self.text = text;
                     self.dirty = true;

@@ -27,16 +27,40 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   multiline text box holding the whole scene as raw JSON. The inspector showed values and could
   not alter one, so every edit was a JSON edit.
 
-  Selecting a row that names a domain now lists every number the scene states about it, each
-  draggable, and a change goes into the text and re-checks on the same frame. Three rows resolve
-  to the same domain — its extent before a run, its field and its readings after one — because
-  after a run the reader is looking at the last two.
+  Selecting a row that names a domain now lists every value the scene states about it, and a
+  change goes into the text and re-checks on the same frame. Three rows resolve to the same domain
+  — its extent before a run, its field and its readings after one — because after a run the reader
+  is looking at the last two.
+
+  **What to cover was counted, not guessed.** A census of every value in the twenty-eight shipped
+  scenes: 358 numbers, 237 strings, 59 arrays of numbers, 46 arrays of objects, 44 nested objects,
+  one array of arrays, and **no booleans at all**. Three things followed. Strings are two fifths
+  of the file, so a numbers-only inspector cannot change a material. Nesting is ordinary rather
+  than exotic — a `hot_spot`'s `above_k`, a `region`'s `material` — so the walk is a full one and
+  not the single level it started as. And there is no flag widget, because the format has nothing
+  for one to point at. `material` gets a menu built from the catalogue **plus whatever the scene
+  declared**, since a menu that offered only the catalogue could not express a file that names its
+  own substance.
+
+  The walk is uncapped, also measured: the widest domain in any shipped scene yields 55 fields and
+  the median is 8. A cap would have to drop rows, and a panel that silently omits part of the
+  scene it describes is this repository's oldest failure shape.
+
+  **`kind` and `name` are held back, and the second was a defect caught before it shipped.**
+  `kind` because the format is `deny_unknown_fields` and changing it makes every key beside it
+  unknown at once. `name` because the outliner's selection is keyed by it — a text field
+  committing per keystroke would rename the domain on the first character, the row would stop
+  existing, and the field being typed into would vanish under the cursor. It is also an
+  identifier: five other keys and every key of `poses` refer to a domain by name, so a rename is a
+  multi-site edit the inspector cannot make atomically. Both stay jobs for the text box.
 
   **It is a byte splice, not a re-serialise, and the reason is measured.** `serde_json` without
   `preserve_order`, which this workspace does not enable, backs an object with a `BTreeMap`: a
   `Value` round trip alphabetises every key. The shipped scenes are hand-formatted with `kind` and
-  `name` first, so one drag would have reordered and reflowed the whole file. `set_number` replaces
-  the bytes of the one value and copies the rest verbatim, and the test asserts that literally
+  `name` first, so one drag would have reordered and reflowed the whole file. `set_number` and
+  `set_text` replace the bytes of the one value and copy the rest verbatim — a string goes through
+  `serde_json` on the way in, so a quote or a backslash cannot end it early — and the test asserts
+  that literally
   rather than by comparing parsed values — a round trip that produced an equivalent scene would
   pass a value comparison having destroyed the formatting.
 
@@ -45,8 +69,8 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   a fraction dragged onto one is refused; a value written with them keeps its decimal point even
   when it lands on an integer.
 
-  Nothing enumerates domain kinds — every number in the domain's object is offered, whatever the
-  object is, which is ARCHITECTURE.md's rule for the inspection half. Nothing clamps either: the
+  Nothing enumerates domain kinds — every value in the domain's object is offered, at whatever
+  depth, whatever the object is, which is ARCHITECTURE.md's rule for the inspection half. Nothing clamps either: the
   scene's own check is the authority on what is legal and it runs on every change, measured at
   **0.0–0.4 ms** across the shipped scenes, so a limit invented in the shell could only be a second
   opinion that refuses a value the format takes.
