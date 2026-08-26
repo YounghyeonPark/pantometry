@@ -22,6 +22,19 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Changed
 
+- **A domain can be moved from the editor.** The inspector grew a *placement* control, and it is
+  the first write in the editor that **creates** a key rather than replacing one: `poses` is a map
+  beside `materials`, and **no shipped scene states it** — zero of the twenty-eight — so moving
+  anything means writing something the file does not have. Three levels can be missing at once —
+  the `at_m` array, the domain's entry, the whole `poses` object — and each is written where it is
+  found, appended after the last member at the object's own indentation. A scene that gains a pose
+  keeps every other byte, and one that already had it has three numbers replaced rather than a
+  second `at_m` appended.
+
+  The drag rate comes from the scene's own extent rather than a constant, because a millimetre a
+  pixel is right for a die and wrong for a room. It is still a rate and not a limit: nothing bounds
+  where a domain may go, for the same reason nothing clamps the other fields.
+
 - **A domain can be added and removed from the editor.** Before this, creating one meant typing
   an object into the JSON pane from memory — the format defines nineteen kinds and the editor
   offered none of them. **Domain → Add** inserts a starting example, named so it does not collide

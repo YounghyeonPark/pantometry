@@ -1206,6 +1206,58 @@ impl App {
                 });
             ui.separator();
         }
+
+        // Where the domain sits, which is the scene's business rather than the domain's: `poses`
+        // is a map beside `materials`, not a field inside the object above. So it is its own
+        // control with its own write, and it appears for a domain row whether or not the file has
+        // ever said anything about placement — no shipped scene does.
+        let mut moved: Option<(String, [f64; 3])> = None;
+        if let Some(domain) = editor_core::domain_named(&path).map(str::to_string) {
+            let at = editor_core::pose_of(&self.text, &domain);
+            let mut to = at;
+            // A millimetre a pixel would be wrong for a room and right for a die, so the rate
+            // comes from what this scene is the size of. Still a rate and not a limit: nothing
+            // here bounds where a domain may go.
+            let speed = self
+                .checked
+                .bounds
+                .map(|b| ((b[3] - b[0]).max(b[4] - b[1]).max(b[5] - b[2]) / 400.0).max(1e-6))
+                .unwrap_or(1e-3);
+            ui.label(egui::RichText::new("placement").weak().size(11.0));
+            egui::Grid::new("placement")
+                .num_columns(2)
+                .striped(true)
+                .spacing([10.0, 3.0])
+                .show(ui, |ui| {
+                    for (i, axis) in ["x", "y", "z"].iter().enumerate() {
+                        ui.label(
+                            egui::RichText::new(format!("at_m.{axis} (m)"))
+                                .weak()
+                                .monospace()
+                                .size(11.0),
+                        );
+                        if ui
+                            .add(egui::DragValue::new(&mut to[i]).speed(speed))
+                            .changed()
+                        {
+                            moved = Some((domain.clone(), to));
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.separator();
+        }
+        if let Some((domain, to)) = moved {
+            match editor_core::set_pose(&self.text, &domain, to) {
+                Ok(text) => {
+                    self.text = text;
+                    self.dirty = true;
+                    self.recheck();
+                }
+                Err(why) => self.status = why,
+            }
+        }
+        {}
         if let Some(edit) = change {
             let spliced = match &edit {
                 Edited::Number(pointer, value) => {

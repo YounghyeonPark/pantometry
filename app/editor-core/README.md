@@ -33,10 +33,19 @@ domain appears in this menu without the shell learning about it, and cannot quie
 Two kinds arrive incomplete because the format will not let them stand alone: a `beam` states
 what it shines `onto` and a `structure` states the block it `follows`, and neither can be guessed.
 
-It is a byte splice rather than a re-serialise, so the file keeps its own formatting and key
-order — `editor_core::set_number`, `set_text`, `add_domain` and `remove_domain` are where that
-lives and where the tests for it are, including one that adds each of the nineteen and removes it
-again and asserts the file is byte-identical to what it started as. Nothing in it enumerates domain kinds, so a domain written out of tree is as editable as a
+Below those, **placement**: where the domain's origin sits in the world. It is a separate control
+because `poses` is a map beside `materials` rather than a field inside the domain, and it is the
+one write that **creates** instead of replacing — no shipped scene states `poses` at all, so
+moving anything means writing a key the file does not have. Three levels can be missing and each
+is filled in where it is found; a scene that gains a pose keeps every other byte.
+
+Every one of those is a byte splice rather than a re-serialise, so the file keeps its own
+formatting and key order. `editor_core::set_number`, `set_text`, `set_pose`, `add_domain` and
+`remove_domain` are where that lives and where the tests for it are — including one that adds each
+of the nineteen kinds and removes it again, and asserts the file is byte-identical to what it
+started as.
+
+Nothing in any of it enumerates domain kinds, so a domain written out of tree is as editable as a
 shipped one. The read-only rows below say what came *out*, and the two halves are kept apart on
 purpose: a peak temperature is not a thing to drag.
 

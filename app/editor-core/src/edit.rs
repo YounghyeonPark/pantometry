@@ -686,6 +686,138 @@ pub fn remove_domain(text: &str, name: &str) -> Result<String, String> {
     Ok(splice(text, cut, ""))
 }
 
+/// Where a domain's origin sits in the world, in metres.
+///
+/// `[0, 0, 0]` when the scene says nothing, which is what an absent `poses` entry means — the
+/// guarantee `a_placed_part` pins, and the reason every scene written before the key existed
+/// still places its domains where it always did.
+pub fn pose_of(text: &str, name: &str) -> [f64; 3] {
+    let mut at = [0.0; 3];
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else {
+        return at;
+    };
+    let Some(stated) = root
+        .get("poses")
+        .and_then(|p| p.get(name))
+        .and_then(|p| p.get("at_m"))
+    else {
+        return at;
+    };
+    for (i, slot) in at.iter_mut().enumerate() {
+        if let Some(v) = stated.get(i).and_then(|v| v.as_f64()) {
+            *slot = v;
+        }
+    }
+    at
+}
+
+/// Move a domain, writing whatever part of `poses` is not there yet.
+///
+/// # The first write that creates rather than replaces
+///
+/// [`set_number`] and [`set_text`] replace the bytes of a value that already exists, which is
+/// every edit the inspector makes to a domain's own fields. A position is different: **no shipped
+/// scene states `poses` at all** — zero of the twenty-eight — so moving anything means writing a
+/// key that is not in the file. Three levels of it can be missing, and each is handled where it
+/// is found: the `at_m` array, the domain's entry, or the whole `poses` object.
+///
+/// What does not change is the promise. A new member is appended after the last one at the
+/// indentation of the object it goes into, and every other byte is copied — a scene that gains a
+/// pose keeps its formatting, and one that already had the key has three numbers replaced.
+///
+/// `poses` is a map beside `materials` rather than a field on each domain, so this writes at the
+/// top level and not inside the domain's object. That is the format's decision and the reason is
+/// in [`pantometry_world::Scene::poses`]: `serde(flatten)` would have silently disabled
+/// `deny_unknown_fields`.
+pub fn set_pose(text: &str, name: &str, at_m: [f64; 3]) -> Result<String, String> {
+    if let Some(bad) = at_m.iter().find(|v| !v.is_finite()) {
+        return Err(format!(
+            "{name}: a position of {bad} has no JSON spelling, and a scene holding one would              not load"
+        ));
+    }
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    if !root
+        .get("domains")
+        .and_then(|d| d.as_array())
+        .is_some_and(|d| {
+            d.iter()
+                .any(|x| x.get("name").and_then(|n| n.as_str()) == Some(name))
+        })
+    {
+        // A pose for a domain that is not there builds nothing and is refused by the check with
+        // the same sentence; catching it here means the file never holds the mistake at all.
+        return Err(format!("this scene defines no domain called {name:?}"));
+    }
+
+    let numbers = format!(
+        "[{}, {}, {}]",
+        as_float(at_m[0]),
+        as_float(at_m[1]),
+        as_float(at_m[2])
+    );
+    let escaped = escape(name);
+
+    if let Some(span) = value_span(text, &format!("/poses/{escaped}/at_m")) {
+        return Ok(splice(text, span, &numbers));
+    }
+    if let Some(entry) = value_span(text, &format!("/poses/{escaped}")) {
+        return append_member(text, entry, &format!(r#""at_m": {numbers}"#));
+    }
+    if let Some(poses) = value_span(text, "/poses") {
+        return append_member(
+            text,
+            poses,
+            &format!(r#""{name}": {{ "at_m": {numbers} }}"#),
+        );
+    }
+    let root_span = value_span(text, "").ok_or_else(|| "this scene has no root".to_string())?;
+    append_member(
+        text,
+        root_span,
+        &format!(r#""poses": {{ "{name}": {{ "at_m": {numbers} }} }}"#),
+    )
+}
+
+/// A float that stays a float: `3` would be a different literal, and `at_m` is three `f64`.
+fn as_float(v: f64) -> String {
+    let s = format!("{v}");
+    if s.contains(['.', 'e', 'E']) {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
+/// Put `member` into the object at `object`, after whatever is already in it.
+///
+/// Appended rather than inserted in sorted position, because the file's key order is the author's
+/// and this is not the code that gets to reorder it. The indentation is the object's own plus two
+/// spaces, which is what the scenes use.
+fn append_member(text: &str, object: Range<usize>, member: &str) -> Result<String, String> {
+    if !text[object.clone()].starts_with('{') {
+        return Err(format!(
+            "cannot add a key to {}, which is not an object",
+            &text[object.clone()]
+        ));
+    }
+    let inner = object.start + 1..object.end - 1;
+    if text[inner.clone()].trim().is_empty() {
+        return Ok(splice(text, inner, &format!(" {member} ")));
+    }
+    // Just past the last member's final byte, which is the last non-space before the brace.
+    let last = object.start + 1 + text[inner].trim_end().len();
+    let indent = format!("{}  ", indent_of(text, object.start));
+    Ok(splice(
+        text,
+        last..last,
+        &format!(
+            ",
+{indent}{member}"
+        ),
+    ))
+}
+
 /// The whitespace between the start of `at`'s line and `at` itself.
 fn indent_of(text: &str, at: usize) -> String {
     let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
@@ -1149,6 +1281,91 @@ mod tests {
                 "{kind}: the round trip did not land where it started"
             );
         }
+    }
+
+    /// **A scene with no `poses` gains one, and keeps everything else.**
+    ///
+    /// The path no other write takes: three levels missing at once. No shipped scene states
+    /// `poses`, so this is what moving anything in a real file actually does.
+    #[test]
+    fn moving_a_domain_creates_the_key_the_scene_never_had() {
+        assert!(
+            !SCENE.contains("poses"),
+            "the fixture has to start without one"
+        );
+        let out = set_pose(SCENE, "buffer", [0.01, 0.0, -0.002]).expect("the domain is there");
+        assert!(
+            out.contains(r#""poses": { "buffer": { "at_m": [0.01, 0.0, -0.002] } }"#),
+            "{out}"
+        );
+        // Everything that was there is still there, byte for byte, and it still builds.
+        assert!(out.contains(r#""cell_mm": 2.0"#), "{out}");
+        assert!(
+            out.contains(r#""kind": "block", "name": "buffer""#),
+            "{out}"
+        );
+        let checked = crate::check(&out, &crate::OnDisk);
+        assert!(checked.error.is_none(), "{:?}", checked.error);
+        assert_eq!(pose_of(&out, "buffer"), [0.01, 0.0, -0.002]);
+    }
+
+    /// **The three levels are each filled in where they are found.**
+    ///
+    /// A `poses` object with somebody else in it, an entry with no `at_m`, and an `at_m` already
+    /// written — the second and third are the branches a scene reaches once it has been moved
+    /// once, so they are the common case rather than the exotic one.
+    #[test]
+    fn each_missing_level_of_a_pose_is_written_where_it_is_missing() {
+        let with_other = SCENE.replace(
+            r#"  "domains": ["#,
+            "  \"poses\": { \"lamp\": { \"at_m\": [1.0, 0.0, 0.0] } },
+  \"domains\": [",
+        );
+        let out = set_pose(&with_other, "buffer", [2.0, 0.0, 0.0]).expect("added beside the other");
+        assert_eq!(
+            pose_of(&out, "lamp"),
+            [1.0, 0.0, 0.0],
+            "the other one did not move"
+        );
+        assert_eq!(pose_of(&out, "buffer"), [2.0, 0.0, 0.0]);
+
+        let empty_entry = SCENE.replace(
+            r#"  "domains": ["#,
+            "  \"poses\": { \"buffer\": {} },
+  \"domains\": [",
+        );
+        let out = set_pose(&empty_entry, "buffer", [3.0, 0.0, 0.0]).expect("filled the entry");
+        assert_eq!(pose_of(&out, "buffer"), [3.0, 0.0, 0.0], "{out}");
+
+        // And moving twice replaces rather than appending a second `at_m`.
+        let again = set_pose(&out, "buffer", [4.0, 0.0, 0.0]).expect("moved again");
+        assert_eq!(pose_of(&again, "buffer"), [4.0, 0.0, 0.0]);
+        assert_eq!(again.matches("at_m").count(), 1, "{again}");
+        assert!(crate::check(&again, &crate::OnDisk).error.is_none());
+    }
+
+    /// **An absent pose reads as the origin**, which is what the format means by silence.
+    #[test]
+    fn a_domain_with_no_pose_is_at_the_origin() {
+        assert_eq!(pose_of(SCENE, "buffer"), [0.0, 0.0, 0.0]);
+        assert_eq!(pose_of("not json at all", "buffer"), [0.0, 0.0, 0.0]);
+    }
+
+    /// **Posing something that is not in the scene is refused before the file is touched.**
+    #[test]
+    fn a_pose_for_a_domain_that_is_not_there_is_refused() {
+        let why = set_pose(SCENE, "ghost", [1.0, 0.0, 0.0]).expect_err("refused");
+        assert!(why.contains("ghost"), "{why}");
+        let why = set_pose(SCENE, "buffer", [f64::NAN, 0.0, 0.0]).expect_err("refused");
+        assert!(why.contains("no JSON spelling"), "{why}");
+    }
+
+    /// **A position keeps its decimal point**, so a whole-number move does not change the
+    /// literal's kind under a format that reads three `f64`.
+    #[test]
+    fn a_whole_number_position_is_still_written_as_a_float() {
+        let out = set_pose(SCENE, "buffer", [1.0, 2.0, 3.0]).expect("moved");
+        assert!(out.contains("[1.0, 2.0, 3.0]"), "{out}");
     }
 
     /// **Text that does not parse offers nothing**, rather than pointing into a file whose shape

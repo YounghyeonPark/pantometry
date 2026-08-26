@@ -35,7 +35,8 @@
 pub mod edit;
 
 pub use edit::{
-    add_domain, domain_named, editable, remove_domain, set_number, set_text, Editable, Value,
+    add_domain, domain_named, editable, pose_of, remove_domain, set_number, set_pose, set_text,
+    Editable, Value,
 };
 
 /// A starting example of every domain the format defines, re-exported so a shell talks to this
