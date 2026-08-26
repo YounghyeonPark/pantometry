@@ -1344,6 +1344,43 @@ mod tests {
         assert!(crate::check(&again, &crate::OnDisk).error.is_none());
     }
 
+    /// **The box actually moves**, which nothing else here would have noticed.
+    ///
+    /// Every other pose test asserts the file is valid JSON, that it still checks, and that
+    /// `pose_of` reads back what was written. **All of them would pass if `set_pose` wrote to a
+    /// key the builder ignores** — the scene would parse, build, draw, and sit exactly where it
+    /// started. This is the one that reads the geometry back out of `check` and compares it to
+    /// what was asked for, which is the only claim the feature actually makes.
+    #[test]
+    fn a_posed_domain_is_drawn_where_the_pose_says() {
+        let before = crate::check(SCENE, &crate::OnDisk)
+            .bounds
+            .expect("the block has geometry");
+        let moved = set_pose(SCENE, "buffer", [0.5, -0.25, 0.125]).expect("moved");
+        let after = crate::check(&moved, &crate::OnDisk)
+            .bounds
+            .expect("and still has it");
+
+        // The box is the same size and sits exactly the stated offset away. Both halves matter:
+        // a pose that scaled or reshaped anything would be a different defect from one that did
+        // nothing at all.
+        for axis in 0..3 {
+            let shift = [0.5, -0.25, 0.125][axis];
+            assert!(
+                (after[axis] - (before[axis] + shift)).abs() < 1e-12,
+                "axis {axis}: low corner went {} -> {}, expected a shift of {shift}",
+                before[axis],
+                after[axis]
+            );
+            let span_before = before[axis + 3] - before[axis];
+            let span_after = after[axis + 3] - after[axis];
+            assert!(
+                (span_after - span_before).abs() < 1e-12,
+                "axis {axis}: the box changed size, {span_before} -> {span_after}"
+            );
+        }
+    }
+
     /// **An absent pose reads as the origin**, which is what the format means by silence.
     #[test]
     fn a_domain_with_no_pose_is_at_the_origin() {
