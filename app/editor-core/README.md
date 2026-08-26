@@ -49,6 +49,16 @@ Nothing in any of it enumerates domain kinds, so a domain written out of tree is
 shipped one. The read-only rows below say what came *out*, and the two halves are kept apart on
 purpose: a peak temperature is not a thing to drag.
 
+A selected domain also gets **three translate handles** in the viewport — x red, y green, z blue.
+Dragging one moves the domain along that axis and writes the pose; the camera does not turn while
+a handle is held, because to egui the two gestures are the same gesture. A handle pointing at the
+camera refuses to move rather than dividing by nearly nothing, and letting go over empty space
+does not clear the selection — a drag that ends on nothing reads as a click.
+
+The arithmetic is `editor_core::drag_along_axis`, and its error has an **order** rather than a
+tolerance: halving a drag quarters the miss. That is how the first version was caught moving
+things 77% of the way at every drag size, which no "close enough" assertion would have noticed.
+
 The viewport draws every placed extent as a wireframe, live from the text before anything runs.
 **Run** streams the run in as it computes
 — each frame appears when it is captured, the slider grows, **stop** ends a long run between

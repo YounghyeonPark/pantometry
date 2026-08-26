@@ -161,6 +161,33 @@ enum Edited {
     Text(String, String),
 }
 
+/// The three directions a translate handle points, and the colour each is drawn in.
+///
+/// x red, y green, z blue: the convention every 3D tool shares, and the one place in this shell
+/// where a colour means something other than a value.
+const AXES: [([f64; 3], egui::Color32); 3] = [
+    ([1.0, 0.0, 0.0], egui::Color32::from_rgb(226, 96, 88)),
+    ([0.0, 1.0, 0.0], egui::Color32::from_rgb(120, 196, 116)),
+    ([0.0, 0.0, 1.0], egui::Color32::from_rgb(108, 152, 232)),
+];
+
+/// How near the pointer has to be to a handle to take hold of it, in points.
+const GRAB_RADIUS: f32 = 9.0;
+
+/// How far `at` is from the segment `a`..`b`, in points.
+///
+/// A handle is a line and a pointer is a point, so the distance to the *segment* is the question
+/// — not the distance to either end, which would let a click far past the tip take hold of it.
+fn near_segment(at: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    if len2 <= f32::EPSILON {
+        return (at - a).length();
+    }
+    let t = (((at - a).dot(ab)) / len2).clamp(0.0, 1.0);
+    (at - (a + ab * t)).length()
+}
+
 /// A parsed run being scrubbed through.
 struct RunView {
     run: viewer_core::Run,
@@ -261,6 +288,14 @@ struct App {
     shaded_probes: Vec<Probed>,
     shaded_notes: Vec<(String, &'static str)>,
 
+    /// Which translate handle the pointer has hold of, as an index into [`AXES`].
+    ///
+    /// Held across frames because a drag is not one event: the press picks the handle, every
+    /// frame after it moves the domain, and the release lets go. While it is `Some` the camera
+    /// does **not** turn — a gizmo that spun the view while you dragged along it would be
+    /// unusable, and the two gestures are the same gesture as far as egui is concerned.
+    grabbed: Option<usize>,
+
     /// Whether the outliner and the inspector are on screen at all.
     show_outliner: bool,
     show_inspector: bool,
@@ -316,6 +351,7 @@ impl App {
             run_at_once: false,
             shaded_probes: Vec::new(),
             shaded_notes: Vec::new(),
+            grabbed: None,
             show_outliner: true,
             show_inspector: true,
             show_text: true,
@@ -1086,6 +1122,31 @@ impl App {
             });
     }
 
+    /// The selected row's domain, if the selection is one.
+    fn selected_domain(&self) -> Option<String> {
+        self.selected
+            .as_deref()
+            .and_then(editor_core::domain_named)
+            .map(str::to_string)
+    }
+
+    /// Where this domain's handles sit: the centre of its placed box.
+    ///
+    /// The centre rather than the origin the pose states, because a pose of `[0, 0, 0]` puts the
+    /// origin at the world origin, which for most scenes is a corner of the geometry and for some
+    /// is outside it entirely. The handles are a thing to grab, and what they move is a delta, so
+    /// where they are drawn is a matter of being reachable rather than of being correct.
+    fn handle_origin(&self, name: &str) -> Option<[f64; 3]> {
+        let placed = self.checked.boxes.iter().find(|b| b.name == name)?;
+        let mut centre = [0.0; 3];
+        for corner in &placed.corners {
+            for (c, v) in centre.iter_mut().zip(corner) {
+                *c += v / 8.0;
+            }
+        }
+        Some(centre)
+    }
+
     /// The inspector: everything the core knows about the selected row.
     ///
     /// The rows come from `editor_core::Node::detail` rather than being assembled here, because
@@ -1562,7 +1623,101 @@ impl App {
         let rect = response.rect;
         let aspect = (rect.width() / rect.height().max(1.0)) as f64;
 
-        if response.dragged() {
+        // **The world this paint frames**, hoisted above the camera because the handles need it
+        // and the handles have to answer before the camera does: one drag is either turning the
+        // view or moving a domain, and whichever claims it, the other must not also act on it.
+        let mut bounds = self.checked.bounds;
+        if let Some(view) = &self.run {
+            if let Some(frame) = view.run.frames.first() {
+                for panel in &frame.panels {
+                    bounds = Some(union(bounds, panel.bounds()));
+                }
+            }
+        }
+
+        // The translate handles, if a domain is selected and the scene has somewhere to put them.
+        let mut moved: Option<(String, [f64; 3])> = None;
+        let mut holding = false;
+        if let (Some(b), Some(name)) = (bounds, self.selected_domain()) {
+            let framing = viewer_core::Framing::of(b);
+            if let Some(origin) = self.handle_origin(&name) {
+                let to_screen = |p: [f64; 3]| {
+                    let q = self.camera.project(p, &framing, aspect);
+                    egui::pos2(
+                        rect.center().x + (q.x as f32) * rect.width() * 0.5,
+                        rect.center().y - (q.y as f32) * rect.height() * 0.5,
+                    )
+                };
+                let reach = framing.span * 0.35;
+                let tip = |axis: [f64; 3]| {
+                    [
+                        origin[0] + axis[0] * reach,
+                        origin[1] + axis[1] * reach,
+                        origin[2] + axis[2] * reach,
+                    ]
+                };
+
+                if response.drag_started() {
+                    if let Some(at) = response.interact_pointer_pos() {
+                        let base = to_screen(origin);
+                        self.grabbed = AXES
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (axis, _))| {
+                                (i, near_segment(at, base, to_screen(tip(*axis))))
+                            })
+                            .filter(|(_, d)| *d <= GRAB_RADIUS)
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(i, _)| i);
+                    }
+                }
+                if let Some(i) = self.grabbed {
+                    holding = true;
+                    if response.dragged() {
+                        let d = response.drag_delta();
+                        // Points to normalised device: the window is two across in both, and y
+                        // runs the other way. Same mapping `project`'s screen conversion uses,
+                        // read backwards.
+                        let ndc = [
+                            d.x as f64 / (rect.width() as f64 * 0.5).max(1.0),
+                            -d.y as f64 / (rect.height() as f64 * 0.5).max(1.0),
+                        ];
+                        let axis = AXES[i].0;
+                        let t = editor_core::drag_along_axis(
+                            &self.camera,
+                            &framing,
+                            aspect,
+                            origin,
+                            axis,
+                            ndc,
+                        );
+                        if t != 0.0 {
+                            moved = Some((name.clone(), [axis[0] * t, axis[1] * t, axis[2] * t]));
+                        }
+                    }
+                }
+            }
+        }
+        if response.drag_stopped() {
+            self.grabbed = None;
+        }
+        // The pose is absolute in the file and the drag is a delta, so it is read, added to and
+        // written back each frame. Applied after the hit test rather than inside it, because the
+        // splice needs `self.text` and the projection above is still borrowing `self.camera`.
+        if let Some((name, delta)) = moved {
+            let at = editor_core::pose_of(&self.text, &name);
+            let to = [at[0] + delta[0], at[1] + delta[1], at[2] + delta[2]];
+            match editor_core::set_pose(&self.text, &name, to) {
+                Ok(text) => {
+                    self.text = text;
+                    self.dirty = true;
+                    self.recheck();
+                }
+                Err(why) => self.status = why,
+            }
+        }
+
+        if response.dragged() && !holding {
             let d = response.drag_delta();
             self.camera.turn(d.x as f64 * 0.01, d.y as f64 * 0.01);
         }
@@ -1591,16 +1746,6 @@ impl App {
                 .map(|rest| rest.split('/').next().unwrap_or(rest).to_string())
         });
 
-        // The world this paint frames: scene geometry, widened by whatever the run reached —
-        // an orbit's bodies live far outside any placed extent.
-        let mut bounds = self.checked.bounds;
-        if let Some(view) = &self.run {
-            if let Some(frame) = view.run.frames.first() {
-                for panel in &frame.panels {
-                    bounds = Some(union(bounds, panel.bounds()));
-                }
-            }
-        }
         let Some(bounds) = bounds else {
             painter.text(
                 rect.center(),
@@ -1702,6 +1847,34 @@ impl App {
             )
         };
         let to_screen = |p: [f64; 3]| -> egui::Pos2 { project(p).0 };
+
+        // **The translate handles**, on top of everything because they are a control rather than
+        // a picture — the same reason every caption and the colour bar are egui over the shaded
+        // pass. Painted last, below, so nothing occludes what the pointer has to hit; the hit
+        // test above uses the same origin and the same reach, so what is drawn is what is grabbed.
+        let handles: Vec<(usize, egui::Pos2, egui::Pos2)> = match self.selected_domain() {
+            Some(name) => match self.handle_origin(&name) {
+                Some(origin) => {
+                    let reach = framing.span * 0.35;
+                    AXES.iter()
+                        .enumerate()
+                        .map(|(i, (axis, _))| {
+                            (
+                                i,
+                                to_screen(origin),
+                                to_screen([
+                                    origin[0] + axis[0] * reach,
+                                    origin[1] + axis[1] * reach,
+                                    origin[2] + axis[2] * reach,
+                                ]),
+                            )
+                        })
+                        .collect()
+                }
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        };
 
         // The scene's own geometry: every placed extent, wireframed. Drawn from the text, not
         // the run, so layout is visible while editing and before anything is computed.
@@ -1988,8 +2161,24 @@ impl App {
             }
         }
 
+        // The handles, over everything. Drawn from the positions computed before the geometry so
+        // the hit test and the picture cannot drift apart.
+        for (i, base, tip) in &handles {
+            let held = self.grabbed == Some(*i);
+            let colour = AXES[*i].1;
+            painter.line_segment(
+                [*base, *tip],
+                egui::Stroke::new(if held { 3.5_f32 } else { 2.0_f32 }, colour),
+            );
+            painter.circle_filled(*tip, if held { 6.0_f32 } else { 4.5_f32 }, colour);
+        }
+
         // And what the cursor is over, if anything. A click on it selects.
-        if response.clicked() {
+        //
+        // **Not while a handle is held.** A drag that ends on empty space reads as a click to
+        // egui, so letting go of a handle over nothing would clear the selection and take the
+        // handles away from under the pointer that was just using them.
+        if response.clicked() && self.grabbed.is_none() {
             // A click on nothing clears the selection, which is what every outliner does and is
             // the only way to get back to "no selection" without a keyboard.
             self.selected = probe.path.clone();
@@ -2324,4 +2513,42 @@ fn default_scene() -> String {
 }
 "#,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A pointer is measured against the handle's line, not against its ends.**
+    ///
+    /// The distinction is the whole function. Measuring to the nearer endpoint would make the
+    /// middle of a long handle unreachable, and measuring to the infinite line would let a click
+    /// far past the tip take hold of it — a handle that grabs from off-screen is worse than one
+    /// that does not grab at all, because the thing it moves is somewhere the pointer is not.
+    #[test]
+    fn a_handle_is_grabbed_by_its_length() {
+        let a = egui::pos2(100.0, 100.0);
+        let b = egui::pos2(200.0, 100.0);
+
+        // Beside the middle: the perpendicular distance, exactly.
+        assert!((near_segment(egui::pos2(150.0, 107.0), a, b) - 7.0).abs() < 1e-4);
+        // On it: nothing.
+        assert!(near_segment(egui::pos2(150.0, 100.0), a, b) < 1e-6);
+        // Past the tip: the distance to the tip, not to the line it lies on.
+        assert!((near_segment(egui::pos2(260.0, 100.0), a, b) - 60.0).abs() < 1e-4);
+        assert!((near_segment(egui::pos2(40.0, 100.0), a, b) - 60.0).abs() < 1e-4);
+        // Diagonally past the tip: the hypotenuse, which the infinite-line answer would miss.
+        let corner = near_segment(egui::pos2(203.0, 104.0), a, b);
+        assert!((corner - 5.0).abs() < 1e-4, "got {corner}");
+    }
+
+    /// **A handle seen exactly end-on is a point, and does not divide by zero.**
+    ///
+    /// It happens whenever an axis points at the camera, which is a rotation away at any moment.
+    #[test]
+    fn a_handle_with_no_length_is_still_measurable() {
+        let p = egui::pos2(50.0, 50.0);
+        assert!(near_segment(egui::pos2(53.0, 54.0), p, p) - 5.0 < 1e-4);
+        assert!(near_segment(p, p, p) < 1e-6);
+    }
 }

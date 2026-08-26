@@ -22,6 +22,24 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Changed
 
+- **A domain can be dragged in the viewport.** Three translate handles on the selected domain,
+  and the arithmetic behind them — `editor_core::drag_along_axis` — lives in the GUI-free half
+  because it is a function of a camera and two vectors, and because its error has an *order* a
+  test can measure.
+
+  That mattered immediately. The first version took the handle's screen direction as the secant
+  across a whole unit of the axis rather than the derivative, and the object went **77%** of the
+  way the pointer asked — at every drag size, converging to a fixed 23.5% relative error instead
+  of to zero. A single measurement looks like ordinary discretisation and a tolerance would have
+  been written around it; the order creeping toward 1 where a correct inverse gives 2 is what said
+  the map was wrong rather than coarse. It measures 2.00 now. The companion test — "a drag along
+  the handle moves one unit" — passed the whole time, because its helper computed the direction
+  the same wrong way.
+
+  A handle pointing at the camera returns zero rather than turning a one-pixel twitch into a leap
+  across the scene, the camera does not turn while a handle is held, and releasing over empty
+  space does not clear the selection.
+
 - **A domain can be moved from the editor.** The inspector grew a *placement* control, and it is
   the first write in the editor that **creates** a key rather than replacing one: `poses` is a map
   beside `materials`, and **no shipped scene states it** — zero of the twenty-eight — so moving
