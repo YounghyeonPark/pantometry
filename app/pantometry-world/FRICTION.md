@@ -1,9 +1,11 @@
 # What the first consumer found
 
 `pantometry-world` exists to use the SDK from outside and write down where that is awkward. A
-library with no consumers is a library whose ergonomics nobody has measured, and none of the
-795 tests inside the workspace can answer this question about themselves — they are written by
-someone who already knows the shape.
+library with no consumers is a library whose ergonomics nobody has measured, and not one of the
+tests inside this repository can answer the question about itself — they are written by someone
+who already knows the shape. The count used to be here and it is not a number this argument needs:
+"none of them" is the claim, and a figure beside it is a figure that goes stale. It did — it said
+**795** across two releases and a consolidation, while the library's suite measured 733.
 
 Everything below was hit while building the smallest thing that loads a scene, runs it, couples
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
