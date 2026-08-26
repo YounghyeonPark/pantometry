@@ -28,6 +28,27 @@ fn scene(device: &str) -> Scene {
     serde_json::from_str(&text).expect("the scene parses")
 }
 
+/// One GPU test at a time, within this process.
+///
+/// **A workaround at the level the evidence supports, and no deeper.** Measured on this file:
+/// **7 hangs in 30** at the harness default, **0 in 30** with `--test-threads=1`, running alone
+/// with nothing before it. So it is concurrency inside one process — but *what* about it is not
+/// established. Two explanations were tried and measured wrong: device creation, which has always
+/// been behind a `OnceLock` and happens once; and overlapping readbacks, which serialising left
+/// at 5 in 30.
+///
+/// So the tests take a lock and the library does not, because a lock in the library would be a
+/// fix for a mechanism nobody has demonstrated. What is demonstrated is that these tests do not
+/// need to run at the same time, and that when they do, the suite stops.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take it. A poisoned lock is not interesting here — a panicking test has already failed, and
+/// the next one is entitled to a turn rather than a second failure about the first.
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 /// **The library refuses the device it does not have, and names what to do instead.**
 ///
 /// Not a silent fall back. A run that quietly used the CPU when the scene said otherwise would be
@@ -35,6 +56,7 @@ fn scene(device: &str) -> Scene {
 /// are different — which is the whole reason the device is stated.
 #[test]
 fn the_library_alone_refuses_and_says_why() {
+    let _alone = alone();
     let err = match World::build(scene(", \"device\": \"gpu\"")) {
         Err(why) => why,
         Ok(_) => panic!("the library has no device and must not pretend otherwise"),
@@ -54,6 +76,7 @@ fn the_library_alone_refuses_and_says_why() {
 /// **An application honours it, and the run comes off the device.**
 #[test]
 fn the_app_runs_the_block_where_the_scene_said() {
+    let _alone = alone();
     let asked = scene(", \"device\": \"gpu\"");
     let mut world = match World::build_with_accelerator(asked, &OnDisk, &OnTheGpu) {
         Ok(w) => w,
@@ -105,6 +128,7 @@ fn the_app_runs_the_block_where_the_scene_said() {
 /// **A block the device cannot run is refused through the accelerator too, with the reason.**
 #[test]
 fn a_cooled_block_on_the_device_is_refused_by_name() {
+    let _alone = alone();
     let text = r#"{
       "title": "a block that sheds",
       "duration_s": 0.02,

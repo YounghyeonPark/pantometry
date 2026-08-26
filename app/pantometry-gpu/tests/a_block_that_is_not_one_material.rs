@@ -101,6 +101,27 @@ fn march(cpu: &mut Solid3D, gpu: &mut GpuSolid, steps: usize) {
     }
 }
 
+/// One GPU test at a time, within this process.
+///
+/// **A workaround at the level the evidence supports, and no deeper.** Measured on this file:
+/// **7 hangs in 30** at the harness default, **0 in 30** with `--test-threads=1`, running alone
+/// with nothing before it. So it is concurrency inside one process — but *what* about it is not
+/// established. Two explanations were tried and measured wrong: device creation, which has always
+/// been behind a `OnceLock` and happens once; and overlapping readbacks, which serialising left
+/// at 5 in 30.
+///
+/// So the tests take a lock and the library does not, because a lock in the library would be a
+/// fix for a mechanism nobody has demonstrated. What is demonstrated is that these tests do not
+/// need to run at the same time, and that when they do, the suite stops.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take it. A poisoned lock is not interesting here — a panicking test has already failed, and
+/// the next one is entitled to a turn rather than a second failure about the first.
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 /// **Two materials, and the joint between them is the joint the CPU computed.**
 ///
 /// Copper in half the block and aluminium in the other: their conductivities differ by a factor of
@@ -109,6 +130,7 @@ fn march(cpu: &mut Solid3D, gpu: &mut GpuSolid, steps: usize) {
 /// single precision's — about `1e-7` a step, walking as `√k` — and not a number chosen to pass.
 #[test]
 fn two_materials_meet_at_the_face_the_cpu_resolved() {
+    let _alone = alone();
     let mut cpu = cpu_block();
     cpu.fill(Substance::copper(), |i, _, _| i < N / 2);
     let mut gpu = match GpuSolid::mirroring(cpu.clone()) {
@@ -151,6 +173,7 @@ fn two_materials_meet_at_the_face_the_cpu_resolved() {
 /// lies on, so it pairs with nothing and is only a hole.
 #[test]
 fn a_void_stops_the_heat_on_the_device_too() {
+    let _alone = alone();
     let bite = N / 3;
     let mut cpu = cpu_block().empty(move |i, j, k| i < bite && j < bite && k < bite);
     let mut gpu = match GpuSolid::mirroring(cpu.clone()) {
@@ -194,6 +217,7 @@ fn a_void_stops_the_heat_on_the_device_too() {
 /// **A source is watts in a cell, and it arrives on the device as the same rise.**
 #[test]
 fn a_generating_block_generates_the_same_on_both() {
+    let _alone = alone();
     let mut cpu = cpu_block().dissipating(4.0, |i, _, _| i < 2);
     let mut gpu = match GpuSolid::mirroring(cpu.clone()) {
         Ok(g) => g,
@@ -214,6 +238,7 @@ fn a_generating_block_generates_the_same_on_both() {
 /// refuses an unknown panel kind rather than skipping it.
 #[test]
 fn a_block_the_device_cannot_run_is_refused_by_name() {
+    let _alone = alone();
     let filmed = cpu_block().losing_from(
         pantometry_thermal::Face::ZMax,
         pantometry_thermal::Environment::still_air(

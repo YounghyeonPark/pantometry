@@ -5,6 +5,16 @@ cd app
 cargo test --release -- --nocapture
 ```
 
+**The tests in here take a lock and run one at a time**, and that is measured rather than
+cautious. Left to the harness's default they deadlock: `a_block_that_is_not_one_material` hung
+**7 times in 30** running alone with nothing before it, and **0 in 30** under
+`--test-threads=1`. A lock per test file is that, without making the whole suite serial.
+
+What is *not* established is why. Device creation is not it — that has always been behind a
+`OnceLock` and happens once per process. Overlapping readbacks are not it either: serialising the
+submit-map-`Maintain::Wait` region left it at 5 in 30. So the workaround sits in the tests and not
+in the library, because a lock in the library would be a fix for a mechanism nobody has shown.
+
 `--release`. This README used to say `cargo test` without it, which turns out **not** to be why its
 figures were wrong: measured at 64³, debug costs the CPU column 6.7× and the device column 5.9×, and
 the ratio survives (37× against 33×). The per-step host work — encoder, submit, uniform write — is
