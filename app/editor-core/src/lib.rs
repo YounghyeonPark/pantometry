@@ -9,12 +9,17 @@
 //!   under.
 //! - **Placement geometry** — every placed extent as eight posed corners, ready to wireframe,
 //!   with the union bounds a camera fits to. The corners go through
-//!   [`pantometry::core::Pose::point_to_world`]
-//!   even though no scene can state a pose yet, so the day the format grows one this crate
-//!   does not need to learn about it.
-//! - **Editing** — the inspector's half of the loop: which numbers a selected row lets a person
-//!   change, and a splice that changes one of them in the text without touching any other byte.
-//!   See [`edit`] for why it is a splice and not a `Value` round trip.
+//!   [`pantometry::core::Pose::point_to_world`], which was written here before any scene stated
+//!   a pose and needed no change when one did.
+//! - **Editing** — the inspector's half of the loop: which values a selected row lets a person
+//!   change, and the splices that change them in the text without touching any other byte —
+//!   a number, a string, a domain added or removed, and a placement, which is the one that
+//!   *creates* a key rather than replacing one. See [`edit`] for why they are splices and not a
+//!   `Value` round trip.
+//! - **The arithmetic behind a handle** — [`drag_along_axis`], which turns a drag on the screen
+//!   into a distance along an axis in the world. Here rather than in the shell because it is a
+//!   function of a camera and two vectors, and because its error has an *order* that a test can
+//!   measure — which is how it was caught moving things 77% of the way.
 //! - **Running and verifying** — thin passes over [`World::run`] and
 //!   [`pantometry_world::verify::verify`], returning the run's JSON (which `viewer-core` reads)
 //!   and the battery's rendered report.
@@ -35,8 +40,8 @@
 pub mod edit;
 
 pub use edit::{
-    add_domain, domain_named, editable, pose_of, remove_domain, set_number, set_pose, set_text,
-    Editable, Value,
+    add_domain, domain_named, drag_along_axis, editable, pose_of, remove_domain, set_number,
+    set_pose, set_text, Editable, Value,
 };
 
 /// A starting example of every domain the format defines, re-exported so a shell talks to this

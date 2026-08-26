@@ -818,6 +818,67 @@ fn append_member(text: &str, object: Range<usize>, member: &str) -> Result<Strin
     ))
 }
 
+/// How far along `axis` a drag moves the thing at `origin`, in world units.
+///
+/// The arithmetic behind a translate handle, kept here rather than in the shell because it is a
+/// function of a camera and two vectors and nothing about an event loop.
+///
+/// # The formula, and the case it refuses
+///
+/// A handle is an axis through the object. Project the origin and a point one unit along the
+/// axis; the difference is where that unit of world motion *goes on screen*. The drag is then
+/// projected onto that direction — `t = (d · s) / (s · s)` — which is the least-squares answer to
+/// "how far along the axis did the pointer mean to go", and the only answer that behaves when the
+/// pointer wanders off the handle.
+///
+/// **An axis pointing at the camera returns zero.** Its screen direction is a point, `s · s` is
+/// nearly nothing, and the division would turn a one-pixel twitch into a leap across the scene.
+/// A handle you cannot see is a handle you cannot drag, and refusing is the honest answer; the
+/// alternative is a gizmo that occasionally throws the object out of the world.
+///
+/// # Exact for a small drag, second order for a large one
+///
+/// The projection divides by depth, so moving along the axis changes how far the object is and
+/// the screen-to-world map is not linear. `s` is the map at the *starting* position, so the error
+/// grows with the square of the drag — measured in `a_drag_lands_where_the_pointer_went`, which
+/// halves the drag and watches the error quarter. That is the right shape for a gizmo: a pointer
+/// is moved continuously, and each frame's drag is a few pixels.
+pub fn drag_along_axis(
+    camera: &viewer_core::Camera,
+    frame: &viewer_core::Framing,
+    aspect: f64,
+    origin: [f64; 3],
+    axis: [f64; 3],
+    screen: [f64; 2],
+) -> f64 {
+    // **A short step, not a whole unit.** `s` has to be the screen displacement *per unit of
+    // axis at this position*, and the projection divides by depth, so the secant across a whole
+    // unit is not that — it is the average over a stretch where the object gets nearer or further.
+    // Measured with the whole-unit version: the pointer asked for a move and the object went
+    // **77%** of the way, at every drag size, converging to a fixed 23.5% relative error rather
+    // than to zero. A step of a ten-thousandth of the framed span makes this the derivative.
+    let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if length < 1e-30 {
+        return 0.0;
+    }
+    let eps = 1e-4 * frame.span.max(1e-12) / length;
+    let along = [
+        origin[0] + axis[0] * eps,
+        origin[1] + axis[1] * eps,
+        origin[2] + axis[2] * eps,
+    ];
+    let here = camera.project(origin, frame, aspect);
+    let there = camera.project(along, frame, aspect);
+    let s = [(there.x - here.x) / eps, (there.y - here.y) / eps];
+    let len2 = s[0] * s[0] + s[1] * s[1];
+    // Edge-on. `s` is now normalised device units *per unit of axis*, and the window is two
+    // across, so this is a handle one unit of which draws shorter than a thousandth of the screen.
+    if len2 < 1e-6 {
+        return 0.0;
+    }
+    (screen[0] * s[0] + screen[1] * s[1]) / len2
+}
+
 /// The whitespace between the start of `at`'s line and `at` itself.
 fn indent_of(text: &str, at: usize) -> String {
     let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
@@ -1403,6 +1464,123 @@ mod tests {
     fn a_whole_number_position_is_still_written_as_a_float() {
         let out = set_pose(SCENE, "buffer", [1.0, 2.0, 3.0]).expect("moved");
         assert!(out.contains("[1.0, 2.0, 3.0]"), "{out}");
+    }
+
+    /// A camera and a framing to drag against: the default three-quarter view, on a box one
+    /// metre across at the origin.
+    fn a_view() -> (viewer_core::Camera, viewer_core::Framing) {
+        (
+            viewer_core::Camera::default(),
+            viewer_core::Framing::of([-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]),
+        )
+    }
+
+    /// The screen displacement per unit of `axis`, at the origin — the same derivative
+    /// `drag_along_axis` takes, by the same short step.
+    ///
+    /// Deliberately not the secant across a whole unit. That is what the function used to do, and
+    /// a helper that repeated the mistake would have agreed with it: the parallel-drag test below
+    /// passed the whole time the gizmo was moving things 77% of the way.
+    fn on_screen(axis: [f64; 3]) -> [f64; 2] {
+        let (camera, frame) = a_view();
+        let eps = 1e-4 * frame.span;
+        let here = camera.project([0.0; 3], &frame, 1.6);
+        let there = camera.project([axis[0] * eps, axis[1] * eps, axis[2] * eps], &frame, 1.6);
+        [(there.x - here.x) / eps, (there.y - here.y) / eps]
+    }
+
+    /// **A drag exactly along the handle moves exactly one unit**, and one across it moves none.
+    ///
+    /// Both are exact rather than approximate, because they are what the projection `(d·s)/(s·s)`
+    /// *is* — the parallel case is `s·s` over itself and the perpendicular case is a zero dot
+    /// product. A gizmo that failed either would be one that drifts off its own axis.
+    #[test]
+    fn a_drag_along_the_handle_moves_along_the_handle() {
+        let (camera, frame) = a_view();
+        for axis in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
+            let s = on_screen(axis);
+            let along = drag_along_axis(&camera, &frame, 1.6, [0.0; 3], axis, s);
+            assert!(
+                (along - 1.0).abs() < 1e-9,
+                "{axis:?}: a drag of one unit's worth moved {along}"
+            );
+            let across = drag_along_axis(&camera, &frame, 1.6, [0.0; 3], axis, [-s[1], s[0]]);
+            assert!(
+                across.abs() < 1e-12,
+                "{axis:?}: a drag across the handle moved {across}"
+            );
+        }
+    }
+
+    /// **A handle pointing at the camera refuses rather than exploding.**
+    ///
+    /// Its screen direction is a point, so `s·s` is nearly nothing and the division would turn a
+    /// pixel into a leap across the scene. Set up by aiming the camera straight down the axis:
+    /// azimuth zero and elevation zero looks along one of them.
+    #[test]
+    fn an_edge_on_handle_does_not_move() {
+        let frame = viewer_core::Framing::of([-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]);
+        let camera = viewer_core::Camera {
+            azimuth: 0.0,
+            elevation: 0.0,
+            ..viewer_core::Camera::default()
+        };
+        // Whichever axis is along the view direction has no screen length. Find it rather than
+        // asserting which one it is, because that depends on the rotation's convention.
+        let flattest = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            .into_iter()
+            .min_by(|a, b| {
+                let l = |v: [f64; 3]| {
+                    let here = camera.project([0.0; 3], &frame, 1.6);
+                    let there = camera.project(v, &frame, 1.6);
+                    (there.x - here.x).hypot(there.y - here.y)
+                };
+                l(*a).total_cmp(&l(*b))
+            })
+            .expect("three axes");
+        let moved = drag_along_axis(&camera, &frame, 1.6, [0.0; 3], flattest, [0.5, 0.5]);
+        assert_eq!(moved, 0.0, "{flattest:?} is edge-on and must not move");
+    }
+
+    /// **A drag lands where the pointer went, and the error is second order.**
+    ///
+    /// The projection divides by depth, so the map from screen to world changes as the object
+    /// moves and a finite drag cannot be inverted exactly. What can be checked is the *rate*: the
+    /// map is the derivative at the starting position, so halving the drag quarters the error.
+    ///
+    /// **This is the test that found the defect, and no tolerance would have.** The first version
+    /// of `drag_along_axis` took its screen direction as the secant across a whole unit of the
+    /// axis rather than the derivative, and the object went **77%** of the way the pointer asked
+    /// — at every drag size, converging to a fixed 23.5% relative error instead of to zero. An
+    /// assertion of "close enough at one drag size" would have been written around it. The order
+    /// measured 0.52, 0.80, 0.91, 0.95 — creeping toward 1 where a correct inverse gives 2 — and
+    /// that shape is what said the map itself was wrong rather than merely coarse.
+    #[test]
+    fn a_drag_lands_where_the_pointer_went() {
+        let (camera, frame) = a_view();
+        let axis = [1.0, 0.0, 0.0];
+        let s = on_screen(axis);
+
+        let error_at = |fraction: f64| {
+            let wanted = [s[0] * fraction, s[1] * fraction];
+            let t = drag_along_axis(&camera, &frame, 1.6, [0.0; 3], axis, wanted);
+            let landed = camera.project([axis[0] * t, axis[1] * t, axis[2] * t], &frame, 1.6);
+            let here = camera.project([0.0; 3], &frame, 1.6);
+            // How far the object actually moved on screen, against how far it was asked to.
+            ((landed.x - here.x) - wanted[0]).hypot((landed.y - here.y) - wanted[1])
+        };
+
+        let mut previous = error_at(0.4);
+        for step in 1..=3 {
+            let fraction = 0.4 / 2f64.powi(step);
+            let now = error_at(fraction);
+            let ratio = previous / now.max(1e-300);
+            assert!(
+                (3.0..=5.0).contains(&ratio),
+                "halving the drag should quarter the error; step {step} gave {ratio:.2}                  ({previous:.3e} -> {now:.3e})"
+            );
+            previous = now;
+        }
     }
 
     /// **Text that does not parse offers nothing**, rather than pointing into a file whose shape
