@@ -33,7 +33,8 @@ domain appears in this menu without the shell learning about it, and cannot quie
 Two kinds arrive incomplete because the format will not let them stand alone: a `beam` states
 what it shines `onto` and a `structure` states the block it `follows`, and neither can be guessed.
 
-Below those, **placement**: where the domain's origin sits in the world. It is a separate control
+Below those, **placement**: where the domain's origin sits in the world, and the turn — an axis
+and degrees — applied about it. It is a separate control
 because `poses` is a map beside `materials` rather than a field inside the domain, and it is the
 one write that **creates** instead of replacing — no shipped scene states `poses` at all, so
 moving anything means writing a key the file does not have. Three levels can be missing and each

@@ -48,6 +48,27 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   camera following it. Released on mouse-up the picture would snap back by the whole drag instead,
   which is the same defect arriving late, so the camera now moves when it is asked to.
 
+- **A domain can be turned from the editor.** `PoseSpec` has carried a `turn` — an axis and
+  degrees — since it arrived, and nothing in the editor could write one.
+
+  It turned out to be much smaller than planned, because of what a measurement said before any of
+  it was built: the inspector's generic walk **already reaches into `poses`**, so a turn is
+  editable the moment the key exists. The whole job was creating it, which is `set_pose`'s pattern
+  one level deeper. A test pins that, so a walk that stopped reaching in would fail rather than
+  making the control silently read-only.
+
+  Checked against a closed form, because the obvious assertions are blind: creating the key,
+  reading it back and coexisting with a position all pass if `set_turn` writes somewhere the
+  builder never looks — the trap five pose tests fell into. **360 degrees is the identity** for
+  any axis, so the bounds return; **90 degrees is not**, so they must move. Neither alone is
+  enough. Order is checked both ways too, since writing the position first and the turn first take
+  different branches at all four levels.
+
+  An axis of `[0, 0, 0]` is refused before the file is touched, for the reason `PoseSpec::to_pose`
+  gives: normalising a zero vector yields a `NaN` rather than an error.
+
+  The handles still only translate; an arc drag is a different inverse and is not here.
+
 - **A domain can be moved from the editor.** The inspector grew a *placement* control, and it is
   the first write in the editor that **creates** a key rather than replacing one: `poses` is a map
   beside `materials`, and **no shipped scene states it** — zero of the twenty-eight — so moving

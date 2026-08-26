@@ -1296,6 +1296,7 @@ impl App {
         // control with its own write, and it appears for a domain row whether or not the file has
         // ever said anything about placement — no shipped scene does.
         let mut moved: Option<(String, [f64; 3])> = None;
+        let mut turned: Option<(String, [f64; 3], f64)> = None;
         if let Some(domain) = editor_core::domain_named(&path).map(str::to_string) {
             let at = editor_core::pose_of(&self.text, &domain);
             let mut to = at;
@@ -1328,11 +1329,50 @@ impl App {
                         }
                         ui.end_row();
                     }
+                    // The turn, beside the position because they are one key in the file. Once it
+                    // exists the inspector's generic walk offers it from the scene row as well —
+                    // this is the control that brings it into being, which is the only part that
+                    // needed writing.
+                    let (axis, degrees) = editor_core::turn_of(&self.text, &domain);
+                    let (mut spin, mut about) = (degrees, axis);
+                    ui.label(
+                        egui::RichText::new("turn (deg)")
+                            .weak()
+                            .monospace()
+                            .size(11.0),
+                    );
+                    if ui.add(egui::DragValue::new(&mut spin).speed(1.0)).changed() {
+                        turned = Some((domain.clone(), about, spin));
+                    }
+                    ui.end_row();
+                    for (i, name) in ["axis.x", "axis.y", "axis.z"].iter().enumerate() {
+                        ui.label(egui::RichText::new(*name).weak().monospace().size(11.0));
+                        if ui
+                            .add(egui::DragValue::new(&mut about[i]).speed(0.05))
+                            .changed()
+                        {
+                            turned = Some((domain.clone(), about, spin));
+                        }
+                        ui.end_row();
+                    }
                 });
             ui.separator();
         }
         if let Some((domain, to)) = moved {
             match editor_core::set_pose(&self.text, &domain, to) {
+                Ok(text) => {
+                    self.text = text;
+                    self.dirty = true;
+                    self.recheck();
+                }
+                Err(why) => self.status = why,
+            }
+        }
+        if let Some((domain, axis, degrees)) = turned {
+            // An axis dragged through zero on every component is refused by the format rather
+            // than normalised into a `NaN`, and the status line says so instead of the file
+            // taking it. Dragging back out of zero recovers.
+            match editor_core::set_turn(&self.text, &domain, axis, degrees) {
                 Ok(text) => {
                     self.text = text;
                     self.dirty = true;

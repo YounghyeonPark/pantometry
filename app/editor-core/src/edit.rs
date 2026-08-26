@@ -779,6 +779,99 @@ pub fn set_pose(text: &str, name: &str, at_m: [f64; 3]) -> Result<String, String
     )
 }
 
+/// How a domain is turned: an axis, and degrees about it.
+///
+/// `([0, 0, 1], 0)` when the scene says nothing — an identity rotation with a real axis, because
+/// the format refuses a zero one and a default that cannot be written back is not a default.
+pub fn turn_of(text: &str, name: &str) -> ([f64; 3], f64) {
+    let mut axis = [0.0, 0.0, 1.0];
+    let mut degrees = 0.0;
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else {
+        return (axis, degrees);
+    };
+    let Some(turn) = root
+        .get("poses")
+        .and_then(|p| p.get(name))
+        .and_then(|p| p.get("turn"))
+    else {
+        return (axis, degrees);
+    };
+    if let Some(stated) = turn.get("axis") {
+        for (i, slot) in axis.iter_mut().enumerate() {
+            if let Some(v) = stated.get(i).and_then(|v| v.as_f64()) {
+                *slot = v;
+            }
+        }
+    }
+    if let Some(d) = turn.get("degrees").and_then(|d| d.as_f64()) {
+        degrees = d;
+    }
+    (axis, degrees)
+}
+
+/// Turn a domain, writing whatever part of `poses` is not there yet.
+///
+/// The counterpart to [`set_pose`], one level deeper: a `turn` sits inside the entry that
+/// `set_pose` writes, so there are four places the path can stop rather than three.
+///
+/// **Nothing else has to change for the result to be editable.** Once the key exists the
+/// inspector's generic walk finds `poses.<name>.turn.axis[0]` and `poses.<name>.turn.degrees`
+/// like any other value — measured rather than assumed. Creating the key is the whole job.
+///
+/// Refuses what the format refuses, before the file is touched: a value that is not finite, and
+/// an axis with no direction. `PoseSpec::to_pose` gives the same two answers a frame later, and
+/// its note on the second is the reason — normalising a zero vector gives a `NaN` rather than an
+/// error, so it has to be caught by somebody.
+pub fn set_turn(text: &str, name: &str, axis: [f64; 3], degrees: f64) -> Result<String, String> {
+    if !degrees.is_finite() || !axis.iter().all(|v| v.is_finite()) {
+        return Err(format!(
+            "{name}: a turn of {degrees} degrees about {axis:?} has no JSON spelling"
+        ));
+    }
+    if axis.iter().all(|v| *v == 0.0) {
+        return Err(format!(
+            "{name}: an axis of {axis:?} has no direction, and a rotation needs one"
+        ));
+    }
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    if !root
+        .get("domains")
+        .and_then(|d| d.as_array())
+        .is_some_and(|d| {
+            d.iter()
+                .any(|x| x.get("name").and_then(|n| n.as_str()) == Some(name))
+        })
+    {
+        return Err(format!("this scene defines no domain called {name:?}"));
+    }
+
+    let body = format!(
+        r#"{{ "axis": [{}, {}, {}], "degrees": {} }}"#,
+        as_float(axis[0]),
+        as_float(axis[1]),
+        as_float(axis[2]),
+        as_float(degrees)
+    );
+    let escaped = escape(name);
+
+    if let Some(span) = value_span(text, &format!("/poses/{escaped}/turn")) {
+        return Ok(splice(text, span, &body));
+    }
+    if let Some(entry) = value_span(text, &format!("/poses/{escaped}")) {
+        return append_member(text, entry, &format!(r#""turn": {body}"#));
+    }
+    if let Some(poses) = value_span(text, "/poses") {
+        return append_member(text, poses, &format!(r#""{name}": {{ "turn": {body} }}"#));
+    }
+    let root_span = value_span(text, "").ok_or_else(|| "this scene has no root".to_string())?;
+    append_member(
+        text,
+        root_span,
+        &format!(r#""poses": {{ "{name}": {{ "turn": {body} }} }}"#),
+    )
+}
+
 /// A float that stays a float: `3` would be a different literal, and `at_m` is three `f64`.
 fn as_float(v: f64) -> String {
     let s = format!("{v}");
@@ -1440,6 +1533,105 @@ mod tests {
                 "axis {axis}: the box changed size, {span_before} -> {span_after}"
             );
         }
+    }
+
+    /// **A turn is created where it is missing, and is editable the moment it exists.**
+    ///
+    /// The second half is the point: nothing was added to the inspector for rotation, because the
+    /// generic walk finds `poses.<name>.turn.*` like any other value once the key is there. This
+    /// asserts that rather than assuming it — if the walk ever stopped reaching into `poses`, a
+    /// rotation control would silently become read-only.
+    #[test]
+    fn a_turn_is_created_and_then_walks_like_anything_else() {
+        let turned = set_turn(SCENE, "buffer", [0.0, 0.0, 1.0], 30.0).expect("the domain is there");
+        assert_eq!(turn_of(&turned, "buffer"), ([0.0, 0.0, 1.0], 30.0));
+        assert!(crate::check(&turned, &crate::OnDisk).error.is_none());
+
+        let labels: Vec<String> = editable(&turned, "/")
+            .into_iter()
+            .map(|e| e.label)
+            .collect();
+        for wanted in [
+            "poses.buffer.turn.axis[0]",
+            "poses.buffer.turn.axis[2]",
+            "poses.buffer.turn.degrees",
+        ] {
+            assert!(
+                labels.iter().any(|l| l == wanted),
+                "{wanted} not in {labels:?}"
+            );
+        }
+    }
+
+    /// **A turn goes in beside a position without disturbing it**, at whichever level is missing.
+    #[test]
+    fn a_turn_and_a_position_coexist() {
+        let moved = set_pose(SCENE, "buffer", [0.01, 0.0, 0.0]).expect("moved");
+        let both = set_turn(&moved, "buffer", [0.0, 1.0, 0.0], 45.0).expect("turned");
+        assert_eq!(
+            pose_of(&both, "buffer"),
+            [0.01, 0.0, 0.0],
+            "the position moved: {both}"
+        );
+        assert_eq!(turn_of(&both, "buffer"), ([0.0, 1.0, 0.0], 45.0));
+        assert_eq!(both.matches("turn").count(), 1, "{both}");
+
+        // And the other order, which takes a different branch at every level.
+        let turned = set_turn(SCENE, "buffer", [0.0, 1.0, 0.0], 45.0).expect("turned");
+        let both = set_pose(&turned, "buffer", [0.01, 0.0, 0.0]).expect("moved");
+        assert_eq!(pose_of(&both, "buffer"), [0.01, 0.0, 0.0]);
+        assert_eq!(turn_of(&both, "buffer"), ([0.0, 1.0, 0.0], 45.0));
+        assert!(crate::check(&both, &crate::OnDisk).error.is_none());
+    }
+
+    /// **The box actually turns**, and a full circle puts it back.
+    ///
+    /// The same trap the pose tests fell into: every assertion above passes if `set_turn` writes
+    /// a key the builder never reads. A full turn returning the original bounds is the closed
+    /// form — 360 degrees is the identity for any axis — and a quarter turn moving them is what
+    /// says the rotation is applied at all rather than the test being blind to both.
+    #[test]
+    fn a_turned_domain_is_drawn_turned() {
+        let plain = crate::check(SCENE, &crate::OnDisk)
+            .bounds
+            .expect("geometry");
+        let bounds_of = |degrees: f64| {
+            let text = set_turn(SCENE, "buffer", [0.0, 0.0, 1.0], degrees).expect("turned");
+            crate::check(&text, &crate::OnDisk)
+                .bounds
+                .expect("still geometry")
+        };
+
+        let quarter = bounds_of(90.0);
+        assert!(
+            plain
+                .iter()
+                .zip(quarter.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-9),
+            "a quarter turn about z moved nothing: {plain:?}"
+        );
+
+        let full = bounds_of(360.0);
+        for (a, b) in plain.iter().zip(full.iter()) {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "a full turn should be the identity: {plain:?} against {full:?}"
+            );
+        }
+    }
+
+    /// **An axis with no direction is refused before the file is touched.**
+    ///
+    /// `PoseSpec::to_pose` refuses it too, and says why: normalising a zero vector gives a `NaN`
+    /// rather than an error, so somebody has to catch it.
+    #[test]
+    fn a_turn_about_nothing_is_refused() {
+        let why = set_turn(SCENE, "buffer", [0.0, 0.0, 0.0], 30.0).expect_err("refused");
+        assert!(why.contains("no direction"), "{why}");
+        let why = set_turn(SCENE, "buffer", [0.0, 0.0, 1.0], f64::NAN).expect_err("refused");
+        assert!(why.contains("no JSON spelling"), "{why}");
+        let why = set_turn(SCENE, "ghost", [0.0, 0.0, 1.0], 30.0).expect_err("refused");
+        assert!(why.contains("ghost"), "{why}");
     }
 
     /// **An absent pose reads as the origin**, which is what the format means by silence.
