@@ -40,6 +40,14 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   across the scene, the camera does not turn while a handle is held, and releasing over empty
   space does not clear the selection.
 
+  **The framing holds still while a domain is dragged**, and keeps holding until the view is
+  fitted again. Every projection in the viewport is relative to the centre of everything the scene
+  contains, so moving the only domain in a scene moved that centre by the same amount and the box
+  did not appear to move at all — measured on scene 15: the box goes 3 mm, the centre goes 3 mm,
+  apparent motion `0.000000000 m`. It felt like the box resisting the pointer, and it was the
+  camera following it. Released on mouse-up the picture would snap back by the whole drag instead,
+  which is the same defect arriving late, so the camera now moves when it is asked to.
+
 - **A domain can be moved from the editor.** The inspector grew a *placement* control, and it is
   the first write in the editor that **creates** a key rather than replacing one: `poses` is a map
   beside `materials`, and **no shipped scene states it** — zero of the twenty-eight — so moving

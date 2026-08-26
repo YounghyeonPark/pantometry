@@ -296,6 +296,19 @@ struct App {
     /// unusable, and the two gestures are the same gesture as far as egui is concerned.
     grabbed: Option<usize>,
 
+    /// A framing held still, instead of recomputed from the geometry every frame.
+    ///
+    /// Every projection here is relative to [`viewer_core::Framing::centre`], which is the centre
+    /// of everything the scene contains. So moving the only domain in a scene moves the frame by
+    /// the same amount and the object does not appear to move **at all** — measured on scene 15:
+    /// the box goes 3 mm, the centre goes 3 mm, apparent motion `0.000000000 m`. Dragging a handle
+    /// felt like the box resisting, and it was the camera following it.
+    ///
+    /// Taken when a handle is grabbed and kept until the view is fitted again, rather than
+    /// released on the mouse-up: snapping back by the whole drag the moment you let go is the
+    /// same defect arriving late. The camera moves when it is asked to.
+    framing_hold: Option<viewer_core::Framing>,
+
     /// Whether the outliner and the inspector are on screen at all.
     show_outliner: bool,
     show_inspector: bool,
@@ -352,6 +365,7 @@ impl App {
             shaded_probes: Vec::new(),
             shaded_notes: Vec::new(),
             grabbed: None,
+            framing_hold: None,
             show_outliner: true,
             show_inspector: true,
             show_text: true,
@@ -1639,7 +1653,9 @@ impl App {
         let mut moved: Option<(String, [f64; 3])> = None;
         let mut holding = false;
         if let (Some(b), Some(name)) = (bounds, self.selected_domain()) {
-            let framing = viewer_core::Framing::of(b);
+            let framing = self
+                .framing_hold
+                .unwrap_or_else(|| viewer_core::Framing::of(b));
             if let Some(origin) = self.handle_origin(&name) {
                 let to_screen = |p: [f64; 3]| {
                     let q = self.camera.project(p, &framing, aspect);
@@ -1669,6 +1685,9 @@ impl App {
                             .filter(|(_, d)| *d <= GRAB_RADIUS)
                             .min_by(|a, b| a.1.total_cmp(&b.1))
                             .map(|(i, _)| i);
+                        if self.grabbed.is_some() {
+                            self.framing_hold = Some(framing);
+                        }
                     }
                 }
                 if let Some(i) = self.grabbed {
@@ -1757,7 +1776,13 @@ impl App {
             );
             return;
         };
-        let framing = viewer_core::Framing::of(bounds);
+        // Asking the camera to fit is asking for the framing to follow the geometry again.
+        if self.needs_fit || self.pending_frame {
+            self.framing_hold = None;
+        }
+        let framing = self
+            .framing_hold
+            .unwrap_or_else(|| viewer_core::Framing::of(bounds));
         if self.needs_fit {
             self.camera.fit(bounds, &framing, aspect, 0.85);
             self.needs_fit = false;
@@ -1946,218 +1971,230 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        let Some(view) = &mut self.run else {
-            return;
-        };
-        if view.partial {
-            painter.text(
-                egui::pos2(rect.left() + 8.0, rect.top() + 8.0),
-                egui::Align2::LEFT_TOP,
-                "streaming — a prefix of the run",
-                egui::FontId::proportional(12.0),
-                egui::Color32::from_rgb(230, 180, 60),
-            );
-        }
-        let frames = view.run.frames.len();
-        if frames > 1 {
-            ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Slider::new(&mut view.frame, 0..=frames - 1).text("frame"));
-                        ui.label(format!(
-                            "t = {} s",
-                            editor_core::magnitude(view.run.frames[view.frame].t)
-                        ));
+        // **Everything below is about a run, and there may not be one.** This used to be an
+        // early `return`, which quietly took the rest of the function with it: the translate
+        // handles are painted after this point, so on a scene that had not been run they were
+        // computed, hit-tested and never drawn. Compiles, passes, does nothing.
+        if let Some(view) = &mut self.run {
+            if view.partial {
+                painter.text(
+                    egui::pos2(rect.left() + 8.0, rect.top() + 8.0),
+                    egui::Align2::LEFT_TOP,
+                    "streaming — a prefix of the run",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::from_rgb(230, 180, 60),
+                );
+            }
+            let frames = view.run.frames.len();
+            if frames > 1 {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::Slider::new(&mut view.frame, 0..=frames - 1).text("frame"),
+                            );
+                            ui.label(format!(
+                                "t = {} s",
+                                editor_core::magnitude(view.run.frames[view.frame].t)
+                            ));
+                        });
                     });
                 });
-            });
-        }
-        let frame = &view.run.frames[view.frame.min(frames - 1)];
-
-        // The scale the colour bar will show. The first panel that has one: a viewport holding
-        // two quantities cannot draw one bar for both, and drawing the first with its name on it
-        // beats drawing none.
-        let mut legend: Option<(f64, f64, String, bool)> = None;
-
-        for panel in &frame.panels {
-            if !visible_names.iter().any(|n| n == panel.name()) {
-                continue;
             }
-            let scale = view.run.scale_of(panel.name());
-            if legend.is_none() {
-                if let Some((lo, hi)) = scale {
-                    legend = Some((
-                        lo,
-                        hi,
-                        format!("{} / {}", panel.name(), panel.unit()),
-                        editor_core::scale_is_signed(scale),
-                    ));
+            let frame = &view.run.frames[view.frame.min(frames - 1)];
+
+            // The scale the colour bar will show. The first panel that has one: a viewport holding
+            // two quantities cannot draw one bar for both, and drawing the first with its name on it
+            // beats drawing none.
+            let mut legend: Option<(f64, f64, String, bool)> = None;
+
+            for panel in &frame.panels {
+                if !visible_names.iter().any(|n| n == panel.name()) {
+                    continue;
                 }
-            }
-            match panel {
-                viewer_core::Panel::Points {
-                    name,
-                    unit,
-                    positions,
-                    values,
-                    ..
-                } => {
-                    // Far to near, so a body in front covers one behind rather than whichever
-                    // happened to be last in the array.
-                    let pts: Vec<[f64; 3]> = (0..values.len())
-                        .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
-                        .collect();
-                    let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
-                    for i in editor_core::far_to_near(&depths) {
-                        let at = to_screen(pts[i]);
-                        if !self.shaded {
-                            painter.circle_filled(at, 3.5, shade(values[i], scale));
-                        }
-                        probe.offer(pointer, at, 6.0, depths[i], &format!("/run/{name}"), || {
-                            format!(
-                                "{name} body {i}   {} {unit}",
-                                editor_core::magnitude(values[i])
-                            )
-                        });
+                let scale = view.run.scale_of(panel.name());
+                if legend.is_none() {
+                    if let Some((lo, hi)) = scale {
+                        legend = Some((
+                            lo,
+                            hi,
+                            format!("{} / {}", panel.name(), panel.unit()),
+                            editor_core::scale_is_signed(scale),
+                        ));
                     }
                 }
-                viewer_core::Panel::Paths {
-                    starts,
-                    vertices,
-                    values,
-                    ..
-                } => {
-                    for (r, value) in values.iter().enumerate() {
-                        let lo = starts[r] as usize;
-                        let hi = starts
-                            .get(r + 1)
-                            .map_or(vertices.len() / 3, |s| *s as usize);
-                        if self.shaded {
-                            continue;
+                match panel {
+                    viewer_core::Panel::Points {
+                        name,
+                        unit,
+                        positions,
+                        values,
+                        ..
+                    } => {
+                        // Far to near, so a body in front covers one behind rather than whichever
+                        // happened to be last in the array.
+                        let pts: Vec<[f64; 3]> = (0..values.len())
+                            .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
+                            .collect();
+                        let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
+                        for i in editor_core::far_to_near(&depths) {
+                            let at = to_screen(pts[i]);
+                            if !self.shaded {
+                                painter.circle_filled(at, 3.5, shade(values[i], scale));
+                            }
+                            probe.offer(
+                                pointer,
+                                at,
+                                6.0,
+                                depths[i],
+                                &format!("/run/{name}"),
+                                || {
+                                    format!(
+                                        "{name} body {i}   {} {unit}",
+                                        editor_core::magnitude(values[i])
+                                    )
+                                },
+                            );
                         }
-                        for w in lo..hi.saturating_sub(1) {
-                            let a = [vertices[3 * w], vertices[3 * w + 1], vertices[3 * w + 2]];
-                            let b = [
-                                vertices[3 * w + 3],
-                                vertices[3 * w + 4],
-                                vertices[3 * w + 5],
-                            ];
-                            painter.line_segment(
-                                [to_screen(a), to_screen(b)],
-                                egui::Stroke::new(1.5_f32, shade(*value, scale)),
+                    }
+                    viewer_core::Panel::Paths {
+                        starts,
+                        vertices,
+                        values,
+                        ..
+                    } => {
+                        for (r, value) in values.iter().enumerate() {
+                            let lo = starts[r] as usize;
+                            let hi = starts
+                                .get(r + 1)
+                                .map_or(vertices.len() / 3, |s| *s as usize);
+                            if self.shaded {
+                                continue;
+                            }
+                            for w in lo..hi.saturating_sub(1) {
+                                let a = [vertices[3 * w], vertices[3 * w + 1], vertices[3 * w + 2]];
+                                let b = [
+                                    vertices[3 * w + 3],
+                                    vertices[3 * w + 4],
+                                    vertices[3 * w + 5],
+                                ];
+                                painter.line_segment(
+                                    [to_screen(a), to_screen(b)],
+                                    egui::Stroke::new(1.5_f32, shade(*value, scale)),
+                                );
+                            }
+                        }
+                    }
+                    viewer_core::Panel::Field {
+                        name,
+                        unit,
+                        nx,
+                        ny,
+                        nz,
+                        values,
+                        ..
+                    } => {
+                        // **The run's own extent first, the scene's placed box second.** A field
+                        // carries the box it was sampled over now, so a run opened without the file
+                        // that produced it still draws in the right place and at the right size. The
+                        // placed box is the fallback for a run written before the format carried it,
+                        // and a field with neither has nowhere to be drawn — which is said rather
+                        // than shown as an absence.
+                        let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
+                            name: name.clone(),
+                            corners: editor_core::corners_of(e),
+                        });
+                        let placed = from_run
+                            .as_ref()
+                            .or_else(|| self.checked.boxes.iter().find(|b| &b.name == name));
+                        let Some(b) = placed else {
+                            continue;
+                        };
+                        let note = if self.shaded {
+                            self.shaded_notes
+                                .iter()
+                                .find(|(n, _)| n == name)
+                                .map(|(_, note)| *note)
+                        } else {
+                            draw_field(
+                                &painter,
+                                &project,
+                                b,
+                                (*nx, *ny, *nz),
+                                values,
+                                unit,
+                                scale,
+                                pointer,
+                                &mut probe,
+                                name,
+                            )
+                        };
+                        if let Some(note) = note {
+                            painter.text(
+                                to_screen(b.corners[0]),
+                                egui::Align2::LEFT_TOP,
+                                note,
+                                egui::FontId::proportional(10.0),
+                                ui.visuals().weak_text_color(),
                             );
                         }
                     }
                 }
-                viewer_core::Panel::Field {
-                    name,
-                    unit,
-                    nx,
-                    ny,
-                    nz,
-                    values,
-                    ..
-                } => {
-                    // **The run's own extent first, the scene's placed box second.** A field
-                    // carries the box it was sampled over now, so a run opened without the file
-                    // that produced it still draws in the right place and at the right size. The
-                    // placed box is the fallback for a run written before the format carried it,
-                    // and a field with neither has nowhere to be drawn — which is said rather
-                    // than shown as an absence.
-                    let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
-                        name: name.clone(),
-                        corners: editor_core::corners_of(e),
-                    });
-                    let placed = from_run
-                        .as_ref()
-                        .or_else(|| self.checked.boxes.iter().find(|b| &b.name == name));
-                    let Some(b) = placed else {
-                        continue;
-                    };
-                    let note = if self.shaded {
-                        self.shaded_notes
-                            .iter()
-                            .find(|(n, _)| n == name)
-                            .map(|(_, note)| *note)
-                    } else {
-                        draw_field(
-                            &painter,
-                            &project,
-                            b,
-                            (*nx, *ny, *nz),
-                            values,
-                            unit,
-                            scale,
-                            pointer,
-                            &mut probe,
-                            name,
-                        )
-                    };
-                    if let Some(note) = note {
-                        painter.text(
-                            to_screen(b.corners[0]),
-                            egui::Align2::LEFT_TOP,
-                            note,
-                            egui::FontId::proportional(10.0),
-                            ui.visuals().weak_text_color(),
-                        );
-                    }
+            }
+
+            // The colour bar. Without it the viewport says *more* and *less* and never *how much* —
+            // which is the whole difference between a picture and a reading, and the report grew one
+            // for every view for the same reason.
+            if let Some((lo, hi, label, signed)) = legend {
+                colour_bar(&painter, rect, lo, hi, &label, signed, ui.visuals());
+            }
+
+            // The frame's readings, top-right: the numbers for everything that has no picture.
+            //
+            // `editor_core::magnitude`, not `{:.4}` — a cavity holding 3.19e-10 J printed `0.0000`
+            // here beside a field the same run reported at 921 V/m.
+            let readings = &frame.readings;
+            if !readings.is_empty() {
+                let mut y = rect.top() + 8.0;
+                for r in readings {
+                    painter.text(
+                        egui::pos2(rect.right() - 8.0, y),
+                        egui::Align2::RIGHT_TOP,
+                        format!(
+                            "{} {} {} {}",
+                            r.domain,
+                            r.label,
+                            editor_core::magnitude(r.value),
+                            r.unit
+                        ),
+                        egui::FontId::monospace(11.0),
+                        ui.visuals().text_color(),
+                    );
+                    y += 14.0;
                 }
             }
-        }
 
-        // The colour bar. Without it the viewport says *more* and *less* and never *how much* —
-        // which is the whole difference between a picture and a reading, and the report grew one
-        // for every view for the same reason.
-        if let Some((lo, hi, label, signed)) = legend {
-            colour_bar(&painter, rect, lo, hi, &label, signed, ui.visuals());
-        }
-
-        // The frame's readings, top-right: the numbers for everything that has no picture.
-        //
-        // `editor_core::magnitude`, not `{:.4}` — a cavity holding 3.19e-10 J printed `0.0000`
-        // here beside a field the same run reported at 921 V/m.
-        let readings = &frame.readings;
-        if !readings.is_empty() {
-            let mut y = rect.top() + 8.0;
-            for r in readings {
-                painter.text(
-                    egui::pos2(rect.right() - 8.0, y),
-                    egui::Align2::RIGHT_TOP,
-                    format!(
-                        "{} {} {} {}",
-                        r.domain,
-                        r.label,
-                        editor_core::magnitude(r.value),
-                        r.unit
-                    ),
-                    egui::FontId::monospace(11.0),
-                    ui.visuals().text_color(),
-                );
-                y += 14.0;
+            // The shaded view's readout, from the cache rather than from a fresh mesh.
+            if self.shaded {
+                for t in &self.shaded_probes {
+                    let (at, depth) = project(t.at);
+                    probe.offer(pointer, at, 6.0, depth, &t.path, || t.label.clone());
+                }
             }
-        }
 
-        // The shaded view's readout, from the cache rather than from a fresh mesh.
-        if self.shaded {
-            for t in &self.shaded_probes {
-                let (at, depth) = project(t.at);
-                probe.offer(pointer, at, 6.0, depth, &t.path, || t.label.clone());
-            }
-        }
-
-        // What the shaded pass actually drew. Every DCC viewport has this readout, and it is also
-        // the only thing that distinguishes a pass drawing nothing from a pass never asked to run.
-        if self.shaded {
-            if let Ok(gpu) = self.gpu.lock() {
-                let (tris, lines, paints) = gpu.drawn;
-                painter.text(
-                    egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    format!("{tris} triangles, {lines} lines, {paints} paints"),
-                    egui::FontId::monospace(10.0),
-                    ui.visuals().weak_text_color(),
-                );
+            // What the shaded pass actually drew. Every DCC viewport has this readout, and it is also
+            // the only thing that distinguishes a pass drawing nothing from a pass never asked to run.
+            if self.shaded {
+                if let Ok(gpu) = self.gpu.lock() {
+                    let (tris, lines, paints) = gpu.drawn;
+                    painter.text(
+                        egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("{tris} triangles, {lines} lines, {paints} paints"),
+                        egui::FontId::monospace(10.0),
+                        ui.visuals().weak_text_color(),
+                    );
+                }
             }
         }
 
@@ -2178,7 +2215,13 @@ impl App {
         // **Not while a handle is held.** A drag that ends on empty space reads as a click to
         // egui, so letting go of a handle over nothing would clear the selection and take the
         // handles away from under the pointer that was just using them.
-        if response.clicked() && self.grabbed.is_none() {
+        //
+        // **And not at all without a run.** Everything that offers itself to the probe is a run
+        // panel, so with no run `probe.path` is always `None` and this would clear the selection
+        // on every click in the viewport — including the click that just selected something. It
+        // was unreachable before the block above stopped being an early `return`, which is the
+        // sort of thing removing a `return` quietly switches on.
+        if response.clicked() && self.grabbed.is_none() && self.run.is_some() {
             // A click on nothing clears the selection, which is what every outliner does and is
             // the only way to get back to "no selection" without a keyboard.
             self.selected = probe.path.clone();
