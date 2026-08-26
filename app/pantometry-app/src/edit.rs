@@ -296,17 +296,26 @@ struct App {
     /// unusable, and the two gestures are the same gesture as far as egui is concerned.
     grabbed: Option<usize>,
 
-    /// A framing held still, instead of recomputed from the geometry every frame.
+    /// The framing this viewport is using, held still rather than recomputed from the geometry
+    /// every frame.
     ///
-    /// Every projection here is relative to [`viewer_core::Framing::centre`], which is the centre
-    /// of everything the scene contains. So moving the only domain in a scene moves the frame by
-    /// the same amount and the object does not appear to move **at all** — measured on scene 15:
-    /// the box goes 3 mm, the centre goes 3 mm, apparent motion `0.000000000 m`. Dragging a handle
-    /// felt like the box resisting, and it was the camera following it.
+    /// **The camera moves when it is asked to, and not when the scene changes shape.** Every
+    /// projection here is relative to [`viewer_core::Framing::centre`], the centre of everything
+    /// the scene contains, so any edit that moves or resizes geometry slides the whole picture
+    /// under the reader. Dragging a handle was the case where that is fatal: moving the only
+    /// domain in a scene moves the centre by the same amount, and the object does not appear to
+    /// move **at all** — measured on scene 15, the box goes 3 mm, the centre goes 3 mm, apparent
+    /// motion `0.000000000 m`. It reads as the box resisting the pointer, and it is the camera
+    /// following it.
     ///
-    /// Taken when a handle is grabbed and kept until the view is fitted again, rather than
-    /// released on the mouse-up: snapping back by the whole drag the moment you let go is the
-    /// same defect arriving late. The camera moves when it is asked to.
+    /// It is the general rule rather than a special case for dragging, because the smaller
+    /// version of it is the same surprise: a `cells` drag should make the block bigger, not make
+    /// the room around it shrink.
+    ///
+    /// Cleared exactly where the camera is *asked* to move — **Fit view**, **Frame selection**,
+    /// loading a file, and the first run arriving — all of which already set
+    /// [`App::needs_fit`] or [`App::pending_frame`]. So there is one rule and no second list of
+    /// places to keep in step.
     framing_hold: Option<viewer_core::Framing>,
 
     /// Whether the outliner and the inspector are on screen at all.
@@ -1649,6 +1658,12 @@ impl App {
             }
         }
 
+        // Asking the camera to fit is asking the framing to follow the geometry again. Done here,
+        // above both readers of it, so the handles and the paint cannot disagree within a frame.
+        if self.needs_fit || self.pending_frame {
+            self.framing_hold = None;
+        }
+
         // The translate handles, if a domain is selected and the scene has somewhere to put them.
         let mut moved: Option<(String, [f64; 3])> = None;
         let mut holding = false;
@@ -1685,9 +1700,6 @@ impl App {
                             .filter(|(_, d)| *d <= GRAB_RADIUS)
                             .min_by(|a, b| a.1.total_cmp(&b.1))
                             .map(|(i, _)| i);
-                        if self.grabbed.is_some() {
-                            self.framing_hold = Some(framing);
-                        }
                     }
                 }
                 if let Some(i) = self.grabbed {
@@ -1776,13 +1788,9 @@ impl App {
             );
             return;
         };
-        // Asking the camera to fit is asking for the framing to follow the geometry again.
-        if self.needs_fit || self.pending_frame {
-            self.framing_hold = None;
-        }
-        let framing = self
+        let framing = *self
             .framing_hold
-            .unwrap_or_else(|| viewer_core::Framing::of(bounds));
+            .get_or_insert_with(|| viewer_core::Framing::of(bounds));
         if self.needs_fit {
             self.camera.fit(bounds, &framing, aspect, 0.85);
             self.needs_fit = false;
