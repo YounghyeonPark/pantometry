@@ -34,7 +34,14 @@ fn it_is_exactly_as_big_as_the_box_it_was_placed_in() {
     let corners = corners_of(extent);
 
     for n in [2usize, 3, 9, 20] {
-        let out = field_shell(&corners, (n, n, n), &solid(n), "C", Some((0.0, 100.0)));
+        let out = field_shell(
+            &corners,
+            (n, n, n),
+            &solid(n),
+            "C",
+            Some((0.0, 100.0)),
+            None,
+        );
         assert!(
             !out.indices.is_empty(),
             "a solid {n}^3 has a surface: {}",
@@ -86,7 +93,7 @@ fn the_faces_look_outwards_even_when_the_box_is_turned() {
         })
     });
 
-    let out = field_shell(&corners, (n, n, n), &values, "C", Some((0.0, 100.0)));
+    let out = field_shell(&corners, (n, n, n), &values, "C", Some((0.0, 100.0)), None);
     assert!(
         !out.indices.is_empty(),
         "a turned solid still has a surface"
@@ -152,13 +159,13 @@ fn a_void_inside_becomes_a_cavity_with_a_surface() {
     let corners = corners_of([0.0, 0.0, 0.0, 0.05, 0.05, 0.05]);
     let scale = Some((0.0, 100.0));
 
-    let whole = field_shell(&corners, (n, n, n), &solid(n), "C", scale);
+    let whole = field_shell(&corners, (n, n, n), &solid(n), "C", scale, None);
 
     // A void is *not a value*, which is how `Solid3D` reports one: a void has no temperature and a
     // zero there is a number somebody would plot.
     let mut with_hole = solid(n);
     with_hole[2 + n * (2 + n * 2)] = f64::NAN;
-    let holed = field_shell(&corners, (n, n, n), &with_hole, "C", scale);
+    let holed = field_shell(&corners, (n, n, n), &with_hole, "C", scale, None);
 
     let (before, after) = (whole.indices.len() / 3, holed.indices.len() / 3);
     println!("  {before} triangles solid, {after} with one cell absent");
@@ -179,6 +186,7 @@ fn a_line_of_samples_is_not_geometry() {
         &vec![20.0; 32],
         "C",
         Some((0.0, 100.0)),
+        None,
     );
     assert!(out.indices.is_empty(), "a line has no surface");
     assert!(
@@ -208,7 +216,7 @@ fn the_colours_follow_the_values() {
             }
         }
     }
-    let out = field_shell(&corners, (n, n, n), &values, "C", Some((0.0, 100.0)));
+    let out = field_shell(&corners, (n, n, n), &values, "C", Some((0.0, 100.0)), None);
     assert!(!out.colours.is_empty(), "there are colours: {}", out.note);
 
     // The two ends of the scale, as the ramp gives them.

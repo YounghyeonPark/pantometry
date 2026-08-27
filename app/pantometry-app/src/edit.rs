@@ -318,6 +318,15 @@ struct App {
     /// places to keep in step.
     framing_hold: Option<viewer_core::Framing>,
 
+    /// The value whose surface to draw instead of the object's outside, if any.
+    ///
+    /// `None` draws the boundary of the cells that hold a value — where the block *is*. `Some(v)`
+    /// draws where the field reaches `v`, which is a different question and the one a field is
+    /// usually asked: not where the block is, but where it is 100 °C. The viewport has had a depth
+    /// buffer since it was written and nothing here had a surface that needed one; this is that
+    /// thing, and `ARCHITECTURE.md` names it as the condition.
+    iso: Option<f64>,
+
     /// Whether the outliner and the inspector are on screen at all.
     show_outliner: bool,
     show_inspector: bool,
@@ -374,6 +383,7 @@ impl App {
             shaded_probes: Vec::new(),
             shaded_notes: Vec::new(),
             grabbed: None,
+            iso: None,
             framing_hold: None,
             show_outliner: true,
             show_inspector: true,
@@ -635,6 +645,21 @@ impl eframe::App for App {
                     ui.checkbox(&mut self.show_text, "Scene text");
                     ui.separator();
                     ui.checkbox(&mut self.solo, "Solo the selection");
+                    // A third picture, and the menu says what each is for the same reason the
+                    // other two do: a surface says where the object is, a splat cloud says what is
+                    // inside it, and an isosurface says where a *value* is. None is a rendering of
+                    // either other.
+                    let mut on = self.iso.is_some();
+                    if ui.checkbox(&mut on, "Isosurface at a value").changed() {
+                        // Opens at the middle of whatever the run's scale is, because a level
+                        // outside the range draws nothing and an empty viewport reads as broken.
+                        self.iso = on.then(|| self.iso_default()).flatten();
+                    }
+                    let (lo, hi) = self.iso_range();
+                    if let Some(level) = &mut self.iso {
+                        ui.add(egui::Slider::new(level, lo..=hi).text("level"));
+                    }
+                    ui.separator();
                     if ui.button("Show everything").clicked() {
                         self.hidden.clear();
                         self.solo = false;
@@ -1145,6 +1170,36 @@ impl App {
             });
     }
 
+    /// The range an isosurface level may take, from the run's own scale.
+    ///
+    /// The scale rather than this frame's spread, for the reason every picture here uses it: a
+    /// slider that renormalised per frame would move the surface while the field stood still.
+    fn iso_range(&self) -> (f64, f64) {
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        if let Some(view) = &self.run {
+            for panel in view.run.panels() {
+                if let Some((a, b)) = view.run.scale_of(&panel) {
+                    lo = lo.min(a);
+                    hi = hi.max(b);
+                }
+            }
+        }
+        if lo.is_finite() && hi.is_finite() && hi > lo {
+            (lo, hi)
+        } else {
+            (0.0, 1.0)
+        }
+    }
+
+    /// Where the slider opens: the middle of the range, or nothing when there is no run to have a
+    /// range. Turning it on before running would draw an empty viewport, which reads as broken.
+    fn iso_default(&self) -> Option<f64> {
+        self.run.as_ref()?;
+        let (lo, hi) = self.iso_range();
+        Some(0.5 * (lo + hi))
+    }
+
     /// The selected row's domain, if the selection is one.
     fn selected_domain(&self) -> Option<String> {
         self.selected
@@ -1537,8 +1592,14 @@ impl App {
                     else {
                         continue;
                     };
-                    let shell =
-                        editor_core::field_shell(&b.corners, (*nx, *ny, *nz), values, unit, scale);
+                    let shell = editor_core::field_shell(
+                        &b.corners,
+                        (*nx, *ny, *nz),
+                        values,
+                        unit,
+                        scale,
+                        self.iso,
+                    );
                     let base = solid.vertices();
                     for i in 0..shell.positions.len() {
                         solid.push(

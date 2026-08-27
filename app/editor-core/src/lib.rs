@@ -722,16 +722,31 @@ pub fn field_splats(
 /// cube and mapped through the box's own three axes; the normals are mapped as the cross products
 /// of the axis pairs, which is exact for a rotated and non-uniformly scaled box where transforming
 /// the normal by the same matrix would not be.
+/// # Two surfaces, one mapping
+///
+/// `level` chooses **which** surface, and nothing else changes. `None` is the boundary of the
+/// cells that hold a value — the outside of the object. `Some(v)` is the isosurface where the
+/// field reaches `v`, which is a different question: not *where is the block* but *where is it
+/// 100 °C*.
+///
+/// One function rather than two because everything after the mesh is the same, and the part that
+/// is the same is the part that has been wrong before: mapping the unit cube through a placed
+/// box's own axes, with normals as cross products of the axis pairs. A second copy of that would
+/// be a second chance at the 40 mm cube that exported 80 mm across.
 pub fn field_shell(
     corners: &[[f64; 3]; 8],
     counts: (usize, usize, usize),
     values: &[f64],
     unit: &str,
     scale: Option<(f64, f64)>,
+    level: Option<f64>,
 ) -> Shelled {
     let colouring = Colouring::of(unit, values, scale);
-    let mesh =
-        pantometry::view::mesh::field_surface(counts, [0.0, 0.0, 0.0, 1.0, 1.0, 1.0], values);
+    let unit_cube = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let mesh = match level {
+        Some(v) => pantometry::view::mesh::isosurface(counts, unit_cube, values, v),
+        None => pantometry::view::mesh::field_surface(counts, unit_cube, values),
+    };
     if mesh.indices.is_empty() {
         return Shelled {
             positions: Vec::new(),

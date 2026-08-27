@@ -20,6 +20,40 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+### Added
+
+- **An isosurface: the surface where a field reaches a value.** `pantometry_view::mesh::isosurface`.
+  `field_surface` draws the outside of the cells that hold a value — a staircase, and a picture of
+  the grid as much as of the object. This draws where the *values* reach a number, which is the
+  question a field is usually asked: not where the block is, but where it is 100 degrees.
+
+  `ARCHITECTURE.md` has said for several releases that depth buffering "becomes worth doing when
+  something here has *surfaces* — a mesh, an isosurface — and nothing does". Something does now,
+  and the editor's viewport has had the depth buffer waiting for it.
+
+  **Marching tetrahedra rather than cubes.** Marching cubes needs a 256-entry case table with
+  ambiguous entries, where the wrong choice leaves a hole; six tetrahedra per cell have sixteen
+  sign patterns and two shapes among them, no ambiguity, and watertightness by construction because
+  neighbouring cells cut their shared face the same way. The cost is more triangles, which is the
+  right side to be wrong on: a hole in a closed shape reads as a rendering artefact rather than a
+  bug, so the cheaper method fails in the way nobody investigates.
+
+  Checked against closed forms, two of them **rates**: a sphere's area converges on 4πR² and its
+  enclosed volume on 4/3πR³ at **second order** across three refinements. A plane comes out exactly
+  flat, because a linear field makes the edge interpolation exact rather than approximate. The
+  enclosed volume is the divergence-theorem sum, which is also the winding test — faces pointing
+  both ways cancel toward zero.
+
+  A cell touching a non-finite sample is skipped whole. `Solid3D` returns `NaN` for an emptied cell
+  deliberately, and interpolating an edge that ends in one would invent the number the `NaN` exists
+  to refuse.
+
+  In the editor as **View → Isosurface at a value**, with the level from the run's own scale rather
+  than the frame's — a slider that renormalised per frame would move the surface while the field
+  stood still. `field_shell` takes a `level: Option<f64>` rather than gaining a twin, because
+  everything after the mesh is the same and that part has been wrong before: a 40 mm cube once
+  exported 80 mm across.
+
 ### Changed
 
 - **`verify` measures all three of `advance`'s refusals.** It measured one, and said so about

@@ -104,6 +104,248 @@ impl Surface {
     }
 }
 
+/// The surface inside a field where it equals `level`.
+///
+/// The first thing in this workspace with a **surface** rather than a boundary. `field_surface`
+/// draws the outside of the cells that hold a value — a staircase, correct and blocky, and a
+/// picture of the grid as much as of the object. This draws where the *values* reach a number,
+/// which is the question a person actually asks of a field: where is it 100 °C, where is the
+/// pressure zero, where does the melt front sit.
+///
+/// # Marching tetrahedra, and why not cubes
+///
+/// Marching cubes needs a 256-entry case table, and several of those entries are ambiguous — the
+/// same corner signs admit two different surfaces, and choosing wrong leaves a hole. This splits
+/// every cell into **six tetrahedra** instead: four corners, sixteen sign patterns, and only two
+/// shapes among them. There is no table to get wrong and no ambiguous case to resolve, and the
+/// result is watertight by construction because adjacent cells split their shared face the same
+/// way.
+///
+/// The cost is more triangles for the same surface. That is the right trade here: a large table is
+/// a large surface to be quietly wrong on, and a hole in a closed shape is the kind of wrong that
+/// looks like a rendering artefact rather than like a bug.
+///
+/// # A void is not a value
+///
+/// A cell with a non-finite sample is skipped entirely, along with every tetrahedron touching it.
+/// `Solid3D::temperature_at` returns `NaN` for an emptied cell deliberately — "a zero or an
+/// ambient is a value somebody would plot and believe" — and interpolating an edge that ends in
+/// one would invent the very number that `NaN` exists to refuse.
+///
+/// # What comes back
+///
+/// Vertices are shared between triangles by the edge they sit on, so the mesh is watertight and
+/// each vertex gets a normal averaged from the faces around it. [`Surface::source`] points at the
+/// nearer of the two samples the vertex sits between, which is what colours it.
+pub fn isosurface(
+    counts: (usize, usize, usize),
+    extent: [f64; 6],
+    values: &[f64],
+    level: f64,
+) -> Surface {
+    let (nx, ny, nz) = counts;
+    let mut out = Surface {
+        stride: 1,
+        ..Surface::default()
+    };
+    // Two samples along every axis is the minimum that has an inside: a plane of samples has no
+    // cell to march through.
+    if nx < 2 || ny < 2 || nz < 2 || values.len() < nx * ny * nz || !level.is_finite() {
+        return out;
+    }
+
+    let at = |i: usize, j: usize, k: usize| values[i + nx * (j + ny * k)];
+    // Samples sit at cell centres of a grid spanning `extent`, corner to corner — the same
+    // convention `field_surface` uses, and the one `mesh` had to be corrected to once when a
+    // 40 mm cube exported 80 mm across.
+    let step = |lo: f64, hi: f64, n: usize| {
+        if n > 1 {
+            (hi - lo) / (n - 1) as f64
+        } else {
+            0.0
+        }
+    };
+    let (dx, dy, dz) = (
+        step(extent[0], extent[3], nx),
+        step(extent[1], extent[4], ny),
+        step(extent[2], extent[5], nz),
+    );
+    let position = |i: usize, j: usize, k: usize| {
+        [
+            extent[0] + dx * i as f64,
+            extent[1] + dy * j as f64,
+            extent[2] + dz * k as f64,
+        ]
+    };
+
+    // The six tetrahedra of a cube, as indices into its eight corners in the binary order bit 0 =
+    // x, bit 1 = y, bit 2 = z. Every one of them contains the 0–7 diagonal, which is what makes
+    // neighbouring cells agree about how their shared face is cut.
+    const TETS: [[usize; 4]; 6] = [
+        [0, 7, 1, 3],
+        [0, 7, 3, 2],
+        [0, 7, 2, 6],
+        [0, 7, 6, 4],
+        [0, 7, 4, 5],
+        [0, 7, 5, 1],
+    ];
+
+    // One vertex per cut edge, keyed by the two samples it lies between, so triangles share it.
+    let mut vertices: std::collections::HashMap<(usize, usize), u32> =
+        std::collections::HashMap::new();
+
+    for k in 0..nz - 1 {
+        for j in 0..ny - 1 {
+            for i in 0..nx - 1 {
+                let corner = |c: usize| (i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1));
+                let sample = |c: usize| {
+                    let (a, b, d) = corner(c);
+                    (a + nx * (b + ny * d), at(a, b, d))
+                };
+                let corners: [(usize, f64); 8] = std::array::from_fn(sample);
+                // A cell touching a void is not marched. Skipping the whole cell rather than the
+                // tetrahedra that touch the void keeps the surface closed: a partial cell would
+                // leave an edge with nothing on the other side of it.
+                if corners.iter().any(|(_, v)| !v.is_finite()) {
+                    continue;
+                }
+
+                for tet in TETS {
+                    let inside: [bool; 4] = std::array::from_fn(|n| corners[tet[n]].1 < level);
+                    let count = inside.iter().filter(|x| **x).count();
+                    if count == 0 || count == 4 {
+                        continue;
+                    }
+                    // The cut edges are the ones whose ends disagree. One corner apart from the
+                    // other three gives a triangle; two against two gives a quad, as two.
+                    let mut cut: Vec<(usize, usize)> = Vec::with_capacity(4);
+                    for a in 0..4 {
+                        for b in a + 1..4 {
+                            if inside[a] != inside[b] {
+                                cut.push((tet[a], tet[b]));
+                            }
+                        }
+                    }
+                    // Behind the surface: the average of the corners that are below `level`.
+                    // Every face of this tetrahedron must point away from it.
+                    let mut behind = [0.0f64; 3];
+                    let mut n_behind = 0.0f64;
+                    for (n, c) in tet.iter().enumerate() {
+                        if inside[n] {
+                            let (a, b, d) = corner(*c);
+                            let p = position(a, b, d);
+                            for x in 0..3 {
+                                behind[x] += p[x];
+                            }
+                            n_behind += 1.0;
+                        }
+                    }
+                    for x in behind.iter_mut() {
+                        *x /= n_behind.max(1.0);
+                    }
+
+                    let mut idx: Vec<u32> = Vec::with_capacity(cut.len());
+                    for (a, b) in &cut {
+                        let (ia, va) = corners[*a];
+                        let (ib, vb) = corners[*b];
+                        let key = (ia.min(ib), ia.max(ib));
+                        let handle = *vertices.entry(key).or_insert_with(|| {
+                            // Where the straight line between the two samples crosses `level`.
+                            // Guarded: two equal samples that straddle nothing would divide by
+                            // zero, and the midpoint is the only answer that is not a direction.
+                            let t = if (vb - va).abs() > f64::MIN_POSITIVE {
+                                ((level - va) / (vb - va)).clamp(0.0, 1.0)
+                            } else {
+                                0.5
+                            };
+                            let (pa, pb) = (
+                                position(corner(*a).0, corner(*a).1, corner(*a).2),
+                                position(corner(*b).0, corner(*b).1, corner(*b).2),
+                            );
+                            out.positions.push([
+                                (pa[0] + (pb[0] - pa[0]) * t) as f32,
+                                (pa[1] + (pb[1] - pa[1]) * t) as f32,
+                                (pa[2] + (pb[2] - pa[2]) * t) as f32,
+                            ]);
+                            out.normals.push([0.0; 3]);
+                            out.source.push(if t < 0.5 { ia as u32 } else { ib as u32 });
+                            (out.positions.len() - 1) as u32
+                        });
+                        idx.push(handle);
+                    }
+                    // Three cut edges is one triangle; four is a quad, and the two triangles must
+                    // share a diagonal of it rather than be picked independently.
+                    match idx.len() {
+                        3 => emit(&mut out, [idx[0], idx[1], idx[2]], behind),
+                        4 => {
+                            emit(&mut out, [idx[0], idx[1], idx[3]], behind);
+                            emit(&mut out, [idx[0], idx[3], idx[2]], behind);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Vertex normals, accumulated from the faces that meet there. A face's own normal is its
+    // cross product; summing and normalising is the standard average weighted by area, which is
+    // what makes a curved surface look curved rather than faceted.
+    for f in out.indices.chunks_exact(3) {
+        let p = |n: u32| out.positions[n as usize];
+        let (a, b, c) = (p(f[0]), p(f[1]), p(f[2]));
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for h in f {
+            let slot = &mut out.normals[*h as usize];
+            for a in 0..3 {
+                slot[a] += n[a];
+            }
+        }
+    }
+    for n in out.normals.iter_mut() {
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len > f32::MIN_POSITIVE {
+            for a in n.iter_mut() {
+                *a /= len;
+            }
+        }
+    }
+    out
+}
+
+/// Add one triangle, wound so its face points **away from the low side** of the field.
+///
+/// Consistent winding is not decoration: it is what lets a caller compute an enclosed volume from
+/// the mesh at all, and what stops a renderer with back-face culling showing a surface only from
+/// inside. The reference is the tetrahedron's own geometry — the centroid of the corners below
+/// `level` is behind the face, so a normal pointing away from it points out.
+fn emit(out: &mut Surface, tri: [u32; 3], behind: [f64; 3]) {
+    let p = |n: u32| out.positions[n as usize];
+    let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
+    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    // Positive when the face already points away from what is behind it.
+    let outward = (0..3)
+        .map(|x| n[x] as f64 * (a[x] as f64 - behind[x]))
+        .sum::<f64>();
+    if outward >= 0.0 {
+        out.indices.extend_from_slice(&tri);
+    } else {
+        out.indices.extend_from_slice(&[tri[0], tri[2], tri[1]]);
+    }
+}
+
 /// The surface of the cells of a field that hold a value.
 ///
 /// A field of one dimension returns an empty surface: a row of samples along a line is a graph and

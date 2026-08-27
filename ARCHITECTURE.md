@@ -322,10 +322,15 @@ different quantities, the second separates domains carrying the same one.
    3D field — trilinear sampling, front-to-back compositing, rotatable — beside the slice montage,
    because a render shows shape and cannot be read for values while a montage is the reverse.
 
-   Depth buffering is still absent and still not obviously needed. Bodies are points, which
-   painter's algorithm sorts correctly, and a field is composited rather than occluded. It becomes
-   worth doing when something here has *surfaces* — a mesh, an isosurface — and nothing does.
-   `pantometry-shape` now reads meshes but does not hand one to the view, so this is unchanged.
+   **And now something has surfaces.** `pantometry_view::mesh::isosurface` draws where a field
+   reaches a value — marching tetrahedra, so there is no 256-entry table to be wrong and no
+   ambiguous case to leave a hole — and the editor's viewport, which has had a depth buffer since
+   it was written, is where it is drawn. That closes the condition this entry set for itself: the
+   depth buffer was waiting for something with a surface, and an isosurface is one.
+
+   Bodies are still points and a field is still composited rather than occluded, so the *flat*
+   renderers in `pantometry-view` need no depth. `pantometry-shape` still does not hand its meshes
+   to the view, which is the remaining half of this entry.
 7. **Geometry from a designed file.** Done as far as one object goes: `pantometry-shape` reads an STL,
    measures it, and rasterises it into the predicate a domain's `fill` already took. Nothing in the
    physics changed.
