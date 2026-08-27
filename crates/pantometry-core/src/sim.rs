@@ -582,6 +582,36 @@ impl Exchange {
         Ok(())
     }
 
+    /// The most any channel has left on it, and which, without judging it.
+    ///
+    /// [`Exchange::audit_transfers`] returns on the *first* thing over the line, which is right
+    /// for a refusal and useless for a margin: it says nothing when it passes, and when it fails
+    /// it names one channel out of however many were close. This walks the same two collections
+    /// and reports the largest, so a caller can see how near the run came.
+    ///
+    /// Separate from the audit rather than folded into it, because the audit's signature is
+    /// public and a check that also measures is a check somebody will call for the measurement
+    /// and get a refusal from.
+    pub fn worst_undelivered(&self) -> Option<(String, f64)> {
+        let plain = self
+            .published
+            .iter()
+            .map(|(channel, left)| ((*channel).to_string(), left.abs()));
+        let spatial = self
+            .spatial
+            .iter()
+            .flat_map(|((interface, channel), flux)| {
+                flux.per_face()
+                    .iter()
+                    .enumerate()
+                    .map(move |(face, left)| {
+                        (format!("{interface}/{channel} face {face}"), left.abs())
+                    })
+                    .collect::<Vec<_>>()
+            });
+        plain.chain(spatial).max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
     /// Total published on a channel over the run, plain and spatial together.
     ///
     /// Cumulative, unlike [`Exchange::peek`], which reports what is on offer right now.
@@ -766,6 +796,33 @@ pub enum Schedule {
     Multirate,
 }
 
+/// How close a check came to refusing, on the step where it came closest.
+///
+/// `advance` has **three** refusal points and only one of them is visible from outside it. The
+/// whole-simulation audit compares the ledger before and after, so a caller can redo that
+/// arithmetic itself. The other two cannot be seen from out there at all: the transfer audit
+/// reads what is left on the bus *between* domains, and the per-domain books check snapshots one
+/// domain's ledger across its own turn. Both are gone by the time `advance` returns.
+///
+/// So they are reported. A pass with no margin is a different fact from a pass, and it was
+/// previously a fact nothing above the kernel could establish for two of the three.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Margin {
+    /// What the check was about: a channel, `interface/channel face N`, or `domain/quantity`.
+    pub what: String,
+    /// What the check measured — **and the two are not in the same units**, deliberately.
+    ///
+    /// [`Report::transfer`] is an absolute amount in the channel's own quantity, because that
+    /// check is absolute: what is left on a channel *is* the scale, since all of it went missing.
+    /// [`Report::books`] is a dimensionless ratio, because that check is relative to the domain's
+    /// own holdings — which is the whole reason it exists. Reading either against
+    /// [`Margin::tolerance`] is the comparison that means something; reading them against each
+    /// other is not.
+    pub worst: f64,
+    /// What it was judged against, so a reader can compute the headroom rather than be told it.
+    pub tolerance: f64,
+}
+
 /// What one [`Simulation::advance`] actually did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Report {
@@ -779,6 +836,16 @@ pub struct Report {
     pub iterations: u32,
     /// Largest residual left at the end.
     pub residual: f64,
+    /// The most any channel had left on it when the transfer audit looked, and the absolute
+    /// tolerance it was judged against. `None` when nothing was published at all.
+    pub transfer: Option<Margin>,
+    /// The worst discrepancy a `books_balance` domain showed **on its own scale**, and the
+    /// tolerance for that quantity. `None` when no domain claims exact books.
+    ///
+    /// This is the one the whole-simulation audit structurally cannot see: a domain holding a
+    /// microjoule beside one holding a kilojoule can lose a fifth of itself without moving the
+    /// sum by more than `2e-10`.
+    pub books: Option<Margin>,
 }
 
 /// A set of domains sharing a clock.
@@ -949,12 +1016,19 @@ impl Simulation {
         // What a substep's share is measured against. Set here rather than in `sweep`, because
         // `iterate` sweeps repeatedly over the same interval.
         self.bus.covering(dt);
-        let report = match self.schedule {
+        let mut report = match self.schedule {
             Schedule::OneWay | Schedule::Staggered => self.sweep(dt, false)?,
             Schedule::Multirate => self.sweep(dt, true)?,
             Schedule::Iterative { max_iter, tol } => self.iterate(dt, max_iter, tol)?,
         };
 
+        // Measured before the audit rather than after it, because the audit refuses on the first
+        // channel over the line and this has to see all of them.
+        report.transfer = self.bus.worst_undelivered().map(|(what, worst)| Margin {
+            what,
+            worst,
+            tolerance: self.transfer_tol,
+        });
         self.bus.audit_transfers("bus", self.transfer_tol)?;
         let after = self.ledger();
         if !before.is_empty() || !after.is_empty() {
@@ -972,6 +1046,8 @@ impl Simulation {
         // nothing is only robbed if somebody before it received something.
         let mut moved: BTreeMap<&'static str, f64> = BTreeMap::new();
         let mut substeps = Vec::with_capacity(self.domains.len());
+        let mut books_pressure = f64::NEG_INFINITY;
+        let mut worst_books: Option<Margin> = None;
         for domain in self.domains.iter_mut() {
             // A quasi-static domain has no state to march, so subdividing its
             // step would just solve the same problem several times.
@@ -1000,7 +1076,7 @@ impl Simulation {
                 t += h;
             }
             if let (Some(books), Some(traffic)) = (books_before, traffic_before) {
-                attribute(
+                let closest = attribute(
                     domain.name(),
                     &books,
                     &domain.ledger(),
@@ -1008,6 +1084,18 @@ impl Simulation {
                     &self.bus.traffic(),
                     &self.conservation_tol,
                 )?;
+                // Across domains, again by how close to refusing rather than by raw size — the
+                // small domain that is nearly out is the one this check exists for.
+                if let Some((what, ratio, tol)) = closest {
+                    if tol > 0.0 && ratio / tol > books_pressure {
+                        books_pressure = ratio / tol;
+                        worst_books = Some(Margin {
+                            what,
+                            worst: ratio,
+                            tolerance: tol,
+                        });
+                    }
+                }
             }
             let mine = self.bus.plain_traffic_since_mark();
 
@@ -1107,6 +1195,10 @@ impl Simulation {
             substeps,
             iterations: 1,
             residual,
+            // Filled by `advance`, which is where the bus is still holding whatever went
+            // undelivered — by the time a caller has this, it has been drained.
+            transfer: None,
+            books: worst_books,
         })
     }
 
@@ -1166,6 +1258,12 @@ impl Simulation {
 /// Only for domains that opt in through [`Domain::books_balance`], because an exact book is a
 /// claim not every honest domain can make — one losing heat to an environment that is not on the
 /// bus is modelling a boundary, not leaking.
+/// Check one domain's books against what it moved, and say how close it came.
+///
+/// Returns the quantity that came **nearest to refusing** — measured as `residual / tolerance`,
+/// which is the only ordering that means anything when two quantities have different tolerances —
+/// along with its raw ratio and that tolerance. `None` when the domain held nothing above the
+/// scale floor.
 fn attribute(
     name: &str,
     before: &Ledger,
@@ -1173,7 +1271,7 @@ fn attribute(
     traffic_before: &[(&'static str, f64, f64)],
     traffic_after: &[(&'static str, f64, f64)],
     tolerances: &Tolerances,
-) -> Result<(), Violation> {
+) -> Result<Option<(String, f64, f64)>, Violation> {
     let moved = |channel: &str| -> f64 {
         let find = |t: &[(&'static str, f64, f64)]| {
             t.iter()
@@ -1195,6 +1293,8 @@ fn attribute(
     }
     names.sort_unstable();
 
+    let mut pressure = f64::NEG_INFINITY;
+    let mut closest: Option<(String, f64, f64)> = None;
     for quantity in names {
         let held_before = before.get(quantity).unwrap_or(0.0);
         let held_after = after.get(quantity).unwrap_or(0.0);
@@ -1213,7 +1313,8 @@ fn attribute(
             continue;
         }
         let tol = tolerances.for_quantity(quantity);
-        if discrepancy.abs() / scale > tol {
+        let ratio = discrepancy.abs() / scale;
+        if ratio > tol {
             return Err(Violation {
                 quantity: quantity.to_string(),
                 site: format!("{name} (its own books, against what it moved on the bus)"),
@@ -1223,8 +1324,14 @@ fn attribute(
                 tolerance: tol,
             });
         }
+        // How close this one came, in units of its own tolerance. Comparing raw residuals across
+        // quantities would rank a loose one above a tight one that is nearly out.
+        if tol > 0.0 && ratio / tol > pressure {
+            pressure = ratio / tol;
+            closest = Some((format!("{name}/{quantity}"), ratio, tol));
+        }
     }
-    Ok(())
+    Ok(closest)
 }
 
 #[cfg(test)]

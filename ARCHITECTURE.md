@@ -707,6 +707,13 @@ the platform's specification rather than a feature backlog:
   audit residual has left against its tolerance, per quantity — a pass with no margin is a
   different fact from a pass.
 
+  Done, and it took a kernel change to finish. `advance` refuses in **three** places and only one
+  of them can be redone from outside it: the transfer audit reads what is left on the bus between
+  domains, and the per-domain books check snapshots one domain's ledger across its own turn, and
+  both are gone by the time `advance` returns. So `Report` carries them out — which is the shape
+  this list predicts, a platform question that turns out to need something of the kernel rather
+  than something of the tool.
+
 Every one of these needs more than the run file. Three need *reruns* — a second resolution, a
 halved window, the same scene twice — and the fourth needs the **build**, because what a
 rasterisation lost is not in the frames it produced: the joules the missing rib would have held

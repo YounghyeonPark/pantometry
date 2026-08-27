@@ -20,6 +20,36 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+### Changed
+
+- **`verify` measures all three of `advance`'s refusals.** It measured one, and said so about
+  itself: *"Neither margin is measured here yet, and the report heading says so rather than
+  letting 'conservation margins' claim more than it covers."*
+
+  The reason was not laziness, it was that the other two **cannot be seen from outside `advance`**.
+  The whole-simulation audit compares the ledger before and after, which a caller can redo. The
+  transfer audit reads what is left on the bus, and the per-domain books check snapshots one
+  domain's ledger across its own turn — both are gone by the time `advance` returns. So the kernel
+  reports them: `Report::transfer` and `Report::books`, each a `Margin` of what the check measured
+  and what it was judged against.
+
+  **The two are not in the same units and the report says so.** A transfer margin is an absolute
+  amount, because that check is absolute — what is left on a channel *is* the scale, since all of
+  it went missing. A books margin is a ratio on the domain's own holdings, which is the entire
+  reason that check exists. Ranking either against the other is meaningless; each is read against
+  its own tolerance. "Worst" is likewise `residual / tolerance` rather than raw size, or a loose
+  quantity would always outrank a tight one that is nearly out.
+
+  Pinned by the case it exists for: a domain that loses `1e-10` of itself against a tolerance of
+  `1e-9` **passes**, one digit from refusing, while the whole-simulation audit over the same step
+  reports more than eight digits of headroom. The test asserts the *gap* between the two numbers,
+  not either alone. Visible on a shipped scene too — scene 22 reads 4.5 digits on the sum and 4.3
+  on `buffer/energy`.
+
+  `Exchange::audit_transfers` is untouched; the measurement is a separate `worst_undelivered`,
+  because a check that also measures is a check somebody calls for the measurement and gets a
+  refusal from.
+
 ## [0.17.0] — 2026-08-27
 
 ### Changed

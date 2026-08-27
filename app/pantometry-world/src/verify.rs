@@ -10,9 +10,14 @@
 //!
 //! What it measures:
 //!
-//! - **Margins, not verdicts.** The worst conservation drift per quantity against its
-//!   tolerance, and each evolving domain's stability limit against the coupling window. A pass
-//!   with no margin left is a different fact from a pass.
+//! - **Margins, not verdicts.** All **three** of `advance`'s refusals against their tolerances,
+//!   and each evolving domain's stability limit against the coupling window. A pass with no
+//!   margin left is a different fact from a pass.
+//!
+//!   Two of the three were unmeasurable from here until the kernel reported them, and this
+//!   module's own documentation said so: the transfer audit reads the bus before it is drained,
+//!   and the per-domain books check snapshots one domain's ledger across its own turn. Both are
+//!   gone by the time `advance` returns. `Report::transfer` and `Report::books` carry them out.
 //! - **Determinism.** The same scene run twice must produce byte-identical frames. A digest
 //!   over the run is printed so "this reproduces" is checkable rather than claimed.
 //! - **Window sensitivity.** The scene rerun with the coupling window halved. What moves is
@@ -63,7 +68,7 @@
 use std::collections::BTreeMap;
 
 use crate::{DissipationSpec, DomainSpec, OnDisk, Parts, Rasterised, Scene, World};
-use pantometry::core::Reading;
+use pantometry::core::{Margin, Reading};
 use pantometry::prelude::*;
 
 /// FNV-1a over the run's JSON, which is every panel, body and reading of every frame.
@@ -98,8 +103,8 @@ pub struct Measured {
     /// audit has its own absolute tolerance, and a `books_balance` domain is additionally
     /// checked on its own scale — a small domain can sit an ulp from *that* refusal while
     /// these rows read comfortable, which is the very blindness that made the per-domain
-    /// check exist. Neither margin is measured here yet, and the report heading says so
-    /// rather than letting "conservation margins" claim more than it covers.
+    /// Both are measured now, by the kernel — see [`pantometry::core::Report::transfer`] and
+    /// [`pantometry::core::Report::books`], and the two rows the report prints beneath this one.
     pub drift: Vec<(String, f64, f64)>,
     /// Quantities that were on a ledger and **never rose above the audit's scale floor**, so no
     /// step ever audited them. The audit's own rule — two denormals are equal for every purpose
@@ -115,6 +120,17 @@ pub struct Measured {
     /// Per evolving domain: the smallest stability limit it reported at any frame boundary, in
     /// seconds, and the largest substep count one advance asked of it.
     pub stability: Vec<(String, f64, u32)>,
+    /// The closest `advance`'s **other two** refusals came, over the run.
+    ///
+    /// These used to be the hole this struct's own documentation named: the whole-simulation
+    /// audit can be redone from outside `advance`, and the transfer audit and the per-domain
+    /// books check cannot — the first reads the bus before it is drained, the second snapshots
+    /// one domain's ledger across its own turn. Both are gone by the time `advance` returns, so
+    /// the kernel reports them and this keeps the worst.
+    ///
+    /// `.0` is the transfer audit, an absolute amount left on a channel. `.1` is the books check,
+    /// a ratio on the domain's own scale. They are not in the same units and the report says so.
+    pub margins: (Option<Margin>, Option<Margin>),
 }
 
 /// Run a scene the way [`World::run`] does, measuring as it goes.
@@ -132,6 +148,8 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
     let mut poisoned: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut anomalies: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stability: BTreeMap<String, (f64, u32)> = BTreeMap::new();
+    let mut worst_transfer: Option<Margin> = None;
+    let mut worst_books: Option<Margin> = None;
 
     let mut frames = Vec::with_capacity(scene.frames + 1);
     frames.push(pantometry::scene::capture(&world.sim, &placed));
@@ -159,6 +177,27 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
             if let Some(entry) = stability.get_mut(name) {
                 entry.1 = entry.1.max(*n);
             }
+        }
+
+        // The two margins only this step can see. Kept by how close each came to refusing —
+        // `worst / tolerance` — because the transfer audit's number is an absolute amount and the
+        // books check's is a ratio, and ranking them by raw size would compare a joule to a
+        // fraction.
+        let closer = |held: &Option<Margin>, seen: &Option<Margin>| -> bool {
+            match (held, seen) {
+                (_, None) => false,
+                (None, Some(_)) => true,
+                (Some(h), Some(s)) => {
+                    s.worst / s.tolerance.max(f64::MIN_POSITIVE)
+                        > h.worst / h.tolerance.max(f64::MIN_POSITIVE)
+                }
+            }
+        };
+        if closer(&worst_transfer, &report.transfer) {
+            worst_transfer = report.transfer.clone();
+        }
+        if closer(&worst_books, &report.books) {
+            worst_books = report.books.clone();
         }
 
         // The audit's own arithmetic, run on a step it passed: same scale rule, same
@@ -222,6 +261,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
         unaudited,
         anomalies: anomalies.into_iter().collect(),
         stability: stability.into_iter().map(|(n, (l, s))| (n, l, s)).collect(),
+        margins: (worst_transfer, worst_books),
     })
 }
 
@@ -1163,8 +1203,7 @@ impl Battery {
 
         let _ = writeln!(
             out,
-            "\nconservation margins (whole-simulation audit, worst step; the bus and \
-             per-domain checks have their own tolerances, not measured here)"
+            "\nconservation margins (whole-simulation audit, worst step)"
         );
         if self.base.drift.is_empty() {
             let _ = writeln!(out, "  nothing on any ledger — no margins to have");
@@ -1183,6 +1222,43 @@ impl Battery {
         for q in &self.base.unaudited {
             let _ = writeln!(out, "  {q:<10} never above the scale floor — not audited");
         }
+
+        // `advance` refuses in three places and the table above is one of them. These are the
+        // other two, which nothing outside the kernel could measure until it reported them.
+        let _ = writeln!(
+            out,
+            "
+the other two refusals (worst step; not comparable to each other — the first is an amount, the second a ratio on a domain's own scale)"
+        );
+        let row = |out: &mut String, label: &str, m: &Option<Margin>, absent: &str| match m {
+            Some(m) => {
+                let headroom = if m.worst > 0.0 {
+                    format!("{:.1} digits in hand", (m.tolerance / m.worst).log10())
+                } else {
+                    "exact".to_string()
+                };
+                let _ = writeln!(
+                    out,
+                    "  {label:<10} {:<24} {:.3e} of {:.1e} — {headroom}",
+                    m.what, m.worst, m.tolerance
+                );
+            }
+            None => {
+                let _ = writeln!(out, "  {label:<10} {absent}");
+            }
+        };
+        row(
+            &mut out,
+            "bus",
+            &self.base.margins.0,
+            "nothing was published — no transfer to audit",
+        );
+        row(
+            &mut out,
+            "own books",
+            &self.base.margins.1,
+            "no domain claims exact books — nothing to check on its own scale",
+        );
 
         let _ = writeln!(out, "\nstability margins (limit vs the coupling window)");
         if self.base.stability.is_empty() {

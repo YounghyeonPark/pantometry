@@ -253,3 +253,83 @@ fn declining_the_claim_costs_nothing_and_claiming_uses_the_quantity_tolerance() 
         .advance(Time::from_si(1.0))
         .expect_err("loosening momentum must not loosen energy");
 }
+
+/// **A pass with no margin left, which the whole-simulation audit reports as comfortable.**
+///
+/// The two tests above are about *refusing*. This is about the step before that, and it is the
+/// reason `Report::books` exists: a run can pass every check and be one digit from not passing,
+/// and until this the only margin anything above the kernel could see was the wrong one.
+///
+/// Same shape as `a_fifth_of_a_small_domain_hides_in_the_sum`, with the leak turned down until it
+/// passes. The small domain loses `1e-10` of itself against a tolerance of `1e-9` — a tenth of the
+/// way to a refusal — while the sum barely notices, because a tenth of a billionth of a
+/// microjoule beside a kilojoule is nothing at all.
+///
+/// **The point is the gap between the two numbers**, not either alone. They are measured here and
+/// asserted to differ by orders of magnitude, because a margins table that reported only the
+/// second would be telling a reader they had room they do not have.
+#[test]
+fn a_domain_can_pass_with_one_digit_left_while_the_sum_reads_comfortable() {
+    let leak = 1e-10;
+    let mut sim = Simulation::new(Schedule::Staggered)
+        .conservation_tolerance(1e-9)
+        .with(holder("big", 1000.0, 0.0, false))
+        .with(holder("small", 1e-6, leak, true));
+
+    let before = sim
+        .ledger()
+        .get(quantity::ENERGY)
+        .expect("energy on the books");
+    let report = sim
+        .advance(Time::from_si(1.0))
+        .expect("a tenth of the way to the line still passes");
+    let after = sim.ledger().get(quantity::ENERGY).expect("still there");
+
+    // What the per-domain check saw: the small domain, on its own scale.
+    let books = report.books.expect("a domain claims exact books");
+    assert!(
+        books.what.starts_with("small/"),
+        "the margin should name the domain and quantity, said {:?}",
+        books.what
+    );
+    assert!(
+        (books.worst - leak).abs() < 1e-16,
+        "it lost {leak} of itself; the margin says {:.3e}",
+        books.worst
+    );
+    let books_headroom = (books.tolerance / books.worst).log10();
+
+    // What the whole-simulation audit saw over the same step.
+    let sum_drift = (after - before).abs() / before.abs().max(after.abs());
+    let sum_headroom = (1e-9f64 / sum_drift).log10();
+
+    assert!(
+        books_headroom < 1.5,
+        "the domain is about one digit from refusing, said {books_headroom:.1}"
+    );
+    assert!(
+        sum_headroom > 8.0,
+        "the sum should look comfortable, said {sum_headroom:.1}"
+    );
+    assert!(
+        sum_headroom - books_headroom > 7.0,
+        "the whole point is the gap: {sum_headroom:.1} digits against {books_headroom:.1}"
+    );
+}
+
+/// **Nothing on the bus is a margin of zero, not an absent one.**
+///
+/// `Report::transfer` is `None` only when nothing was published at all. A run that published and
+/// delivered every joule reports zero left, which is a different fact from "no coupling here" and
+/// the difference is what tells a reader the check ran.
+#[test]
+fn a_delivered_coupling_reports_no_residual_rather_than_nothing() {
+    let mut sim = Simulation::new(Schedule::Staggered)
+        .conservation_tolerance(1e-9)
+        .with(holder("alone", 1.0, 0.0, true));
+    let report = sim.advance(Time::from_si(1.0)).expect("a still domain");
+    assert!(
+        report.transfer.is_none(),
+        "nothing was published, so there is no channel to have a margin on"
+    );
+}
