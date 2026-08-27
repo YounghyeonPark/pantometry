@@ -42,10 +42,18 @@ grep -c '0\.14' Cargo.toml bindings/python/Cargo.toml bindings/python/pyproject.
     AGENTS.md crates/pantometry/src/lib.rs .claude/agents/invariant-guard.md CITATION.cff .zenodo.json
 ```
 
-Then `cargo update --workspace --offline` in the root **and** in `bindings/python`, because
-`--locked` refuses a stale lockfile and the bindings' lock has gone stale unnoticed before — nothing
-in that job passes `--locked`, so cargo rewrites it silently on every build and the committed copy
-drifts.
+Then `cargo update --workspace --offline` in **three** places — the root, `app/` and
+`bindings/python` — because `--locked` refuses a stale lockfile.
+
+`app/` is the row this paragraph was missing, and it was missing for the reason every stale line in
+this repository is: the consolidation at `0f468d5` made `app/` its own workspace with its own
+`Cargo.lock` *after* 0.16.0 shipped, and nothing re-read this. That lock pins the library crates by
+path, so the version bump staled it and `app clippy`, `app test` and `app doc` refused at once —
+the loud version of this failure, and the reason it was caught on the first release after the move
+rather than the fifth.
+
+`bindings/python` has the quiet version instead: nothing in that job passes `--locked`, so cargo
+rewrites its lock silently on every build and the committed copy drifts.
 
 **The exact `pantometry` pin in `bindings/python/Cargo.toml` is the trap.** Bumping the root workspace
 and not that leaves it resolving a version that no longer exists. That failed the 0.9.0 release, and

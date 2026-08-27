@@ -43,8 +43,8 @@ repository-code: "https://github.com/YounghyeonPark/pantometry"
 # version ran, which for this library it does. Minted for the first time at 0.16.0. The 0.13.0
 # and 0.14.0 depositions both failed, silently, on the licence field.
 doi: 10.5281/zenodo.22024817
-version: 0.16.0
-date-released: "2026-08-20"
+version: 0.17.0
+date-released: "2026-08-27"
 keywords:
   - physics simulation
   - verification

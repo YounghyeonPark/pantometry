@@ -20,6 +20,8 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-08-27
+
 ### Changed
 
 - **A domain can be dragged in the viewport.** Three translate handles on the selected domain,
@@ -2881,7 +2883,13 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.17.0
+[0.16.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.16.0
+[0.15.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.15.0
+[0.14.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.14.0
+[0.13.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.13.0
+[0.12.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.12.0
 [0.11.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.11.0
 [0.10.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.10.0
 [0.9.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.9.0

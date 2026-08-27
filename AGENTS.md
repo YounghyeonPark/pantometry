@@ -13,7 +13,7 @@ Everything below describes the Rust API.
 
 ```toml
 [dependencies]
-pantometry = "0.16"
+pantometry = "0.17"
 ```
 
 API docs: <https://docs.rs/pantometry>. Source: <https://github.com/YounghyeonPark/pantometry>.
@@ -258,8 +258,8 @@ also pass it, then go and check *that*.
 - **[README.md](README.md)** — the long version, including what is deliberately *not* here.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — the conventions, and the gate CI runs.
 - **[CLAUDE.md](CLAUDE.md)** — working on pantometry rather than with it.
-- **[RELEASING.md](RELEASING.md)** — the seventeen crates, the wheel, the seven places a version
-  lives, and the DOI switch nobody has thrown yet. Read once per release and not otherwise, which is
-  why it is not in `CLAUDE.md`.
+- **[RELEASING.md](RELEASING.md)** — the seventeen crates, the wheel, the eight places a version
+  lives, and the DOI, which was minted at 0.16.0 after failing silently at 0.13.0 and 0.14.0. Read
+  once per release and not otherwise, which is why it is not in `CLAUDE.md`.
 - **[CITATION.cff](CITATION.cff)** — how to cite this. Co-authorship is not requested and could not be
   required; `README.md`'s Citation section says why, and what is invited instead.
