@@ -115,6 +115,43 @@ struct Shared {
     /// A table of timings that does not name the device is prose nobody can check. `how_much_faster`
     /// prints it beside the numbers so the README's table has a machine attached to it.
     adapter: String,
+    /// **One thread at a time on this device.** Every block in the process shares one, and two
+    /// threads using it concurrently deadlock about one run in five.
+    ///
+    /// Narrowed by measurement and not by reasoning, in thirty-run blocks on
+    /// `a_block_that_is_not_one_material`, which runs four tests and touches the device in three:
+    ///
+    /// | serialised | hangs of 30 |
+    /// | --- | --- |
+    /// | nothing | 7 |
+    /// | the readback's submit, map and wait | 5 |
+    /// | the readback and the teardown | 7 |
+    /// | every `submit` | 4 |
+    /// | every operation that touches the device | 0 |
+    ///
+    /// **No single call site is the culprit**, which is the finding. Four explanations were tried
+    /// and each was refuted by the row above it. Device *creation* was never a candidate — that
+    /// has always been behind a `OnceLock`. Printing the thread at each call moved the apparent
+    /// location between runs, and adding enough of those prints stopped it happening at all:
+    /// twenty-five clean rounds where seven hangs were expected, which is what a timing race looks
+    /// like once you put I/O in it.
+    ///
+    /// So the lock is at the layer where the device is actually touched — [`Context`]'s own
+    /// operations, which never call one another, so a plain `Mutex` cannot deadlock on itself.
+    /// The cost is that GPU work does not overlap across threads. Nothing in this workspace does
+    /// that today, and a wedged suite is a worse price.
+    one_at_a_time: std::sync::Mutex<()>,
+}
+
+impl Shared {
+    /// Take the device. A poisoned lock is not interesting here: a panicking caller has already
+    /// failed, and the next thread is entitled to its turn rather than a second failure about the
+    /// first.
+    fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.one_at_a_time
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 /// One block's buffers, on the process's shared device.
@@ -602,6 +639,7 @@ impl Drop for Context {
     /// drifting under load. Kept because it is right, and recorded as unmeasured because the first
     /// version of this comment claimed a cause it had not established.
     fn drop(&mut self) {
+        let _device = self.shared.hold();
         for b in self
             .cells
             .iter()
@@ -703,6 +741,7 @@ impl Shared {
             pipeline,
             layout,
             adapter: format!("{} ({:?}, {:?})", info.name, info.device_type, info.backend),
+            one_at_a_time: std::sync::Mutex::new(()),
         }))
     }
 }
@@ -826,6 +865,7 @@ impl Context {
     }
 
     fn upload(&mut self, cells: &[f32]) {
+        let _device = self.shared.hold();
         let bytes: Vec<u8> = cells.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.shared
             .queue
@@ -833,6 +873,7 @@ impl Context {
     }
 
     fn download(&self, into: &mut [f32]) {
+        let _device = self.shared.hold();
         let mut encoder = self
             .shared
             .device
@@ -880,6 +921,7 @@ impl Context {
     /// Jacobi, which is a different scheme with a different stability limit and no ordering
     /// anybody chose.
     fn dispatch(&mut self, dt: f32, counts: [u32; 3]) {
+        let _device = self.shared.hold();
         let mut uniforms = Vec::with_capacity(32);
         uniforms.extend(counts[0].to_le_bytes());
         uniforms.extend(counts[1].to_le_bytes());

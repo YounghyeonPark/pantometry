@@ -5,15 +5,36 @@ cd app
 cargo test --release -- --nocapture
 ```
 
-**The tests in here take a lock and run one at a time**, and that is measured rather than
-cautious. Left to the harness's default they deadlock: `a_block_that_is_not_one_material` hung
-**7 times in 30** running alone with nothing before it, and **0 in 30** under
-`--test-threads=1`. A lock per test file is that, without making the whole suite serial.
+**One thread at a time on the device**, and the lock is in the library rather than in the tests.
+Every block in a process shares one device, and two threads using it concurrently deadlock about
+one run in five.
 
-What is *not* established is why. Device creation is not it — that has always been behind a
-`OnceLock` and happens once per process. Overlapping readbacks are not it either: serialising the
-submit-map-`Maintain::Wait` region left it at 5 in 30. So the workaround sits in the tests and not
-in the library, because a lock in the library would be a fix for a mechanism nobody has shown.
+Narrowed by measurement, in thirty-run blocks on `a_block_that_is_not_one_material`, which runs
+four tests and touches the device in three:
+
+| serialised | hangs of 30 |
+| --- | --- |
+| nothing | 7 |
+| the readback's submit, map and `Maintain::Wait` | 5 |
+| the readback and the teardown | 7 |
+| every `submit` | 4 |
+| every operation that touches the device | **0** |
+
+**No single call site is the culprit**, which is the finding rather than a step toward one. Four
+explanations were tried and each is refuted by the row above it. Device creation was never a
+candidate: it has been behind a `OnceLock` since it was written, so it happens once however many
+threads ask.
+
+Two things worth knowing before picking this up again. Printing the thread at each device call
+moved the apparent location between runs — once it looked like construction, once like the gap
+between construction and the first readback. And adding enough of those prints stopped it
+happening at all: twenty-five clean rounds where seven hangs were expected, which is what a timing
+race looks like once you put I/O in it.
+
+So the mechanism is still unknown, and the lock is at the layer where the device is actually
+touched — `Context`'s own operations, which never call one another, so a plain `Mutex` cannot
+deadlock on itself. The cost is that GPU work does not overlap across threads. Nothing here does
+that today, and a wedged suite is a worse price.
 
 `--release`. This README used to say `cargo test` without it, which turns out **not** to be why its
 figures were wrong: measured at 64³, debug costs the CPU column 6.7× and the device column 5.9×, and

@@ -87,27 +87,6 @@ fn divergence(cpu: &Solid3D, gpu: &mut GpuSolid) -> f64 {
     worst
 }
 
-/// One GPU test at a time, within this process.
-///
-/// **A workaround at the level the evidence supports, and no deeper.** Measured on this file:
-/// **7 hangs in 30** at the harness default, **0 in 30** with `--test-threads=1`, running alone
-/// with nothing before it. So it is concurrency inside one process — but *what* about it is not
-/// established. Two explanations were tried and measured wrong: device creation, which has always
-/// been behind a `OnceLock` and happens once; and overlapping readbacks, which serialising left
-/// at 5 in 30.
-///
-/// So the tests take a lock and the library does not, because a lock in the library would be a
-/// fix for a mechanism nobody has demonstrated. What is demonstrated is that these tests do not
-/// need to run at the same time, and that when they do, the suite stops.
-static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Take it. A poisoned lock is not interesting here — a panicking test has already failed, and
-/// the next one is entitled to a turn rather than a second failure about the first.
-fn alone() -> std::sync::MutexGuard<'static, ()> {
-    ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 /// **The GPU reproduces the reference to single precision, and the figure is reported.**
 ///
 /// The claim is not that they agree. WGSL has no `f64`, so they cannot: the port is a
@@ -119,7 +98,6 @@ fn alone() -> std::sync::MutexGuard<'static, ()> {
 /// rounding; anything above it by orders is a different stencil.
 #[test]
 fn the_gpu_reproduces_the_cpu_to_single_precision() {
-    let _alone = alone();
     let Some((mut cpu, mut gpu)) = pair() else {
         return;
     };
@@ -168,7 +146,6 @@ fn the_gpu_reproduces_the_cpu_to_single_precision() {
 /// disagreement would give.
 #[test]
 fn the_difference_grows_like_rounding_rather_than_appearing_at_once() {
-    let _alone = alone();
     let Some((mut cpu, mut gpu)) = pair() else {
         return;
     };
@@ -202,7 +179,6 @@ fn the_difference_grows_like_rounding_rather_than_appearing_at_once() {
 /// for being wrong.
 #[test]
 fn the_gpu_conserves_to_what_f32_can_hold() {
-    let _alone = alone();
     let Some((mut cpu, mut gpu)) = pair() else {
         return;
     };
@@ -234,7 +210,6 @@ fn the_gpu_conserves_to_what_f32_can_hold() {
 /// **The stability limit is refused on the GPU exactly as on the CPU.**
 #[test]
 fn past_the_limit_is_refused() {
-    let _alone = alone();
     let Some((cpu, mut gpu)) = pair() else {
         return;
     };
@@ -277,7 +252,6 @@ fn past_the_limit_is_refused() {
 /// number is then a first measurement, and rows compare because none of them paid for the others.
 #[test]
 fn how_much_faster() {
-    let _alone = alone();
     let n: usize = std::env::var("PANTOMETRY_SWEEP")
         .ok()
         .and_then(|v| v.parse().ok())
