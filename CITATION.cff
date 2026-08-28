@@ -8,8 +8,8 @@ message: >-
   each store exactly one, and `Cargo.toml` carries the authoritative expression.
 title: "pantometry: physics for simulated worlds, checked against closed forms"
 abstract: >-
-  A Rust workspace of sixteen crates: a kernel that knows conservation, integration,
-  scheduling and sampling but no physics, ten domain crates built on it, and scene and
+  A Rust workspace of seventeen crates: a kernel that knows conservation, integration,
+  scheduling and sampling but no physics, eleven domain crates built on it, and scene and
   view layers above. Every claim is checked against a closed form, an exact limit, a
   conservation law or a convergence rate rather than against a second implementation.
   Results are bit-for-bit reproducible across platforms, optimisation levels,
@@ -43,8 +43,8 @@ repository-code: "https://github.com/YounghyeonPark/pantometry"
 # version ran, which for this library it does. Minted for the first time at 0.16.0. The 0.13.0
 # and 0.14.0 depositions both failed, silently, on the licence field.
 doi: 10.5281/zenodo.22024817
-version: 0.17.0
-date-released: "2026-08-27"
+version: 0.18.0
+date-released: "2026-08-28"
 keywords:
   - physics simulation
   - verification

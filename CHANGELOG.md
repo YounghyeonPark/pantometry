@@ -20,6 +20,10 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.18.0] — 2026-08-28
+
 ### Added
 
 - **A designed mesh reaches the screen.** `pantometry_view::mesh::mesh_surface` turns triangles
@@ -2979,7 +2983,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.18.0
 [0.17.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.17.0
 [0.16.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.16.0
 [0.15.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.15.0

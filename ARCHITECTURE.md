@@ -31,7 +31,7 @@ promise dates.
     ┌───────────────────────────┴─────────────────────────────────┐
     │  PHYSICS       what evolves, and what it conserves           │
     │                the kernel, and one crate per physics         │
-    │                            `pantometry-core` + ten domain crates │
+    │                         `pantometry-core` + eleven domain crates │
     └───────────────────────────▲─────────────────────────────────┘
                                 │  fills
     ┌───────────────────────────┴─────────────────────────────────┐
