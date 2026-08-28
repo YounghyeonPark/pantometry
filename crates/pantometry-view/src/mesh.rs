@@ -1,4 +1,5 @@
-//! Turning a panel into triangles, once, for every exporter that needs them.
+//! Turning a panel into triangles, once, for every exporter that needs them — and carrying a
+//! designed mesh across when the triangles were somebody else's to begin with.
 //!
 //! # Why this is its own module
 //!
@@ -23,6 +24,14 @@
 //! Flat-shaded, four vertices to a quad, each carrying that face's normal. A voxel surface *is*
 //! faceted; sharing corner vertices would average three perpendicular normals into a direction no
 //! face points and shade a cube as a blob.
+//!
+//! # And one shape that is not derived from anything
+//!
+//! Three of the four producers here *compute* a surface — from the boundary of a field's cells,
+//! from a level through its values, from a body's position and a drawing convention.
+//! [`mesh_surface`] does not: a designed part arrived as triangles and the work is to carry them
+//! across unchanged, flat-shaded, with the winding the file wrote. It is the only one whose input
+//! is not a panel, which is why the module is described twice above.
 //!
 //! **Cells are clipped to the extent.** [`capture`](pantometry_scene::capture) samples corner to
 //! corner, so the first and last samples sit *on* the faces of the box rather than half a cell
@@ -496,6 +505,82 @@ pub fn field_surface(counts: (usize, usize, usize), extent: [f64; 6], values: &[
                 }
             }
         }
+    }
+    out
+}
+
+/// The surface a designed mesh already is.
+///
+/// The other three producers in this module *derive* a surface: from the boundary of a field's
+/// cells, from a level through its values, from a body's position and a drawing convention. A
+/// designed mesh needs none of that — it arrived as triangles and the work is to carry them
+/// across without changing them.
+///
+/// # Triangles, not a `Mesh`
+///
+/// `pantometry-shape` owns meshes and this crate does not depend on it, deliberately: layer 3 may
+/// read layer 2's scene and nothing below it. So this takes the same plain arrays every other
+/// producer here takes, and the caller — which links both — does the conversion. It costs one
+/// `collect` at the boundary and keeps a rule that has held through eleven domains.
+///
+/// # Flat, and one `source`
+///
+/// Per-face normals, three vertices to a triangle, nothing shared. The argument is the one this
+/// module's header makes about voxel faces and it survives the change of subject: a designed mesh
+/// is faceted *by construction* — an STL has no curvature to preserve, only the tessellation of
+/// one — and averaging normals across a machined edge would round a chamfer that is not there.
+/// Smoothing here would draw a shape the file does not describe.
+///
+/// Every vertex carries the caller's `source`, one for the whole mesh, because a part is one
+/// object with one material. Nothing in an STL varies along it, so a per-vertex index would be
+/// three copies of the same number and an invitation to colour a solid by an accident.
+///
+/// # What is dropped, and what is not budgeted
+///
+/// A triangle whose normal is not finite and positive is skipped: zero area means no normal
+/// exists, and a non-finite vertex poisons the cross product to `NaN`, so the one test catches
+/// both. Exporters emit degenerate triangles routinely and a vertex normal of `NaN` shades a face
+/// black. `a_designed_mesh.rs` pins that both go, and that a mesh of nothing but degenerates comes
+/// out **empty** rather than malformed.
+///
+/// Unlike [`field_surface`] there is no [`MAX_FACES`] budget, because subsampling has no meaning
+/// here. Dropping every other cell of a field draws a coarser field; dropping every other triangle
+/// of a mesh punches holes in a solid. A million-triangle STL is the caller's to decimate, with a
+/// tool that knows what the surface is.
+pub fn mesh_surface(triangles: &[[[f64; 3]; 3]], source: u32) -> Surface {
+    let mut out = Surface {
+        stride: 1,
+        ..Surface::default()
+    };
+    for t in triangles {
+        let u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+        let v = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
+        // The winding is the file's. `a` to `b` to `c` counter-clockwise seen from outside is
+        // what every STL writer means, and `(b - a) x (c - a)` is the direction that follows
+        // from it -- so a mesh that was inside-out on disk is drawn inside-out here, which is
+        // the honest outcome. The cube test asserts a positive enclosed volume to prove the
+        // conversion does not flip it.
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if !len.is_finite() || len <= 0.0 {
+            continue;
+        }
+        let unit = [
+            (n[0] / len) as f32,
+            (n[1] / len) as f32,
+            (n[2] / len) as f32,
+        ];
+        let base = out.positions.len() as u32;
+        for p in t {
+            out.positions.push([p[0] as f32, p[1] as f32, p[2] as f32]);
+            out.normals.push(unit);
+            out.source.push(source);
+        }
+        out.indices.extend([base, base + 1, base + 2]);
     }
     out
 }

@@ -22,6 +22,38 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
+- **A designed mesh reaches the screen.** `pantometry_view::mesh::mesh_surface` turns triangles
+  into a `Surface`, and the editor draws every `parts` entry of a scene in the place its voxels
+  will occupy. Until now the only picture of a designed part was the staircase it rasterised
+  into, and a staircase is a picture of the grid as much as of the object.
+
+  It draws **before there is a run**, which is the point: everything else in that viewport is a
+  picture of results, and a part is a picture of the scene. Once a run is loaded the field's
+  surface wins for that domain, because two surfaces in one place z-fight into a picture of
+  neither.
+
+  `pantometry-view` still does not depend on `pantometry-shape`. `mesh_surface` takes the same
+  plain arrays the module's other three producers take, and `editor-core` — which links both —
+  converts and applies the pose. The **same** pose `Voxels::onto` rasterises against: a mesh
+  drawn a millimetre from its own voxels is two pictures that disagree, and nothing on screen
+  would say which to believe.
+
+  Flat-shaded, per face, three vertices to a triangle. An STL has no curvature to preserve, only
+  the tessellation of one, so smoothing across a machined edge would round a chamfer that is not
+  there. A triangle with no finite positive normal is dropped — a zero-area face has no direction
+  and a non-finite vertex poisons the cross product to `NaN`, which shades a face black.
+
+  Checked against a cube's `6s²` and `s³`, both computed from the emitted surface rather than
+  from the triangles that went in, and against a quarter turn worked out by hand rather than by
+  the code under test. Verified by breaking it four ways: negating the normals, doubling the
+  positions, removing the degenerate guard, and collapsing every normal to one direction — each
+  is caught, and by the test written for it.
+
+  This closes the second half of `ARCHITECTURE.md`'s "a renderer with depth". What a mesh still
+  cannot do is travel in a **run**: the report and the glTF and USD writers work from a `Run`,
+  which has no shape for a surface, and adding one is a wire-format change to a reader that is
+  `deny_unknown_fields` on purpose.
+
 - **An isosurface: the surface where a field reaches a value.** `pantometry_view::mesh::isosurface`.
   `field_surface` draws the outside of the cells that hold a value — a staircase, and a picture of
   the grid as much as of the object. This draws where the *values* reach a number, which is the

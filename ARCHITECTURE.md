@@ -328,9 +328,26 @@ different quantities, the second separates domains carrying the same one.
    it was written, is where it is drawn. That closes the condition this entry set for itself: the
    depth buffer was waiting for something with a surface, and an isosurface is one.
 
+   **And the other half is closed too: a designed mesh reaches the screen.**
+   `pantometry_view::mesh::mesh_surface` takes triangles and returns a `Surface`, and the editor
+   draws every `parts` entry of a scene where its voxels will be — so an assembly is visible while
+   somebody is still authoring it, before there is a run and therefore before there is any field
+   to draw a surface of. Until now the only picture of a designed part was the staircase it
+   rasterised into, which is a picture of the grid as much as of the object.
+
+   The layering held without an exception. `pantometry-view` still does not depend on
+   `pantometry-shape` — `mesh_surface` takes the same plain arrays the other three producers take,
+   and `editor-core`, which links both, does the conversion and applies the pose. It is the *same*
+   pose `Voxels::onto` rasterises against, and that is not a detail: a mesh drawn a millimetre
+   from its own voxels would be two pictures of one part that disagree, which this module's own
+   header calls worse than either being wrong.
+
    Bodies are still points and a field is still composited rather than occluded, so the *flat*
-   renderers in `pantometry-view` need no depth. `pantometry-shape` still does not hand its meshes
-   to the view, which is the remaining half of this entry.
+   renderers in `pantometry-view` need no depth. What a designed mesh does not yet do is travel
+   in a **run**: the report and the glTF and USD writers work from a `Run`, which carries fields,
+   bodies and paths and has no fourth shape for a surface. Adding one is a wire-format change to
+   a reader that is `deny_unknown_fields` on purpose, so it is a decision rather than an
+   oversight — and it is the next thing this entry wants.
 7. **Geometry from a designed file.** Done as far as one object goes: `pantometry-shape` reads an STL,
    measures it, and rasterises it into the predicate a domain's `fill` already took. Nothing in the
    physics changed.

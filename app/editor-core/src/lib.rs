@@ -8,9 +8,11 @@
 //!   parse error carried as `line:column` because that is what an editor puts a squiggle
 //!   under.
 //! - **Placement geometry** — every placed extent as eight posed corners, ready to wireframe,
-//!   with the union bounds a camera fits to. The corners go through
-//!   [`pantometry::core::Pose::point_to_world`], which was written here before any scene stated
-//!   a pose and needed no change when one did.
+//!   with the union bounds a camera fits to, and every designed part's triangles posed the same
+//!   way. Both go through [`pantometry::core::Pose::point_to_world`], which was written here
+//!   before any scene stated a pose and needed no change when one did — and they have to go
+//!   through the *same* one, because a part drawn away from its own box is two pictures of one
+//!   object with nothing to say which moved. See [`PlacedMesh`].
 //! - **Editing** — the inspector's half of the loop: which values a selected row lets a person
 //!   change, and the splices that change them in the text without touching any other byte —
 //!   a number, a string, a domain added or removed, and a placement, which is the one that
@@ -49,7 +51,7 @@ pub use edit::{
 pub use pantometry_world::templates::TEMPLATES;
 
 use pantometry::units::LengthVec;
-use pantometry_world::{Parts, Scene, World};
+use pantometry_world::{DomainSpec, Parts, Scene, World};
 
 /// Where a scene's `parts` come from, re-exported so a shell talks to this crate and not past it.
 ///
@@ -73,6 +75,34 @@ pub struct PlacedBox {
     pub name: String,
     /// Eight corners, `[x, y, z]` each, in metres.
     pub corners: [[f64; 3]; 8],
+}
+
+/// One designed part's triangles, posed into world coordinates, in metres.
+///
+/// The wireframe beside it is the *grid* the part was rasterised onto; this is the part. A
+/// staircase and the shape it approximates are different pictures and a person authoring an
+/// assembly wants the second one, before there is a run and therefore before there is a field
+/// to draw a surface of.
+///
+/// # Placed the way the rasteriser places it, or not at all
+///
+/// `Voxels::onto` reads the mesh's coordinates as written — an STL carries absolute positions —
+/// against a grid whose origin is the block's local zero, and the *domain* is what a `Pose`
+/// moves. So the only transform here is that same pose, and it has to be that one: a mesh drawn
+/// a millimetre from its own voxels is two pictures of one part that disagree, which `mesh`'s
+/// header calls worse than either being wrong, because nothing says which to believe.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedMesh {
+    /// The domain the part belongs to. The same string [`PlacedBox::name`] carries, so hiding a
+    /// domain hides its parts with it rather than leaving them floating over a hidden box.
+    pub name: String,
+    /// `name/parts[n]` — the site the build's notes and `verify`'s findings already use, so a
+    /// reader can carry a rasterisation loss straight to the thing on screen.
+    pub site: String,
+    /// The file, for a label.
+    pub stl: String,
+    /// Triangles in world metres, three vertices each, wound as the file wound them.
+    pub triangles: Vec<[[f64; 3]; 3]>,
 }
 
 /// The twelve edges of a box, as index pairs into [`PlacedBox::corners`].
@@ -111,6 +141,10 @@ pub struct Checked {
     pub notes: Vec<String>,
     /// Every placed extent, posed into world coordinates.
     pub boxes: Vec<PlacedBox>,
+    /// Every designed part's triangles, posed the same way. Empty for a scene with no `parts`,
+    /// and empty for one whose STLs could not be read — in which case `error` says so, because
+    /// this is laid out from the same `files` the build used and fails for the same reasons.
+    pub meshes: Vec<PlacedMesh>,
     /// The union of every box, `[x0, y0, z0, x1, y1, z1]`, for the camera to fit. `None` when
     /// nothing in the scene has geometry — which the shell must say rather than draw an empty
     /// viewport that reads as "framed on nothing".
@@ -159,6 +193,50 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
             .get(spec.name())
             .copied()
             .unwrap_or_else(|| spec.placement());
+        // Parts before the extent check, because a part is geometry whether or not the domain
+        // states a box to wireframe -- and because this is the picture somebody authoring an
+        // assembly is looking at.
+        //
+        // The STL is read a second time here: `World::build_with` above already read *and*
+        // rasterised every one of them, so a parse is a small fraction of what this function
+        // has already spent, and the alternative -- carrying every mesh out of the build --
+        // would put a million triangles inside every `World` for the sake of the one caller
+        // that draws them.
+        if let DomainSpec::Block { parts, .. } = spec {
+            for (n, part) in parts.iter().enumerate() {
+                let Ok(bytes) = files.bytes(&part.stl) else {
+                    continue;
+                };
+                let Ok(mesh) = pantometry::shape::Mesh::from_stl(&bytes) else {
+                    continue;
+                };
+                let triangles = mesh
+                    .triangles()
+                    .iter()
+                    .map(|t| {
+                        // By component rather than by vertex: a `Triangle` holds `glam::DVec3`,
+                        // which `pantometry` does not re-export, and adding a dependency to
+                        // name a type in a closure signature is the wrong reason to add one.
+                        let world = |x: f64, y: f64, z: f64| {
+                            let w = placement.pose.point_to_world(LengthVec::m(x, y, z)).to_si();
+                            [w.x, w.y, w.z]
+                        };
+                        [
+                            world(t.a.x, t.a.y, t.a.z),
+                            world(t.b.x, t.b.y, t.b.z),
+                            world(t.c.x, t.c.y, t.c.z),
+                        ]
+                    })
+                    .collect();
+                out.meshes.push(PlacedMesh {
+                    name: spec.name().to_string(),
+                    site: format!("{}/parts[{n}]", spec.name()),
+                    stl: part.stl.clone(),
+                    triangles,
+                });
+            }
+        }
+
         let Some(extent) = placement.extent else {
             continue;
         };
@@ -192,6 +270,19 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
             for a in 0..3 {
                 bounds[a] = bounds[a].min(c[a]);
                 bounds[a + 3] = bounds[a + 3].max(c[a]);
+            }
+        }
+    }
+    // Meshes too, so a domain that states parts and no extent is still framed. A part is inside
+    // its grid by construction -- `Voxels::onto` refuses one that is not -- so this widens
+    // nothing when both are present, and is the whole of the answer when only the parts are.
+    for m in &out.meshes {
+        for t in &m.triangles {
+            for c in t {
+                for a in 0..3 {
+                    bounds[a] = bounds[a].min(c[a]);
+                    bounds[a + 3] = bounds[a + 3].max(c[a]);
+                }
             }
         }
     }

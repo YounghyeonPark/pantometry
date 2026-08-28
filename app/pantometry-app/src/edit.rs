@@ -1625,6 +1625,51 @@ impl App {
             }
         }
 
+        // **The designed parts**, in the same place their voxels will be.
+        //
+        // Everything else in this viewport is a picture of a *run*: a field's cells, a level
+        // through its values, a body's sphere. A part is a picture of the **scene**, so it draws
+        // before there is a run and is the only three-dimensional thing on screen while somebody
+        // is still authoring — which is most of the time an editor is open.
+        //
+        // Drawn only for a domain the current frame has no panel for. With a run there is
+        // already a surface in that space and two surfaces in one place z-fight into a picture
+        // of neither; the run wins, because a reader looking at results is asking about the
+        // values and not about the shape they were sampled on.
+        let running: std::collections::BTreeSet<&str> = self
+            .run
+            .as_ref()
+            .and_then(|v| {
+                v.run
+                    .frames
+                    .get(v.frame.min(v.run.frames.len().saturating_sub(1)))
+            })
+            .map(|f| f.panels.iter().map(|p| p.name()).collect())
+            .unwrap_or_default();
+        for m in &self.checked.meshes {
+            if !self.draws(&m.name) || running.contains(m.name.as_str()) {
+                continue;
+            }
+            let c = if selected_name.as_deref() == Some(m.name.as_str()) {
+                picked_colour
+            } else {
+                // Deliberately unlike any colour scale in this workspace. A designed part
+                // carries no value, and giving it one from the same palette a field uses would
+                // invite reading a temperature off a thing that has none.
+                [0.55f32, 0.57, 0.60]
+            };
+            let surface = pantometry::view::mesh::mesh_surface(&m.triangles, 0);
+            let base = solid.vertices();
+            for (p, n) in surface.positions.iter().zip(&surface.normals) {
+                let at = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+                solid.push(framing.local(at), *n, c);
+            }
+            solid
+                .indices
+                .extend(surface.indices.iter().map(|i| base + i));
+            notes.push((m.name.clone(), "part: as designed, not as rasterised"));
+        }
+
         let Some(view) = &self.run else {
             return (solid, lines, probes, notes);
         };

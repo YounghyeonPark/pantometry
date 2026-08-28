@@ -73,6 +73,18 @@ hold a value* — one quad per cell face whose neighbour is absent — lit by a 
 tested against everything else in the scene, with the placed extents as wire boxes that are hidden
 where they are behind a solid. A body is a sphere at the radius the exports use. Paths are lines.
 
+**A scene's `parts` are drawn as the meshes they are**, flat-shaded, in the place their voxels
+will occupy — which is the only thing in this viewport that is a picture of the *scene* rather
+than of a run, and so the only thing visible before anything has been run. It goes away for a
+domain once that domain has a panel in the current frame: the field's surface is in the same
+space, and two surfaces in one place z-fight into a picture of neither.
+
+The pose is `Scene::placements`', the same one `Voxels::onto` rasterises against. That is the
+whole of the correctness here — a part drawn a millimetre from its own voxels is two pictures of
+one object, and the viewport offers nothing that would say which of them moved. Pinned by
+`a_part_is_drawn_where_it_is_rasterised.rs`, whose quarter turn is worked out by hand rather than
+by the code under test.
+
 **View → Cells (see inside)** is the other picture, and the menu says so: every sample as a
 translucent splat composited far to near. Neither is a rendering of the other. A surface says what
 the shape is and a splat cloud says what is *inside* it, and the block whose hot spot is in the
