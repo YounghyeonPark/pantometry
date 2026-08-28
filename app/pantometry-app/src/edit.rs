@@ -656,8 +656,43 @@ impl eframe::App for App {
                         self.iso = on.then(|| self.iso_default()).flatten();
                     }
                     let (lo, hi) = self.iso_range();
+                    let frame = self.frame_range();
                     if let Some(level) = &mut self.iso {
                         ui.add(egui::Slider::new(level, lo..=hi).text("level"));
+                        // **What this frame actually reaches**, because the slider spans the
+                        // *run* and a frame is usually narrower. Scene 15's hot spot starts 60 K
+                        // above ambient and has diffused to 7 K by the last frame, so seven
+                        // eighths of the slider's travel draw the same tiny blob — which reads as
+                        // a broken control rather than as a level nothing has reached.
+                        //
+                        // The range stays the run's: rescaling per frame would make "the surface
+                        // at 300 K" a different temperature at every frame, which is the mistake
+                        // every other picture here avoids. So the silence is labelled instead.
+                        match frame {
+                            Some((flo, fhi)) => {
+                                let inside = (flo..=fhi).contains(level);
+                                let note = format!("this frame: {flo:.6} to {fhi:.6}");
+                                if inside {
+                                    ui.label(egui::RichText::new(note).weak().size(11.0));
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{note} — nothing reaches this level here"
+                                        ))
+                                        .weak()
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgb(230, 180, 60)),
+                                    );
+                                }
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new("no field in this frame")
+                                        .weak()
+                                        .size(11.0),
+                                );
+                            }
+                        }
                     }
                     ui.separator();
                     if ui.button("Show everything").clicked() {
@@ -1192,11 +1227,37 @@ impl App {
         }
     }
 
+    /// What the *current frame's* fields actually span, as against the run's scale.
+    ///
+    /// The two differ by a lot whenever a field settles: a hot spot released 60 K above ambient is
+    /// 7 K above it by the end, so most of a run-wide slider is outside every late frame. The
+    /// slider keeps the run's range on purpose — a level has to mean one temperature across the
+    /// whole run — and this is what lets the control say so rather than appear stuck.
+    fn frame_range(&self) -> Option<(f64, f64)> {
+        let view = self.run.as_ref()?;
+        let frame = view.run.frames.get(view.frame)?;
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for panel in &frame.panels {
+            if matches!(panel, viewer_core::Panel::Field { .. }) {
+                for v in panel.values().iter().filter(|v| v.is_finite()) {
+                    lo = lo.min(*v);
+                    hi = hi.max(*v);
+                }
+            }
+        }
+        (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+    }
+
     /// Where the slider opens: the middle of the range, or nothing when there is no run to have a
     /// range. Turning it on before running would draw an empty viewport, which reads as broken.
     fn iso_default(&self) -> Option<f64> {
         self.run.as_ref()?;
-        let (lo, hi) = self.iso_range();
+        // The middle of **this frame**, not of the run. The run's range is what the slider spans,
+        // but opening at the middle of it lands outside every late frame of a settling field —
+        // scene 15's run is 60 K wide and its last frame is 7 K, so the midpoint reaches nothing
+        // and the control would turn on showing an empty viewport. Which is the exact failure
+        // this function was written to avoid, committed by the function itself.
+        let (lo, hi) = self.frame_range().unwrap_or_else(|| self.iso_range());
         Some(0.5 * (lo + hi))
     }
 
@@ -1491,6 +1552,17 @@ impl App {
         self.hidden.hash(&mut h);
         self.solo.hash(&mut h);
         self.selected.hash(&mut h);
+        // **The isosurface level changes the mesh, so it belongs in the key.** Left out, the
+        // slider moved and the viewport kept the geometry it had already built — the control
+        // worked, the mesher worked, and nothing happened. Hashed as bits because `f64` is not
+        // `Hash`, and `None` as a distinct byte so "off" is not the same key as some level.
+        match self.iso {
+            Some(level) => {
+                1u8.hash(&mut h);
+                level.to_bits().hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
         if let Some(view) = &self.run {
             view.frame.hash(&mut h);
             view.run.frames.len().hash(&mut h);
