@@ -101,7 +101,7 @@ its own scheme. There are tests for those rates now.
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
 | `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because a GPU stack is 86 external crates and a GUI shell 371 against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
-| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with twenty-eight scenes across all eleven domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
+| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with twenty-nine scenes across all eleven domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
 
 The last three are the workspace's answer to the same question from three sides: what a
 simulation *is* (`pantometry-scene`), what a picture of one *is* (`pantometry-view`), and what it feels

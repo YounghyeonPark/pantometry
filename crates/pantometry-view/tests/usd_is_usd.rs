@@ -201,7 +201,7 @@ fn a_body_that_moves_has_animated_points() {
 
 /// **The domains with no shape are in the file.**
 ///
-/// Twelve of the twenty-eight shipped scenes have one, and for several of them the scalar *is* the
+/// Twelve of the twenty-nine shipped scenes have one, and for several of them the scalar *is* the
 /// result. A format that carried only geometry would drop the subject of the scene.
 #[test]
 fn a_domain_with_no_geometry_still_arrives_as_numbers() {

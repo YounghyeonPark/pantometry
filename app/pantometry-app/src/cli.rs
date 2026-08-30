@@ -23,7 +23,7 @@
 //! `.html` is the one to reach for if you do not already know how you want this drawn. It picks
 //! a view from each domain's *shape* — a profile for a 1D field, a heatmap for a 2D one, a
 //! rotatable scene for bodies, a line chart for scalars — and opens in a browser with nothing
-//! installed. `.csv` is the one that changed what this crate can say. **Twelve of the twenty-eight**
+//! installed. `.csv` is the one that changed what this crate can say. **Twelve of the twenty-nine**
 //! shipped scenes have a domain the filmstrip cannot draw — measured by running each of them, not
 //! counted once and left — and for several the scalar *is* the result:
 //! scene 13's whole subject is a winding whose resistance follows its own temperature, and it
@@ -34,7 +34,7 @@ use pantometry::prelude::ThermalNetwork;
 // were modules in this binary, which is `publish = false`, so a consumer who could state a
 // simulation and run it could not draw one.
 use pantometry::view::{html, readings_csv, svg as filmstrip, to_json};
-use pantometry_world::{OnDisk, Scene, World};
+use pantometry_world::{Beside, Scene, World};
 
 /// Build a scene **with the accelerator attached**.
 ///
@@ -43,8 +43,13 @@ use pantometry_world::{OnDisk, Scene, World};
 /// without a dependency tree the library's promises forbid — so honouring the key needed a binary
 /// that linked both the format and `pantometry-gpu`. There was no such binary. A scene that says
 /// nothing still runs on the CPU, which is what every scene written before the key meant.
-fn build(scene: Scene) -> Result<World, String> {
-    World::build_with_accelerator(scene, &OnDisk, &pantometry_gpu::OnTheGpu)
+///
+/// `beside` is the scene's own path, because a `parts` entry names a file **next to the scene**
+/// rather than next to whoever is running it. Resolving against the working directory is what
+/// this did until the first scene shipped with a part in it, and that scene then ran from
+/// exactly one directory and failed from its own.
+fn build(scene: Scene, beside: &str) -> Result<World, String> {
+    World::build_with_accelerator(scene, &Beside::of(beside), &pantometry_gpu::OnTheGpu)
 }
 
 /// Read a file, saying **which** file when it cannot be read.
@@ -112,7 +117,7 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         };
-        match build(scene.clone()) {
+        match build(scene.clone(), path) {
             Ok(world) => {
                 println!(
                     "{path}: format {}, {} domain(s), {:.3} s in {} frames",
@@ -227,7 +232,7 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let text = read(path)?;
         let scene: Scene = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
         println!("{}", scene.title);
-        let battery = match pantometry_world::verify::verify(&scene, deep) {
+        let battery = match pantometry_world::verify::verify_with(&scene, deep, &Beside::of(path)) {
             Ok(b) => b,
             Err(why) => {
                 eprintln!("{path}: {why}");
@@ -251,6 +256,10 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // The path is kept, not just the text: `parts` resolve beside the scene. The built-in
+    // scene has no file, and an empty root leaves a relative name resolving against the working
+    // directory -- which is right, because there is nothing else it could mean.
+    let beside = args.first().cloned().unwrap_or_default();
     let scene = match args.first() {
         Some(path) => {
             serde_json::from_str::<Scene>(&read(path)?).map_err(|e| format!("{path}: {e}"))?
@@ -268,7 +277,7 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         scene.conservation_tolerance
     );
 
-    let mut world = build(scene)?;
+    let mut world = build(scene, &beside)?;
     let frames = match world.run() {
         Ok(frames) => frames,
         // The whole reason to use this library: a run that stopped conserving says which

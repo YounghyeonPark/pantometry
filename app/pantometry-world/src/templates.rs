@@ -14,7 +14,7 @@
 //! Rust cannot list an enum's variants, so no compiler check can prove this list is complete.
 //! What can be proved is that it agrees with a set maintained somewhere else entirely, and one
 //! exists: **every kind the format defines appears in at least one shipped scene.** Measured, not
-//! assumed — nineteen variants, nineteen distinct kinds across the twenty-eight scenes. So the
+//! assumed — nineteen variants, nineteen distinct kinds across the twenty-nine scenes. So the
 //! test compares the two sets **in both directions**, which is the same shape as
 //! `counts_in_prose`: a template with no scene fires one half, a twentieth domain with a scene
 //! fires the other.

@@ -40,7 +40,7 @@
 //! name used only as a label. A domain added next year is drawn by the code below unchanged.
 
 use crate::render;
-use editor_core::OnDisk;
+use editor_core::Beside;
 use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -358,7 +358,7 @@ impl App {
                 String::from("the built-in scene"),
             ),
         };
-        let checked = editor_core::check(&text, &OnDisk);
+        let checked = editor_core::check(&text, &Beside::of(&path));
         let known_mtime = mtime_of(&path);
         App {
             history: editor_core::edit::History::new(text.clone()),
@@ -401,7 +401,7 @@ impl App {
     }
 
     fn recheck(&mut self) {
-        self.checked = editor_core::check(&self.text, &OnDisk);
+        self.checked = editor_core::check(&self.text, &Beside::of(&self.path));
         self.run = None;
     }
 
@@ -464,10 +464,13 @@ impl App {
 
     fn start_run(&mut self) {
         let text = self.text.clone();
+        // The path travels with the text, because a `parts` entry is resolved beside the scene
+        // and the thread has no idea where the scene came from.
+        let beside = Beside::of(&self.path);
         self.stop = Arc::new(AtomicBool::new(false));
         let stop = self.stop.clone();
         self.spawn("running", move |tx| {
-            let end = editor_core::run_streaming(&text, &OnDisk, &stop, |json| {
+            let end = editor_core::run_streaming(&text, &beside, &stop, |json| {
                 let _ = tx.send(Job::Frames(json));
             });
             let _ = tx.send(Job::RunEnded(end));
@@ -477,8 +480,9 @@ impl App {
     fn start_verify(&mut self) {
         let text = self.text.clone();
         let deep = self.deep;
+        let beside = Beside::of(&self.path);
         self.spawn("verifying", move |tx| {
-            let _ = tx.send(Job::Verified(editor_core::verify(&text, deep, &OnDisk)));
+            let _ = tx.send(Job::Verified(editor_core::verify(&text, deep, &beside)));
         });
     }
 

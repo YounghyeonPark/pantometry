@@ -57,7 +57,7 @@ use pantometry_world::{DomainSpec, Parts, Scene, World};
 ///
 /// The native editor has a filesystem and uses [`OnDisk`]; the browser has uploads and uses
 /// [`Uploaded`]. Both are the same scene format and the same builder — see [`Parts`].
-pub use pantometry_world::{OnDisk, Uploaded};
+pub use pantometry_world::{Beside, OnDisk, Uploaded};
 
 /// The material names a scene can use without declaring them, re-exported for a shell's menus.
 ///

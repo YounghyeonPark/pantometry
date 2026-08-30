@@ -800,7 +800,11 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         let scene: Scene =
             serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} does not parse: {e}"));
         let title = scene.title.clone();
-        let mut world = World::build(scene).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // **Beside the scene, not beside the runner.** Scene 29 names an STL, and a `parts`
+        // entry is relative to the file that states it -- which is also what the CLI and the
+        // editor do, so this test and a person at a terminal build the same world.
+        let mut world = World::build_with(scene, &pantometry_world::Beside::of(dir.join(name)))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
         let frames = world
             .run()
             .unwrap_or_else(|v| panic!("{name} ({title}) stopped conserving: {v}"));
@@ -2345,6 +2349,116 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                         );
                     }
                 }
+            }
+            "29-a-designed-bracket-becomes-cells.json" => {
+                // **The first shipped scene whose geometry comes from a file.** Everything else
+                // here states its shape as numbers in the JSON; this one names an STL, and the
+                // question it exists to answer is whether the cells the solver ran on are the
+                // part somebody drew.
+                let part = world
+                    .rasterised()
+                    .first()
+                    .unwrap_or_else(|| panic!("{name}: the part did not rasterise"));
+
+                // The closed form is the **outline**, not the mesh. `Loss::volume_error`
+                // compares the cells against `Mesh::volume`, which is the divergence theorem
+                // over the same triangles the rasteriser read — so agreeing with it would only
+                // say the crate agrees with itself. The shoelace area of the seven-point
+                // outline times the extrusion is an independent derivation, and it has to
+                // match, or either the file or the reader is wrong.
+                //
+                //   shoelace of (10,10) (60,10) (60,30) (40,30) (30,40) (30,60) (10,60)
+                //     = 1650 mm², extruded 20 mm = 33 000 mm³
+                const OUTLINE_MM2: f64 = 1650.0;
+                const EXTRUSION_MM: f64 = 20.0;
+                let designed_m3 = OUTLINE_MM2 * EXTRUSION_MM * 1e-9;
+
+                let cell_m = part.cell_mm * 1e-3;
+                let rasterised_m3 = part.filled as f64 * cell_m.powi(3);
+                let error = rasterised_m3 / designed_m3 - 1.0;
+
+                // 2 mm cells on a part whose thinnest wall is 20 mm: the surface passes through
+                // a shell of cells and each can be counted or not, so the error is a *surface*
+                // effect. It measures −0.61%, and 2% is the number `Loss::CLEAN_VOLUME_ERROR`
+                // already calls clean — asserted against that rather than against a figure
+                // chosen to fit, so a change that made this worse would have to argue with the
+                // crate's own threshold.
+                assert!(
+                    error.abs() < pantometry::shape::Loss::CLEAN_VOLUME_ERROR,
+                    "{name}: the cells are {:.2}% off the designed volume",
+                    error * 100.0
+                );
+
+                // And the crate's own measurement agrees with the independent one. Two ways of
+                // asking the same question, which is the only way to find out that one of them
+                // was answering a different one.
+                assert!(
+                    (part.loss.volume_error - error).abs() < 1e-3,
+                    "{name}: the crate reports {:.4} and the outline says {:.4}",
+                    part.loss.volume_error,
+                    error
+                );
+
+                // Nothing survives a rasterisation this coarse without loss, and the point of
+                // shipping the scene is that the loss is *stated*. A part that suddenly had no
+                // boundary cells at all would mean the grid stopped touching the surface.
+                assert!(
+                    part.loss.boundary_fraction > 0.0 && part.loss.boundary_fraction < 1.0,
+                    "{name}: boundary fraction {}",
+                    part.loss.boundary_fraction
+                );
+                assert_eq!(
+                    part.loss.ambiguous_rows, 0,
+                    "{name}: the rasteriser could not decide {} row(s)",
+                    part.loss.ambiguous_rows
+                );
+
+                // The physics, and the bound is one no cooling body may cross. There is no
+                // source in this scene, so the hottest cell may only fall, and nothing may end
+                // below the air it is losing heat to. A scheme that overshoots — too large a
+                // step against the convection coefficient — breaks the second and looks
+                // perfectly plausible doing it.
+                const AMBIENT_K: f64 = 293.15;
+                let hottest = |f: &pantometry_world::Frame| {
+                    f.panels.first().map_or(f64::NAN, |p| {
+                        p.values()
+                            .iter()
+                            .copied()
+                            .filter(|v| v.is_finite())
+                            .fold(f64::MIN, f64::max)
+                    })
+                };
+                let coldest = |f: &pantometry_world::Frame| {
+                    f.panels.first().map_or(f64::NAN, |p| {
+                        p.values()
+                            .iter()
+                            .copied()
+                            .filter(|v| v.is_finite())
+                            .fold(f64::MAX, f64::min)
+                    })
+                };
+                for pair in frames.windows(2) {
+                    let (before, after) = (hottest(&pair[0]), hottest(&pair[1]));
+                    assert!(
+                        after <= before + 1e-9,
+                        "{name}: the peak rose from {before} to {after} with no source"
+                    );
+                }
+                for f in &frames {
+                    assert!(
+                        coldest(f) >= AMBIENT_K - 1e-6,
+                        "{name}: a cell reached {} K, below the {AMBIENT_K} K air",
+                        coldest(f)
+                    );
+                }
+
+                // And it actually cooled, or the three bounds above are satisfied by a scene
+                // that did nothing for two minutes.
+                let (start, end) = (hottest(&frames[0]), hottest(frames.last().unwrap()));
+                assert!(
+                    start - end > 1.0,
+                    "{name}: 120 s of convection moved the peak from {start} to {end}"
+                );
             }
             other => panic!("{other} ships but nothing checks it; add a claim for it"),
         }

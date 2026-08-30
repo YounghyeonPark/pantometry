@@ -1,6 +1,6 @@
 # Scenes
 
-Twenty-eight worlds described as data, covering **all eleven** of the library's domains — twenty-six of them
+Twenty-nine worlds described as data, covering **all eleven** of the library's domains — twenty-seven of them
 one physics at a time, and one that is actually a world. Nothing here is Rust: the
 physics, the resolution, the coupling and the run length are all in the file, and the same
 binary runs all of them.
@@ -16,7 +16,7 @@ pointing at a node the scene defines. It reports a parse failure as `file:line:c
 keys that were expected, which is what an editor puts a squiggle under. CI runs it over every
 scene, because it would otherwise be the one entry point nothing exercises.
 
-Every file carries a `format` number, and **absence means 1** — which is what all twenty-eight here
+Every file carries a `format` number, and **absence means 1** — which is what all twenty-nine here
 are: nothing has yet changed what an existing key means. A version this build cannot read is refused
 rather than half-run: `deny_unknown_fields` catches a key that was *added*, but not one whose
 meaning changed, and that is what the number is for.
@@ -33,7 +33,7 @@ No second argument prints the numbers and checks them. A second argument writes 
 | `out.gltf` | The last frame as **surfaces** — a field's boundary, a body's sphere, with normals — for Blender, three.js or any glTF reader |
 | `out.usda` | The **whole run** as USD: geometry, colour and every domain's scalars, animated on a timeline, for usdview, Omniverse, Houdini or Maya |
 
-`.csv` is the one that reaches the domains a picture cannot. Twelve of these twenty-eight scenes have
+`.csv` is the one that reaches the domains a picture cannot. Twelve of these twenty-nine scenes have
 a domain with no field and no bodies, and for several the scalar *is* the result: `13` is about a
 winding whose resistance follows its own temperature, and it drew nothing at all. As a table it
 shows the feedback directly — 12.46 W at 25 °C rising to 16.01 W at 99 °C, with the resistance
@@ -62,7 +62,7 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. Eighteen of the twenty-eight scenes have geometry to
+`.gltf` is the one that leaves this workspace. Nineteen of the twenty-nine scenes have geometry to
 export — bodies, ray paths, a 3D field as its cell centres — and the other ten are **refused with
 a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not something to put
 in a 3D viewer, and the message says which panel and why.
@@ -297,7 +297,7 @@ against 6500 K rather than checking one number.
 ## Every one of them is run by CI
 
 A scene in this repository is a claim, and one that parses and then produces nonsense is worse
-than none at all. `tests/scene.rs` runs all twenty-eight on every commit and asserts one number each —
+than none at all. `tests/scene.rs` runs all twenty-nine on every commit and asserts one number each —
 chosen to be a property of the physics rather than of the file, so it would change if the
 library broke and not merely if the scene were edited. Adding a scene without a claim fails
 the test rather than passing quietly. CI also runs the real binary on the real files, which is

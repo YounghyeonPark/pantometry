@@ -1055,6 +1055,56 @@ impl Parts for OnDisk {
     }
 }
 
+/// [`Parts`] resolved **beside a scene file**, which is where a reader expects them.
+///
+/// [`OnDisk`] reads the name as typed, so it resolves against the process's working directory.
+/// That is invisible until a scene ships with a part in it, and then it is a trap: the first
+/// scene here to state `parts` ran from `app/pantometry-world` and failed from the repository
+/// root *and* from its own directory, with an error naming a path the user never typed.
+///
+/// A scene is a document that refers to a file beside it, like every other format that does
+/// this. So the CLI and the editor build one of these from the scene's own directory, and a
+/// relative `stl` is relative to the scene rather than to wherever somebody happened to be
+/// standing.
+///
+/// An **absolute** name is used as written — joining a root onto an absolute path is either a
+/// no-op or nonsense depending on the platform, and a scene that states an absolute path has
+/// said what it means.
+#[derive(Debug, Clone, Default)]
+pub struct Beside(pub std::path::PathBuf);
+
+impl Beside {
+    /// The directory holding `scene`, or the working directory when it has no parent.
+    ///
+    /// A bare `scene.json` has an empty parent rather than none, and joining an empty path is
+    /// already the right answer — but it is spelled out here because the two cases read the same
+    /// and only one of them is obvious.
+    pub fn of(scene: impl AsRef<std::path::Path>) -> Beside {
+        Beside(
+            scene
+                .as_ref()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(""))
+                .to_path_buf(),
+        )
+    }
+}
+
+impl Parts for Beside {
+    fn bytes(&self, name: &str) -> Result<Vec<u8>, String> {
+        let named = std::path::Path::new(name);
+        let full = if named.is_absolute() {
+            named.to_path_buf()
+        } else {
+            self.0.join(named)
+        };
+        // The message names the path **as the scene wrote it** and then where that was looked
+        // for. Reporting only the resolved path would answer a question the reader cannot map
+        // back to their file; reporting only the written one is what made this hard to see.
+        std::fs::read(&full).map_err(|e| format!("{name} (at {}): {e}", full.display()))
+    }
+}
+
 /// [`Parts`] held in memory: the name is a label somebody chose.
 ///
 /// What a browser has after a drop, and what a test has instead of a temporary directory. The
@@ -2532,6 +2582,15 @@ impl DomainSpec {
 /// file it could not find. Stated here rather than discovered: a page that wants geometry has to
 /// carry it, and that is a format decision this key does not make.
 ///
+/// # Relative to the scene, not to the terminal
+///
+/// A relative `stl` is resolved **beside the scene file** — see [`Beside`], which is what the
+/// CLI and the editor build. It was resolved against the working directory until the first
+/// scene shipped with a part in it, and that scene then ran from exactly one directory: from
+/// the repository root, and from its *own* directory, it failed with an error naming a path
+/// nobody had typed. A document that refers to a file beside it should not care where the
+/// reader is standing.
+///
 /// ```json
 /// "parts": [
 ///   { "stl": "bracket.stl", "material": "aluminium" },
@@ -2541,7 +2600,7 @@ impl DomainSpec {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartSpec {
-    /// Path to a binary or ASCII STL, relative to wherever the scene is run from.
+    /// Path to a binary or ASCII STL, relative to the scene file that names it.
     pub stl: String,
     /// What the part is made of: a catalogue name or one of [`Scene::materials`].
     pub material: String,

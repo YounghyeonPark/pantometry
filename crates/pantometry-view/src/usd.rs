@@ -503,7 +503,7 @@ fn write_curves(
 
 /// Every domain's scalars, as custom attributes with time samples.
 ///
-/// This is the half of a scene no picture reaches. Twelve of the twenty-eight shipped scenes have a
+/// This is the half of a scene no picture reaches. Twelve of the twenty-nine shipped scenes have a
 /// domain with no field and no bodies, and for several of them the scalar *is* the result — a
 /// winding whose resistance follows its own temperature draws nothing at all and is the whole
 /// subject of its scene.

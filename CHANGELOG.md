@@ -22,6 +22,40 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
+- **A shipped scene whose geometry comes from a file.** Scene 29 names an ASCII STL — an
+  L-bracket with a re-entrant corner and a chamfer, so a 2 mm grid has something to round off —
+  and cools it to still air. The `parts` path had been in the format for several releases and
+  **no scene used it**, so nothing in the twenty-eight-scene suite ran it; verifying the editor's
+  new mesh drawing meant building a fixture in a scratch directory.
+
+  ASCII rather than binary, because it is text: it reads in a diff, it greps, and it cannot carry
+  anything a reader cannot see.
+
+  The claim is a closed form **independent of the crate**. `Loss::volume_error` compares the
+  filled cells against `Mesh::volume`, the divergence theorem over the same triangles the
+  rasteriser read — agreeing with it would only say the crate agrees with itself. The shoelace
+  area of the seven-point outline times the extrusion is a separate derivation: 1650 mm² × 20 mm
+  = 33 000 mm³, so 4125 cells exactly, against 4100 filled. −0.61%, inside the 2% that
+  `Loss::CLEAN_VOLUME_ERROR` already calls clean. Plus two bounds no cooling body may cross: the
+  peak may only fall, and nothing may end below the air it is losing heat to.
+
+### Fixed
+
+- **A `parts` path was resolved against the working directory, not the scene.** Invisible until
+  a scene shipped with a part in it, and then a trap: scene 29 ran from `app/pantometry-world`
+  and failed from the repository root *and* from its own directory, with an error naming a path
+  the user never typed.
+
+  `Beside` resolves a relative `stl` next to the file that names it, which is what every format
+  that refers to a sibling does. The CLI and the editor both build one from the scene's own path,
+  so a scene checked at a terminal and a scene opened in the editor read the same bytes.
+  Measured from four directories, all of which now agree on 4100 cells; before, three of the four
+  could not find the file at all.
+
+  An absolute `stl` is used as written, and the error names the path **as the scene spelled it**
+  followed by where that was looked for — reporting only the resolved path answers a question the
+  reader cannot map back to their file.
+
 - **Undo in the editor.** It had gained six ways to change a scene before it had any way to
   change one back — a value, a string, a domain added, a domain removed, a placement, and a drag
   on an axis — and two of those destroy something: a removed domain takes its whole block of

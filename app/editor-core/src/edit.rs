@@ -7,7 +7,7 @@
 //!
 //! # What it covers, counted rather than assumed
 //!
-//! A census of every value in the twenty-eight shipped scenes: **358 numbers, 237 strings, 59
+//! A census of every value in the twenty-eight scenes that shipped when it was taken: **358 numbers, 237 strings, 59
 //! arrays of numbers, 46 arrays of objects, 44 nested objects, one array of arrays — and no
 //! booleans at all.** Three things follow, and none of them was obvious before the count.
 //!
@@ -72,7 +72,7 @@ pub struct Editable {
 
 /// What kind of value an [`Editable`] is, and what it would take to change it.
 ///
-/// Two variants and not three: a census of all twenty-eight shipped scenes counts **358 numbers,
+/// Two variants and not three: a census of the twenty-eight scenes of the time counts **358 numbers,
 /// 237 strings and no booleans at all**, so a flag variant would be a widget with nothing to
 /// point at. It goes in the day the format grows one.
 #[derive(Clone, Debug, PartialEq)]
@@ -246,7 +246,7 @@ const STRUCTURAL: [&str; 2] = ["kind", "name"];
 ///
 /// A full walk, not one level. Measured on the shipped scenes, the levels matter: a `hot_spot`'s
 /// `above_k` and a `region`'s `material` are nested, and there are **44 nested objects and 46
-/// arrays of objects** across the twenty-eight of them. A one-level inspector shows a domain and
+/// arrays of objects** across the twenty-eight it covered. A one-level inspector shows a domain and
 /// hides half of what the domain says.
 ///
 /// No cap on how many come out, and that is measured rather than hoped: the widest domain in any
@@ -717,7 +717,7 @@ pub fn pose_of(text: &str, name: &str) -> [f64; 3] {
 ///
 /// [`set_number`] and [`set_text`] replace the bytes of a value that already exists, which is
 /// every edit the inspector makes to a domain's own fields. A position is different: **no shipped
-/// scene states `poses` at all** — zero of the twenty-eight — so moving anything means writing a
+/// scene states `poses` at all** — zero of the twenty-nine — so moving anything means writing a
 /// key that is not in the file. Three levels of it can be missing, and each is handled where it
 /// is found: the `at_m` array, the domain's entry, or the whole `poses` object.
 ///
@@ -992,7 +992,7 @@ mod tests {
     /// Hand-formatted the way the shipped scenes are: several keys to a line, `kind` and `name`
     /// first. Every test that asserts nothing else moved is asserting about *this* shape.
     ///
-    /// It carries one of each shape the census of the twenty-eight shipped scenes found — a
+    /// It carries one of each shape that census found — a
     /// nested object (`hot_spot`), an array of objects (`regions`), an array of numbers
     /// (`cells`), strings and numbers — because a fixture that only holds the easy shapes is a
     /// fixture that agrees with a one-level walk.

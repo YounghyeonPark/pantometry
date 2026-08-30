@@ -1,6 +1,6 @@
 //! Every domain reports scalars, including the ones that have no picture.
 //!
-//! **Twelve of the twenty-eight** shipped scenes contain a domain the filmstrip cannot draw — a
+//! **Twelve of the twenty-nine** shipped scenes contain a domain the filmstrip cannot draw — a
 //! heater, a lamp, a winding, a thermal network — and for several the scalar *is* the result. The
 //! count is measured by running every scene and reading what the binary says it drew; it stood at
 //! "eight of the fourteen" through fourteen more scenes. The
@@ -10,14 +10,14 @@
 use pantometry_world::{Scene, World};
 
 fn run(path: &str) -> Vec<pantometry_world::Frame> {
-    let text = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("scenes")
-            .join(path),
-    )
-    .expect("the scene is there");
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scenes")
+        .join(path);
+    let text = std::fs::read_to_string(&file).expect("the scene is there");
     let scene: Scene = serde_json::from_str(&text).expect("it parses");
-    let mut world = World::build(scene).expect("it builds");
+    // Beside the scene, because a `parts` entry names a file next to the file that states it.
+    let mut world =
+        World::build_with(scene, &pantometry_world::Beside::of(&file)).expect("it builds");
     world.run().expect("it conserves")
 }
 
@@ -229,7 +229,8 @@ fn every_domain_with_a_field_was_given_an_extent() {
         }
         let scene: Scene = serde_json::from_str(&std::fs::read_to_string(&path).expect("readable"))
             .expect("it parses");
-        let world = World::build(scene.clone()).expect("it builds");
+        let world = World::build_with(scene.clone(), &pantometry_world::Beside::of(&path))
+            .expect("it builds");
         let placed = world.placements();
 
         for spec in &scene.domains {
