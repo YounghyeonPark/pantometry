@@ -252,7 +252,9 @@ list actually wants.
 | | |
 | --- | --- |
 | concept DOI | `10.5281/zenodo.22024817` — always the newest version. Cite this in prose |
-| 0.16.0 | `10.5281/zenodo.22024818` — cite this when the result depends on which version ran, which for this library it does |
+| 0.16.0 | `10.5281/zenodo.22024818` — the first one minted |
+| 0.17.0 | `10.5281/zenodo.22122301` |
+| 0.18.0 | `10.5281/zenodo.22142201` — cite a version DOI when the result depends on which version ran, which for this library it does |
 
 Both are in `CITATION.cff` and `README.md`'s BibTeX block. The concept DOI is the `doi:` field,
 because that is the one a reader following a reference wants; the version DOI lives on each Zenodo
@@ -282,7 +284,14 @@ newest. Cite the concept DOI in prose and the version DOI when the result depend
 — which for this library it does, because the numbers in the changelog move.
 
 Once the first one exists, add it to `CITATION.cff` as `doi:` and to the BibTeX block in `README.md`.
-**Both are written now.** They could not be before 0.16.0, because there was no DOI to write — which
+**Both are written now.**
+
+**And the BibTeX one moves every release, which this paragraph used to obscure by describing a
+one-time action.** `CITATION.cff`'s `doi:` is the *concept* DOI and never changes; the BibTeX
+`doi` is the *version* DOI and goes stale the moment a new version is minted. It named 0.16.0
+through the whole of 0.17.0 because nothing here said to bump it. It is a row of the release
+checklist now, and the version DOI cannot be known until after the GitHub Release exists — so it
+is the one edit that necessarily comes *after* the tag, in a follow-up commit. They could not be before 0.16.0, because there was no DOI to write — which
 is the paragraph above surviving three failed depositions as an explanation for an absence, and is
 worth keeping beside the fact that the absence is over.
 

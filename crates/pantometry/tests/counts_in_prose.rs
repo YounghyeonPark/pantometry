@@ -318,3 +318,63 @@ fn the_releasing_example_command_counts_every_example() {
         "the old glob missed the example in pantometry-optics"
     );
 }
+
+/// The **six crates that are not a physics**, so the domain count is a subtraction with a stated
+/// list rather than a number somebody remembers.
+///
+/// Naming them beats deriving them. Every plausible derivation is wrong somewhere: "depends on
+/// the kernel" catches `pantometry-scene`, `pantometry-view` and the facade; "has a `Domain`
+/// impl" is true of test fixtures. A list fails *loudly* when a seventh non-physics crate
+/// arrives, which is the direction a guard should fail in.
+const NOT_A_PHYSICS: [&str; 6] = [
+    "pantometry",       // the facade
+    "pantometry-units", // under everything
+    "pantometry-core",  // the kernel, which knows no physics by construction
+    "pantometry-shape", // layer 0, input
+    "pantometry-scene", // layer 2
+    "pantometry-view",  // layer 3
+];
+
+/// How many crates there are, and how many of them are a physics, wherever prose says so.
+///
+/// **Added because all three of these had drifted at once.** At 0.18.0 the citation record and
+/// the Zenodo deposition both described "sixteen crates ... ten domain crates" — one short on
+/// each, and in the two documents a reader outside this repository is most likely to be handed.
+/// `ARCHITECTURE.md`'s layer diagram said ten as well. Nothing here read any of them, and the
+/// three that this file already covered were the three that had stayed correct.
+#[test]
+fn the_crate_and_domain_counts_agree_everywhere_they_are_written() {
+    let Ok(entries) = std::fs::read_dir(root().join("crates")) else {
+        return;
+    };
+    let names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    for expected in NOT_A_PHYSICS {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "{expected} is in NOT_A_PHYSICS and not in crates/ -- the list has gone stale"
+        );
+    }
+    let crates = names.len();
+    let domains = crates - NOT_A_PHYSICS.len();
+    println!("  {crates} crates, {domains} of them a physics");
+
+    // The two documents that leave this repository: one is what a citation manager reads, the
+    // other is what the DOI record shows.
+    for f in ["CITATION.cff", ".zenodo.json"] {
+        phrase(f, "A Rust workspace of {} crates", crates);
+        phrase(f, "{} domain crates built on it", domains);
+    }
+    phrase("ARCHITECTURE.md", "+ {} domain crates", domains);
+    phrase(
+        "ARCHITECTURE.md",
+        "The physics layer is {} crates deep",
+        domains,
+    );
+}
