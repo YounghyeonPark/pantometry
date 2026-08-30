@@ -1999,6 +1999,64 @@ mod tests {
         assert!(axis.iter().all(|c| c.is_finite()));
     }
 
+    /// **A ring is a circle in the plane its axis is normal to**, for every axis.
+    ///
+    /// Four closed forms at once: every point is `radius` from the origin, every point is in the
+    /// plane (its arm is perpendicular to the axis), consecutive points are the chord length a
+    /// circle of that radius gives, and the loop closes. Checked for all three drawn axes plus a
+    /// skew one, because the failure this is shaped to catch is an axis-dependent one — a fixed
+    /// basis vector collapses when the axis is parallel to it, and the axes a gizmo draws are
+    /// exactly the ones that would.
+    #[test]
+    fn a_ring_is_a_circle_about_its_axis() {
+        let origin = [0.3, -1.2, 4.0];
+        let radius = 2.5;
+        for axis in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.4, -0.9, 0.2],
+        ] {
+            let pts = ring_points(origin, axis, radius);
+            assert_eq!(pts.len(), RING, "{axis:?}: wrong count");
+            let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            let k = [axis[0] / n, axis[1] / n, axis[2] / n];
+
+            for p in &pts {
+                let arm = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+                let r = (arm[0] * arm[0] + arm[1] * arm[1] + arm[2] * arm[2]).sqrt();
+                assert!((r - radius).abs() < 1e-12, "{axis:?}: radius {r}");
+                let out_of_plane = arm[0] * k[0] + arm[1] * k[1] + arm[2] * k[2];
+                assert!(
+                    out_of_plane.abs() < 1e-12,
+                    "{axis:?}: {out_of_plane} out of plane"
+                );
+            }
+
+            // The chord of one step: 2 r sin(pi / N), exactly. A ring whose points were not
+            // evenly spaced would still pass the two checks above.
+            let want = 2.0 * radius * (std::f64::consts::PI / RING as f64).sin();
+            for i in 0..RING {
+                let (a, b) = (pts[i], pts[(i + 1) % RING]);
+                let d =
+                    ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+                assert!(
+                    (d - want).abs() < 1e-12,
+                    "{axis:?}: step {i} is {d}, not {want}"
+                );
+            }
+        }
+    }
+
+    /// **A ring nobody can draw is empty**, rather than full of `NaN`.
+    #[test]
+    fn a_ring_with_no_axis_or_no_size_is_empty() {
+        assert!(ring_points([0.0; 3], [0.0; 3], 1.0).is_empty());
+        assert!(ring_points([0.0; 3], [0.0, 0.0, 1.0], 0.0).is_empty());
+        assert!(ring_points([0.0; 3], [0.0, 0.0, 1.0], -1.0).is_empty());
+        assert!(ring_points([0.0; 3], [0.0, 0.0, 1.0], f64::NAN).is_empty());
+    }
+
     /// **Text that does not parse offers nothing**, rather than pointing into a file whose shape
     /// is unknown.
     #[test]
@@ -2337,4 +2395,61 @@ pub fn compose_turns(first: ([f64; 3], f64), second: ([f64; 3], f64)) -> ([f64; 
         [q[1] / sin_half, q[2] / sin_half, q[3] / sin_half],
         angle.to_degrees(),
     )
+}
+
+/// How many segments a rotation ring is drawn and hit-tested with.
+///
+/// Forty-eight reads as a circle at the size a gizmo is drawn and costs nothing. It is the same
+/// number for both because a ring hit-tested more finely than it is drawn would grab where there
+/// is no line, and one drawn more finely than it is tested would miss where there is.
+pub const RING: usize = 48;
+
+/// The points of a rotation ring about `axis`, in world coordinates.
+///
+/// A closed loop of [`RING`] points at `radius` from `origin`, in the plane the axis is normal
+/// to. The shell projects them for both the picture and the hit test, from this one list, for
+/// the reason the translate handles share their endpoints: a control drawn somewhere other than
+/// where it is grabbed is a control that works everywhere except under the pointer.
+///
+/// The first basis vector is chosen away from the axis rather than fixed, because a fixed one
+/// collapses when the axis happens to be parallel to it — and the axes a gizmo draws are exactly
+/// the ones that would.
+pub fn ring_points(origin: [f64; 3], axis: [f64; 3], radius: f64) -> Vec<[f64; 3]> {
+    let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if n < 1e-30 || !radius.is_finite() || radius <= 0.0 {
+        return Vec::new();
+    }
+    let k = [axis[0] / n, axis[1] / n, axis[2] / n];
+    // Anything not parallel to the axis. Picking the *smallest* component to build from is what
+    // makes the cross product well conditioned for every axis rather than for most of them.
+    let seed = if k[0].abs() <= k[1].abs() && k[0].abs() <= k[2].abs() {
+        [1.0, 0.0, 0.0]
+    } else if k[1].abs() <= k[2].abs() {
+        [0.0, 1.0, 0.0]
+    } else {
+        [0.0, 0.0, 1.0]
+    };
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let u0 = cross(k, seed);
+    let un = (u0[0] * u0[0] + u0[1] * u0[1] + u0[2] * u0[2]).sqrt();
+    let u = [u0[0] / un, u0[1] / un, u0[2] / un];
+    let v = cross(k, u);
+
+    (0..RING)
+        .map(|i| {
+            let t = std::f64::consts::TAU * i as f64 / RING as f64;
+            let (s, c) = (t.sin(), t.cos());
+            [
+                origin[0] + (u[0] * c + v[0] * s) * radius,
+                origin[1] + (u[1] * c + v[1] * s) * radius,
+                origin[2] + (u[2] * c + v[2] * s) * radius,
+            ]
+        })
+        .collect()
 }

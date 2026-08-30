@@ -174,6 +174,15 @@ const AXES: [([f64; 3], egui::Color32); 3] = [
 /// How near the pointer has to be to a handle to take hold of it, in points.
 const GRAB_RADIUS: f32 = 9.0;
 
+/// What the three axis handles do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gizmo {
+    /// Arrows along the axes: drag to move the domain.
+    Move,
+    /// Rings about the axes: drag to turn it.
+    Turn,
+}
+
 /// How far `at` is from the segment `a`..`b`, in points.
 ///
 /// A handle is a line and a pointer is a point, so the distance to the *segment* is the question
@@ -296,6 +305,18 @@ struct App {
     shaded_probes: Vec<Probed>,
     shaded_notes: Vec<(String, &'static str)>,
 
+    /// What the three handles do: move the domain along an axis, or turn it about one.
+    ///
+    /// One gizmo at a time, which is what every DCC tool does and for the same reason: arrows
+    /// and rings occupying the same space would be six controls in the room a person aims at
+    /// with one pointer.
+    gizmo: Gizmo,
+    /// Where on a rotation ring the drag started, in world metres.
+    ///
+    /// The angle a drag asks for depends on **where** the ring was taken hold of — the far side
+    /// of a ring turns the other way — so the grip is remembered rather than recomputed from the
+    /// pointer, which moves.
+    grip: Option<[f64; 3]>,
     /// Which translate handle the pointer has hold of, as an index into [`AXES`].
     ///
     /// Held across frames because a drag is not one event: the press picks the handle, every
@@ -391,6 +412,8 @@ impl App {
             run_at_once: false,
             shaded_probes: Vec::new(),
             shaded_notes: Vec::new(),
+            gizmo: Gizmo::Move,
+            grip: None,
             grabbed: None,
             iso: None,
             framing_hold: None,
@@ -715,6 +738,21 @@ impl eframe::App for App {
                         ui.close_menu();
                     }
                     ui.separator();
+                    // **The gizmo, in Edit rather than View**, because it changes what a drag
+                    // does to the scene rather than what the scene looks like. `View` is the
+                    // menu of pictures.
+                    ui.label("Handles");
+                    if ui.radio(self.gizmo == Gizmo::Move, "Move	W").clicked() {
+                        self.gizmo = Gizmo::Move;
+                        self.grabbed = None;
+                        self.grip = None;
+                    }
+                    if ui.radio(self.gizmo == Gizmo::Turn, "Turn	E").clicked() {
+                        self.gizmo = Gizmo::Turn;
+                        self.grabbed = None;
+                        self.grip = None;
+                    }
+                    ui.separator();
                     ui.label(format!(
                         "{} back, {} forward",
                         self.history.steps_back(),
@@ -991,6 +1029,34 @@ impl eframe::App for App {
         });
         if let Some(step) = step {
             self.take_back(step == editor_core::edit::Step::Back);
+        }
+
+        // W and E, which is what a person arrives from Blender or Unreal expecting. Guarded on
+        // focus like everything else here, or they would be two letters somebody cannot type.
+        if !typing {
+            let wanted = ctx.input(|i| {
+                if i.key_pressed(egui::Key::W) {
+                    Some(Gizmo::Move)
+                } else if i.key_pressed(egui::Key::E) {
+                    Some(Gizmo::Turn)
+                } else {
+                    None
+                }
+            });
+            if let Some(g) = wanted {
+                if self.gizmo != g {
+                    self.gizmo = g;
+                    // Dropped, not carried: a grip is a point on a ring and means nothing to an
+                    // arrow, and a handle index held across a mode change would be a drag the
+                    // user started on a control that is no longer there.
+                    self.grabbed = None;
+                    self.grip = None;
+                    self.status = match g {
+                        Gizmo::Move => String::from("handles: move"),
+                        Gizmo::Turn => String::from("handles: turn"),
+                    };
+                }
+            }
         }
 
         if !typing {
@@ -2013,6 +2079,10 @@ impl App {
 
         // The translate handles, if a domain is selected and the scene has somewhere to put them.
         let mut moved: Option<(String, [f64; 3])> = None;
+        // A turn is a third thing the drag can produce: a name, the world axis it was about, and
+        // how far. Applied after the hit test for the same reason `moved` is -- the splice needs
+        // `self.text` while the projection above still borrows `self.camera`.
+        let mut turned: Option<(String, [f64; 3], f64)> = None;
         let mut holding = false;
         if let (Some(b), Some(name)) = (bounds, self.selected_domain()) {
             let framing = self
@@ -2037,16 +2107,41 @@ impl App {
 
                 if response.drag_started() {
                     if let Some(at) = response.interact_pointer_pos() {
-                        let base = to_screen(origin);
-                        self.grabbed = AXES
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (axis, _))| {
-                                (i, near_segment(at, base, to_screen(tip(*axis))))
-                            })
-                            .filter(|(_, d)| *d <= GRAB_RADIUS)
-                            .min_by(|a, b| a.1.total_cmp(&b.1))
-                            .map(|(i, _)| i);
+                        match self.gizmo {
+                            Gizmo::Move => {
+                                let base = to_screen(origin);
+                                self.grabbed = AXES
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, (axis, _))| {
+                                        (i, near_segment(at, base, to_screen(tip(*axis))))
+                                    })
+                                    .filter(|(_, d)| *d <= GRAB_RADIUS)
+                                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                                    .map(|(i, _)| i);
+                                self.grip = None;
+                            }
+                            Gizmo::Turn => {
+                                // Nearest segment of any ring, and **which point of it** —
+                                // the far side of a ring turns the other way, so the grip is
+                                // part of the answer rather than a detail of finding it.
+                                let mut best: Option<(f32, usize, [f64; 3])> = None;
+                                for (i, (axis, _)) in AXES.iter().enumerate() {
+                                    let pts = editor_core::edit::ring_points(origin, *axis, reach);
+                                    for w in 0..pts.len() {
+                                        let a = pts[w];
+                                        let b = pts[(w + 1) % pts.len()];
+                                        let d = near_segment(at, to_screen(a), to_screen(b));
+                                        if d <= GRAB_RADIUS && best.is_none_or(|(bd, _, _)| d < bd)
+                                        {
+                                            best = Some((d, i, a));
+                                        }
+                                    }
+                                }
+                                self.grabbed = best.map(|(_, i, _)| i);
+                                self.grip = best.map(|(_, _, p)| p);
+                            }
+                        }
                     }
                 }
                 if let Some(i) = self.grabbed {
@@ -2061,16 +2156,39 @@ impl App {
                             -d.y as f64 / (rect.height() as f64 * 0.5).max(1.0),
                         ];
                         let axis = AXES[i].0;
-                        let t = editor_core::drag_along_axis(
-                            &self.camera,
-                            &framing,
-                            aspect,
-                            origin,
-                            axis,
-                            ndc,
-                        );
-                        if t != 0.0 {
-                            moved = Some((name.clone(), [axis[0] * t, axis[1] * t, axis[2] * t]));
+                        match (self.gizmo, self.grip) {
+                            (Gizmo::Move, _) => {
+                                let t = editor_core::drag_along_axis(
+                                    &self.camera,
+                                    &framing,
+                                    aspect,
+                                    origin,
+                                    axis,
+                                    ndc,
+                                );
+                                if t != 0.0 {
+                                    moved = Some((
+                                        name.clone(),
+                                        [axis[0] * t, axis[1] * t, axis[2] * t],
+                                    ));
+                                }
+                            }
+                            (Gizmo::Turn, Some(grip)) => {
+                                let radians = editor_core::edit::turn_about_axis(
+                                    &self.camera,
+                                    &framing,
+                                    aspect,
+                                    origin,
+                                    axis,
+                                    grip,
+                                    ndc,
+                                );
+                                if radians != 0.0 {
+                                    turned = Some((name.clone(), axis, radians.to_degrees()));
+                                }
+                            }
+                            // Held a ring and lost the grip: refuse rather than guess one.
+                            (Gizmo::Turn, None) => {}
                         }
                     }
                 }
@@ -2078,6 +2196,7 @@ impl App {
         }
         if response.drag_stopped() {
             self.grabbed = None;
+            self.grip = None;
         }
         // The pose is absolute in the file and the drag is a delta, so it is read, added to and
         // written back each frame. Applied after the hit test rather than inside it, because the
@@ -2089,6 +2208,25 @@ impl App {
                 Ok(text) => {
                     // Fold in anything typed since the last edit, then record this one. The
                     // first commit is a no-op when nobody typed, by construction.
+                    self.history.commit(self.text.clone());
+                    self.text = text;
+                    self.history.commit(self.text.clone());
+                    self.dirty = true;
+                    self.recheck();
+                }
+                Err(why) => self.status = why,
+            }
+        }
+
+        // **A turn composes rather than replaces.** The file states one axis and one angle, and
+        // the ring asks for a rotation about a *world* axis applied on top of whatever is there;
+        // rotations do not commute, so the two are composed as rotations rather than added.
+        // `editor_core::edit::compose_turns` is where that lives and where its tests are.
+        if let Some((name, axis, degrees)) = turned {
+            let now = editor_core::turn_of(&self.text, &name);
+            let (next_axis, next_deg) = editor_core::edit::compose_turns(now, (axis, degrees));
+            match editor_core::set_turn(&self.text, &name, next_axis, next_deg) {
+                Ok(text) => {
                     self.history.commit(self.text.clone());
                     self.text = text;
                     self.history.commit(self.text.clone());
@@ -2236,25 +2374,41 @@ impl App {
         // a picture — the same reason every caption and the colour bar are egui over the shaded
         // pass. Painted last, below, so nothing occludes what the pointer has to hit; the hit
         // test above uses the same origin and the same reach, so what is drawn is what is grabbed.
-        let handles: Vec<(usize, egui::Pos2, egui::Pos2)> = match self.selected_domain() {
+        //
+        // In `Turn` the same list holds the **rings**: each is a closed polyline, and it comes
+        // from `ring_points` — the one the hit test above walks — so what is drawn is what is
+        // grabbed. That equality is the reason both go through the same function rather than
+        // each computing a circle.
+        let reach = framing.span * 0.35;
+        let handles: Vec<(usize, Vec<egui::Pos2>)> = match self.selected_domain() {
             Some(name) => match self.handle_origin(&name) {
-                Some(origin) => {
-                    let reach = framing.span * 0.35;
-                    AXES.iter()
-                        .enumerate()
-                        .map(|(i, (axis, _))| {
-                            (
-                                i,
-                                to_screen(origin),
-                                to_screen([
+                Some(origin) => AXES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (axis, _))| {
+                        let world: Vec<[f64; 3]> = match self.gizmo {
+                            Gizmo::Move => vec![
+                                origin,
+                                [
                                     origin[0] + axis[0] * reach,
                                     origin[1] + axis[1] * reach,
                                     origin[2] + axis[2] * reach,
-                                ]),
-                            )
-                        })
-                        .collect()
-                }
+                                ],
+                            ],
+                            Gizmo::Turn => {
+                                let mut p = editor_core::edit::ring_points(origin, *axis, reach);
+                                // Closed: the last segment back to the first is a segment a
+                                // pointer can be over, and a ring with a gap in it is a ring
+                                // that refuses in one place for no reason a person can see.
+                                if let Some(first) = p.first().copied() {
+                                    p.push(first);
+                                }
+                                p
+                            }
+                        };
+                        (i, world.into_iter().map(to_screen).collect())
+                    })
+                    .collect(),
                 None => Vec::new(),
             },
             None => Vec::new(),
@@ -2559,14 +2713,20 @@ impl App {
 
         // The handles, over everything. Drawn from the positions computed before the geometry so
         // the hit test and the picture cannot drift apart.
-        for (i, base, tip) in &handles {
+        for (i, points) in &handles {
             let held = self.grabbed == Some(*i);
             let colour = AXES[*i].1;
-            painter.line_segment(
-                [*base, *tip],
-                egui::Stroke::new(if held { 3.5_f32 } else { 2.0_f32 }, colour),
-            );
-            painter.circle_filled(*tip, if held { 6.0_f32 } else { 4.5_f32 }, colour);
+            let stroke = egui::Stroke::new(if held { 3.5_f32 } else { 2.0_f32 }, colour);
+            for pair in points.windows(2) {
+                painter.line_segment([pair[0], pair[1]], stroke);
+            }
+            // An arrow gets a head; a ring does not, because a ring has no end and a blob on one
+            // would read as the handle rather than as the whole circle being it.
+            if self.gizmo == Gizmo::Move {
+                if let Some(tip) = points.last() {
+                    painter.circle_filled(*tip, if held { 6.0_f32 } else { 4.5_f32 }, colour);
+                }
+            }
         }
 
         // And what the cursor is over, if anything. A click on it selects.
