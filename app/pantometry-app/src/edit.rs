@@ -211,6 +211,14 @@ struct App {
     /// The scene text being edited, and where it loads from and saves to.
     text: String,
     path: String,
+    /// Every text this scene has been, so an edit can be taken back.
+    ///
+    /// **Committed on both sides of an edit.** The text pane is bound straight to `text`, so
+    /// typing never passes through `editor_core::edit` at all; committing the current text
+    /// *before* a splice folds that typing into a state of its own, and committing after
+    /// records the splice. Undoing a removed domain therefore walks back through what was typed
+    /// rather than discarding it. See [`editor_core::edit::History`].
+    history: editor_core::edit::History,
     /// The result of checking `text`, refreshed whenever the text changes.
     checked: editor_core::Checked,
     /// The last run — possibly still growing, streamed frame by frame.
@@ -353,6 +361,7 @@ impl App {
         let checked = editor_core::check(&text, &OnDisk);
         let known_mtime = mtime_of(&path);
         App {
+            history: editor_core::edit::History::new(text.clone()),
             text,
             path,
             checked,
@@ -394,6 +403,51 @@ impl App {
     fn recheck(&mut self) {
         self.checked = editor_core::check(&self.text, &OnDisk);
         self.run = None;
+    }
+
+    /// Step the scene back through the history, or forward again.
+    ///
+    /// **The current text is folded in first.** Otherwise undo pressed after typing would step
+    /// back from a state the history has never seen, discarding the typing with no way to reach
+    /// it again. `commit` is a no-op when nothing was typed, so the ordinary case costs a string
+    /// comparison.
+    ///
+    /// The selection is dropped. A path into the scene is only meaningful against the text it
+    /// was taken from, and undoing a removed domain can move every path after it -- keeping the
+    /// old one would leave the inspector pointed at a different value than the one highlighted.
+    fn take_back(&mut self, backwards: bool) {
+        // **Both directions**, and the redo case is the one that needed thinking about. If the
+        // user typed and then pressed redo, the buffer holds a state the history has never
+        // seen; stepping forward would overwrite it. Committing first makes the typing the
+        // newest state, which truncates the redo tail -- so redo then correctly reports that
+        // there is nothing ahead, instead of silently throwing the typing away to get there.
+        //
+        // In the ordinary case, where nothing was typed, this is a string comparison and no
+        // step, so redo is unaffected.
+        self.history.commit(self.text.clone());
+        let stepped = if backwards {
+            self.history.undo()
+        } else {
+            self.history.redo()
+        };
+        let Some(text) = stepped.map(str::to_string) else {
+            self.status = String::from(if backwards {
+                "nothing to undo"
+            } else {
+                "nothing to redo"
+            });
+            return;
+        };
+        self.text = text;
+        self.selected = None;
+        self.dirty = true;
+        self.recheck();
+        self.status = format!(
+            "{} — {} back, {} forward",
+            if backwards { "undid" } else { "redid" },
+            self.history.steps_back(),
+            self.history.steps_forward()
+        );
     }
 
     /// Start a background job, refusing a second while one is in flight.
@@ -562,6 +616,8 @@ impl App {
             Ok(t) => {
                 self.known_mtime = Some(disk);
                 self.text = t;
+                // A reload from disk is not an edit -- see `History::reset`.
+                self.history.reset(self.text.clone());
                 self.recheck();
                 self.status = format!("reloaded {} (changed outside)", self.path);
                 if self.auto_run && self.checked.error.is_none() {
@@ -629,6 +685,37 @@ impl eframe::App for App {
                     if ui.button("Quit").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
+                });
+                ui.menu_button("Edit", |ui| {
+                    // **Undo is over the editor's own edits, not over typing.** The text pane
+                    // is bound straight to the buffer and egui keeps a fine-grained undo for
+                    // what it has focus over; taking that over would mean reimplementing
+                    // keystroke coalescing to no benefit. What this covers is everything the
+                    // editor does to the scene on the user's behalf -- a value, a string, a
+                    // domain added or removed, a placement, a drag, a nudge -- and those are
+                    // the ones with nothing on screen to type back.
+                    let can_undo = self.history.can_undo();
+                    let can_redo = self.history.can_redo();
+                    if ui
+                        .add_enabled(can_undo, egui::Button::new("Undo	Ctrl+Z"))
+                        .clicked()
+                    {
+                        self.take_back(true);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(can_redo, egui::Button::new("Redo	Ctrl+Shift+Z"))
+                        .clicked()
+                    {
+                        self.take_back(false);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.label(format!(
+                        "{} back, {} forward",
+                        self.history.steps_back(),
+                        self.history.steps_forward()
+                    ));
                 });
                 ui.menu_button("View", |ui| {
                     // **Two pictures, not two styles.** Shaded draws the boundary of what is
@@ -731,7 +818,9 @@ impl eframe::App for App {
                     if let Some(kind) = wanted {
                         match editor_core::add_domain(&self.text, kind) {
                             Ok(text) => {
+                                self.history.commit(self.text.clone());
                                 self.text = text;
+                                self.history.commit(self.text.clone());
                                 self.dirty = true;
                                 self.recheck();
                                 self.status = format!("added a {kind}");
@@ -759,7 +848,9 @@ impl eframe::App for App {
                         let name = selected.expect("enabled only when there is one");
                         match editor_core::remove_domain(&self.text, &name) {
                             Ok(text) => {
+                                self.history.commit(self.text.clone());
                                 self.text = text;
+                                self.history.commit(self.text.clone());
                                 self.dirty = true;
                                 self.selected = None;
                                 self.recheck();
@@ -878,6 +969,30 @@ impl eframe::App for App {
         // space bar would step the run instead of typing a space into the scene.
         let typing = ctx.memory(|m| m.focused().is_some());
         if !typing {
+            // Ctrl+Z, and only while nothing has focus -- which is the same guard the frame
+            // keys use and the same reason. A focused text field owns its own undo, and two
+            // undos on one key would take back different things depending on where the caret
+            // happened to be.
+            //
+            // Outside the `frames > 1` guard below, deliberately: undo is about the scene and
+            // the whole point is that it works before anything has been run.
+            let (mut back, mut forward) = (false, false);
+            ctx.input(|i| {
+                if i.modifiers.command && i.key_pressed(egui::Key::Z) {
+                    if i.modifiers.shift {
+                        forward = true;
+                    } else {
+                        back = true;
+                    }
+                }
+                if i.modifiers.command && i.key_pressed(egui::Key::Y) {
+                    forward = true;
+                }
+            });
+            if back || forward {
+                self.take_back(back);
+            }
+
             let frames = self.run.as_ref().map_or(0, |v| v.run.frames.len());
             if frames > 1 {
                 let (mut step, mut jump, mut toggle) = (0i64, None, false);
@@ -1045,6 +1160,7 @@ impl App {
         match std::fs::read_to_string(&self.path) {
             Ok(t) => {
                 self.text = t;
+                self.history.reset(self.text.clone());
                 self.dirty = false;
                 self.known_mtime = mtime_of(&self.path);
                 self.recheck();
@@ -1477,7 +1593,11 @@ impl App {
         if let Some((domain, to)) = moved {
             match editor_core::set_pose(&self.text, &domain, to) {
                 Ok(text) => {
+                    // Fold in anything typed since the last edit, then record this one. The
+                    // first commit is a no-op when nobody typed, by construction.
+                    self.history.commit(self.text.clone());
                     self.text = text;
+                    self.history.commit(self.text.clone());
                     self.dirty = true;
                     self.recheck();
                 }
@@ -1490,7 +1610,11 @@ impl App {
             // taking it. Dragging back out of zero recovers.
             match editor_core::set_turn(&self.text, &domain, axis, degrees) {
                 Ok(text) => {
+                    // Fold in anything typed since the last edit, then record this one. The
+                    // first commit is a no-op when nobody typed, by construction.
+                    self.history.commit(self.text.clone());
                     self.text = text;
+                    self.history.commit(self.text.clone());
                     self.dirty = true;
                     self.recheck();
                 }
@@ -1507,7 +1631,11 @@ impl App {
             };
             match spliced {
                 Ok(text) => {
+                    // Fold in anything typed since the last edit, then record this one. The
+                    // first commit is a no-op when nobody typed, by construction.
+                    self.history.commit(self.text.clone());
                     self.text = text;
+                    self.history.commit(self.text.clone());
                     self.dirty = true;
                     self.recheck();
                 }
@@ -1958,7 +2086,11 @@ impl App {
             let to = [at[0] + delta[0], at[1] + delta[1], at[2] + delta[2]];
             match editor_core::set_pose(&self.text, &name, to) {
                 Ok(text) => {
+                    // Fold in anything typed since the last edit, then record this one. The
+                    // first commit is a no-op when nobody typed, by construction.
+                    self.history.commit(self.text.clone());
                     self.text = text;
+                    self.history.commit(self.text.clone());
                     self.dirty = true;
                     self.recheck();
                 }

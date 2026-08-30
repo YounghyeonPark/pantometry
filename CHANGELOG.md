@@ -20,7 +20,39 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Undo in the editor.** It had gained six ways to change a scene before it had any way to
+  change one back — a value, a string, a domain added, a domain removed, a placement, and a drag
+  on an axis — and two of those destroy something: a removed domain takes its whole block of
+  JSON, and a drag rewrites a number nobody is necessarily looking at.
+
+  `Edit > Undo` and `Ctrl+Z`, with redo on `Ctrl+Shift+Z`. Sixty-four states, oldest dropped.
+
+  **The buffer changes two ways and only one of them passes through this crate.** The text pane
+  is bound straight to the scene text, so typing never reaches a splice. A history that recorded
+  only the splices would hold a snapshot from before the typing, and undoing a deleted domain
+  would silently discard whatever had been typed since. So the current text is committed on
+  *both sides* of every edit: the first call folds typing into a state of its own and is a no-op
+  when there was none, and undo then walks back through the typing rather than over it.
+
+  Committing before a **redo** as well, which the first draft did not. Typing leaves the buffer
+  holding a state the history has never seen, and stepping forward from there would overwrite
+  it; folding in first makes the typing the newest state, so redo correctly reports there is
+  nothing ahead instead of reaching a future by discarding the present.
+
+  egui's own fine-grained undo is left alone for whatever has focus. A focused text field owning
+  its undo is what every editor does, and taking it over would mean reimplementing keystroke
+  coalescing to no benefit — so `Ctrl+Z` is handled only when nothing has focus, the same guard
+  the frame-stepping keys already use. The menu item works either way.
+
+  A load from disk **resets** rather than appends: a file is a different document, and undoing
+  from one scene back into another would offer a text belonging to no path.
+
+  Ten tests, every case walked in both directions and three of them past an end, because the
+  interesting bugs in a history are at its edges. Verified by breaking it three ways — trimming
+  the bound without moving the cursor, letting a no-op commit become a step, and keeping the
+  redo tail across a new edit — each caught by the test written for it.
 
 ## [0.18.0] — 2026-08-28
 

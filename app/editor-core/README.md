@@ -253,11 +253,46 @@ costs no editor edit.
   paints from a shape — a box, points, paths, a reading — with the domain name used only as a
   label.
 
+## An edit can be taken back
+
+Six ways to change a scene arrived before any way to change one back, and two of them destroy
+something: a removed domain takes its whole block of JSON, and a drag on an axis rewrites a
+number nobody is necessarily looking at.
+
+`History` is a list of texts and an index into it, which is cheap here because every edit in
+`edit` already returns a **whole new string** rather than mutating one. `Edit > Undo`, `Ctrl+Z`,
+redo on `Ctrl+Shift+Z`, sixty-four states deep with the oldest dropped.
+
+**The buffer changes two ways and only one of them passes through this crate.** The shell binds
+the text pane straight to the scene text, so typing never reaches a splice. A history that
+recorded only the splices would hold a snapshot from *before* the typing, and undoing a deleted
+domain would discard whatever had been typed since — silently, which is the failure mode this
+repository keeps finding.
+
+So the current text is committed on **both sides** of every edit. The first call folds any
+typing into a state of its own and is a no-op when there was none; the second records the edit.
+Undo then walks back through the typing rather than over it.
+
+Committing before a **redo** as well. Typing leaves the buffer holding a state the history has
+never seen, and stepping forward would overwrite it; folding in first makes the typing the
+newest state, so redo says there is nothing ahead — which is true — instead of reaching a future
+by discarding the present. The first draft committed only before undo, and redo after typing
+lost it.
+
+egui's own fine-grained undo is left alone for whatever has focus, so `Ctrl+Z` is handled only
+when nothing does — the same guard the frame-stepping keys use, and for the same reason. Two
+undos on one key would take back different things depending on where the caret happened to be.
+The menu item works either way.
+
+A load from disk **resets**. A file is a different document, and undoing from one scene back
+into another would offer a text belonging to no path.
+
 ## What the first version does not do
 
 No structured editing — the text *is* the model, and `deny_unknown_fields` plus the version
 check are what stand between a typo and a silently different scene. No shadows, no ambient
 occlusion and no anti-aliasing beyond whatever the context gives: the lighting is a key, a fill and
-an ambient, which is the least that shows a shape. No file dialogs, no undo beyond the text box's
-own. Each of those is worth adding only after using this one reports back what actually
+an ambient, which is the least that shows a shape. No file dialogs. Undo covers the editor's own
+edits and leaves typing to the text box, which is the division described above rather than a gap.
+Each of those is worth adding only after using this one reports back what actually
 chafes; that method has a name here, and `FRICTION.md` is where its findings go.

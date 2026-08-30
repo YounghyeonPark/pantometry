@@ -1797,3 +1797,139 @@ mod tests {
         );
     }
 }
+
+/// How many states a [`History`] keeps.
+///
+/// A scene is a few kilobytes and sixty-four of them is a few hundred, which is nothing beside
+/// the run this editor holds in memory. The bound exists so a long session cannot grow without
+/// one, not because the memory matters.
+pub const HISTORY: usize = 64;
+
+/// The sequence of texts the scene has been, so an edit can be taken back.
+///
+/// # Why the shell cannot own this
+///
+/// Every edit in this module is a **whole new string**: a splice returns the text it produced
+/// rather than mutating one in place. So the history of a scene is a list of strings and undo is
+/// an index into it, and the only interesting part is the bookkeeping — which is exactly the
+/// kind of thing that is wrong in one direction until somebody writes a test that walks it both
+/// ways.
+///
+/// # The buffer changes two ways and only one of them comes through here
+///
+/// The shell binds the text pane straight to its buffer, so **typing mutates the scene without
+/// passing any function in this crate**. A history that recorded only the splices would take a
+/// snapshot from before the typing, and undoing a deleted domain would silently discard whatever
+/// had been typed since.
+///
+/// So [`History::commit`] is called with the current text *before* an edit as well as after it.
+/// The first call folds any typing into a state of its own and is a no-op when there was none;
+/// the second records the edit. Undo then walks back through the typing rather than over it.
+///
+/// egui's text widget keeps its own fine-grained undo for what it has focus over, and that is
+/// left alone: a focused text field owning its own undo is what every editor does, and fighting
+/// it would mean reimplementing keystroke coalescing to no benefit.
+#[derive(Clone, Debug)]
+pub struct History {
+    states: Vec<String>,
+    at: usize,
+}
+
+impl History {
+    /// A history holding one state and nothing to undo to.
+    pub fn new(initial: impl Into<String>) -> History {
+        History {
+            states: vec![initial.into()],
+            at: 0,
+        }
+    }
+
+    /// The text now.
+    pub fn current(&self) -> &str {
+        &self.states[self.at]
+    }
+
+    /// Record that the text is now `next`.
+    ///
+    /// **Committing the same text again is not a step.** The shell calls this before every edit
+    /// to fold in typing, and on a scene nobody typed into that call must not leave an undo that
+    /// appears to do nothing — an undo that does nothing is indistinguishable from an undo that
+    /// is broken.
+    ///
+    /// A commit after an undo discards the redo tail, which is what a linear history means: the
+    /// future you did not take stops existing the moment you do something else.
+    pub fn commit(&mut self, next: impl Into<String>) {
+        let next = next.into();
+        if next == self.states[self.at] {
+            return;
+        }
+        self.states.truncate(self.at + 1);
+        self.states.push(next);
+        self.at += 1;
+        // Drop from the front, oldest first, and move the cursor with the window. Trimming
+        // without moving `at` would leave it pointing at somebody else's state.
+        if self.states.len() > HISTORY {
+            let over = self.states.len() - HISTORY;
+            self.states.drain(..over);
+            self.at -= over;
+        }
+    }
+
+    /// Step back, returning the text to show.
+    pub fn undo(&mut self) -> Option<&str> {
+        if self.at == 0 {
+            return None;
+        }
+        self.at -= 1;
+        Some(&self.states[self.at])
+    }
+
+    /// Step forward again.
+    pub fn redo(&mut self) -> Option<&str> {
+        if self.at + 1 >= self.states.len() {
+            return None;
+        }
+        self.at += 1;
+        Some(&self.states[self.at])
+    }
+
+    /// Whether there is anything to step back to.
+    pub fn can_undo(&self) -> bool {
+        self.at > 0
+    }
+
+    /// Whether there is anything to step forward to.
+    pub fn can_redo(&self) -> bool {
+        self.at + 1 < self.states.len()
+    }
+
+    /// Start again from `text`, forgetting everything.
+    ///
+    /// For a **load**, which is not an edit: the file on disk is a different document, and
+    /// letting undo walk from one scene back into another would offer a text that belongs to no
+    /// file and no history that explains it.
+    pub fn reset(&mut self, text: impl Into<String>) {
+        self.states = vec![text.into()];
+        self.at = 0;
+    }
+
+    /// How many states are held, for a test to reason about the bound.
+    pub fn len(&self) -> usize {
+        self.states.len()
+    }
+
+    /// How many steps back are available.
+    pub fn steps_back(&self) -> usize {
+        self.at
+    }
+
+    /// How many steps forward are available.
+    pub fn steps_forward(&self) -> usize {
+        self.states.len() - self.at - 1
+    }
+
+    /// Whether the history holds nothing but its initial state.
+    pub fn is_empty(&self) -> bool {
+        self.states.len() <= 1
+    }
+}
