@@ -22,6 +22,34 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
+- **An export can be the surface where a field reaches a value.** `pantometry_view::gltf_with`
+  and `usda_with` take a `mesh::Surfaces`: `Boundary`, which is what they have always written,
+  or `At(level)`. `pantometry run scene.json out.gltf --at 350` on the command line.
+
+  `field_surface` draws the outside of the cells that hold a value, which for a solid block is
+  the block — the same shape at every timestep whatever the values are doing. A level is the
+  question a field is usually asked, and until now it could be seen in the editor's viewport and
+  in nothing that left the workspace.
+
+  **No format change.** The isosurface is derived from the `Field` panel a run already carries —
+  counts, extent and values are all there — so this is a parameter rather than a shape. That was
+  worth finding out before designing one: the two halves of "let the exporters draw a mesh" have
+  very different costs, and only the designed-mesh half needs the run to carry anything new.
+
+  `gltf` and `usda` are unchanged and delegate with `Boundary`, so no existing caller writes a
+  different file. Pinned against the box rather than against itself: a distance field's cell
+  boundary *is* its box, so the default's bounds must equal the extent while a level's are
+  strictly inside. The first version compared the default to an explicit `Boundary` and passed
+  when the default was redefined to a level — both sides moved together.
+
+### Fixed
+
+- **A level nothing reaches said the field was empty.** Reusing the boundary's message meant
+  `--at 5000` reported "no cell that holds a value" about a field entirely full of them, sending
+  a reader to look for a void instead of correcting a number. It now says which level was asked
+  for and what the field actually spans: *"bracket never reaches 5000: the field spans 391.2002
+  to 391.2416"*.
+
 - **The run format states its version, and the version is read before the panels.** A scene has
   carried a `format` since it had consumers; a run never did, and the gap only mattered once
   something wanted to add a shape to it.

@@ -171,6 +171,15 @@ impl Mesh {
 /// Every panel that is geometry becomes a node under one scene, named after its domain, so a
 /// reader opening the file sees the same names the run reported.
 pub fn gltf(title: &str, frame: &Frame) -> Exported {
+    gltf_with(title, frame, mesh::Surfaces::Boundary)
+}
+
+/// The same, choosing which surface a field becomes. See [`mesh::Surfaces`].
+///
+/// Separate rather than an extra argument on [`gltf`], because that one is published and the
+/// files it writes are the ones every caller here already expects. A default nobody asked for is
+/// how an export quietly changes shape between versions.
+pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Exported {
     let mut meshes = Vec::new();
     let mut skipped = Vec::new();
     let mut notes = Vec::new();
@@ -267,13 +276,25 @@ pub fn gltf(title: &str, frame: &Frame) -> Exported {
                     continue;
                 }
                 let (lo, hi, signed) = mesh::span(values);
-                let surface = mesh::field_surface((*nx, *ny, *nz), *extent_m, values);
+                let surface = surfaces.of((*nx, *ny, *nz), *extent_m, values);
                 if surface.indices.is_empty() {
-                    skipped.push(format!(
-                        "{} is a {nx}x{ny}x{nz} field with no cell that holds a value, so it has \
-                         no surface",
-                        panel.name
-                    ));
+                    // **Two different silences, and they used to share one sentence.** An empty
+                    // boundary means no cell holds a value. An empty *level* means the field is
+                    // full of values and none of them is the one asked for, which is a number a
+                    // person can correct -- so it says what the field actually spans.
+                    skipped.push(match surfaces {
+                        mesh::Surfaces::Boundary => format!(
+                            "{} is a {nx}x{ny}x{nz} field with no cell that holds a value, so it has no surface",
+                            panel.name
+                        ),
+                        mesh::Surfaces::At(level) => {
+                            let (lo, hi, _) = mesh::span(values);
+                            format!(
+                                "{} never reaches {level}: the field spans {lo} to {hi}, so there is no surface at that level",
+                                panel.name
+                            )
+                        }
+                    });
                     continue;
                 }
                 if surface.stride > 1 {

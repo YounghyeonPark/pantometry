@@ -113,6 +113,46 @@ impl Surface {
     }
 }
 
+/// Which surface an exporter draws for a field.
+///
+/// The two answer different questions and neither is a better version of the other.
+/// [`field_surface`] draws the outside of the cells that hold a value: where the material is,
+/// blocky and correct, and a picture of the grid as much as of the object. [`isosurface`] draws
+/// where the values reach a number: where it is 100 degrees, where the pressure is zero, where
+/// the melt front sits.
+///
+/// A **selection** rather than a second exporter, because everything after the mesh is
+/// identical — the colours, the bounds, the accessors, the winding — and a second copy of that
+/// is a second chance at the defects it has already had.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Surfaces {
+    /// The boundary of the cells that hold a value. What every export wrote before there was a
+    /// choice, and so the default: a file that changed shape because a new variant appeared
+    /// would be worse than one that never gained the option.
+    #[default]
+    Boundary,
+    /// Where the field reaches this value.
+    ///
+    /// A level outside the field's range produces **nothing**, which the exporters report as a
+    /// skipped panel rather than as an empty file. That is the same silence
+    /// `pantometry-app`'s isosurface control had to learn to label: an absence a reader can see
+    /// beats one they cannot.
+    At(f64),
+}
+
+impl Surfaces {
+    /// Build the surface this selects, from a field's grid and values.
+    ///
+    /// One place, so `gltf` and `usd` cannot come to different answers about the same panel —
+    /// which is the argument this module's header already makes about the two writers.
+    pub fn of(self, counts: (usize, usize, usize), extent: [f64; 6], values: &[f64]) -> Surface {
+        match self {
+            Surfaces::Boundary => field_surface(counts, extent, values),
+            Surfaces::At(level) => isosurface(counts, extent, values, level),
+        }
+    }
+}
+
 /// The surface inside a field where it equals `level`.
 ///
 /// The first thing in this workspace with a **surface** rather than a boundary. `field_surface`

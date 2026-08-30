@@ -268,6 +268,29 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let out = args.get(1);
 
+    // **`--at <value>` picks the surface a field becomes**, for the two writers that write
+    // geometry. Without it they export the boundary of the cells that hold a value, which is
+    // what they have always written and is a picture of the grid as much as of the object; with
+    // it they export where the field reaches that number, which is the question a field is
+    // usually asked.
+    //
+    // The whole tail is matched, as `verify` matches its own: `run s.json out.gltf --at`
+    // silently ignoring a missing number would export a different picture than the one typed.
+    let surfaces = match &args[2.min(args.len())..] {
+        [] => pantometry::view::mesh::Surfaces::Boundary,
+        [flag, value] if flag == "--at" => match value.parse::<f64>() {
+            Ok(level) if level.is_finite() => pantometry::view::mesh::Surfaces::At(level),
+            _ => {
+                eprintln!("--at takes a number, not {value:?}");
+                std::process::exit(1);
+            }
+        },
+        rest => {
+            eprintln!("run takes a scene, an output and optionally --at <value>, not {rest:?}");
+            std::process::exit(1);
+        }
+    };
+
     println!("{}", scene.title);
     println!(
         "  {} domain(s), {:.3} s in {} frames, drift budget {:.0e}",
@@ -414,7 +437,8 @@ nothing to export: the run produced no frames"
                         );
                         std::process::exit(1);
                     };
-                    let out = pantometry::view::gltf(world.scene().title.as_str(), last);
+                    let out =
+                        pantometry::view::gltf_with(world.scene().title.as_str(), last, surfaces);
                     for note in &out.skipped {
                         println!("  not exported: {note}");
                     }
@@ -442,7 +466,11 @@ nothing to export: the run produced no frames"
                     // **The whole run, not one frame.** USD has time samples on any attribute, so
                     // a field's colours animate and a body's positions animate, which is exactly
                     // what glTF cannot express and why `.gltf` above takes the last frame only.
-                    let out = pantometry::view::usda(world.scene().title.as_str(), &frames);
+                    let out = pantometry::view::usda_with(
+                        world.scene().title.as_str(),
+                        &frames,
+                        surfaces,
+                    );
                     for note in &out.skipped {
                         println!("  not exported: {note}");
                     }
