@@ -28,6 +28,14 @@
 
 use serde::Deserialize;
 
+/// The highest run format this build understands.
+///
+/// Written by `pantometry_view::data::FORMAT` and read here, and the two are held together by
+/// `the_writer_and_the_reader_agree_on_the_version` rather than by anyone remembering. They are
+/// in different workspaces on purpose -- this crate does not link the library -- so a constant
+/// each is the only way, and a test comparing them is the only thing that makes it one number.
+pub const FORMAT: u32 = 1;
+
 /// A whole run, as read from a file.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Run {
@@ -199,7 +207,40 @@ impl Panel {
 
 impl Run {
     /// Read a run from the JSON a `pantometry` run wrote.
+    ///
+    /// # The version is read before the panels, and that ordering is the point
+    ///
+    /// A run states a `format`. This reads **that key alone** first, and refuses a number it
+    /// does not understand before trying to parse anything else.
+    ///
+    /// The order matters because of what fails otherwise. `PanelData` is `deny_unknown_fields`
+    /// and tagged by `kind`, so a run carrying a shape this build has never heard of fails
+    /// inside serde with a message about an unknown variant — which is what a *corrupt* file
+    /// says too, and the two want different words in front of a person. The scene format checks
+    /// its version after parsing and has exactly this gap; this does not.
+    ///
+    /// An absent `format` is **1**, because every run written before the key existed is one.
     pub fn from_json(text: &str) -> Result<Run, String> {
+        /// Just the version, from a reader that ignores everything else in the file.
+        #[derive(Deserialize)]
+        struct Stamp {
+            #[serde(default = "one")]
+            format: u32,
+        }
+        fn one() -> u32 {
+            1
+        }
+
+        // A file that is not JSON at all fails here, and says so as "not a pantometry run"
+        // rather than as a complaint about a version.
+        let stamp: Stamp =
+            serde_json::from_str(text).map_err(|e| format!("not a pantometry run: {e}"))?;
+        if stamp.format == 0 || stamp.format > FORMAT {
+            return Err(format!(
+                "this run is format {}, and this build reads {FORMAT}. Upgrade pantometry to open it",
+                stamp.format
+            ));
+        }
         serde_json::from_str(text).map_err(|e| format!("not a pantometry run: {e}"))
     }
 

@@ -52,13 +52,29 @@ pub fn readings_csv(frames: &[Frame]) -> String {
     out
 }
 
+/// What [`to_json`] writes in its `format` field, and the highest a reader of this version
+/// understands.
+///
+/// **One, and it has always been one** - this is the first version *written*, not the first
+/// version of the shape. Every run file produced before the key existed is a format 1 file, and
+/// a reader treats an absent `format` as 1 for exactly that reason.
+///
+/// The scene format has carried a version since it had consumers; this one did not, and the gap
+/// only mattered once something wanted to add a shape to it. A reader that meets a panel kind it
+/// does not know cannot tell "this file is newer than me" from "this file is broken", and those
+/// two want different words in front of a person.
+pub const FORMAT: u32 = 1;
+
 /// The frames as JSON, for a viewer this crate does not contain.
 ///
 /// Fields as grids, bodies as positions in space, and the readings beside them. Written by hand
 /// rather than derived, so the shape is chosen here and stays where a reader can see it — this
 /// is a wire format the moment anything consumes it, and it should look deliberate.
 pub fn to_json(title: &str, frames: &[Frame]) -> String {
-    let mut out = format!("{{\n  \"title\": {},\n  \"frames\": [\n", quote(title));
+    let mut out = format!(
+        "{{\n  \"format\": {FORMAT},\n  \"title\": {},\n  \"frames\": [\n",
+        quote(title)
+    );
     for (fi, frame) in frames.iter().enumerate() {
         // **Significant figures, not decimal places** — the same defect `readings_csv` above was
         // fixed for and this writer was not. `{:.6}` prints every timestamp of a four-nanosecond

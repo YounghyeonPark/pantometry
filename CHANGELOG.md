@@ -22,6 +22,60 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
+- **The run format states its version, and the version is read before the panels.** A scene has
+  carried a `format` since it had consumers; a run never did, and the gap only mattered once
+  something wanted to add a shape to it.
+
+  `PanelData` is tagged and `deny_unknown_fields`, so a run carrying a panel kind a build has
+  never heard of fails inside serde with a complaint about an unknown variant — which is what a
+  truncated file says too. "This run is newer than your pantometry" and "this file is broken" are
+  different sentences and a person can only act on one of them.
+
+  So `Run::from_json` reads the `format` key **alone** first, from a reader that ignores every
+  other field, and refuses a number it does not understand before parsing anything else. The
+  scene format checks its version *after* parsing and has exactly this gap; this does not, and
+  `the_version_is_read_before_the_panels` fails if the order is swapped back.
+
+  **Backwards compatible**, because `Run` does not refuse unknown fields: a viewer built before
+  the key ignores it. An absent `format` is 1, which is what every run this workspace has ever
+  written is — the three recorded runs in `viewer-core/tests/runs` have no such key and still
+  read.
+
+  The writer's constant and the reader's are in different workspaces on purpose, since
+  `viewer-core` deliberately does not link `pantometry`. `one_run_format_two_crates` is what
+  makes them one number, and it checks the **bytes** as well as the constants: a writer that
+  agreed on the number and spelled the key differently would pass a constant comparison and
+  produce files nothing could version-check.
+
+- **Rings to turn a domain with**, beside the arrows that move it. `Edit > Handles`, or `W` and
+  `E`.
+
+  `turn_about_axis` is `drag_along_axis`'s companion and deliberately its shape: a point on the
+  ring moves with velocity `axis × (grip − origin)`, so the question is the one the translate
+  handle already answers with the tangent in place of the axis. The test is the *rate* — halving
+  the drag must quarter the miss — and the whole-radian secant, which is the mistake that made
+  the translate handle move things 77% of the way, takes the ratio to 2.88 against 4.
+
+  A turn **composes** rather than replaces. The file states one axis and one angle; a ring asks
+  for a rotation about a world axis on top of whatever is there, and rotations do not commute.
+  `compose_turns` multiplies quaternions, and it is checked by applying the result to points
+  rather than by comparing axes and angles — `(a, 90°)` and `(−a, 270°)` are one rotation spelled
+  two ways.
+
+  `ring_points` produces the loop once and the shell both draws and hit-tests from it, because a
+  control drawn somewhere other than where it is grabbed works everywhere except under the
+  pointer.
+
+- **The undo shortcut's decision is a function.** `edit::shortcut` takes the modifiers, the keys
+  and whether anything has focus, and returns a direction. Six cases pinned, including a bare
+  letter that must not reach the history and a focused widget keeping its own undo.
+
+  Separated out because verifying `Ctrl+Z` by driving the desktop was tried and abandoned: three
+  attempts raised the wrong window twice, missed a menu by a few pixels and clicked an outliner
+  row, and the one keystroke that landed could not be read back. What the toolkit does with a
+  press is egui's contract; which chord means which direction is this repository's, and that half
+  is now checked.
+
 - **A shipped scene whose geometry comes from a file.** Scene 29 names an ASCII STL — an
   L-bracket with a re-entrant corner and a chamfer, so a 2 mm grid has something to round off —
   and cools it to still air. The `parts` path had been in the format for several releases and
