@@ -197,3 +197,48 @@ fn redo_after_typing_cannot_silently_discard_it() {
     assert_eq!(h.undo(), Some("a"), "the typing is still one step back");
     assert_eq!(h.redo(), Some("a typed"), "and reachable again");
 }
+
+// --- the shortcut, which is the half of the key handling that can be checked -----------------
+
+use editor_core::edit::{shortcut, Step};
+
+#[test]
+fn the_chords_mean_what_a_person_arriving_expects() {
+    //                    cmd   shift   z      y
+    assert_eq!(shortcut(true, false, true, false, false), Some(Step::Back));
+    assert_eq!(
+        shortcut(true, true, true, false, false),
+        Some(Step::Forward)
+    );
+    // Ctrl+Y as well, because half the editors a person arrives from use it and it costs
+    // nothing. Shift is irrelevant to it.
+    assert_eq!(
+        shortcut(true, false, false, true, false),
+        Some(Step::Forward)
+    );
+    assert_eq!(
+        shortcut(true, true, false, true, false),
+        Some(Step::Forward)
+    );
+}
+
+#[test]
+fn a_focused_widget_keeps_its_own_undo() {
+    // The guard that makes `Ctrl+Z` mean one thing. Without it the editor's history and egui's
+    // text history both fire, and which one the user gets depends on where the caret is.
+    assert_eq!(shortcut(true, false, true, false, true), None);
+    assert_eq!(shortcut(true, true, true, false, true), None);
+    assert_eq!(shortcut(true, false, false, true, true), None);
+}
+
+#[test]
+fn a_bare_key_is_not_a_shortcut() {
+    // `z` is a character somebody is typing. Without the modifier this must not reach the
+    // history at all -- and the first thing an editor with a broken guard does is eat letters.
+    assert_eq!(shortcut(false, false, true, false, false), None);
+    assert_eq!(shortcut(false, true, true, false, false), None);
+    assert_eq!(shortcut(false, false, false, true, false), None);
+    // The modifier alone is not one either.
+    assert_eq!(shortcut(true, false, false, false, false), None);
+    assert_eq!(shortcut(true, true, false, false, false), None);
+}

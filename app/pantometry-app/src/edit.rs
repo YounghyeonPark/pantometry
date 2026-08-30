@@ -972,31 +972,28 @@ impl eframe::App for App {
         // button is the wrong target for that. Skipped while the text pane has focus, or the
         // space bar would step the run instead of typing a space into the scene.
         let typing = ctx.memory(|m| m.focused().is_some());
-        if !typing {
-            // Ctrl+Z, and only while nothing has focus -- which is the same guard the frame
-            // keys use and the same reason. A focused text field owns its own undo, and two
-            // undos on one key would take back different things depending on where the caret
-            // happened to be.
-            //
-            // Outside the `frames > 1` guard below, deliberately: undo is about the scene and
-            // the whole point is that it works before anything has been run.
-            let (mut back, mut forward) = (false, false);
-            ctx.input(|i| {
-                if i.modifiers.command && i.key_pressed(egui::Key::Z) {
-                    if i.modifiers.shift {
-                        forward = true;
-                    } else {
-                        back = true;
-                    }
-                }
-                if i.modifiers.command && i.key_pressed(egui::Key::Y) {
-                    forward = true;
-                }
-            });
-            if back || forward {
-                self.take_back(back);
-            }
 
+        // **Undo, and the focus guard is the function's own.** `shortcut` refuses while a widget
+        // has focus, because a focused text field owns its undo; putting this inside the
+        // `if !typing` block below would pass a constant and leave that refusal untested in
+        // everything but a test.
+        //
+        // Outside the `frames > 1` guard too: undo is about the scene, and the whole point is
+        // that it works before anything has been run.
+        let step = ctx.input(|i| {
+            editor_core::edit::shortcut(
+                i.modifiers.command,
+                i.modifiers.shift,
+                i.key_pressed(egui::Key::Z),
+                i.key_pressed(egui::Key::Y),
+                typing,
+            )
+        });
+        if let Some(step) = step {
+            self.take_back(step == editor_core::edit::Step::Back);
+        }
+
+        if !typing {
             let frames = self.run.as_ref().map_or(0, |v| v.run.frames.len());
             if frames > 1 {
                 let (mut step, mut jump, mut toggle) = (0i64, None, false);

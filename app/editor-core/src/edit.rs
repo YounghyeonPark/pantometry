@@ -1775,6 +1775,230 @@ mod tests {
         }
     }
 
+    /// **A drag on a ring turns by what the pointer asked, and the error is second order.**
+    ///
+    /// The same measurement `a_drag_lands_where_the_pointer_went` makes, for the same reason: a
+    /// finite drag cannot be inverted exactly because the projection divides by depth, so the
+    /// claim is the *rate*. Halving the drag must quarter the miss. A secant taken across a
+    /// whole radian instead of the derivative would converge to a fixed fraction, which is
+    /// exactly what the translate handle did at 77% and what no "close enough" assertion catches.
+    #[test]
+    fn a_drag_on_a_ring_turns_by_what_was_asked() {
+        let (camera, frame) = a_view();
+        let axis = [0.0, 0.0, 1.0];
+        let origin = [0.0; 3];
+        let radius = frame.span * 0.3;
+        let grip = [radius, 0.0, 0.0];
+
+        // The screen displacement of one radian at the grip, from the same derivative the
+        // function computes -- used only to *scale* the asked-for drag, so the check below is
+        // still against where the point actually lands.
+        let tangent = [0.0, radius, 0.0];
+        let eps = 1e-4;
+        let a = camera.project(grip, &frame, 1.6);
+        let b = camera.project(
+            [
+                grip[0] + tangent[0] * eps,
+                grip[1] + tangent[1] * eps,
+                grip[2] + tangent[2] * eps,
+            ],
+            &frame,
+            1.6,
+        );
+        let per_radian = [(b.x - a.x) / eps, (b.y - a.y) / eps];
+
+        let error_at = |radians: f64| {
+            let wanted = [per_radian[0] * radians, per_radian[1] * radians];
+            let got = turn_about_axis(&camera, &frame, 1.6, origin, axis, grip, wanted);
+            // Where the grip really goes when rotated by what the function returned.
+            let (c, sn) = (got.cos(), got.sin());
+            let landed = camera.project(
+                [
+                    grip[0] * c - grip[1] * sn,
+                    grip[0] * sn + grip[1] * c,
+                    grip[2],
+                ],
+                &frame,
+                1.6,
+            );
+            ((landed.x - a.x) - wanted[0]).hypot((landed.y - a.y) - wanted[1])
+        };
+
+        let mut previous = error_at(0.3);
+        for step in 1..=3 {
+            let now = error_at(0.3 / 2f64.powi(step));
+            let ratio = previous / now.max(1e-300);
+            assert!(
+                (3.0..=5.0).contains(&ratio),
+                "halving the turn should quarter the error; step {step} gave {ratio:.2}                  ({previous:.3e} -> {now:.3e})"
+            );
+            previous = now;
+        }
+    }
+
+    /// **A ring with nothing to turn refuses**, rather than returning a number.
+    #[test]
+    fn a_ring_that_cannot_be_turned_returns_zero() {
+        let (camera, frame) = a_view();
+        let origin = [0.0; 3];
+        let radius = frame.span * 0.3;
+
+        // A grip on the axis: every rotation leaves it where it is, so no drag means anything.
+        let on_axis = turn_about_axis(
+            &camera,
+            &frame,
+            1.6,
+            origin,
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, radius],
+            [0.5, 0.5],
+        );
+        assert_eq!(on_axis, 0.0, "a grip on the axis cannot be turned");
+
+        // A degenerate axis is not a rotation at all.
+        let no_axis = turn_about_axis(
+            &camera,
+            &frame,
+            1.6,
+            origin,
+            [0.0; 3],
+            [radius, 0.0, 0.0],
+            [0.5, 0.5],
+        );
+        assert_eq!(no_axis, 0.0, "a zero axis is not a rotation");
+    }
+
+    /// **The two directions are opposite**, which is what makes a ring a control rather than a
+    /// ratchet. Dragging back must undo dragging forward.
+    #[test]
+    fn dragging_the_other_way_turns_the_other_way() {
+        let (camera, frame) = a_view();
+        let grip = [frame.span * 0.3, 0.0, 0.0];
+        let go =
+            |d: [f64; 2]| turn_about_axis(&camera, &frame, 1.6, [0.0; 3], [0.0, 0.0, 1.0], grip, d);
+        let forward = go([0.05, 0.05]);
+        let back = go([-0.05, -0.05]);
+        assert!(forward.abs() > 1e-9, "the drag did nothing: {forward}");
+        assert!(
+            (forward + back).abs() < 1e-12 * forward.abs().max(1.0),
+            "{forward} and {back} do not cancel"
+        );
+    }
+
+    /// Rotate `p` about `axis` by `degrees`, by Rodrigues' formula — an independent route to the
+    /// same rotation, so a composition can be checked by what it *does* rather than by how it is
+    /// spelled.
+    fn spin(p: [f64; 3], (axis, degrees): ([f64; 3], f64)) -> [f64; 3] {
+        let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+        if n < 1e-30 || degrees == 0.0 {
+            return p;
+        }
+        let k = [axis[0] / n, axis[1] / n, axis[2] / n];
+        let (s, c) = (degrees.to_radians().sin(), degrees.to_radians().cos());
+        let cross = [
+            k[1] * p[2] - k[2] * p[1],
+            k[2] * p[0] - k[0] * p[2],
+            k[0] * p[1] - k[1] * p[0],
+        ];
+        let dot = k[0] * p[0] + k[1] * p[1] + k[2] * p[2];
+        [
+            p[0] * c + cross[0] * s + k[0] * dot * (1.0 - c),
+            p[1] * c + cross[1] * s + k[1] * dot * (1.0 - c),
+            p[2] * c + cross[2] * s + k[2] * dot * (1.0 - c),
+        ]
+    }
+
+    /// **A composed turn does what the two turns did, in order.**
+    ///
+    /// Checked by applying it to points, not by comparing axes and angles: `(a, 90°)` and
+    /// `(-a, 270°)` are the same rotation spelled two ways, so a test that compared the
+    /// *representation* would fail on a correct answer. Three points that do not share a plane,
+    /// so no rotation can satisfy them by accident.
+    #[test]
+    fn a_composed_turn_is_the_two_turns() {
+        let cases = [
+            (([1.0, 0.0, 0.0], 90.0), ([0.0, 1.0, 0.0], 90.0)),
+            (([0.0, 0.0, 1.0], 45.0), ([0.0, 0.0, 1.0], 45.0)),
+            (([1.0, 1.0, 0.0], 30.0), ([0.0, 1.0, 1.0], -110.0)),
+            (([0.0, 1.0, 0.0], 179.0), ([0.0, 1.0, 0.0], 179.0)),
+        ];
+        let points = [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.3, -0.4, 1.7]];
+        for (first, second) in cases {
+            let both = compose_turns(first, second);
+            for p in points {
+                let want = spin(spin(p, first), second);
+                let got = spin(p, both);
+                let miss = (0..3)
+                    .map(|i| (got[i] - want[i]).abs())
+                    .fold(0.0f64, f64::max);
+                assert!(
+                    miss < 1e-12,
+                    "{first:?} then {second:?} on {p:?}: {got:?} against {want:?}"
+                );
+            }
+        }
+    }
+
+    /// **Order matters, and the composition keeps it.**
+    ///
+    /// The whole reason this is not addition. If it were, the two orders would agree and a drag
+    /// would place a part somewhere nobody asked for.
+    #[test]
+    fn the_two_orders_are_not_the_same_placement() {
+        let x = ([1.0, 0.0, 0.0], 90.0);
+        let y = ([0.0, 1.0, 0.0], 90.0);
+        let p = [0.0, 0.0, 1.0];
+        let one = spin(p, compose_turns(x, y));
+        let other = spin(p, compose_turns(y, x));
+        let apart = (0..3)
+            .map(|i| (one[i] - other[i]).abs())
+            .fold(0.0f64, f64::max);
+        assert!(apart > 0.5, "the two orders agree: {one:?} and {other:?}");
+    }
+
+    /// **Composing with nothing changes nothing**, and a composition that cancels has no axis.
+    #[test]
+    fn the_identity_is_handled_rather_than_normalised() {
+        let turn = ([0.2, -0.7, 0.4], 63.0);
+        let p = [1.0, 0.5, -0.2];
+        for pair in [
+            compose_turns(turn, ([0.0, 0.0, 1.0], 0.0)),
+            compose_turns(([1.0, 0.0, 0.0], 0.0), turn),
+            compose_turns(turn, ([0.0; 3], 90.0)),
+        ] {
+            let got = spin(p, pair);
+            let want = spin(p, turn);
+            let miss = (0..3)
+                .map(|i| (got[i] - want[i]).abs())
+                .fold(0.0f64, f64::max);
+            assert!(miss < 1e-12, "a no-op changed the turn: {pair:?}");
+        }
+
+        // **Exactly** nothing, which is the case the guard exists for: two zero turns leave
+        // `sin_half` at zero and the axis is `0/0`. A `NaN` axis reaches the file and the
+        // builder refuses it with a message nobody can act on.
+        //
+        // Written as the exact case on purpose. The first version of this used a 63° turn
+        // undone by −63°, which leaves `sin_half` at about 8e-16 -- finite, unit, harmless --
+        // and it passed with the guard deleted.
+        for (a, b) in [
+            (([0.0, 0.0, 1.0], 0.0), ([0.0, 0.0, 1.0], 0.0)),
+            (([1.0, 0.0, 0.0], 0.0), ([0.0, 1.0, 0.0], 0.0)),
+        ] {
+            let (axis, degrees) = compose_turns(a, b);
+            assert!(degrees.abs() < 1e-9, "expected no rotation, got {degrees}");
+            assert!(
+                axis.iter().all(|c| c.is_finite()),
+                "{a:?} and {b:?} composed to {axis:?}"
+            );
+        }
+
+        // And near-cancellation, which is fine either way but should still come out sane.
+        let (axis, degrees) = compose_turns(turn, ([0.2, -0.7, 0.4], -63.0));
+        assert!(degrees.abs() < 1e-9, "expected no rotation, got {degrees}");
+        assert!(axis.iter().all(|c| c.is_finite()));
+    }
+
     /// **Text that does not parse offers nothing**, rather than pointing into a file whose shape
     /// is unknown.
     #[test]
@@ -1932,4 +2156,185 @@ impl History {
     pub fn is_empty(&self) -> bool {
         self.states.len() <= 1
     }
+}
+
+/// Which way an undo shortcut asks the history to step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Back, towards what the scene used to be.
+    Back,
+    /// Forward again, into what an undo took away.
+    Forward,
+}
+
+/// What a key press means for [`History`], as a decision separated from the toolkit.
+///
+/// # Why this is not left in the event handler
+///
+/// The shell's `Ctrl+Z` cannot be checked without a window, a compositor and a person, and the
+/// attempt to check it by driving the real desktop grabbed three unrelated windows and answered
+/// nothing. So the part that is *this* repository's to get right is pulled out here, where a
+/// test reaches it: which chord means which direction, and that a focused widget keeps its own
+/// undo.
+///
+/// What that leaves unverified is whether the toolkit delivers the press at all — egui's
+/// contract, not this crate's. Stated rather than implied, because a function that tests the
+/// easy half and reads as testing both is worse than no function.
+///
+/// `command` is egui's name for the platform's accelerator: control on Windows and Linux, the
+/// command key on macOS. Taking `Ctrl+Y` as redo too costs nothing and is what half of the
+/// editors a person arrives from use.
+pub fn shortcut(command: bool, shift: bool, z: bool, y: bool, focused: bool) -> Option<Step> {
+    // **A focused widget owns its undo.** egui keeps a fine-grained history for the text it has
+    // focus over, and two undos on one chord would take back different things depending on where
+    // the caret happened to be. The same guard the frame-stepping keys use.
+    if focused || !command {
+        return None;
+    }
+    match (z, y, shift) {
+        (true, _, false) => Some(Step::Back),
+        (true, _, true) => Some(Step::Forward),
+        (false, true, _) => Some(Step::Forward),
+        _ => None,
+    }
+}
+
+/// How far a drag on a rotation ring turns the thing, in **radians** about `axis`.
+///
+/// The companion to [`drag_along_axis`], and deliberately the same shape: the screen displacement
+/// per unit of the motion being asked for, taken as a **derivative** rather than as a secant.
+/// That distinction is not stylistic — the whole-unit version of the translate handle moved
+/// things 77% of the way at every drag size, and nothing about a rotation makes it less prone to
+/// the same error.
+///
+/// # The tangent, not the axis
+///
+/// A point `grip` on the ring moves, under rotation about `axis` through the origin, with
+/// velocity `axis × (grip − origin)`. So the question "how much rotation does this drag ask for"
+/// is the same question `drag_along_axis` answers, with that tangent in place of the axis — and
+/// the answer comes out in radians because the tangent's length is the ring's radius.
+///
+/// # What it refuses
+///
+/// A degenerate axis, a grip **on** the axis — where the tangent is zero and no rotation moves
+/// it — and a ring seen edge-on, where the tangent projects to nothing and a pixel of drag would
+/// mean an unbounded angle. All three return zero rather than a number, for the reason the
+/// translate handle does: a control that resists is a control a person tries again, and one that
+/// spins the part into the next county is a scene somebody has to reconstruct.
+pub fn turn_about_axis(
+    camera: &viewer_core::Camera,
+    frame: &viewer_core::Framing,
+    aspect: f64,
+    origin: [f64; 3],
+    axis: [f64; 3],
+    grip: [f64; 3],
+    screen: [f64; 2],
+) -> f64 {
+    let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if length < 1e-30 {
+        return 0.0;
+    }
+    let unit = [axis[0] / length, axis[1] / length, axis[2] / length];
+    let arm = [
+        grip[0] - origin[0],
+        grip[1] - origin[1],
+        grip[2] - origin[2],
+    ];
+    // The velocity of `grip` per radian: `axis × arm`. Its length is the distance from the
+    // axis, which is what makes the result radians rather than an arbitrary scale.
+    let tangent = [
+        unit[1] * arm[2] - unit[2] * arm[1],
+        unit[2] * arm[0] - unit[0] * arm[2],
+        unit[0] * arm[1] - unit[1] * arm[0],
+    ];
+    let radius =
+        (tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2]).sqrt();
+    if radius < 1e-12 * frame.span.max(1e-12) {
+        return 0.0;
+    }
+    // A ten-thousandth of a radian, scaled so the step is the same fraction of the framed span
+    // that `drag_along_axis` uses. Small enough to be the derivative, large enough that the
+    // projection's own rounding is far below it.
+    let eps = 1e-4;
+    let turned = [
+        grip[0] + tangent[0] * eps,
+        grip[1] + tangent[1] * eps,
+        grip[2] + tangent[2] * eps,
+    ];
+    let here = camera.project(grip, frame, aspect);
+    let there = camera.project(turned, frame, aspect);
+    let s = [(there.x - here.x) / eps, (there.y - here.y) / eps];
+    let len2 = s[0] * s[0] + s[1] * s[1];
+    // Edge-on: a radian of turn draws less than a thousandth of the screen, so a pixel of drag
+    // would ask for an angle nobody meant.
+    if len2 < 1e-6 {
+        return 0.0;
+    }
+    (screen[0] * s[0] + screen[1] * s[1]) / len2
+}
+
+/// Apply a turn of `degrees` about `axis` **on top of** an existing one, as a single axis and
+/// angle.
+///
+/// # Why this is not addition
+///
+/// The scene format states a turn as one axis and one angle, which is all a `Pose` is. Dragging
+/// a ring asks for a rotation about a *world* axis applied to whatever the domain is already
+/// turned by, and rotations do not commute: a quarter turn about x then about y is not the same
+/// placement as the other order, and no pair of angles added componentwise says which was meant.
+///
+/// So the two are composed as rotations — quaternions, because they compose by multiplication
+/// and come back to an axis and an angle without a matrix to be wrong about — and the result is
+/// the one turn that does what both did, in order.
+///
+/// `first` is applied first and `second` on top of it, which is the order a drag means: the part
+/// is already placed, and the ring turns it from there.
+///
+/// # The identity is a choice, and the hazard is narrower than it looks
+///
+/// A composition that comes out to no rotation has **no axis** — every axis is correct and none
+/// is meaningful — so it returns `([0, 0, 1], 0.0)`.
+///
+/// The guard matters only where the cancellation is **exact**, which is the ordinary case rather
+/// than an exotic one: two turns of zero degrees, or a drag that asked for nothing on a domain
+/// that is not turned. There `sin_half` is exactly zero and the division is `0/0`, so the axis
+/// reaches the file as `NaN` and the builder refuses it with a message nobody can act on.
+///
+/// Near-cancellation does not need it, and it was measured rather than assumed: undoing a 63°
+/// turn with a −63° one leaves `sin_half` at about `8e-16` and the axis comes out finite and
+/// unit, with an angle of `8e-16` degrees. The first draft of this comment claimed a `NaN` there
+/// and the test written from it passed with the guard removed.
+pub fn compose_turns(first: ([f64; 3], f64), second: ([f64; 3], f64)) -> ([f64; 3], f64) {
+    /// Axis and degrees to a unit quaternion `(w, x, y, z)`.
+    fn quat((axis, degrees): ([f64; 3], f64)) -> [f64; 4] {
+        let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+        if n < 1e-30 || degrees == 0.0 {
+            return [1.0, 0.0, 0.0, 0.0];
+        }
+        let half = degrees.to_radians() * 0.5;
+        let (s, c) = (half.sin(), half.cos());
+        [c, axis[0] / n * s, axis[1] / n * s, axis[2] / n * s]
+    }
+
+    let a = quat(second);
+    let b = quat(first);
+    // Hamilton product, `second * first`: the right-hand one is applied first.
+    let q = [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ];
+
+    let sin_half = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if sin_half < 1e-12 {
+        return ([0.0, 0.0, 1.0], 0.0);
+    }
+    // `atan2` rather than `acos(w)`: near a half turn `w` approaches zero and `acos` loses most
+    // of its precision there, which is exactly where a person has dragged a ring right round.
+    let angle = 2.0 * sin_half.atan2(q[0]);
+    (
+        [q[1] / sin_half, q[2] / sin_half, q[3] / sin_half],
+        angle.to_degrees(),
+    )
 }
