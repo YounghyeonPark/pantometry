@@ -63,7 +63,7 @@ pub fn readings_csv(frames: &[Frame]) -> String {
 /// only mattered once something wanted to add a shape to it. A reader that meets a panel kind it
 /// does not know cannot tell "this file is newer than me" from "this file is broken", and those
 /// two want different words in front of a person.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// The frames as JSON, for a viewer this crate does not contain.
 ///
@@ -86,8 +86,29 @@ pub fn to_json(title: &str, frames: &[Frame]) -> String {
             compact(frame.time_s)
         ));
         for (pi, panel) in frame.panels.iter().enumerate() {
+            // **Where the panel's coordinates are**, written only when they are not already
+            // the world's. Every scene this workspace ships has an identity pose, so this key
+            // appears in none of their runs and their bytes are unchanged -- and a run that
+            // does place something says so instead of leaving two frames in one file with
+            // nothing to tell them apart.
+            let place = if panel.place.is_here() {
+                String::new()
+            } else {
+                let (t, r) = (panel.place.at_m, panel.place.turn);
+                format!(
+                    "\"place\": {{ \"at_m\": [{}, {}, {}], \"turn\": [{}, {}, {}, {}] }}, ",
+                    compact(t[0]),
+                    compact(t[1]),
+                    compact(t[2]),
+                    compact(r[0]),
+                    compact(r[1]),
+                    compact(r[2]),
+                    compact(r[3])
+                )
+            };
             out.push_str(&format!(
-                "\n      {{ \"name\": {}, \"unit\": {}, ",
+                "
+      {{ \"name\": {}, \"unit\": {}, {place}",
                 quote(&panel.name),
                 quote(panel.unit)
             ));

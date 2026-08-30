@@ -14,7 +14,7 @@
 //! out one colour. This is the check that would have.
 
 use pantometry_core::Reading;
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 use pantometry_view::usda;
 
 /// A block that cools, a body that moves, a ray, and a domain with no shape at all.
@@ -28,6 +28,7 @@ fn run() -> Vec<Frame> {
                     Panel {
                         name: "block".into(),
                         unit: "K",
+                        place: Placed::HERE,
                         data: PanelData::Field {
                             nx: 2,
                             ny: 2,
@@ -40,6 +41,7 @@ fn run() -> Vec<Frame> {
                     Panel {
                         name: "mean speed".into(),
                         unit: "m/s",
+                        place: Placed::HERE,
                         data: PanelData::Points {
                             positions: vec![[t, 0.0, 0.0], [1.0 + t, 0.5, 0.0]],
                             values: vec![1.0, 2.0 + t],
@@ -50,6 +52,7 @@ fn run() -> Vec<Frame> {
                     Panel {
                         name: "rays".into(),
                         unit: "nm",
+                        place: Placed::HERE,
                         data: PanelData::paths(
                             vec![vec![[0.0, 0.0, 0.0], [1.0, 0.2, 0.0], [2.0, 0.0, 0.0]]],
                             vec![486.1],
@@ -240,6 +243,7 @@ fn a_line_of_samples_is_not_geometry_and_the_writer_says_so() {
         panels: vec![Panel {
             name: "wire".into(),
             unit: "K",
+            place: Placed::HERE,
             data: PanelData::Field {
                 nx: 4,
                 ny: 1,

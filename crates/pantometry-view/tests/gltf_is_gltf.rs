@@ -6,7 +6,7 @@
 //! actually enforces: buffer lengths that match, accessor counts that match the geometry, indices
 //! in range, four-byte alignment, and `min`/`max` on every `POSITION`.
 
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 use pantometry_view::gltf;
 
 /// A frame with one of each shape.
@@ -17,6 +17,7 @@ fn frame() -> Frame {
             Panel {
                 name: "rays".into(),
                 unit: "nm",
+                place: Placed::HERE,
                 data: PanelData::paths(
                     vec![
                         vec![[0.0, 0.0, 0.0], [1.0, 0.5, 0.0], [2.0, 0.0, 1.0]],
@@ -28,6 +29,7 @@ fn frame() -> Frame {
             Panel {
                 name: "bodies".into(),
                 unit: "m/s",
+                place: Placed::HERE,
                 data: PanelData::Points {
                     positions: vec![[0.0, 0.0, 0.0], [3.0, 1.0, -1.0]],
                     values: vec![1.0, 9.0],
@@ -38,6 +40,7 @@ fn frame() -> Frame {
             Panel {
                 name: "block".into(),
                 unit: "K",
+                place: Placed::HERE,
                 data: PanelData::Field {
                     nx: 2,
                     ny: 2,
@@ -51,6 +54,7 @@ fn frame() -> Frame {
             Panel {
                 name: "profile".into(),
                 unit: "K",
+                place: Placed::HERE,
                 data: PanelData::Field {
                     nx: 4,
                     ny: 1,

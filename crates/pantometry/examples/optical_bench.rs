@@ -33,7 +33,7 @@
 
 use glam::DVec3;
 use pantometry::prelude::*;
-use pantometry::scene::{Frame, Panel, PanelData};
+use pantometry::scene::{Frame, Panel, PanelData, Placed};
 use pantometry_optics::geometry::{cap_intersect, hexapolar_unit, plane_intersect, refract, Ray};
 
 mod common;
@@ -300,6 +300,7 @@ fn main() {
             panels: vec![Panel {
                 name: "bench".into(),
                 unit: "deg field",
+                place: Placed::HERE,
                 data: PanelData::paths(paths, colours),
             }],
             readings: vec![

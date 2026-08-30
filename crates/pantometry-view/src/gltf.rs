@@ -75,9 +75,10 @@
 //! are therefore not on the same scale. [`Exported::notes`] says so on every export that has a
 //! colour in it.
 
+use crate::data::compact;
 use crate::mesh::{self, Surface};
 use crate::ramp;
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 
 /// The most bodies that become spheres before the exporter falls back to a point cloud.
 ///
@@ -139,6 +140,13 @@ fn colour(t: f64, signed: bool) -> [f32; 4] {
 /// One mesh under construction.
 struct Mesh {
     name: String,
+    /// Where this mesh's own coordinates sit, straight onto a glTF node's transform.
+    ///
+    /// glTF nodes take `translation` and a `rotation` quaternion in `[x, y, z, w]`, which is the
+    /// shape `Placed` carries and the reason it carries it. A node transform is emitted only
+    /// when the placement is not the identity, so every file this workspace has ever written
+    /// keeps the bytes it had.
+    place: Placed,
     positions: Vec<[f32; 3]>,
     /// Empty for a point cloud and for lines, which take no light.
     normals: Vec<[f32; 3]>,
@@ -152,6 +160,7 @@ struct Mesh {
 impl Mesh {
     fn new(name: &str, mode: u32) -> Mesh {
         Mesh {
+            place: Placed::HERE,
             name: name.to_string(),
             positions: Vec::new(),
             normals: Vec::new(),
@@ -241,7 +250,15 @@ pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Export
                         panel.name
                     ));
                     let surface = mesh::body_spheres(positions, r);
-                    meshes.push(from_surface(&panel.name, &surface, values, lo, hi, signed));
+                    meshes.push(from_surface(
+                        &panel.name,
+                        panel.place,
+                        &surface,
+                        values,
+                        lo,
+                        hi,
+                        signed,
+                    ));
                 } else {
                     notes.push(format!(
                         "{}: {} bodies is over the {MAX_SPHERES} a sphere each is worth, so this \
@@ -305,7 +322,15 @@ pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Export
                     ));
                 }
                 coloured = true;
-                meshes.push(from_surface(&panel.name, &surface, values, lo, hi, signed));
+                meshes.push(from_surface(
+                    &panel.name,
+                    panel.place,
+                    &surface,
+                    values,
+                    lo,
+                    hi,
+                    signed,
+                ));
             }
         }
     }
@@ -331,6 +356,7 @@ pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Export
 /// size from one file and another size from the other.
 fn from_surface(
     name: &str,
+    place: Placed,
     surface: &Surface,
     values: &[f64],
     lo: f64,
@@ -339,6 +365,7 @@ fn from_surface(
 ) -> Mesh {
     Mesh {
         name: name.to_string(),
+        place,
         positions: surface.positions.clone(),
         normals: surface.normals.clone(),
         colours: surface
@@ -420,8 +447,26 @@ fn document(title: &str, meshes: &[Mesh]) -> String {
             quote(&mesh.name),
             mesh.mode
         ));
+        // **The placement, as the node's own transform.** A panel's coordinates are its
+        // domain's, and this is what puts two domains half a metre apart half a metre apart --
+        // they used to export on top of each other, both at their local origin.
+        let transform = if mesh.place.is_here() {
+            String::new()
+        } else {
+            let (t, r) = (mesh.place.at_m, mesh.place.turn);
+            format!(
+                ",\"translation\":[{},{},{}],\"rotation\":[{},{},{},{}]",
+                compact(t[0]),
+                compact(t[1]),
+                compact(t[2]),
+                compact(r[0]),
+                compact(r[1]),
+                compact(r[2]),
+                compact(r[3])
+            )
+        };
         nodes.push(format!(
-            "{{\"name\":{},\"mesh\":{}}}",
+            "{{\"name\":{},\"mesh\":{}{transform}}}",
             quote(&mesh.name),
             mesh_json.len() - 1
         ));

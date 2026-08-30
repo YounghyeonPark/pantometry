@@ -16,7 +16,7 @@
 //! trailing-zero trim must still spell.
 
 use pantometry_core::Reading;
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 use pantometry_view::{html, readings_csv, to_json};
 
 /// Times and values a real scene actually produces, spanning nineteen decades between them.
@@ -32,6 +32,7 @@ fn frames() -> Vec<Frame> {
             panels: vec![Panel {
                 name: "cavity".into(),
                 unit: "V/m",
+                place: Placed::HERE,
                 data: PanelData::Field {
                     nx: 2,
                     ny: 2,

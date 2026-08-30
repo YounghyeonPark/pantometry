@@ -11,7 +11,7 @@
 //! One rule, four writers: **absence is not a value.** These are on the writers. The sampler that
 //! decides what is absent has its own, in `pantometry-thermal`.
 
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 
 /// A 3x1x3 field with the middle *column* empty, so the hole survives any projection.
 ///
@@ -33,6 +33,7 @@ fn holed() -> Frame {
         panels: vec![Panel {
             name: "block".into(),
             unit: "K",
+            place: Placed::HERE,
             data: PanelData::Field {
                 nx: 3,
                 ny: 1,

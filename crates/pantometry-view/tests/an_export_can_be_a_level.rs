@@ -11,7 +11,7 @@
 //! direction arithmetic says, and that a level with nothing at it is reported rather than
 //! written as an empty file.
 
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 use pantometry_view::mesh::Surfaces;
 
 /// A ball of radius `r` inside a `n³` box one metre across, as a field whose value is the
@@ -40,6 +40,7 @@ fn ball(n: usize) -> Frame {
         panels: vec![Panel {
             name: String::from("ball"),
             unit: "m",
+            place: Placed::HERE,
             data: PanelData::Field {
                 nx: n,
                 ny: n,

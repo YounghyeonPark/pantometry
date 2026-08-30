@@ -182,6 +182,69 @@ pub struct Frame {
     pub readings: Vec<Reading>,
 }
 
+/// Where a panel's own coordinates sit in the world.
+///
+/// # Why a run needs this at all
+///
+/// It did not have it, and the consequence was measured rather than argued: two blocks half a
+/// metre apart exported to glTF **on top of each other**, both at their local origin. `capture`
+/// held the placement and threw the pose away for fields (`let _ = pose`), while bodies and
+/// paths had it multiplied into their positions. Two coordinate conventions in one file, and
+/// nothing in the file saying which a panel used.
+///
+/// No shipped scene states a `poses` block, so every one of them has an identity pose and not
+/// one could show the defect.
+///
+/// # Local coordinates and a placement, not world coordinates
+///
+/// The alternative was to bake the pose into the values, which is what bodies used to do. Two
+/// reasons not to, and the second is the one that decides it:
+///
+/// - **A field's extent should not change when the field is moved.** `PanelData::Field`'s doc
+///   has said so since the key existed, and it is right: how long the bar is is a property of
+///   the bar.
+/// - **A rotated box has no axis-aligned extent.** Bodies used to pose their cell's two corners
+///   and take the min and max of the result, which for any rotation is a *bounding* box —
+///   bigger than the cell, and not recoverable. Carrying the pose keeps the cell exact.
+///
+/// # A quaternion, not an axis and an angle
+///
+/// The scene format states a turn as an axis and degrees, because a person writes it. This is
+/// written and read by programs, and a quaternion needs no conversion at either end — the same
+/// shape, in the same component order, that a glTF node's `rotation` takes, which is exactly
+/// where it is going. Spelling it as an axis and an angle here would mean a second copy of that
+/// conversion, and this workspace has already paid for second copies of arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placed {
+    /// The origin of the panel's own frame, in world metres.
+    pub at_m: [f64; 3],
+    /// The rotation about that origin, as a unit quaternion `[x, y, z, w]` — glTF's order.
+    pub turn: [f64; 4],
+}
+
+impl Placed {
+    /// At the origin, unrotated: a panel whose own coordinates are already the world's.
+    pub const HERE: Placed = Placed {
+        at_m: [0.0, 0.0, 0.0],
+        turn: [0.0, 0.0, 0.0, 1.0],
+    };
+
+    /// Whether this is [`Placed::HERE`] to the bit.
+    ///
+    /// Exact rather than approximate, and used to decide whether a writer emits a transform at
+    /// all: a pose that is identity in every scene ever shipped should not put a node transform
+    /// into every file, and "near enough" would make that decision depend on rounding.
+    pub fn is_here(&self) -> bool {
+        *self == Placed::HERE
+    }
+}
+
+impl Default for Placed {
+    fn default() -> Placed {
+        Placed::HERE
+    }
+}
+
 /// One domain, captured.
 #[derive(Clone, Debug)]
 pub struct Panel {
@@ -189,6 +252,8 @@ pub struct Panel {
     pub name: String,
     /// What the values mean, for a legend.
     pub unit: &'static str,
+    /// Where this panel's own coordinates sit in the world. See [`Placed`].
+    pub place: Placed,
     /// The shape of what was captured.
     pub data: PanelData,
 }
@@ -337,10 +402,13 @@ impl Panel {
 
     /// The box this panel occupies, `[x0, y0, z0, x1, y1, z1]` in metres, whichever shape it is.
     ///
-    /// For a field this is the sampled extent in the domain's own coordinates; for bodies and
-    /// paths it is the world-space bounds they already carried. The two frames are not the same
-    /// and a caller that overlays them is making a claim this type cannot check — which is why
-    /// this returns the numbers and not a promise about them. See [`PanelData::Field::extent_m`].
+    /// **In the panel's own frame**, for every shape, with [`Panel::place`] saying where that
+    /// frame is. A caller that overlays two panels applies each one's placement first.
+    ///
+    /// This used to be two frames: a field's extent was local and a body set's bounds were
+    /// world-space, and the doc here said so and declined to promise anything, which is the
+    /// shape of a known hazard being written down rather than closed. It was measurable —
+    /// two blocks half a metre apart exported on top of each other — and it is closed now.
     pub fn bounds(&self) -> [f64; 6] {
         match &self.data {
             PanelData::Field { extent_m, .. } => *extent_m,
@@ -431,6 +499,21 @@ pub fn sample_field(
     sample(&name.into(), field, extent, pose, t)
 }
 
+/// A kernel [`Pose`] as the wire's [`Placed`].
+///
+/// `glam`'s quaternion is already `[x, y, z, w]`, which is glTF's order and this format's, so
+/// the conversion is a read rather than a rearrangement -- worth stating, because a quaternion
+/// silently transposed into `[w, x, y, z]` rotates everything by the wrong amount about a
+/// plausible-looking axis and nothing about the file looks wrong.
+fn placed(pose: Pose) -> Placed {
+    let t = pose.translation().to_si();
+    let q = pose.rotation();
+    Placed {
+        at_m: [t.x, t.y, t.z],
+        turn: [q.x, q.y, q.z, q.w],
+    }
+}
+
 fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Time) -> Panel {
     let (nx, ny, nz) = extent.samples;
     let (lo, hi) = (extent.min.to_si(), extent.max.to_si());
@@ -452,7 +535,9 @@ fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Ti
                 let local = LengthVec::from_si(lo + (hi - lo) * f);
                 // Sampled in the domain's own coordinates. The pose is where the *result* goes,
                 // not where the question is asked — a field does not know it has been placed.
-                let _ = pose;
+                // Sampled in the domain's own coordinates, still: the pose is where the
+                // *result* goes and a field does not know it has been placed. What changed is
+                // that the panel now carries the pose beside the values instead of dropping it.
                 values.push(field.at(local, t));
             }
         }
@@ -460,6 +545,7 @@ fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Ti
     Panel {
         name: name.to_string(),
         unit: field.unit(),
+        place: placed(pose),
         data: PanelData::Field {
             nx,
             ny,
@@ -475,17 +561,21 @@ fn points(name: &str, bodies: &dyn pantometry_core::Bodies, pose: Pose) -> Panel
     let n = bodies.count();
     let mut positions = Vec::with_capacity(n);
     let mut values = Vec::with_capacity(n);
+    // **In the domain's own frame**, like a field's samples, with the pose carried beside them.
+    // These used to be multiplied through the pose here, which made bodies world coordinates and
+    // fields local ones in the same file with nothing saying which.
     for i in 0..n {
-        let p = pose.point_to_world(bodies.position(i)).to_si();
+        let p = bodies.position(i).to_si();
         positions.push([p.x, p.y, p.z]);
         values.push(bodies.value(i));
     }
     let (bounds, boxed) = match bodies.cell() {
         Some((lo, hi)) => {
-            let (lo, hi) = (
-                pose.point_to_world(lo).to_si(),
-                pose.point_to_world(hi).to_si(),
-            );
+            // **The cell itself, not a box around it.** Posing the two corners and taking the
+            // min and max of the result is a *bounding* box for any rotation -- larger than the
+            // cell and not recoverable from the numbers written. Keeping it local keeps it exact,
+            // and the pose beside it says where it is.
+            let (lo, hi) = (lo.to_si(), hi.to_si());
             (
                 [
                     lo.x.min(hi.x),
@@ -512,6 +602,7 @@ fn points(name: &str, bodies: &dyn pantometry_core::Bodies, pose: Pose) -> Panel
     Panel {
         name: name.to_string(),
         unit: bodies.value_unit(),
+        place: placed(pose),
         data: PanelData::Points {
             positions,
             values,

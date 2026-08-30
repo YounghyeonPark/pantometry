@@ -22,34 +22,6 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
-- **An export can be the surface where a field reaches a value.** `pantometry_view::gltf_with`
-  and `usda_with` take a `mesh::Surfaces`: `Boundary`, which is what they have always written,
-  or `At(level)`. `pantometry run scene.json out.gltf --at 350` on the command line.
-
-  `field_surface` draws the outside of the cells that hold a value, which for a solid block is
-  the block — the same shape at every timestep whatever the values are doing. A level is the
-  question a field is usually asked, and until now it could be seen in the editor's viewport and
-  in nothing that left the workspace.
-
-  **No format change.** The isosurface is derived from the `Field` panel a run already carries —
-  counts, extent and values are all there — so this is a parameter rather than a shape. That was
-  worth finding out before designing one: the two halves of "let the exporters draw a mesh" have
-  very different costs, and only the designed-mesh half needs the run to carry anything new.
-
-  `gltf` and `usda` are unchanged and delegate with `Boundary`, so no existing caller writes a
-  different file. Pinned against the box rather than against itself: a distance field's cell
-  boundary *is* its box, so the default's bounds must equal the extent while a level's are
-  strictly inside. The first version compared the default to an explicit `Boundary` and passed
-  when the default was redefined to a level — both sides moved together.
-
-### Fixed
-
-- **A level nothing reaches said the field was empty.** Reusing the boundary's message meant
-  `--at 5000` reported "no cell that holds a value" about a field entirely full of them, sending
-  a reader to look for a void instead of correcting a number. It now says which level was asked
-  for and what the field actually spans: *"bracket never reaches 5000: the field spans 391.2002
-  to 391.2416"*.
-
 - **The run format states its version, and the version is read before the panels.** A scene has
   carried a `format` since it had consumers; a run never did, and the gap only mattered once
   something wanted to add a shape to it.
@@ -121,23 +93,6 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   `Loss::CLEAN_VOLUME_ERROR` already calls clean. Plus two bounds no cooling body may cross: the
   peak may only fall, and nothing may end below the air it is losing heat to.
 
-### Fixed
-
-- **A `parts` path was resolved against the working directory, not the scene.** Invisible until
-  a scene shipped with a part in it, and then a trap: scene 29 ran from `app/pantometry-world`
-  and failed from the repository root *and* from its own directory, with an error naming a path
-  the user never typed.
-
-  `Beside` resolves a relative `stl` next to the file that names it, which is what every format
-  that refers to a sibling does. The CLI and the editor both build one from the scene's own path,
-  so a scene checked at a terminal and a scene opened in the editor read the same bytes.
-  Measured from four directories, all of which now agree on 4100 cells; before, three of the four
-  could not find the file at all.
-
-  An absolute `stl` is used as written, and the error names the path **as the scene spelled it**
-  followed by where that was looked for — reporting only the resolved path answers a question the
-  reader cannot map back to their file.
-
 - **Undo in the editor.** It had gained six ways to change a scene before it had any way to
   change one back — a value, a string, a domain added, a domain removed, a placement, and a drag
   on an axis — and two of those destroy something: a removed domain takes its whole block of
@@ -169,6 +124,76 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   interesting bugs in a history are at its edges. Verified by breaking it three ways — trimming
   the bound without moving the cursor, letting a no-op commit become a step, and keeping the
   redo tail across a new edit — each caught by the test written for it.
+
+- **An export can be the surface where a field reaches a value.** `pantometry_view::gltf_with`
+  and `usda_with` take a `mesh::Surfaces`: `Boundary`, which is what they have always written,
+  or `At(level)`. `pantometry run scene.json out.gltf --at 350` on the command line.
+
+  `field_surface` draws the outside of the cells that hold a value, which for a solid block is
+  the block — the same shape at every timestep whatever the values are doing. A level is the
+  question a field is usually asked, and until now it could be seen in the editor's viewport and
+  in nothing that left the workspace.
+
+  **No format change.** The isosurface is derived from the `Field` panel a run already carries —
+  counts, extent and values are all there — so this is a parameter rather than a shape. That was
+  worth finding out before designing one: the two halves of "let the exporters draw a mesh" have
+  very different costs, and only the designed-mesh half needs the run to carry anything new.
+
+  `gltf` and `usda` are unchanged and delegate with `Boundary`, so no existing caller writes a
+  different file. Pinned against the box rather than against itself: a distance field's cell
+  boundary *is* its box, so the default's bounds must equal the extent while a level's are
+  strictly inside. The first version compared the default to an explicit `Boundary` and passed
+  when the default was redefined to a level — both sides moved together.
+
+### Fixed
+
+- **A run had no coordinate frame, and two placed domains exported on top of each other.**
+  Measured, not argued: two blocks half a metre apart came out of glTF at the same coordinates,
+  both `[0,0,0]..[0.03,0.03,0.03]`.
+
+  `capture` held each domain's `Placement` and used half of it. A field was sampled in the
+  domain's own coordinates and the pose was dropped — `let _ = pose` — while bodies had it
+  multiplied into their positions. One file, two conventions, and nothing in it saying which a
+  panel used. `Panel::bounds`' own doc said exactly this and declined to promise anything about
+  overlaying them, which is a hazard written down rather than closed.
+
+  Nothing caught it because **no shipped scene states a pose**. Under the identity, local and
+  world are the same thing, and all twenty-nine agree.
+
+  `Panel::place` carries a `Placed` now — a translation and a unit quaternion in `[x, y, z, w]`,
+  which is a glTF node's `rotation` in a glTF node's order, because that is where it goes. Bodies
+  stay in their domain's frame like a field's samples, and the exporter puts the transform on the
+  node. Run format **2**; the key is written only when it is not the identity, so every scene here
+  produces the bytes it did.
+
+  **A rotated cell is exact again.** Bodies used to pose the cell's two corners and take the min
+  and max of the result, which for any rotation is a box *around* the cell — a quarter turn of a
+  unit cube gave one √2 across, and nothing written down could recover the cube.
+
+  `knows_no_physics.rs` asserted the old convention and now asserts the new one *and* that
+  composing the placement with the local position lands the mote exactly where it always was:
+  what changed is where that fact is stored, not the fact.
+
+- **A level nothing reaches said the field was empty.** Reusing the boundary's message meant
+  `--at 5000` reported "no cell that holds a value" about a field entirely full of them, sending
+  a reader to look for a void instead of correcting a number. It now says which level was asked
+  for and what the field actually spans: *"bracket never reaches 5000: the field spans 391.2002
+  to 391.2416"*.
+
+- **A `parts` path was resolved against the working directory, not the scene.** Invisible until
+  a scene shipped with a part in it, and then a trap: scene 29 ran from `app/pantometry-world`
+  and failed from the repository root *and* from its own directory, with an error naming a path
+  the user never typed.
+
+  `Beside` resolves a relative `stl` next to the file that names it, which is what every format
+  that refers to a sibling does. The CLI and the editor both build one from the scene's own path,
+  so a scene checked at a terminal and a scene opened in the editor read the same bytes.
+  Measured from four directories, all of which now agree on 4100 cells; before, three of the four
+  could not find the file at all.
+
+  An absolute `stl` is used as written, and the error names the path **as the scene spelled it**
+  followed by where that was looked for — reporting only the resolved path answers a question the
+  reader cannot map back to their file.
 
 ## [0.18.0] — 2026-08-28
 

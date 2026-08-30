@@ -30,13 +30,14 @@ fn what_the_writer_produces_is_what_the_reader_reads() {
     // Not the constants — the **bytes**. A writer that agreed on the number and spelled the key
     // differently would pass the test above and produce files nothing could version-check, which
     // is the state this format was in until now.
-    use pantometry::scene::{Frame, Panel, PanelData};
+    use pantometry::scene::{Frame, Panel, PanelData, Placed};
 
     let frames = vec![Frame {
         time_s: 0.0,
         panels: vec![Panel {
             name: String::from("bar"),
             unit: "K",
+            place: Placed::HERE,
             data: PanelData::Field {
                 nx: 2,
                 ny: 1,

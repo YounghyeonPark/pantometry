@@ -10,7 +10,7 @@
 //! being non-empty — a renderer that silently drew nothing would pass every `len() > 0` check
 //! ever written for it.
 
-use pantometry_scene::{Frame, Panel, PanelData};
+use pantometry_scene::{Frame, Panel, PanelData, Placed};
 use pantometry_view::{html, readings_csv, svg, to_json};
 
 /// A 3D field, a 2D field, a 1D field, some bodies, and two readings — one of each shape.
@@ -24,6 +24,7 @@ fn frames() -> Vec<Frame> {
                     Panel {
                         name: "sheet".into(),
                         unit: "Pa",
+                        place: Placed::HERE,
                         data: PanelData::Field {
                             nx: 3,
                             ny: 2,
@@ -41,6 +42,7 @@ fn frames() -> Vec<Frame> {
                     Panel {
                         name: "lump".into(),
                         unit: "K",
+                        place: Placed::HERE,
                         data: PanelData::Field {
                             nx: 2,
                             ny: 2,
@@ -68,6 +70,7 @@ fn frames() -> Vec<Frame> {
                     Panel {
                         name: "wire".into(),
                         unit: "K",
+                        place: Placed::HERE,
                         data: PanelData::Field {
                             nx: 4,
                             ny: 1,
@@ -79,6 +82,7 @@ fn frames() -> Vec<Frame> {
                     Panel {
                         name: "rays".into(),
                         unit: "nm",
+                        place: Placed::HERE,
                         // Two paths of three vertices each, going different ways, so a view that
                         // drew only the first or joined them into one is distinguishable.
                         data: PanelData::paths(
@@ -92,6 +96,7 @@ fn frames() -> Vec<Frame> {
                     Panel {
                         name: "specks".into(),
                         unit: "m/s",
+                        place: Placed::HERE,
                         data: PanelData::Points {
                             positions: vec![[t, 0.0, 0.0], [0.0, 1.0, -1.0]],
                             // Climbs past the static body, which matters for
@@ -371,6 +376,7 @@ fn paths_keep_their_runs() {
     let panel = Panel {
         name: "thin".into(),
         unit: "",
+        place: Placed::HERE,
         data: thin,
     };
     assert_eq!(

@@ -147,7 +147,7 @@ pub mod prelude {
     pub use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck, Shot};
     pub use pantometry_quantum::{Wavenumber, Well, PROBABILITY};
     pub use pantometry_scene::{
-        capture, sample_field, settle_framing, Extent, Frame, Panel, PanelData, Placement,
+        capture, sample_field, settle_framing, Extent, Frame, Panel, PanelData, Placed, Placement,
     };
     pub use pantometry_shape::{Loss, Mesh, Triangle, Voxels};
     pub use pantometry_thermal::{

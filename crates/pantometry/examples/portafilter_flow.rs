@@ -579,6 +579,7 @@ fn trace(puck: &mut Puck, seed: u64) -> Traced {
             panels: vec![Panel {
                 name: format!("{name} — the machine and the water"),
                 unit: "kg/m3",
+                place: Placed::HERE,
                 data: PanelData::paths(runs, values),
             }],
             readings: vec![

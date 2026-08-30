@@ -105,10 +105,18 @@ fn a_physics_invented_in_a_test_file_is_captured_whole() {
 
 /// **A placed domain is captured where it was placed.**
 ///
-/// `Pose` is physical, so bodies come back in world coordinates. Checked against a quarter turn
-/// worked by hand: a mote on the local +x axis lands on world +y.
+/// **A placement reaches the frame, and the mote it moves ends where hand arithmetic says.**
+///
+/// This asserted world coordinates until the two frames were closed. Bodies had the pose
+/// multiplied into their positions while fields were sampled in their own; one file, two
+/// conventions, and nothing saying which a panel used. Bodies are local now and the panel carries
+/// the placement.
+///
+/// The claim is unchanged in the only way that matters: compose the two and the mote is in the
+/// same world position it always was. What moved is where that fact is *stored* — and storing it
+/// beside the values is what lets a reader put a field and a body set in one picture.
 #[test]
-fn bodies_come_back_in_world_coordinates() {
+fn a_placement_reaches_the_frame_and_composes_to_world() {
     let mut sim = Simulation::new(Schedule::Staggered).with(Invented { t: 0.0 });
     sim.advance(Time::s(1.0)).unwrap();
 
@@ -128,11 +136,49 @@ fn bodies_come_back_in_world_coordinates() {
         panic!("expected bodies");
     };
 
-    // Mote 0 sits at local (1, 0, 0) after one second; turned a quarter turn and lifted 5 m.
+    // Mote 0 sits at local (1, 0, 0) after one second, and stays there: the pose is not baked in.
     let p = positions[0];
-    assert!(p[0].abs() < 1e-12, "x should be 0, got {}", p[0]);
-    assert!((p[1] - 1.0).abs() < 1e-12, "y should be 1, got {}", p[1]);
-    assert!((p[2] - 5.0).abs() < 1e-12, "z should be 5, got {}", p[2]);
+    assert!((p[0] - 1.0).abs() < 1e-12, "x should be 1, got {}", p[0]);
+    assert!(p[1].abs() < 1e-12, "y should be 0, got {}", p[1]);
+    assert!(p[2].abs() < 1e-12, "z should be 0, got {}", p[2]);
+
+    // And composing the panel's placement with it lands where it always did: a quarter turn
+    // about z sends local +x to world +y, then five metres up. The arithmetic is written out
+    // rather than taken from `Pose`, so this checks the number that reached the *frame* and not
+    // that `Pose` agrees with itself.
+    let place = frame.panels[0].place;
+    assert_eq!(place.at_m, [0.0, 0.0, 5.0]);
+    let (x, y, z, w) = (place.turn[0], place.turn[1], place.turn[2], place.turn[3]);
+    let rotate = |v: [f64; 3]| {
+        // q * v * q^-1, written out for a unit quaternion.
+        let t = [
+            2.0 * (y * v[2] - z * v[1]),
+            2.0 * (z * v[0] - x * v[2]),
+            2.0 * (x * v[1] - y * v[0]),
+        ];
+        [
+            v[0] + w * t[0] + (y * t[2] - z * t[1]),
+            v[1] + w * t[1] + (z * t[0] - x * t[2]),
+            v[2] + w * t[2] + (x * t[1] - y * t[0]),
+        ]
+    };
+    let world = rotate(p);
+    let world = [
+        world[0] + place.at_m[0],
+        world[1] + place.at_m[1],
+        world[2] + place.at_m[2],
+    ];
+    assert!(world[0].abs() < 1e-12, "x should be 0, got {}", world[0]);
+    assert!(
+        (world[1] - 1.0).abs() < 1e-12,
+        "y should be 1, got {}",
+        world[1]
+    );
+    assert!(
+        (world[2] - 5.0).abs() < 1e-12,
+        "z should be 5, got {}",
+        world[2]
+    );
 }
 
 /// **A field with no extent is not drawn**, rather than drawn over a region nobody chose.

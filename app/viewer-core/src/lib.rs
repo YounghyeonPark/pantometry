@@ -28,13 +28,50 @@
 
 use serde::Deserialize;
 
+/// Where a panel's own coordinates sit in the world.
+///
+/// The reader's copy of `pantometry_scene::Placed`. Two types rather than one because this crate
+/// deliberately does not link `pantometry` -- a viewer that could reach the library could come to
+/// depend on it, and then the wire format would stop being the boundary. The wire is the shared
+/// thing, and `one_run_format_two_crates` is what holds the two ends of it together.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Placed {
+    /// The origin of the panel's own frame, in world metres.
+    #[serde(default)]
+    pub at_m: [f64; 3],
+    /// The rotation about it, as a unit quaternion `[x, y, z, w]` -- glTF's order.
+    #[serde(default = "no_turn")]
+    pub turn: [f64; 4],
+}
+
+fn no_turn() -> [f64; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+impl Default for Placed {
+    fn default() -> Placed {
+        Placed {
+            at_m: [0.0; 3],
+            turn: no_turn(),
+        }
+    }
+}
+
+impl Placed {
+    /// Whether this is the identity: a panel whose own coordinates are already the world's.
+    pub fn is_here(&self) -> bool {
+        *self == Placed::default()
+    }
+}
+
 /// The highest run format this build understands.
 ///
 /// Written by `pantometry_view::data::FORMAT` and read here, and the two are held together by
 /// `the_writer_and_the_reader_agree_on_the_version` rather than by anyone remembering. They are
 /// in different workspaces on purpose -- this crate does not link the library -- so a constant
 /// each is the only way, and a test comparing them is the only thing that makes it one number.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// A whole run, as read from a file.
 #[derive(Clone, Debug, Deserialize)]
@@ -84,6 +121,13 @@ pub enum Panel {
         name: String,
         /// What the values are in.
         unit: String,
+        /// Where this panel's own coordinates sit in the world.
+        ///
+        /// **Optional, for the reason `extent_m` above is.** A run written before the key has
+        /// none, and its panels are already in world coordinates because that is what a run
+        /// without a placement meant. Absent reads as the identity, which is the same thing.
+        #[serde(default)]
+        place: Placed,
         /// Samples along x.
         nx: usize,
         /// Along y.
@@ -113,6 +157,13 @@ pub enum Panel {
         name: String,
         /// What the values are in.
         unit: String,
+        /// Where this panel's own coordinates sit in the world.
+        ///
+        /// **Optional, for the reason `extent_m` above is.** A run written before the key has
+        /// none, and its panels are already in world coordinates because that is what a run
+        /// without a placement meant. Absent reads as the identity, which is the same thing.
+        #[serde(default)]
+        place: Placed,
         /// Whether the bounding box is a real wall.
         boxed: bool,
         /// `[x0,y0,z0,x1,y1,z1]`.
@@ -128,6 +179,13 @@ pub enum Panel {
         name: String,
         /// What the values are in.
         unit: String,
+        /// Where this panel's own coordinates sit in the world.
+        ///
+        /// **Optional, for the reason `extent_m` above is.** A run written before the key has
+        /// none, and its panels are already in world coordinates because that is what a run
+        /// without a placement meant. Absent reads as the identity, which is the same thing.
+        #[serde(default)]
+        place: Placed,
         /// `[x0,y0,z0,x1,y1,z1]`.
         bounds: [f64; 6],
         /// Where each run begins, as an index into `vertices` divided by three.
