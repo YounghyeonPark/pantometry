@@ -291,6 +291,27 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // **The shapes the scene designed, for the writers that draw geometry.** A run is the
+    // simulation's *output* and an STL is its input, so the mesh is not in the run at all and the
+    // exporters are handed it here — see `mesh::Designed` for the three ways of putting it in the
+    // run instead and why each is worse.
+    //
+    // Read through `editor-core` because that is where the reader already lives and the editor's
+    // viewport is its other caller. It needs nothing from the editor and `pantometry-world` would
+    // be the tidier home; moving it is a refactor rather than part of this.
+    let drawing = pantometry::view::mesh::Drawing::of(surfaces).and(
+        editor_core::designed(&scene, &Beside::of(&beside))
+            .into_iter()
+            .map(|m| pantometry::view::mesh::Designed {
+                // The site, `bracket/parts[0]`, which is the string a rasterisation finding
+                // already carries — so a loss printed by `--check` names the node in the file.
+                name: m.site,
+                place: m.place,
+                surface: pantometry::view::mesh::mesh_surface(&m.triangles, 0),
+            })
+            .collect(),
+    );
+
     println!("{}", scene.title);
     println!(
         "  {} domain(s), {:.3} s in {} frames, drift budget {:.0e}",
@@ -438,7 +459,7 @@ nothing to export: the run produced no frames"
                         std::process::exit(1);
                     };
                     let out =
-                        pantometry::view::gltf_with(world.scene().title.as_str(), last, surfaces);
+                        pantometry::view::gltf_with(world.scene().title.as_str(), last, &drawing);
                     for note in &out.skipped {
                         println!("  not exported: {note}");
                     }
@@ -469,7 +490,7 @@ nothing to export: the run produced no frames"
                     let out = pantometry::view::usda_with(
                         world.scene().title.as_str(),
                         &frames,
-                        surfaces,
+                        &drawing,
                     );
                     for note in &out.skipped {
                         println!("  not exported: {note}");

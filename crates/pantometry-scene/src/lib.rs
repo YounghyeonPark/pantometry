@@ -237,6 +237,26 @@ impl Placed {
     pub fn is_here(&self) -> bool {
         *self == Placed::HERE
     }
+
+    /// A [`Pose`] in the shape a writer emits: a translation and a unit quaternion in
+    /// `[x, y, z, w]`.
+    ///
+    /// **The one place a pose becomes a placement.** `capture` uses it for every panel and the
+    /// editor uses it for a scene's designed parts, and the two must not come to different
+    /// answers about the same pose -- a designed mesh drawn beside the cells it was rasterised
+    /// onto is the picture that shows how much the grid lost, and it only shows that if both are
+    /// in the same frame.
+    ///
+    /// `[x, y, z, w]` because that is a glTF node's `rotation` and glTF is where it first went.
+    /// USD writes `(w, x, y, z)` and its writer does the reordering; see `usd::write_xform`.
+    pub fn of(pose: Pose) -> Placed {
+        let t = pose.translation().to_si();
+        let q = pose.rotation();
+        Placed {
+            at_m: [t.x, t.y, t.z],
+            turn: [q.x, q.y, q.z, q.w],
+        }
+    }
 }
 
 impl Default for Placed {
@@ -505,15 +525,6 @@ pub fn sample_field(
 /// the conversion is a read rather than a rearrangement -- worth stating, because a quaternion
 /// silently transposed into `[w, x, y, z]` rotates everything by the wrong amount about a
 /// plausible-looking axis and nothing about the file looks wrong.
-fn placed(pose: Pose) -> Placed {
-    let t = pose.translation().to_si();
-    let q = pose.rotation();
-    Placed {
-        at_m: [t.x, t.y, t.z],
-        turn: [q.x, q.y, q.z, q.w],
-    }
-}
-
 fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Time) -> Panel {
     let (nx, ny, nz) = extent.samples;
     let (lo, hi) = (extent.min.to_si(), extent.max.to_si());
@@ -545,7 +556,7 @@ fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Ti
     Panel {
         name: name.to_string(),
         unit: field.unit(),
-        place: placed(pose),
+        place: Placed::of(pose),
         data: PanelData::Field {
             nx,
             ny,
@@ -602,7 +613,7 @@ fn points(name: &str, bodies: &dyn pantometry_core::Bodies, pose: Pose) -> Panel
     Panel {
         name: name.to_string(),
         unit: bodies.value_unit(),
-        place: placed(pose),
+        place: Placed::of(pose),
         data: PanelData::Points {
             positions,
             values,

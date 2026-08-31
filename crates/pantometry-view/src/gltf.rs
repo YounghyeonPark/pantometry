@@ -180,15 +180,16 @@ impl Mesh {
 /// Every panel that is geometry becomes a node under one scene, named after its domain, so a
 /// reader opening the file sees the same names the run reported.
 pub fn gltf(title: &str, frame: &Frame) -> Exported {
-    gltf_with(title, frame, mesh::Surfaces::Boundary)
+    gltf_with(title, frame, &mesh::Drawing::default())
 }
 
-/// The same, choosing which surface a field becomes. See [`mesh::Surfaces`].
+/// The same, choosing which surface a field becomes and what to draw beside it. See
+/// [`mesh::Drawing`].
 ///
-/// Separate rather than an extra argument on [`gltf`], because that one is published and the
-/// files it writes are the ones every caller here already expects. A default nobody asked for is
-/// how an export quietly changes shape between versions.
-pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Exported {
+/// Separate rather than extra arguments on [`gltf`], because that one is published and the files
+/// it writes are the ones every caller here already expects. A default nobody asked for is how an
+/// export quietly changes shape between versions.
+pub fn gltf_with(title: &str, frame: &Frame, drawing: &mesh::Drawing) -> Exported {
     let mut meshes = Vec::new();
     let mut skipped = Vec::new();
     let mut notes = Vec::new();
@@ -293,13 +294,13 @@ pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Export
                     continue;
                 }
                 let (lo, hi, signed) = mesh::span(values);
-                let surface = surfaces.of((*nx, *ny, *nz), *extent_m, values);
+                let surface = drawing.surfaces.of((*nx, *ny, *nz), *extent_m, values);
                 if surface.indices.is_empty() {
                     // **Two different silences, and they used to share one sentence.** An empty
                     // boundary means no cell holds a value. An empty *level* means the field is
                     // full of values and none of them is the one asked for, which is a number a
                     // person can correct -- so it says what the field actually spans.
-                    skipped.push(match surfaces {
+                    skipped.push(match drawing.surfaces {
                         mesh::Surfaces::Boundary => format!(
                             "{} is a {nx}x{ny}x{nz} field with no cell that holds a value, so it has no surface",
                             panel.name
@@ -333,6 +334,41 @@ pub fn gltf_with(title: &str, frame: &Frame, surfaces: mesh::Surfaces) -> Export
                 ));
             }
         }
+    }
+
+    // **The design, beside what the solver made of it.** Uncoloured, for the reason
+    // `mesh::Designed` gives: the cells are what ran, and tinting a smooth surface from the field
+    // would claim a resolution the computation never had.
+    for part in &drawing.designed {
+        if part.surface.indices.is_empty() {
+            skipped.push(format!("{}: the designed mesh has no faces", part.name));
+            continue;
+        }
+        meshes.push(Mesh {
+            name: part.name.clone(),
+            place: part.place,
+            positions: part.surface.positions.clone(),
+            normals: part.surface.normals.clone(),
+            colours: vec![
+                [
+                    mesh::DESIGNED_GREY[0],
+                    mesh::DESIGNED_GREY[1],
+                    mesh::DESIGNED_GREY[2],
+                    1.0,
+                ];
+                part.surface.positions.len()
+            ],
+            indices: part.surface.indices.clone(),
+            mode: 4,
+        });
+    }
+    if !drawing.designed.is_empty() {
+        notes.push(format!(
+            "{} designed part(s) drawn beside the cells, in one flat grey — a designed shape \
+             carries no value and the solver ran on the cells, so the pair is what shows the \
+             rasterisation loss",
+            drawing.designed.len()
+        ));
     }
 
     if coloured {

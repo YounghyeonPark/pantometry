@@ -119,12 +119,26 @@ fn checked(place: &str) -> Checked {
 
 /// The tightest box round every triangle, `[x0, y0, z0, x1, y1, z1]`, in metres.
 fn bounds_of(m: &editor_core::PlacedMesh) -> [f64; 6] {
+    box_of(m, false)
+}
+
+/// The same, after the placement — where the part actually is.
+fn world_bounds_of(m: &editor_core::PlacedMesh) -> [f64; 6] {
+    box_of(m, true)
+}
+
+fn box_of(m: &editor_core::PlacedMesh, place: bool) -> [f64; 6] {
     let mut b = [f64::INFINITY; 3]
         .into_iter()
         .chain([f64::NEG_INFINITY; 3])
         .collect::<Vec<_>>();
     for t in &m.triangles {
         for c in t {
+            let c = if place {
+                editor_core::place(m.place, *c)
+            } else {
+                *c
+            };
             for a in 0..3 {
                 b[a] = b[a].min(c[a]);
                 b[a + 3] = b[a + 3].max(c[a]);
@@ -239,8 +253,22 @@ fn a_pose_moves_a_part_and_does_not_resize_it() {
         );
     }
 
+    // **The triangles do not move; the placement says where they go.** This asserted the other
+    // convention until `PlacedMesh` started stating its pose instead of baking it -- the same
+    // change `Panel::place` made to a run, made here so the editor and the exporters describe a
+    // designed part the same way. The part's own box is the STL's, unposed and identical to the
+    // scene that states no pose at all.
+    assert_eq!(
+        bounds_of(&here.meshes[0]),
+        bounds_of(&there.meshes[0]),
+        "a pose moved the part's own coordinates, which are the file's"
+    );
+    assert!(here.meshes[0].place.is_here());
+    assert!(!there.meshes[0].place.is_here());
+
     // And it moved *to a stated place*. The volume above is invariant under a pose that was
-    // dropped on the floor, which is the likelier bug of the two, so this has to say where.
+    // dropped on the floor, which is the likelier bug of the two, so this has to say where —
+    // composed back, which is what every reader of this does before it draws anything.
     //
     // A quarter turn about `+z` is closed form and needs no trigonometry: right-handed,
     // `(x, y) -> (-y, x)`. The cube spans 0.010 .. 0.050 on every axis, so afterwards
@@ -251,7 +279,7 @@ fn a_pose_moves_a_part_and_does_not_resize_it() {
     // part had moved "more than 0.05 m", measured 0.040 because the turn cancels part of the
     // translation, and the fix for *that* is an exact answer rather than a smaller number.
     let want = [0.050, 0.010, 0.010, 0.090, 0.050, 0.050];
-    let got = bounds_of(&there.meshes[0]);
+    let got = world_bounds_of(&there.meshes[0]);
     for a in 0..6 {
         assert!(
             (got[a] - want[a]).abs() < NEAR_M,
@@ -288,4 +316,43 @@ fn a_scene_with_no_parts_has_no_meshes() {
     assert!(c.error.is_none(), "{:?}", c.error);
     assert!(c.meshes.is_empty());
     assert!(!c.boxes.is_empty(), "the block still has a box");
+}
+
+/// **The shipped scene, read the way the CLI reads it.**
+///
+/// `designed` has two callers now — the editor's viewport and the exporters, through the CLI —
+/// and both resolve `parts` with `Beside`, which joins the path to the scene's own directory. Get
+/// that wrong and the reader returns an **empty list**: no error, no part, and a `.gltf` that is
+/// simply missing the thing somebody drew. That is the silent-failure shape, so it is checked
+/// against a file that actually ships rather than against a fixture written to agree.
+#[test]
+fn the_shipped_scene_with_a_part_yields_one() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../pantometry-world/scenes/29-a-designed-bracket-becomes-cells.json");
+    let text = std::fs::read_to_string(&scene).expect("scene 29 ships");
+    let parsed: pantometry_world::Scene = serde_json::from_str(&text).expect("it parses");
+
+    let meshes = editor_core::designed(&parsed, &pantometry_world::Beside::of(&scene));
+    assert_eq!(meshes.len(), 1, "the bracket did not arrive");
+    let m = &meshes[0];
+    assert_eq!(m.site, "bracket/parts[0]");
+    assert_eq!(m.triangles.len(), 24, "the L-bracket is 24 triangles");
+    assert!(
+        m.place.is_here(),
+        "scene 29 states no pose and the part should say so"
+    );
+
+    // The STL's own box, in metres: 50 x 50 x 20 mm. Read from the file rather than from the
+    // scene, so a reader that silently returned an empty mesh or a scaled one is caught by a
+    // number and not by a count.
+    let b = bounds_of(m);
+    let want = [0.0, 0.0, 0.0, 0.050, 0.050, 0.020];
+    for a in 0..6 {
+        assert!(
+            (b[a] - want[a]).abs() < NEAR_M,
+            "bound {a} is {} and should be {}",
+            b[a],
+            want[a]
+        );
+    }
 }

@@ -1942,7 +1942,13 @@ impl App {
             let surface = pantometry::view::mesh::mesh_surface(&m.triangles, 0);
             let base = solid.vertices();
             for (p, n) in surface.positions.iter().zip(&surface.normals) {
-                let at = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+                // The triangles are the STL's own; `m.place` is where the scene puts them. They
+                // used to arrive here already in world metres, which drew correctly and was the
+                // second convention in a file that has one.
+                let at = editor_core::place(
+                    m.place,
+                    [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])],
+                );
                 solid.push(framing.local(at), *n, c);
             }
             solid

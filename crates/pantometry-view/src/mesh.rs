@@ -39,7 +39,7 @@
 //! node owns half a cell — the same arithmetic whose absence made every room mode in this
 //! workspace read low, when `Tube` and `Room` divided a wall sample's divergence by a whole `dx`.
 
-use pantometry_scene::PanelData;
+use pantometry_scene::{PanelData, Placed};
 
 /// The most faces one field may write before it is subsampled.
 ///
@@ -150,6 +150,80 @@ impl Surfaces {
             Surfaces::Boundary => field_surface(counts, extent, values),
             Surfaces::At(level) => isosurface(counts, extent, values, level),
         }
+    }
+}
+
+/// A shape the scene **designed**, to be drawn beside the cells it became.
+///
+/// # What this is for, which is not what a panel is for
+///
+/// A run is the simulation's output. A designed part is its *input*, and it is not in the run at
+/// all — it is an STL beside the scene file. So the exporters take it as an argument rather than
+/// finding it in a [`Frame`](pantometry_scene::Frame), and the three ways of not doing that were
+/// each considered and each is worse:
+///
+/// | | |
+/// | --- | --- |
+/// | repeat it in every frame | a 24-triangle bracket is free; a million-triangle STL over a hundred frames is not |
+/// | a static section in the run format | a new kind of thing in a format that has never had one, for one case |
+/// | a path in the run, resolved on read | a run that depends on the filesystem, whose failure is an empty picture |
+///
+/// # It is drawn without a colour, and that is a claim about honesty
+///
+/// The solver ran on **cells**. A smooth surface tinted from the field would look like a
+/// higher-resolution answer than the one computed, which is the same mistake as renormalising a
+/// colour scale per frame wearing different clothes. Drawn plainly beside the voxels, the pair is
+/// the only picture that *shows* the rasterisation loss — `pantometry_world`'s `Rasterised` has
+/// reported it as a number since designed parts existed, and a number in a terminal is not
+/// something a designer looks at.
+///
+/// The editor reached this decision first: its viewport draws a designed part in a grey chosen to
+/// be unlike any scale in this workspace. [`DESIGNED_GREY`] is that grey.
+#[derive(Clone, Debug)]
+pub struct Designed {
+    /// What to call the node or prim. The scene's site — `"bracket/parts[0]"` — reads well and is
+    /// the same string a rasterisation finding carries.
+    pub name: String,
+    /// Where the part's own coordinates sit in the world, exactly as a panel states it.
+    pub place: Placed,
+    /// The triangles, in the part's own frame. [`mesh_surface`] is how an STL becomes one.
+    pub surface: Surface,
+}
+
+/// The grey a designed part is drawn in, in **linear** RGB.
+///
+/// Deliberately unlike every colour scale here. A part carries no value, and giving it one from
+/// the palette a field uses invites reading a temperature off a thing that has none. The same
+/// three numbers the editor's viewport uses, so the viewport and the export agree.
+pub const DESIGNED_GREY: [f32; 3] = [0.55, 0.57, 0.60];
+
+/// What an exporter draws, beyond the run itself.
+///
+/// One struct rather than a growing tail of arguments. `gltf_with` and `usda_with` had gained
+/// their third in two commits and were about to gain a fourth, and each was a positional `bool`
+/// or enum in a call that already reads as a sentence.
+#[derive(Clone, Debug, Default)]
+pub struct Drawing {
+    /// Which surface a field becomes.
+    pub surfaces: Surfaces,
+    /// Shapes the scene designed, drawn beside the cells. Empty for a run exported on its own,
+    /// which is every export this workspace wrote before it could be otherwise.
+    pub designed: Vec<Designed>,
+}
+
+impl Drawing {
+    /// The default, with a choice of surface.
+    pub fn of(surfaces: Surfaces) -> Drawing {
+        Drawing {
+            surfaces,
+            ..Drawing::default()
+        }
+    }
+
+    /// The same, drawing these designed parts as well.
+    pub fn and(mut self, designed: Vec<Designed>) -> Drawing {
+        self.designed = designed;
+        self
     }
 }
 

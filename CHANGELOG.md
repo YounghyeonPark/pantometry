@@ -22,6 +22,53 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
+- **The exporters draw the shape somebody designed, beside the cells it became.** Every export of
+  a designed part showed its *rasterisation* — a staircase on the solver's grid — while the thing
+  it was rasterised from sat on disk beside the scene, reachable by nothing that writes a file.
+  `Rasterised` has reported the volume error as a number since designed parts existed, and a
+  number in a terminal is not what a designer looks at.
+
+  Measured on scene 29, through OpenUSD:
+
+  ```
+  /World/bracket           3640 faces   [0, 0, 0] .. [0.05096, 0.05096, 0.020727]   the cells
+  /World/bracket_parts_0_    24 faces   [0, 0, 0] .. [0.05,    0.05,    0.02    ]   the design
+  ```
+
+  The overshoot is the grid. It was always there and there was no way to see it.
+
+  **The design is not in the run**, and that is the decision this took. A run is the simulation's
+  output; an STL is its input. `mesh::Designed` carries the three ways of putting it in the run
+  instead and why each is worse — repeated per frame it is unbounded, a static section is a new
+  kind of thing in a format that has never had one, and a path resolved on read makes a run depend
+  on a filesystem whose failure is an empty picture. So `mesh::Drawing` is an argument to the
+  writer: `gltf_with` and `usda_with` take one instead of a `Surfaces`, which is the third
+  positional argument they had gained in two commits and the last chance to reshape them before
+  either is published.
+
+  **It is drawn uncoloured, and that is a claim about honesty.** The solver ran on cells; tinting
+  a smooth surface from the field would look like a higher-resolution answer than the one
+  computed, which is the same mistake as renormalising a colour scale per frame in different
+  clothes. `mesh::DESIGNED_GREY` is the grey the editor's viewport already used, chosen to be
+  unlike every scale here — so the viewport and the export agree, and the test asserts the design
+  carries *no* variation rather than asserting a shade.
+
+  `editor_core::designed` is the reader, with the editor's viewport as its other caller. Its
+  `PlacedMesh` now holds the STL's **own** triangles and states its placement, where it used to
+  bake the pose into every vertex. Baking is not wrong for a vertex list — a rigid motion loses
+  nothing there, unlike a box — but it was the second convention in a workspace that has just
+  spent four commits removing one. `Placed::of` is public for the same reason: `capture` and the
+  editor must not come to different answers about the same pose.
+
+  `a_pose_moves_a_part_and_does_not_resize_it` asserted the old convention and now asserts the new
+  one *and* composes the placement back to the same world box it always had — the same shape the
+  `knows_no_physics.rs` change took, and the right kind of breakage.
+
+  Six sabotages, all caught by an assertion: each writer dropping the pass, each writing the
+  design at the origin, the colour going per-vertex, and the reader baking the pose in again. The
+  fifth needed two goes — the first anchor matched twice, the harness ran the test anyway, and a
+  pass with **no sabotage applied** was read as "survived". The check is gated on the edit now.
+
 - **A shipped scene that states a pose**, which is the reason three consumers dropped one. Scene
   30: two blackened copper busbars crossing at a 4 mm clearance, identical but for their current,
   one turned a quarter turn about z and lifted above the other.

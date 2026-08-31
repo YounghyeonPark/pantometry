@@ -71,15 +71,16 @@ const TIME_CODES_PER_SECOND: f64 = 24.0;
 
 /// Write a run as a USD stage.
 pub fn usda(title: &str, frames: &[Frame]) -> Staged {
-    usda_with(title, frames, mesh::Surfaces::Boundary)
+    usda_with(title, frames, &mesh::Drawing::default())
 }
 
-/// The same, choosing which surface a field becomes. See [`mesh::Surfaces`].
+/// The same, choosing which surface a field becomes and what to draw beside it. See
+/// [`mesh::Drawing`].
 ///
-/// Separate rather than an extra argument on [`usda`], because that one is published and the
-/// files it writes are the ones every caller here already expects. A default nobody asked for is
-/// how an export quietly changes shape between versions.
-pub fn usda_with(title: &str, frames: &[Frame], surfaces: mesh::Surfaces) -> Staged {
+/// Separate rather than extra arguments on [`usda`], because that one is published and the files
+/// it writes are the ones every caller here already expects. A default nobody asked for is how an
+/// export quietly changes shape between versions.
+pub fn usda_with(title: &str, frames: &[Frame], drawing: &mesh::Drawing) -> Staged {
     let mut out = String::with_capacity(1 << 16);
     let mut skipped = Vec::new();
     let mut notes = Vec::new();
@@ -167,13 +168,13 @@ pub fn usda_with(title: &str, frames: &[Frame], surfaces: mesh::Surfaces) -> Sta
                         panel.name
                     ));
                 }
-                let surface = surfaces.of((*nx, *ny, *nz), *extent_m, values);
+                let surface = drawing.surfaces.of((*nx, *ny, *nz), *extent_m, values);
                 if surface.indices.is_empty() {
                     // **Two different silences, and they used to share one sentence.** An empty
                     // boundary means no cell holds a value. An empty *level* means the field is
                     // full of values and none of them is the one asked for, which is a number a
                     // person can correct -- so it says what the field actually spans.
-                    skipped.push(match surfaces {
+                    skipped.push(match drawing.surfaces {
                         mesh::Surfaces::Boundary => format!(
                             "{} is a {nx}x{ny}x{nz} field with no cell that holds a value, so it has no surface",
                             panel.name
@@ -271,6 +272,24 @@ pub fn usda_with(title: &str, frames: &[Frame], surfaces: mesh::Surfaces) -> Sta
             }
         }
         let _ = pi;
+    }
+
+    // **The design, beside what the solver made of it.** See `mesh::Designed` for why it is
+    // drawn without a colour: the cells are what ran.
+    for part in &drawing.designed {
+        if part.surface.indices.is_empty() {
+            skipped.push(format!("{}: the designed mesh has no faces", part.name));
+            continue;
+        }
+        write_designed(&mut out, &ident(&part.name), &part.name, part);
+    }
+    if !drawing.designed.is_empty() {
+        notes.push(format!(
+            "{} designed part(s) drawn beside the cells, in one flat grey — a designed shape \
+             carries no value and the solver ran on the cells, so the pair is what shows the \
+             rasterisation loss",
+            drawing.designed.len()
+        ));
     }
 
     // The domains with no shape at all, which is most of a scene here. Grouped under one prim so a
@@ -569,6 +588,61 @@ fn write_xform(out: &mut String, place: Placed) {
     out.push_str(
         "        uniform token[] xformOpOrder = [\"xformOp:translate\", \"xformOp:orient\"]\n",
     );
+}
+
+/// A designed part as a `Mesh` prim: topology, normals, one constant colour, and its placement.
+///
+/// Not `write_mesh`, and the difference is the point. That one animates `displayColor` over the
+/// run's time samples against a scale, because a panel carries values; this has none, so its
+/// colour is `interpolation = "constant"` and there is exactly one of it. A designed shape given a
+/// value from a field's palette would read as a temperature, and it does not have one.
+fn write_designed(out: &mut String, path: &str, name: &str, part: &mesh::Designed) {
+    let b = part.surface.bounds();
+    out.push_str(&format!("    def Mesh \"{path}\"\n    {{\n"));
+    out.push_str(&format!(
+        "        float3[] extent = [({}, {}, {}), ({}, {}, {})]\n",
+        b[0], b[1], b[2], b[3], b[4], b[5]
+    ));
+    // `none`, as everywhere here: a subdivision surface would round off the faces the file states,
+    // and this is the one prim whose faces are somebody's design rather than a solver's grid.
+    out.push_str("        uniform token subdivisionScheme = \"none\"\n");
+    out.push_str("        int[] faceVertexCounts = [");
+    for i in 0..part.surface.faces() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push('3');
+    }
+    out.push_str("]\n");
+    out.push_str("        int[] faceVertexIndices = [");
+    for (i, x) in part.surface.indices.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&x.to_string());
+    }
+    out.push_str("]\n");
+    out.push_str("        point3f[] points = [");
+    write_points(out, &part.surface.positions);
+    out.push_str("]\n");
+    out.push_str("        normal3f[] normals = [");
+    write_points(out, &part.surface.normals);
+    out.push_str("]\n");
+    write_xform(out, part.place);
+    out.push_str("        color3f[] primvars:displayColor (\n");
+    out.push_str("            interpolation = \"constant\"\n");
+    out.push_str("        )\n");
+    out.push_str(&format!(
+        "        color3f[] primvars:displayColor = [({}, {}, {})]\n",
+        mesh::DESIGNED_GREY[0],
+        mesh::DESIGNED_GREY[1],
+        mesh::DESIGNED_GREY[2]
+    ));
+    out.push_str(&format!(
+        "        uniform string pantometry:designed = {}\n",
+        quote(name)
+    ));
+    out.push_str("    }\n\n");
 }
 
 /// Every domain's scalars, as custom attributes with time samples.

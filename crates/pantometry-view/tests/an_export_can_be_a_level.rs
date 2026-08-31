@@ -12,7 +12,7 @@
 //! written as an empty file.
 
 use pantometry_scene::{Frame, Panel, PanelData, Placed};
-use pantometry_view::mesh::Surfaces;
+use pantometry_view::mesh::{Drawing, Surfaces};
 
 /// A ball of radius `r` inside a `n³` box one metre across, as a field whose value is the
 /// distance from the centre.
@@ -59,7 +59,7 @@ fn the_default_is_what_it_always_was() {
     // shape because a new variant appeared would be worse than one that never gained the option.
     let frame = ball(9);
     let plain = pantometry_view::gltf("ball", &frame);
-    let asked = pantometry_view::gltf_with("ball", &frame, Surfaces::Boundary);
+    let asked = pantometry_view::gltf_with("ball", &frame, &Drawing::of(Surfaces::Boundary));
     assert_eq!(
         plain.document, asked.document,
         "the default and an explicit Boundary wrote different files"
@@ -123,8 +123,8 @@ fn a_level_writes_a_different_and_smaller_surface() {
     // point of the option is that a reader gets a different picture, and an option that wrote
     // the same bytes would be an option nobody could tell was working.
     let frame = ball(9);
-    let boundary = pantometry_view::gltf_with("ball", &frame, Surfaces::Boundary);
-    let level = pantometry_view::gltf_with("ball", &frame, Surfaces::At(0.3));
+    let boundary = pantometry_view::gltf_with("ball", &frame, &Drawing::of(Surfaces::Boundary));
+    let level = pantometry_view::gltf_with("ball", &frame, &Drawing::of(Surfaces::At(0.3)));
     assert!(
         level.document != boundary.document,
         "asking for a level wrote the same file as the boundary"
@@ -142,7 +142,7 @@ fn a_level_the_field_never_reaches_is_reported_rather_than_written_empty() {
     // reaches at most the corner distance, about 0.87 m; asking for 5 m has no surface, and the
     // exporter must say so where a person reads it rather than writing a file with nothing in it.
     let frame = ball(9);
-    let out = pantometry_view::gltf_with("ball", &frame, Surfaces::At(5.0));
+    let out = pantometry_view::gltf_with("ball", &frame, &Drawing::of(Surfaces::At(5.0)));
     assert!(
         !out.skipped.is_empty(),
         "a level with no surface produced no explanation"
@@ -178,8 +178,8 @@ fn usd_takes_the_same_choice_and_gives_the_same_answer() {
     // other. Both go through `Surfaces::of`, and this is what says so from outside.
     let frame = ball(9);
     let frames = [frame.clone()];
-    let boundary = pantometry_view::usda_with("ball", &frames, Surfaces::Boundary);
-    let level = pantometry_view::usda_with("ball", &frames, Surfaces::At(0.3));
+    let boundary = pantometry_view::usda_with("ball", &frames, &Drawing::of(Surfaces::Boundary));
+    let level = pantometry_view::usda_with("ball", &frames, &Drawing::of(Surfaces::At(0.3)));
     assert!(
         level.document != boundary.document,
         "USD ignored the level and wrote the boundary"
@@ -187,7 +187,7 @@ fn usd_takes_the_same_choice_and_gives_the_same_answer() {
 
     // And the count agrees with glTF's, which is the claim that they share a mesher rather than
     // merely both having one. USD writes `faceVertexIndices`; glTF writes an accessor count.
-    let gl = pantometry_view::gltf_with("ball", &frame, Surfaces::At(0.3));
+    let gl = pantometry_view::gltf_with("ball", &frame, &Drawing::of(Surfaces::At(0.3)));
     assert!(
         !gl.document.is_empty() && !level.document.is_empty(),
         "one of the two wrote nothing"

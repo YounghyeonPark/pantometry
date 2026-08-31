@@ -101,7 +101,15 @@ pub struct PlacedMesh {
     pub site: String,
     /// The file, for a label.
     pub stl: String,
-    /// Triangles in world metres, three vertices each, wound as the file wound them.
+    /// Where the domain's own coordinates sit in the world.
+    ///
+    /// **Stated, not baked**, which is the convention `Panel::place` established for a run and
+    /// which this now shares. A rigid motion loses nothing when it is multiplied into a vertex
+    /// list — unlike a box, where it does — so baking would not be *wrong* here. It would be a
+    /// second convention in a workspace that has just spent four commits removing one.
+    pub place: pantometry::scene::Placed,
+    /// Triangles in the **domain's own** metres, three vertices each, wound as the file wound
+    /// them. [`PlacedMesh::place`] is where they go.
     pub triangles: Vec<[[f64; 3]; 3]>,
 }
 
@@ -151,6 +159,95 @@ pub struct Checked {
     pub bounds: Option<[f64; 6]>,
 }
 
+/// Every designed part a scene names, as triangles in its domain's own frame.
+///
+/// # Why this is public, and why the STL is read twice
+///
+/// [`check`] draws these in the editor's viewport and the CLI hands them to `.gltf` and `.usda`,
+/// which are two callers with one question. `World::build_with` already read **and** rasterised
+/// every one of them, so a second parse is a small fraction of what a build costs, and the
+/// alternative — carrying every mesh out of the build — would put a million triangles inside every
+/// `World` for the sake of the callers that draw them.
+///
+/// # What the exporters do with it
+///
+/// They draw it beside the cells it became. That is the only picture that shows the rasterisation
+/// loss instead of printing it: [`pantometry_world::Rasterised`] has reported a volume error per
+/// part since parts existed, and a number in a terminal is not a thing a designer looks at.
+///
+/// It is drawn **uncoloured**, and deliberately so. The solver ran on the cells; a smooth surface
+/// tinted from the field would claim a resolution the computation never had, which is the same
+/// mistake as renormalising a colour scale per frame in a different dress. The editor already made
+/// this decision — see the grey in its viewport, chosen to be unlike any scale in this workspace —
+/// and this is the exporters agreeing with it.
+///
+/// A part whose file is missing or unreadable is **skipped silently here**, because this runs on a
+/// scene that may not build; `World::build_with` is where a bad part is refused, and `check` calls
+/// it first.
+pub fn designed(scene: &Scene, files: &dyn Parts) -> Vec<PlacedMesh> {
+    let placed = scene.placements();
+    let mut out = Vec::new();
+    for spec in &scene.domains {
+        let DomainSpec::Block { parts, .. } = spec else {
+            continue;
+        };
+        let placement = placed
+            .get(spec.name())
+            .copied()
+            .unwrap_or_else(|| spec.placement());
+        for (n, part) in parts.iter().enumerate() {
+            let Ok(bytes) = files.bytes(&part.stl) else {
+                continue;
+            };
+            let Ok(mesh) = pantometry::shape::Mesh::from_stl(&bytes) else {
+                continue;
+            };
+            let triangles = mesh
+                .triangles()
+                .iter()
+                .map(|t| {
+                    // By component rather than by vertex: a `Triangle` holds `glam::DVec3`, which
+                    // `pantometry` does not re-export, and adding a dependency to name a type in a
+                    // closure signature is the wrong reason to add one.
+                    [
+                        [t.a.x, t.a.y, t.a.z],
+                        [t.b.x, t.b.y, t.b.z],
+                        [t.c.x, t.c.y, t.c.z],
+                    ]
+                })
+                .collect();
+            out.push(PlacedMesh {
+                name: spec.name().to_string(),
+                site: format!("{}/parts[{n}]", spec.name()),
+                stl: part.stl.clone(),
+                place: pantometry::scene::Placed::of(placement.pose),
+                triangles,
+            });
+        }
+    }
+    out
+}
+
+/// A point in a domain's own frame, in the world's.
+///
+/// `pantometry::scene::Placed` states a translation and a unit quaternion; this is the quaternion
+/// sandwich written out, `v + 2 q⃗ × (q⃗ × v + w v)`. The same arithmetic `viewer_core::Placed::apply`
+/// holds for the reader's copy of the type -- two crates because the wire format is the boundary
+/// between them, which `the_wire_format_is_enough` explains.
+pub fn place(at: pantometry::scene::Placed, p: [f64; 3]) -> [f64; 3] {
+    let [qx, qy, qz, qw] = at.turn;
+    let t = [
+        qy * p[2] - qz * p[1] + qw * p[0],
+        qz * p[0] - qx * p[2] + qw * p[1],
+        qx * p[1] - qy * p[0] + qw * p[2],
+    ];
+    [
+        p[0] + 2.0 * (qy * t[2] - qz * t[1]) + at.at_m[0],
+        p[1] + 2.0 * (qz * t[0] - qx * t[2]) + at.at_m[1],
+        p[2] + 2.0 * (qx * t[1] - qy * t[0]) + at.at_m[2],
+    ]
+}
+
 /// Parse and build the text, and lay out its geometry.
 ///
 /// The same two steps `pantometry check` runs, in the same order, so the editor and the
@@ -188,55 +285,14 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
     // The scene's own placements, so a pose the file states moves the box on screen — and so
     // this shell and `World` cannot disagree about where anything is.
     let placed = scene.placements();
+    // Parts before the extents, because a part is geometry whether or not its domain states a box
+    // to wireframe -- and because an assembly is the picture somebody authoring one is looking at.
+    out.meshes = designed(&scene, files);
     for spec in &scene.domains {
         let placement = placed
             .get(spec.name())
             .copied()
             .unwrap_or_else(|| spec.placement());
-        // Parts before the extent check, because a part is geometry whether or not the domain
-        // states a box to wireframe -- and because this is the picture somebody authoring an
-        // assembly is looking at.
-        //
-        // The STL is read a second time here: `World::build_with` above already read *and*
-        // rasterised every one of them, so a parse is a small fraction of what this function
-        // has already spent, and the alternative -- carrying every mesh out of the build --
-        // would put a million triangles inside every `World` for the sake of the one caller
-        // that draws them.
-        if let DomainSpec::Block { parts, .. } = spec {
-            for (n, part) in parts.iter().enumerate() {
-                let Ok(bytes) = files.bytes(&part.stl) else {
-                    continue;
-                };
-                let Ok(mesh) = pantometry::shape::Mesh::from_stl(&bytes) else {
-                    continue;
-                };
-                let triangles = mesh
-                    .triangles()
-                    .iter()
-                    .map(|t| {
-                        // By component rather than by vertex: a `Triangle` holds `glam::DVec3`,
-                        // which `pantometry` does not re-export, and adding a dependency to
-                        // name a type in a closure signature is the wrong reason to add one.
-                        let world = |x: f64, y: f64, z: f64| {
-                            let w = placement.pose.point_to_world(LengthVec::m(x, y, z)).to_si();
-                            [w.x, w.y, w.z]
-                        };
-                        [
-                            world(t.a.x, t.a.y, t.a.z),
-                            world(t.b.x, t.b.y, t.b.z),
-                            world(t.c.x, t.c.y, t.c.z),
-                        ]
-                    })
-                    .collect();
-                out.meshes.push(PlacedMesh {
-                    name: spec.name().to_string(),
-                    site: format!("{}/parts[{n}]", spec.name()),
-                    stl: part.stl.clone(),
-                    triangles,
-                });
-            }
-        }
-
         let Some(extent) = placement.extent else {
             continue;
         };
@@ -279,9 +335,12 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
     for m in &out.meshes {
         for t in &m.triangles {
             for c in t {
+                // In the domain's frame, so the placement has to be applied before a corner is a
+                // corner of anything. It used to be baked in and this loop read it straight.
+                let w = place(m.place, *c);
                 for a in 0..3 {
-                    bounds[a] = bounds[a].min(c[a]);
-                    bounds[a + 3] = bounds[a + 3].max(c[a]);
+                    bounds[a] = bounds[a].min(w[a]);
+                    bounds[a + 3] = bounds[a + 3].max(w[a]);
                 }
             }
         }
