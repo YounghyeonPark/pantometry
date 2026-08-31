@@ -48,7 +48,7 @@
 
 use crate::mesh::{self, Surface};
 use crate::ramp;
-use pantometry_scene::{Frame, PanelData};
+use pantometry_scene::{Frame, PanelData, Placed};
 
 /// A run as USD, and what the writer left out or decided.
 pub struct Staged {
@@ -208,6 +208,7 @@ pub fn usda_with(title: &str, frames: &[Frame], surfaces: mesh::Surfaces) -> Sta
                     hi,
                     signed,
                     Sampler::Field,
+                    panel.place,
                 );
             }
             PanelData::Points {
@@ -243,6 +244,7 @@ pub fn usda_with(title: &str, frames: &[Frame], surfaces: mesh::Surfaces) -> Sta
                     hi,
                     signed,
                     Sampler::Bodies { radius },
+                    panel.place,
                 );
                 let _ = values;
             }
@@ -264,6 +266,7 @@ pub fn usda_with(title: &str, frames: &[Frame], surfaces: mesh::Surfaces) -> Sta
                     lo,
                     hi,
                     signed,
+                    panel.place,
                 );
             }
         }
@@ -347,6 +350,7 @@ fn write_mesh(
     hi: f64,
     signed: bool,
     sampler: Sampler,
+    place: Placed,
 ) {
     let b = surface.bounds();
     out.push_str(&format!(
@@ -403,7 +407,7 @@ fn write_mesh(
     out.push_str("        normal3f[] normals = [");
     write_points(out, &surface.normals);
     out.push_str("]\n");
-    out.push_str("        uniform token[] xformOpOrder = []\n");
+    write_xform(out, place);
 
     // Colour, per vertex, per frame. `displayColor` is what usdview and every USD renderer draw
     // without a material graph, and `interpolation = "vertex"` is what makes it per-vertex rather
@@ -461,6 +465,7 @@ fn write_curves(
     lo: f64,
     hi: f64,
     signed: bool,
+    place: Placed,
 ) {
     out.push_str(&format!(
         "    def BasisCurves \"{}\"\n    {{\n",
@@ -519,7 +524,51 @@ fn write_curves(
         "        uniform string pantometry:domain = {}\n",
         quote(name)
     ));
+    // A `BasisCurves` is `Xformable` too, and had no transform at all — so a placed domain whose
+    // shape is paths was the same defect as a placed field, one prim type further along.
+    write_xform(out, place);
     out.push_str("    }\n\n");
+}
+
+/// A panel's placement, as the prim's own transform.
+///
+/// **USD's quaternion is not glTF's.** A `quatd` is written `(w, x, y, z)` — the real part first —
+/// where a glTF node's `rotation` is `[x, y, z, w]`, which is the order [`Placed`] carries because
+/// that is where it first went. Measured rather than remembered: asking `pxr`'s
+/// `UsdGeom.Xformable` for a 60° turn about z writes
+/// `(0.8660254037844387, 0, 0, 0.49999999999999994)` — real part first, and every component
+/// distinct so the file cannot be read both ways.
+///
+/// `xformOpOrder` is **outermost first**, so `[translate, orient]` turns the point and then moves
+/// it. Measured the same way: that file takes `(1, 0, 0)` to `(1.0, 0.866025, 0)`, which is the
+/// turn applied first. A glTF node composes its `translation` and `rotation` the same way, so the
+/// two writers say the same thing about the same [`Placed`] and only spell it differently.
+///
+/// Empty when the placement is the identity — the byte every file this workspace has written so
+/// far, and every shipped scene still.
+fn write_xform(out: &mut String, place: Placed) {
+    if place.is_here() {
+        out.push_str("        uniform token[] xformOpOrder = []\n");
+        return;
+    }
+    let (t, r) = (place.at_m, place.turn);
+    out.push_str(&format!(
+        "        double3 xformOp:translate = ({}, {}, {})\n",
+        num(t[0]),
+        num(t[1]),
+        num(t[2])
+    ));
+    // `(w, x, y, z)` out of an `[x, y, z, w]`. The reordering is the whole point of this line.
+    out.push_str(&format!(
+        "        quatd xformOp:orient = ({}, {}, {}, {})\n",
+        num(r[3]),
+        num(r[0]),
+        num(r[1]),
+        num(r[2])
+    ));
+    out.push_str(
+        "        uniform token[] xformOpOrder = [\"xformOp:translate\", \"xformOp:orient\"]\n",
+    );
 }
 
 /// Every domain's scalars, as custom attributes with time samples.

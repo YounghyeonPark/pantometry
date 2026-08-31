@@ -147,6 +147,41 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Fixed
 
+- **The USD writer ignored `Panel::place`, so the fix below reached glTF only.** The commit that
+  added the placement said the defect was closed. It was closed in one of the two writers: a
+  `Mesh` wrote `uniform token[] xformOpOrder = []` whatever the panel said, and a `BasisCurves`
+  had no transform at all — a placed domain whose shape is paths was the same defect one prim
+  type further along.
+
+  Measured through OpenUSD rather than by reading the file. Two identical 20 mm blocks, one
+  turned 60° about z and moved half a metre, exported and then loaded with `pxr`:
+
+  ```
+  before   near  [0, 0, 0] .. [0.02, 0.02, 0.02]
+           far   [0, 0, 0] .. [0.02, 0.02, 0.02]      the same block, twice
+  after    near  [0, 0, 0] .. [0.02, 0.02, 0.02]
+           far   [0.482679, 0, 0] .. [0.51, 0.027321, 0.02]
+  closed form    [0.482679, 0, 0] .. [0.510000, 0.027321, 0.020000]
+  ```
+
+  **USD's quaternion is not glTF's.** A `quatd` is written `(w, x, y, z)`, real part first, where
+  a glTF node's `rotation` is `[x, y, z, w]`. That is not remembered, it is measured: `pxr` was
+  asked for a 60° turn about z — every component distinct, so the text cannot be read both ways —
+  and it wrote `(0.8660254037844387, 0, 0, 0.49999999999999994)`. `xformOpOrder` is outermost
+  first, so `[translate, orient]` turns before it moves, which is a glTF node's composition too.
+
+  This crate has no USD dependency and `usd_is_usd.rs` explains why. So the two writers are
+  checked against **each other** on one frame instead: same rotation, each asked for the component
+  the other format puts somewhere else. A permutation error differs by ~0.5 there, which is four
+  orders above the tolerance — and the tolerance is the file's own `{:.6e}`, seven significant
+  figures, half an ulp of 5e-8. An earlier 1e-9 was tighter than the format can be and failed a
+  correct writer.
+
+  **Still not honoured: the viewer.** `viewer-core` parses `place` into all three panel variants
+  and nothing reads it — `Placed::is_here` is defined there and never called — so a window on a
+  run draws two placed domains on top of each other exactly as `.usda` did. Named here rather
+  than fixed here.
+
 - **A run had no coordinate frame, and two placed domains exported on top of each other.**
   Measured, not argued: two blocks half a metre apart came out of glTF at the same coordinates,
   both `[0,0,0]..[0.03,0.03,0.03]`.

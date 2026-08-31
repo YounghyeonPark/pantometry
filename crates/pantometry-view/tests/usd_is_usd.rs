@@ -12,6 +12,11 @@
 //! a file carrying a colour per vertex was drawn with the first one over the whole prim. Nothing
 //! structural said so; it took rendering the file, where scene 23's hot part and cooled lid came
 //! out one colour. This is the check that would have.
+//!
+//! One claim here *was* measured against OpenUSD, once, out of band: the spelling and order of a
+//! prim's transform. It could not be checked any other way — the component order of a `quatd` is
+//! a fact about USD and not about this file — and what holds it in place afterwards is the two
+//! writers agreeing on one frame. See `a_placement_reaches_the_file.rs`.
 
 use pantometry_core::Reading;
 use pantometry_scene::{Frame, Panel, PanelData, Placed};
