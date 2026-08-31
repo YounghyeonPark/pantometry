@@ -72,6 +72,30 @@ fn main() {
             }
         },
 
+        // **Where the editor's shaded pass puts a run's geometry, without a window.** Six places
+        // turn a panel into vertices and each has to apply the panel's placement; a missed one
+        // draws that panel at the origin and looks right on every scene that states no pose. See
+        // `a_placed_run_is_drawn_where_it_says`.
+        Some("--drawn-extent") => {
+            let mut it = rest.iter();
+            match (it.next(), it.next()) {
+                (Some(run), scene) => match edit::drawn_extent(scene.cloned(), run) {
+                    Ok(line) => {
+                        println!("{line}");
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        1
+                    }
+                },
+                _ => {
+                    eprintln!("usage: pantometry --drawn-extent <run.json> [scene.json]");
+                    2
+                }
+            }
+        }
+
         // `verify`, `fit`, `--check`, `--emit-default`, a bare scene path, or nothing.
         _ => cli::run(&args),
     };

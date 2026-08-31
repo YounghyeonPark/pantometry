@@ -106,6 +106,70 @@ enum Job {
     Verified(Result<(String, usize), String>),
 }
 
+/// Where the shaded pass actually puts a run's geometry, in world metres.
+///
+/// The `--drawn-extent` subcommand's whole body, and the only headless way to ask the editor's
+/// viewport what it drew. `batches` is a method on `App`, `App::new` needs no window -- which is
+/// what `--layout-at` already relies on -- and `Batch::positions` is framing-local, so multiplying
+/// by the span and adding the centre puts it back in metres.
+///
+/// **Why a number and not a picture.** Six places in `batches` turn a run panel into geometry and
+/// each has to apply `Panel::place`; five of six would look completely fine on any scene that
+/// states no pose, which is all but one of them. A missed site collapses that panel onto the
+/// origin, and the box below is what says so.
+///
+/// The two batches are reported apart on purpose. The lines carry the *scene's* boxes, which
+/// `editor-core` has always placed correctly, so they would span the assembly even with every run
+/// panel drawn at the origin -- and a single combined box would hide exactly the defect this
+/// exists to catch.
+pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, String> {
+    let mut app = App::new(scene);
+    let text = std::fs::read_to_string(run_path).map_err(|e| format!("{run_path}: {e}"))?;
+    let run = viewer_core::Run::from_json(&text)?;
+    app.run = Some(RunView {
+        run,
+        frame: 0,
+        playing: false,
+        last_step: None,
+        partial: false,
+    });
+
+    let world = app.world().unwrap_or([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
+    let framing = viewer_core::Framing::of(world);
+    let (solid, lines, _, _) = app.batches(&framing);
+
+    let box_of = |b: &render::Batch| {
+        if b.positions.is_empty() {
+            return None;
+        }
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        for v in b.positions.as_chunks::<3>().0 {
+            for a in 0..3 {
+                // `Framing::local` subtracts the centre and divides by the span; this is that,
+                // backwards.
+                let w = v[a] as f64 * framing.span + framing.centre[a];
+                lo[a] = lo[a].min(w);
+                hi[a] = hi[a].max(w);
+            }
+        }
+        Some([lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]])
+    };
+    let say = |b: Option<[f64; 6]>| match b {
+        Some(v) => format!(
+            "[{:.6} {:.6} {:.6} {:.6} {:.6} {:.6}]",
+            v[0], v[1], v[2], v[3], v[4], v[5]
+        ),
+        None => "empty".to_string(),
+    };
+    Ok(format!(
+        "world={} solid={} lines={}",
+        say(Some(world)),
+        say(box_of(&solid)),
+        say(box_of(&lines))
+    ))
+}
+
 /// What the panels do at a given window width, as one line.
 ///
 /// The `--layout-at` subcommand's whole body. `panels_that_fit` is a method on `App` because it
@@ -1772,6 +1836,28 @@ impl App {
         h.finish()
     }
 
+    /// The box everything on screen sits in: the scene's placed extents and the run's panels.
+    ///
+    /// **World, not each panel's own.** `Panel::bounds` is the box in whichever frame the panel
+    /// is in, and a union of boxes from different frames is a box around nothing -- which is what
+    /// the camera fitted to for as long as a run could state a placement and this could not read
+    /// one.
+    ///
+    /// A method rather than four lines inside `viewport` so that `drawn_extent` frames what the
+    /// viewport frames. A hook that computed its own world would be checking a second
+    /// implementation and would agree with the first exactly until one of them changed.
+    fn world(&self) -> Option<[f64; 6]> {
+        let mut bounds = self.checked.bounds;
+        if let Some(view) = &self.run {
+            if let Some(frame) = view.run.frames.first() {
+                for panel in &frame.panels {
+                    bounds = Some(union(bounds, panel.world_bounds()));
+                }
+            }
+        }
+        bounds
+    }
+
     /// The two batches the shaded pass draws: surfaces, and lines.
     ///
     /// Framing-local, in `f64` until the last step — see `render`'s module docs on why the centre
@@ -1894,9 +1980,13 @@ impl App {
                     // The run's own extent first, the scene's placed box second — the same order
                     // the flat path uses, and for the same reason: a run opened without the file
                     // that produced it still knows where it was.
+                    // `Placed::corners_of` and not `editor_core::corners_of`: the extent is
+                    // the domain's own box and the placement is where that box is. Eight corners
+                    // rather than a box, so a turned part stays the shape it is -- `field_shell`
+                    // maps a unit cube through them and never needed it to be axis-aligned.
                     let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
                         name: name.clone(),
-                        corners: editor_core::corners_of(e),
+                        corners: panel.place().corners_of(e),
                     });
                     let Some(b) = from_run
                         .as_ref()
@@ -1948,6 +2038,10 @@ impl App {
                 viewer_core::Panel::Points {
                     positions, values, ..
                 } => {
+                    // Bodies are in the domain's own frame; the radius below is a *size* and
+                    // a rigid motion does not change one, so it is measured here and the centres
+                    // are placed as they are drawn.
+                    let place = panel.place();
                     let pts: Vec<[f64; 3]> = (0..values.len())
                         .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
                         .collect();
@@ -1962,7 +2056,8 @@ impl App {
                     let radius = pantometry::view::mesh::body_radius(&pts, &bounds);
                     let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
                     for (i, centre) in pts.iter().enumerate() {
-                        let sphere = pantometry::view::mesh::body_spheres(&[*centre], radius);
+                        let sphere =
+                            pantometry::view::mesh::body_spheres(&[place.apply(*centre)], radius);
                         let colour = colouring.linear(values[i]);
                         let base = solid.vertices();
                         for (p, n) in sphere.positions.iter().zip(&sphere.normals) {
@@ -1984,6 +2079,7 @@ impl App {
                     ..
                 } => {
                     let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
+                    let place = panel.place();
                     for (r, value) in values.iter().enumerate() {
                         let lo = starts[r] as usize;
                         let hi = starts
@@ -1993,11 +2089,11 @@ impl App {
                         let base = lines.vertices();
                         for w in lo..hi {
                             lines.push(
-                                framing.local([
+                                framing.local(place.apply([
                                     vertices[3 * w],
                                     vertices[3 * w + 1],
                                     vertices[3 * w + 2],
-                                ]),
+                                ])),
                                 [0.0, 0.0, 1.0],
                                 colour,
                             );
@@ -2062,14 +2158,7 @@ impl App {
         // **The world this paint frames**, hoisted above the camera because the handles need it
         // and the handles have to answer before the camera does: one drag is either turning the
         // view or moving a domain, and whichever claims it, the other must not also act on it.
-        let mut bounds = self.checked.bounds;
-        if let Some(view) = &self.run {
-            if let Some(frame) = view.run.frames.first() {
-                for panel in &frame.panels {
-                    bounds = Some(union(bounds, panel.bounds()));
-                }
-            }
-        }
+        let bounds = self.world();
 
         // Asking the camera to fit is asking the framing to follow the geometry again. Done here,
         // above both readers of it, so the handles and the paint cannot disagree within a frame.
@@ -2546,8 +2635,15 @@ impl App {
                     } => {
                         // Far to near, so a body in front covers one behind rather than whichever
                         // happened to be last in the array.
+                        let place = panel.place();
                         let pts: Vec<[f64; 3]> = (0..values.len())
-                            .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
+                            .map(|i| {
+                                place.apply([
+                                    positions[3 * i],
+                                    positions[3 * i + 1],
+                                    positions[3 * i + 2],
+                                ])
+                            })
                             .collect();
                         let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
                         for i in editor_core::far_to_near(&depths) {
@@ -2584,13 +2680,18 @@ impl App {
                             if self.shaded {
                                 continue;
                             }
+                            let place = panel.place();
                             for w in lo..hi.saturating_sub(1) {
-                                let a = [vertices[3 * w], vertices[3 * w + 1], vertices[3 * w + 2]];
-                                let b = [
+                                let a = place.apply([
+                                    vertices[3 * w],
+                                    vertices[3 * w + 1],
+                                    vertices[3 * w + 2],
+                                ]);
+                                let b = place.apply([
                                     vertices[3 * w + 3],
                                     vertices[3 * w + 4],
                                     vertices[3 * w + 5],
-                                ];
+                                ]);
                                 painter.line_segment(
                                     [to_screen(a), to_screen(b)],
                                     egui::Stroke::new(1.5_f32, shade(*value, scale)),
@@ -2615,7 +2716,7 @@ impl App {
                         // than shown as an absence.
                         let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
                             name: name.clone(),
-                            corners: editor_core::corners_of(e),
+                            corners: panel.place().corners_of(e),
                         });
                         let placed = from_run
                             .as_ref()

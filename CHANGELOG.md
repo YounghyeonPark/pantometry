@@ -197,6 +197,53 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Fixed
 
+- **The editor's viewport drew a placed run at the origin**, over a wireframe that was in the
+  right place. The third of three readers, and the worst of them: `editor-core` applies a scene's
+  pose itself, so a placed part's outline was where it belongs and its colours were not — two
+  frames in one picture, and nothing on screen saying which anything was in.
+
+  `viewer-core` had parsed `place` since the key existed and read it nowhere. `Placed::is_here`
+  was defined and never called, and `Panel::bounds` said **"in world coordinates"** while
+  returning the panel's own box — a doc naming the wrong frame, which is worse than none, because
+  the number is perfectly usable and silently in the wrong place.
+
+  `Placed::apply` and `Placed::corners_of` are what every caller was about to write. Corners
+  rather than a box: under a rotation the box *around* a placed cell is bigger than the cell, and
+  not losing that is the whole reason the run format grew a placement. `field_shell` already
+  mapped a unit cube through eight corners and never needed them axis-aligned, so a turned field
+  is exact. `Panel::world_bounds` is the bounding box, for the one caller that wants one — a
+  camera fitting to what is on screen — and is identical to `bounds` to the last bit under the
+  identity.
+
+  Eight sites: three in the shaded pass, three in the flat painter, the camera's world, and
+  `segments`, which is the standalone viewer's half.
+
+  **Measured with `--drawn-extent`**, a headless subcommand in the pattern `--layout-at` set: it
+  loads a run, builds the editor's batches and inverts the framing to say what got drawn, in
+  metres. A fixture holds one of each shape placed on a different axis — a field at x = 10, bodies
+  at y = 20, a path at z = 30 — so one number says which site failed:
+
+  ```
+  baseline   solid x→11.00   solid y→21.25   lines z→30.0
+  field unplaced             solid x→ 1.25
+  bodies unplaced                            solid y→ 1.25
+  path unplaced                                              lines z→ 0.0
+  world from local boxes     world → [0 0 0  4.4 3.1 1.0]  — the built-in scene's room
+  ```
+
+  A fixture and not a shipped scene because **scene 30 has two fields and no bodies and no
+  paths**: run against it, the body sabotage survived and said nothing, and the camera-world one
+  was reported as caught on a difference between `-0.0` and `0.0`. A string comparison of two
+  boxes is not a comparison of two boxes.
+
+  **Not covered:** the flat painter's three sites, which have no headless hook. Said here rather
+  than assumed, because an uncovered site is how this reached three readers.
+
+  An earlier claim in this changelog — that `pantometry view` draws two placed domains on top of
+  each other — was wrong. That shell draws **one panel at a time** and refuses fields and point
+  clouds outright, so it would decline scene 30 rather than mis-draw it. The overlay is the
+  editor's.
+
 - **The USD writer ignored `Panel::place`, so the fix below reached glTF only.** The commit that
   added the placement said the defect was closed. It was closed in one of the two writers: a
   `Mesh` wrote `uniform token[] xformOpOrder = []` whatever the panel said, and a `BasisCurves`

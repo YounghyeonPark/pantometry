@@ -63,6 +63,49 @@ impl Placed {
     pub fn is_here(&self) -> bool {
         *self == Placed::default()
     }
+
+    /// A point in the panel's own frame, in the world's.
+    ///
+    /// **Turn first, then move**, which is a glTF node's composition and a USD
+    /// `xformOpOrder = [translate, orient]`, so a viewer and an exporter put the same run in the
+    /// same place. Written as `v + 2 q⃗ × (q⃗ × v + w v)` rather than through a matrix because
+    /// there is no matrix type here and building one for eight corners is more code than the
+    /// identity is.
+    ///
+    /// This exists because every caller was writing it. The editor's viewport draws a run's
+    /// panels over the scene's own boxes, and the boxes are placed by `editor-core` while the
+    /// panels were not placed at all — so a scene that states a pose drew its outline in the
+    /// right place and its colours at the origin, which is worse than either alone.
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        let [qx, qy, qz, qw] = self.turn;
+        let t = [
+            qy * p[2] - qz * p[1] + qw * p[0],
+            qz * p[0] - qx * p[2] + qw * p[1],
+            qx * p[1] - qy * p[0] + qw * p[2],
+        ];
+        [
+            p[0] + 2.0 * (qy * t[2] - qz * t[1]) + self.at_m[0],
+            p[1] + 2.0 * (qz * t[0] - qx * t[2]) + self.at_m[1],
+            p[2] + 2.0 * (qx * t[1] - qy * t[0]) + self.at_m[2],
+        ]
+    }
+
+    /// The eight corners of a `[x0, y0, z0, x1, y1, z1]` box, in the world.
+    ///
+    /// Eight corners and not a box, deliberately. Under a rotation the axis-aligned box *around*
+    /// a cell is not the cell — a quarter turn of a unit cube gives one √2 across on two axes —
+    /// and that information loss is exactly what `Panel::place` was introduced to stop. Anything
+    /// that draws the shape wants these; only a camera fitting to what is on screen wants
+    /// [`Panel::world_bounds`], where a bounding box is the right answer.
+    pub fn corners_of(&self, extent: [f64; 6]) -> [[f64; 3]; 8] {
+        std::array::from_fn(|i| {
+            self.apply([
+                if i & 1 == 0 { extent[0] } else { extent[3] },
+                if i & 2 == 0 { extent[1] } else { extent[4] },
+                if i & 4 == 0 { extent[2] } else { extent[5] },
+            ])
+        })
+    }
 }
 
 /// The highest run format this build understands.
@@ -225,17 +268,35 @@ impl Panel {
         }
     }
 
-    /// The box this panel occupies, in world coordinates and in metres.
+    /// Where this panel's own coordinates sit in the world.
     ///
-    /// A field says so directly now. It did not: the run file recorded a grid and not the extent
-    /// it was sampled over, so this returned **the grid in cell units** — a 9x9x9 block framed as
-    /// a nine-metre cube, at the origin however far from it the part really was, and a slab that
-    /// was asked for at more slices drawn taller for it. That was stated in a doc comment rather
-    /// than fixed because the number was genuinely not in the file. It is now.
+    /// Every shape carries one. Absent in the file is the identity, which is what a run written
+    /// before format 2 means and what all but one of the shipped scenes still are.
+    pub fn place(&self) -> Placed {
+        match self {
+            Panel::Field { place, .. }
+            | Panel::Points { place, .. }
+            | Panel::Paths { place, .. } => *place,
+        }
+    }
+
+    /// The box this panel occupies, **in the panel's own frame**, in metres.
     ///
-    /// The cell-unit box is still the answer for a file written before the format carried the
-    /// extent, and [`Panel::extent_m`] is how a caller tells the two apart rather than being
-    /// handed a plausible number with no provenance.
+    /// This said "in world coordinates" and stopped being true the day a run gained a coordinate
+    /// frame: the writer stopped baking each domain's pose into its numbers and started stating
+    /// it, so a placed domain's samples and bodies are its own again and [`Panel::place`] is
+    /// where they go. A doc that names the wrong frame is worse than none, because the number is
+    /// perfectly usable and silently in the wrong place — which is how the editor's viewport came
+    /// to draw a placed part's outline where the scene put it and its colours at the origin.
+    ///
+    /// Use [`Panel::world_bounds`] for anything that has to agree with another panel.
+    ///
+    /// A field says its extent directly now. It did not: the run file recorded a grid and not the
+    /// extent it was sampled over, so this returned **the grid in cell units** — a 9x9x9 block
+    /// framed as a nine-metre cube, and a slab asked for at more slices drawn taller for it. The
+    /// cell-unit box is still the answer for a file written before the format carried the extent,
+    /// and [`Panel::extent_m`] is how a caller tells the two apart rather than being handed a
+    /// plausible number with no provenance.
     pub fn bounds(&self) -> [f64; 6] {
         match self {
             Panel::Field {
@@ -247,6 +308,31 @@ impl Panel {
             } => extent_m.unwrap_or([0.0, 0.0, 0.0, *nx as f64, *ny as f64, *nz as f64]),
             Panel::Points { bounds, .. } | Panel::Paths { bounds, .. } => *bounds,
         }
+    }
+
+    /// The same box after [`Panel::place`], as an axis-aligned box in world metres.
+    ///
+    /// **A bounding box, and only for callers that want one.** Under a rotation the box around a
+    /// placed cell is bigger than the cell, which is information this format went out of its way
+    /// to stop losing — so this is right for fitting a camera to what is on screen and wrong for
+    /// drawing anything. Use [`Placed::corners_of`] to draw.
+    ///
+    /// Identical to [`Panel::bounds`] to the last bit when the placement is the identity, which
+    /// is every run this workspace wrote before format 2.
+    pub fn world_bounds(&self) -> [f64; 6] {
+        let place = self.place();
+        if place.is_here() {
+            return self.bounds();
+        }
+        let corners = place.corners_of(self.bounds());
+        let mut out = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        for c in corners {
+            for a in 0..3 {
+                out[a] = out[a].min(c[a]);
+                out[a + 3] = out[a + 3].max(c[a]);
+            }
+        }
+        out
     }
 
     /// The box a field was sampled over, in metres, or `None` if this is not a field or the run
@@ -635,6 +721,7 @@ pub fn segments(
         starts,
         vertices,
         values,
+        place,
         ..
     } = panel
     {
@@ -648,8 +735,12 @@ pub fn segments(
                 .unwrap_or(vertices.len() / 3);
             let shade = ((values.get(k).copied().unwrap_or(0.0) - lo) / width).clamp(0.0, 1.0);
             for i in from..to.saturating_sub(1) {
-                let a = camera.project(vertex(vertices, i), framing, aspect);
-                let b = camera.project(vertex(vertices, i + 1), framing, aspect);
+                // The panel's own frame is not the world's. A run states which, and until it was
+                // read here a placed optic's rays were drawn at the origin — invisible in this
+                // shell, which draws one panel at a time, and wrong the moment anything puts two
+                // together.
+                let a = camera.project(place.apply(vertex(vertices, i)), framing, aspect);
+                let b = camera.project(place.apply(vertex(vertices, i + 1)), framing, aspect);
                 out.push(Segment {
                     from: a,
                     to: b,
