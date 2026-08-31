@@ -544,8 +544,8 @@ fn write_curves(
 /// turn applied first. A glTF node composes its `translation` and `rotation` the same way, so the
 /// two writers say the same thing about the same [`Placed`] and only spell it differently.
 ///
-/// Empty when the placement is the identity — the byte every file this workspace has written so
-/// far, and every shipped scene still.
+/// Empty when the placement is the identity — the byte every file this workspace had written
+/// until scene 30 placed two busbars, and twenty-nine of the thirty shipped scenes still.
 fn write_xform(out: &mut String, place: Placed) {
     if place.is_here() {
         out.push_str("        uniform token[] xformOpOrder = []\n");
@@ -573,7 +573,7 @@ fn write_xform(out: &mut String, place: Placed) {
 
 /// Every domain's scalars, as custom attributes with time samples.
 ///
-/// This is the half of a scene no picture reaches. Twelve of the twenty-nine shipped scenes have a
+/// This is the half of a scene no picture reaches. Twelve of the thirty shipped scenes have a
 /// domain with no field and no bodies, and for several of them the scalar *is* the result — a
 /// winding whose resistance follows its own temperature draws nothing at all and is the whole
 /// subject of its scene.

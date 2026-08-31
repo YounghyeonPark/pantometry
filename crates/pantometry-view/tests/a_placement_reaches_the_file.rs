@@ -77,8 +77,10 @@ fn components(doc: &str, attr: &str) -> Vec<f64> {
 
 #[test]
 fn the_identity_writes_what_it_always_wrote() {
-    // Every one of the twenty-nine shipped scenes is this case, so the bytes must not move: a file
-    // that gained a transform saying "no transform" is a diff in every export ever taken.
+    // Twenty-nine of the thirty shipped scenes are this case, so the bytes must not move: a file
+    // that gained a transform saying "no transform" is a diff in every export ever taken. The
+    // thirtieth is scene 30, which places two busbars and exists because the twenty-nine could
+    // not fail — see `app/pantometry-world/scenes/30-two-phases-crossing-at-a-clearance.json`.
     let doc = usda("a run", &placed(Placed::HERE)).document;
     assert!(
         doc.contains("uniform token[] xformOpOrder = []"),

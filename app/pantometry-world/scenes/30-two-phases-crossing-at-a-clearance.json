@@ -1,0 +1,61 @@
+{
+  "title": "two blackened busbars crossing at a clearance, one at twice the current, in still air",
+  "schedule": "multirate",
+  "duration_s": 3700.0,
+  "frames": 16,
+  "conservation_tolerance": 1e-6,
+  "materials": {
+    "blackened_copper": {
+      "name": "Cu ETP, blackened",
+      "density": 8960.0,
+      "thermal": {
+        "conductivity": 401.0,
+        "specific_heat": 385.0,
+        "expansion": 1.65e-5,
+        "emissivity": 0.9
+      }
+    }
+  },
+  "poses": {
+    "phase_b": {
+      "at_m": [0.020, -0.012, 0.012],
+      "turn": { "axis": [0.0, 0.0, 1.0], "degrees": 90.0 }
+    }
+  },
+  "domains": [
+    {
+      "kind": "block",
+      "name": "phase_a",
+      "cells": [8, 2, 2],
+      "cell_mm": 4.0,
+      "initial_c": 40.0,
+      "material": "blackened_copper",
+      "dissipation": [
+        { "watts": 0.344, "from": [0, 0, 0], "to": [8, 2, 2] }
+      ],
+      "cooling": [
+        { "face": "y-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
+        { "face": "y-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
+        { "face": "z-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
+        { "face": "z-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 }
+      ]
+    },
+    {
+      "kind": "block",
+      "name": "phase_b",
+      "cells": [8, 2, 2],
+      "cell_mm": 4.0,
+      "initial_c": 40.0,
+      "material": "blackened_copper",
+      "dissipation": [
+        { "watts": 0.086, "from": [0, 0, 0], "to": [8, 2, 2] }
+      ],
+      "cooling": [
+        { "face": "y-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
+        { "face": "y-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
+        { "face": "z-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
+        { "face": "z-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 }
+      ]
+    }
+  ]
+}

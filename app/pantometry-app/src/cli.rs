@@ -23,7 +23,7 @@
 //! `.html` is the one to reach for if you do not already know how you want this drawn. It picks
 //! a view from each domain's *shape* — a profile for a 1D field, a heatmap for a 2D one, a
 //! rotatable scene for bodies, a line chart for scalars — and opens in a browser with nothing
-//! installed. `.csv` is the one that changed what this crate can say. **Twelve of the twenty-nine**
+//! installed. `.csv` is the one that changed what this crate can say. **Twelve of the thirty**
 //! shipped scenes have a domain the filmstrip cannot draw — measured by running each of them, not
 //! counted once and left — and for several the scalar *is* the result:
 //! scene 13's whole subject is a winding whose resistance follows its own temperature, and it

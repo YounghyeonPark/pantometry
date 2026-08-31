@@ -22,6 +22,56 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Added
 
+- **A shipped scene that states a pose**, which is the reason three consumers dropped one. Scene
+  30: two blackened copper busbars crossing at a 4 mm clearance, identical but for their current,
+  one turned a quarter turn about z and lifted above the other.
+
+  Under the identity a domain's own coordinates and the world's are the same thing. So a reader
+  that dropped the placement produced exactly the right answer for **all twenty-nine** shipped
+  scenes, and glTF, then USD, then `viewer-core` each did — each found by hand, none by a test.
+  This is the file that cannot agree with them.
+
+  The arrangement is chosen so that *not* conducting is the design requirement rather than a
+  limitation being worked around: two phases at a clearance must not touch, and `PoseSpec`'s doc
+  already warns that placed parts do not interact. A scene of two parts in contact would have been
+  the failure that doc exists to prevent.
+
+  **The closed form is the steady balance** — everything generated leaves, and it leaves two ways:
+
+  ```
+  P = h A (T − Ta) + ε σ A (T⁴ − Ta⁴)
+  ```
+
+  solved for `T` by bisection. Not a second solver: one algebraic equation on a lumped bar where
+  the run time-steps sixty-four cells, and the bar is isothermal to **3.4 mK**, so the peak cell
+  *is* the mean. It matches to **1.6e-4** and **3.3e-4**, against a budget of 1e-3 that is derived
+  rather than chosen: the run stops at 8.0 τ, so e⁻⁸ = 3.3e-4 of the rise is still to come, and
+  the discretisation adds 1.5e-4. Bar B's error is the budget's leading term almost exactly.
+
+  **The physics worth a scene** is that four times the heat is *not* four times the rise. Both
+  bars are the same bar, so under convection alone the rises would be in the ratio of the watts
+  exactly — 4, with no material property left in it. Measured **3.859**, because the hotter bar
+  radiates as T⁴ and sheds disproportionately.
+
+  How much radiation carries is asserted by conservation rather than by a threshold: the
+  convective half is `h A ΔT` with ΔT the run's own answer, so the rest is radiative. **46.6%** —
+  blackening a busbar nearly doubles what it can shed, which is why switchgear busbars are
+  blackened. The first version of that check asked for the rise ratio to sit more than 0.1 below
+  4, which is a number nothing derived; it tolerated ε down to 0.35 and had 1.4× of room. The
+  conservation form fails at ε = 0.2 and reads 4% at copper's own 0.04.
+
+  Five sabotages, all caught by an assertion rather than by an exit code: radiation not applied,
+  `capture` dropping the pose again, the turn conjugated, the clearance closed, and the bars left
+  bright. **The first run of that script proved nothing** — it backed both `pantometry-scene` and
+  `pantometry-thermal` up as `/tmp/lib.rs.orig`, so restoring put one crate's source in the
+  other's file, the workspace stopped compiling, and four sabotages "failed" without a test ever
+  running. A non-zero exit is not evidence; the script requires `panicked at` now and says so per
+  case.
+
+  The scenes README gained a row for scene 29 as well, which never got one, and its opening count
+  is corrected: it read "twenty-seven of them ... and one", which is twenty-eight and was never
+  the number of files in that directory.
+
 - **The run format states its version, and the version is read before the panels.** A scene has
   carried a `format` since it had consumers; a run never did, and the gap only mattered once
   something wanted to add a shape to it.

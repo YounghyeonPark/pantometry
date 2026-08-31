@@ -144,7 +144,7 @@ struct Mesh {
     ///
     /// glTF nodes take `translation` and a `rotation` quaternion in `[x, y, z, w]`, which is the
     /// shape `Placed` carries and the reason it carries it. A node transform is emitted only
-    /// when the placement is not the identity, so every file this workspace has ever written
+    /// when the placement is not the identity, so every file this workspace had written before
     /// keeps the bytes it had.
     place: Placed,
     positions: Vec<[f32; 3]>,

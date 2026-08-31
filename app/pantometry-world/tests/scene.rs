@@ -2460,6 +2460,254 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: 120 s of convection moved the peak from {start} to {end}"
                 );
             }
+            "30-two-phases-crossing-at-a-clearance.json" => {
+                // **The first shipped scene that states a `poses` entry.** Every other scene here
+                // sits at the origin, and under the identity a domain's own coordinates and the
+                // world's are the same thing — which is why three separate consumers dropped the
+                // placement in turn and all twenty-nine agreed with every one of them. glTF
+                // exported two blocks half a metre apart on top of each other, `.usda` did the
+                // same for a commit longer, and `viewer-core` still does. Nothing here could
+                // fail, so nothing here did.
+                //
+                // The arrangement is why this can be two domains that never touch: two phases
+                // crossing at a clearance **must not** conduct, so the format's inability to make
+                // placed parts interact is the right answer here rather than a limitation being
+                // worked around. `PoseSpec`'s own doc warns about the scene this is not.
+
+                // ---- the physics, against the steady-state balance ----
+                //
+                // A conservation law, solved for T by bisection: what goes in leaves, and it
+                // leaves two ways.
+                //
+                //   P = h A (T − Ta) + ε σ A (T⁴ − Ta⁴)
+                //
+                // Not a second solver. This is one algebraic equation on a lumped bar where the
+                // run time-steps sixty-four cells, and the bar is isothermal to **3.4 mK** —
+                // uniform generation, 401 W/m·K, a 4 mm half-thickness — so the peak cell *is*
+                // the mean and the lumped balance is the exact answer rather than an
+                // approximation to it.
+                const SIGMA: f64 = 5.670_374_419e-8;
+                const AMBIENT_C: f64 = 40.0;
+                const AMBIENT_K: f64 = AMBIENT_C + 273.15;
+                const H: f64 = 8.0;
+                const EPS: f64 = 0.9;
+                // 32 × 8 × 8 mm, cooled on the four long faces. The two x faces are the joints to
+                // the rest of the bus and the file does not cool them, which is also why there is
+                // no gradient along the bar to spoil the lump.
+                let area = 4.0 * (0.032 * 0.008);
+                let settle = |watts: f64| {
+                    let (mut lo, mut hi) = (AMBIENT_K, AMBIENT_K + 1.0e4);
+                    for _ in 0..200 {
+                        let mid = 0.5 * (lo + hi);
+                        let out = H * area * (mid - AMBIENT_K)
+                            + EPS * SIGMA * area * (mid.powi(4) - AMBIENT_K.powi(4));
+                        if out < watts {
+                            lo = mid;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    0.5 * (lo + hi) - AMBIENT_K
+                };
+
+                let peak_of = |f: &pantometry_world::Frame, domain: &str| {
+                    f.readings
+                        .iter()
+                        .find(|r| r.domain == domain && r.label == "peak")
+                        .unwrap_or_else(|| panic!("{name}: {domain} reports no peak"))
+                        .value
+                };
+                let last = frames.last().expect("frames");
+
+                // The run stops at 8.0 τ, so what is left of the exponential is e⁻⁸ = 3.3e-4 of
+                // the rise. That is where this tolerance comes from and it is the whole of it:
+                // the discretisation contributes 3.4 mK on 22 K, another 1.5e-4. Measured at
+                // 1.4e-4 — a third of the budget, and the budget is derived rather than chosen.
+                const SHORT_OF_STEADY: f64 = 1e-3;
+                for (domain, watts) in [("phase_a", 0.344), ("phase_b", 0.086)] {
+                    let want = settle(watts);
+                    let got = peak_of(last, domain) - AMBIENT_C;
+                    println!(
+                        "  {name}: {domain} rises {got:.4} K against the balance's {want:.4} K \
+                         — off {:.2e}",
+                        (got - want).abs() / want
+                    );
+                    assert!(
+                        (got - want).abs() / want < SHORT_OF_STEADY,
+                        "{name}: {domain} rose {got:.4} K, the balance says {want:.4} K"
+                    );
+                }
+
+                // **And it is steady**, or the agreement above is a coincidence of run length.
+                let earlier = &frames[frames.len() - 2];
+                for domain in ["phase_a", "phase_b"] {
+                    let moved = (peak_of(last, domain) - peak_of(earlier, domain)).abs();
+                    assert!(
+                        moved < 0.01,
+                        "{name}: {domain} is still climbing at the end, by {moved:.4} K \
+                         over the last frame"
+                    );
+                }
+
+                // ---- what the scene is *for* ----
+                //
+                // **Four times the heat is not four times the rise.** Both bars are the same bar
+                // and only their current differs, so under convection alone the rises would be in
+                // the ratio of the watts exactly — 4, with no material property left in it. They
+                // are not, because the hotter bar radiates as T⁴ and sheds disproportionately.
+                //
+                // This is the assertion that notices if radiation stops being applied: with ε
+                // dropped the ratio returns to exactly 4 and the gap below vanishes. Nothing else
+                // in this file would say so — both bars would still settle, and both would still
+                // be steady.
+                let rise = |d: &str| peak_of(last, d) - AMBIENT_C;
+                let ratio = rise("phase_a") / rise("phase_b");
+                let balance = settle(0.344) / settle(0.086);
+                println!(
+                    "  {name}: rises are {ratio:.4} apart where the watts are 4.0 — \
+                     radiation carries the difference"
+                );
+                assert!(
+                    ratio < 4.0,
+                    "{name}: the ratio is {ratio:.4}; radiation cannot make it 4 or more"
+                );
+                assert!(
+                    (ratio - balance).abs() / balance < SHORT_OF_STEADY,
+                    "{name}: the run says {ratio:.4}, the balance says {balance:.4}"
+                );
+
+                // **How much of the heat radiation actually carries**, by conservation rather than
+                // by a threshold somebody liked the look of. At steady state everything generated
+                // leaves through the boundary and it leaves two ways; the convective way is
+                // `h A ΔT` exactly, with ΔT the run's own answer, so the rest is the radiative
+                // one. It measures **46.6%** — blackening this bar nearly doubles what it can
+                // shed, which is why switchgear busbars are blackened and is the reason this
+                // scene has an emissivity worth stating.
+                //
+                // A third is the bound and the gap is the earned part: the split at ε = 0.9 is
+                // 46.6 / 53.4, so a third leaves 1.4× of room. The sensitivity is measured — the
+                // radiative share is 46.6% at ε = 0.9 and **4%** at copper's own 0.04 — so this
+                // fails long before radiation is merely reduced. The check it replaced asked for
+                // the ratio to sit more than 0.1 below 4, which is a number nothing derived: it
+                // tolerated ε all the way down to 0.35 and had 1.4× of room of its own.
+                let convected = H * area * rise("phase_a");
+                let radiated = 0.344 - convected;
+                println!(
+                    "  {name}: radiation carries {:.1}% of phase_a's 0.344 W",
+                    radiated / 0.344 * 100.0
+                );
+                assert!(
+                    radiated / 0.344 > 1.0 / 3.0,
+                    "{name}: radiation carries {:.1}% of the heat, and this scene is about a \
+                     surface that radiates",
+                    radiated / 0.344 * 100.0
+                );
+
+                // ---- what the placement is *for* ----
+                //
+                // The run has to carry where each bar is, or every reader of it draws them in one
+                // place. This is the path that broke three times and could not fail here until a
+                // shipped scene stated a pose.
+                let panel = |domain: &str| {
+                    last.panels
+                        .iter()
+                        .find(|p| p.name == domain)
+                        .unwrap_or_else(|| panic!("{name}: no panel for {domain}"))
+                };
+                assert!(
+                    panel("phase_a").place.is_here(),
+                    "{name}: phase_a was moved and the file does not place it"
+                );
+                let b = panel("phase_b").place;
+                assert!(!b.is_here(), "{name}: phase_b states a pose and lost it");
+                for (a, want) in [0.020, -0.012, 0.012].into_iter().enumerate() {
+                    assert!(
+                        (b.at_m[a] - want).abs() < 1e-12,
+                        "{name}: phase_b is at {:?}, not where the file puts it",
+                        b.at_m
+                    );
+                }
+                // A quarter turn about z is sin and cos of an eighth of a turn, in `[x, y, z, w]`.
+                let eighth = std::f64::consts::FRAC_PI_4;
+                for (a, want) in [0.0, 0.0, eighth.sin(), eighth.cos()]
+                    .into_iter()
+                    .enumerate()
+                {
+                    assert!(
+                        (b.turn[a] - want).abs() < 1e-12,
+                        "{name}: phase_b's turn is {:?}, not a quarter turn about z",
+                        b.turn
+                    );
+                }
+
+                // **The assembly's envelope, composed the way an exporter composes it** — each
+                // panel's own extent, turned and moved by its own placement. Written out by hand
+                // below rather than read back from anything:
+                //
+                //   phase_a  x [0, 32]     y [0, 8]      z [0, 8]      mm
+                //   phase_b  x [12, 20]    y [−12, 20]   z [12, 20]    mm   (turned, then moved)
+                //   union    x [0, 32]     y [−12, 20]   z [0, 20]     mm
+                let turn = |q: [f64; 4], v: [f64; 3]| {
+                    // v + 2 q⃗ × (q⃗ × v + w v), which is q v q* without building the matrix.
+                    let (qx, qy, qz, qw) = (q[0], q[1], q[2], q[3]);
+                    let t = [
+                        qy * v[2] - qz * v[1] + qw * v[0],
+                        qz * v[0] - qx * v[2] + qw * v[1],
+                        qx * v[1] - qy * v[0] + qw * v[2],
+                    ];
+                    [
+                        v[0] + 2.0 * (qy * t[2] - qz * t[1]),
+                        v[1] + 2.0 * (qz * t[0] - qx * t[2]),
+                        v[2] + 2.0 * (qx * t[1] - qy * t[0]),
+                    ]
+                };
+                let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+                for p in &last.panels {
+                    let PanelData::Field { extent_m: e, .. } = &p.data else {
+                        panic!("{name}: both bars are fields");
+                    };
+                    for c in 0..8 {
+                        let local = [
+                            if c & 1 == 0 { e[0] } else { e[3] },
+                            if c & 2 == 0 { e[1] } else { e[4] },
+                            if c & 4 == 0 { e[2] } else { e[5] },
+                        ];
+                        let w = turn(p.place.turn, local);
+                        for a in 0..3 {
+                            lo[a] = lo[a].min(w[a] + p.place.at_m[a]);
+                            hi[a] = hi[a].max(w[a] + p.place.at_m[a]);
+                        }
+                    }
+                }
+                let envelope = [0.0, -0.012, 0.0, 0.032, 0.020, 0.020];
+                for a in 0..3 {
+                    assert!(
+                        (lo[a] - envelope[a]).abs() < 1e-9
+                            && (hi[a] - envelope[a + 3]).abs() < 1e-9,
+                        "{name}: axis {a} spans {} to {}, not {} to {}",
+                        lo[a],
+                        hi[a],
+                        envelope[a],
+                        envelope[a + 3]
+                    );
+                }
+
+                // **The clearance itself**, which is the one dimension a fault would close. The
+                // bars are 4 mm apart in z and a scene that lost the placement puts them in
+                // contact — which is exactly what every consumer of this run drew until the
+                // placement reached it.
+                let top_of_a = panel("phase_a").place.at_m[2]
+                    + match &panel("phase_a").data {
+                        PanelData::Field { extent_m, .. } => extent_m[5],
+                        _ => unreachable!(),
+                    };
+                let gap = b.at_m[2] - top_of_a;
+                assert!(
+                    (gap - 0.004).abs() < 1e-9,
+                    "{name}: the phases are {:.4} mm apart, not 4 mm",
+                    gap * 1e3
+                );
+            }
             other => panic!("{other} ships but nothing checks it; add a claim for it"),
         }
     }

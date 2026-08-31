@@ -8,8 +8,8 @@
 //!
 //! It was measurable and it was measured: two blocks half a metre apart exported to glTF **on top
 //! of each other**, both at their local origin. Nothing caught it because **no shipped scene
-//! states a pose** — under the identity, local and world are the same thing, and all twenty-nine
-//! agree.
+//! stated a pose** — under the identity, local and world are the same thing, and all twenty-nine
+//! agreed. Scene 30 is the one that does not, and it was written for that reason.
 //!
 //! So every test here uses a real pose, which is the whole point. The domain is invented in this
 //! file, the way `knows_no_physics.rs` invents one: what is being checked is the scene layer, and
@@ -92,7 +92,8 @@ fn along_x() -> Extent {
 
 #[test]
 fn the_identity_is_exact() {
-    // Every shipped scene is this case, so it has to be exact rather than near: a writer decides
+    // Twenty-nine of the thirty shipped scenes are this case, so it has to be exact rather than
+    // near, and not approximately so: a writer decides
     // by `is_here` whether to emit a transform at all, and "close enough" would make that
     // decision depend on rounding.
     assert!(Placed::HERE.is_here());
