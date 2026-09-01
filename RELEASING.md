@@ -31,6 +31,7 @@ All of them, or the release is broken in a way only one CI job can see:
 | `.claude/agents/invariant-guard.md` | 1 — which version is published against which is in the tree |
 | `CITATION.cff` | 1 — `version`. Also update `date-released`, which is not a version string and so is not caught by the grep below. The grep returns **2**: the other hit is a comment recording which version's Zenodo deposition failed, and bumping that would erase the history it is there for |
 | `.zenodo.json` | 1 — `version`. **The row this table was missing**, and it gained it the way the last one did: the 0.15.0 release bumped the seven above and `citation_is_valid` refused, because it asserts the deposition's version *is* the crate's. A table that has now been wrong three times is a table to count against rather than to read |
+| `README.md` | 1 — the BibTeX block's `version`, which is **not** the `doi` beside it and does not move at the same time. **The row this table was missing at 0.20.0**: the seven-file grep below does not reach it, `counts_in_prose.rs` does not guard it, and the 0.19.0 release only got it right because it was bumped by hand as a separate step. It shipped stale for the length of one release. Four times wrong now, in both directions |
 
 Count them rather than trusting this table, because it has already been wrong in both directions. It
 lost a row when the docs were split — `CLAUDE.md` carried the `pip install ... .whl` line and the
@@ -39,8 +40,14 @@ bump at all — and gained one the same day when `CITATION.cff` arrived. Check e
 
 ```sh
 grep -c '0\.14' Cargo.toml bindings/python/Cargo.toml bindings/python/pyproject.toml \
-    AGENTS.md crates/pantometry/src/lib.rs .claude/agents/invariant-guard.md CITATION.cff .zenodo.json
+    AGENTS.md crates/pantometry/src/lib.rs .claude/agents/invariant-guard.md CITATION.cff \
+    .zenodo.json README.md
 ```
+
+`README.md` is the row added at 0.20.0 and the grep above will find **two** hits there once the
+version DOI is written: the BibTeX `version` and, coincidentally, nothing else — the `doi` is a
+Zenodo number and does not carry the crate version. Bump the `version` with the rest; the `doi` is
+the one edit that necessarily comes after the tag.
 
 Then `cargo update --workspace --offline` in **three** places — the root, `app/` and
 `bindings/python` — because `--locked` refuses a stale lockfile.
@@ -281,7 +288,8 @@ list actually wants.
 | 0.16.0 | `10.5281/zenodo.22024818` — the first one minted |
 | 0.17.0 | `10.5281/zenodo.22122301` |
 | 0.18.0 | `10.5281/zenodo.22142201` |
-| 0.19.0 | `10.5281/zenodo.22218821` — cite a version DOI when the result depends on which version ran, which for this library it does. Minted seconds after the release: the `released` delivery answered **202** and the records API had the record on the first query, which is the shape 0.16.0 had and the one to expect |
+| 0.19.0 | `10.5281/zenodo.22218821` |
+| 0.20.0 | `10.5281/zenodo.22233493` — cite a version DOI when the result depends on which version ran, which for this library it does. Minted seconds after the release, and the records API had it on the first query. **Which of the three deliveries is acted on varies**: 0.19.0's `released` answered 202 and its `published` 409; 0.20.0's `published` answered 202 and its `released` 409. The reliable statement is that exactly one of the three does, not which — the section below names `published` and this row used to name `released`, and each was one release read as a rule |
 
 Both are in `CITATION.cff` and `README.md`'s BibTeX block. The concept DOI is the `doi:` field,
 because that is the one a reader following a reference wants; the version DOI lives on each Zenodo
