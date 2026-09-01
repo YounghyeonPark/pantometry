@@ -2384,17 +2384,21 @@ pub fn compose_turns(first: ([f64; 3], f64), second: ([f64; 3], f64)) -> ([f64; 
         a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
     ];
 
-    let sin_half = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if sin_half < 1e-12 {
-        return ([0.0, 0.0, 1.0], 0.0);
+    // `Placed::axis_angle` and not a second copy here. Same arithmetic, one place: the report
+    // needs it too, and two copies of one extraction is how a placement came to have four
+    // different readers.
+    //
+    // The comment that used to sit here said `acos(w)` loses precision *near a half turn*. It is
+    // backwards -- at a half turn `w` is zero and `acos` is at its best-conditioned point -- and
+    // the case that actually hurts is the small angle, which is a nudge of this very ring. The
+    // measured table is on `Placed::axis_angle`.
+    //
+    // `Placed` orders a quaternion `[x, y, z, w]`, glTF's order; `q` above is `(w, x, y, z)`.
+    pantometry::scene::Placed {
+        at_m: [0.0; 3],
+        turn: [q[1], q[2], q[3], q[0]],
     }
-    // `atan2` rather than `acos(w)`: near a half turn `w` approaches zero and `acos` loses most
-    // of its precision there, which is exactly where a person has dragged a ring right round.
-    let angle = 2.0 * sin_half.atan2(q[0]);
-    (
-        [q[1] / sin_half, q[2] / sin_half, q[3] / sin_half],
-        angle.to_degrees(),
-    )
+    .axis_angle()
 }
 
 /// How many segments a rotation ring is drawn and hit-tested with.

@@ -278,3 +278,82 @@ impl Domain for Named {
         Vec::new()
     }
 }
+
+#[test]
+fn a_turn_comes_back_as_the_axis_and_angle_it_was_written_as() {
+    // **A round trip through the format's two vocabularies.** A scene states a rotation as an axis
+    // and an angle, because a quaternion's four numbers carry a constraint between them that no
+    // file can express and no person can check by eye. A run carries the quaternion, because that
+    // is what a glTF node and a USD prim take. Anything showing a placement to a person has to
+    // come back, and this is the closed form for that: what goes in comes out.
+    let cases: [([f64; 3], f64); 5] = [
+        ([0.0, 0.0, 1.0], 90.0),
+        ([0.0, 0.0, 1.0], 60.0),
+        ([1.0, 0.0, 0.0], 45.0),
+        ([0.0, 1.0, 0.0], 30.0),
+        ([1.0, 1.0, 1.0], 120.0),
+    ];
+    for (axis, degrees) in cases {
+        let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+        let unit = [axis[0] / n, axis[1] / n, axis[2] / n];
+        let q = glam::DQuat::from_axis_angle(
+            glam::DVec3::new(unit[0], unit[1], unit[2]),
+            degrees.to_radians(),
+        );
+        let (got_axis, got_deg) = Placed::of(Pose::turned(q)).axis_angle();
+        assert!(
+            (got_deg - degrees).abs() < 1e-9,
+            "{degrees}° about {axis:?} came back as {got_deg}°"
+        );
+        for a in 0..3 {
+            assert!(
+                (got_axis[a] - unit[a]).abs() < 1e-9,
+                "axis came back as {got_axis:?}, not {unit:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_half_turn_is_where_acos_would_have_lost_its_precision() {
+    // **Why `atan2` and not `acos(w)`, measured rather than remembered.** The comment this
+    // replaced said `acos` loses precision near a *half turn*. It is the other end: at a half turn
+    // `w` is zero and `|d acos/dw|` is 1, the best-conditioned point there is. At a thousandth of
+    // a degree `w` -> 1 and the derivative is 1.1e5.
+    //
+    //     turn        acos        atan2
+    //     0.0001°     4.6e-5      0
+    //     0.001°      4.0e-7      2.2e-16
+    //     1°          2.8e-13     0
+    //     180°        0           0
+    //
+    // A thousandth of a degree is a real thing to ask of a rotation ring, and 180° is not a case
+    // that needed guarding at all.
+    let tiny = 1e-3_f64;
+    let q = glam::DQuat::from_axis_angle(glam::DVec3::Z, tiny.to_radians());
+    let (axis, degrees) = Placed::of(Pose::turned(q)).axis_angle();
+    assert!(
+        (degrees - tiny).abs() / tiny < 1e-9,
+        "{tiny}° came back as {degrees}°, off by {:.2e} relative",
+        (degrees - tiny).abs() / tiny
+    );
+    assert!((axis[2] - 1.0).abs() < 1e-9);
+
+    // And the half turn itself, where `w` is zero and the axis is all that is left.
+    let half = glam::DQuat::from_axis_angle(glam::DVec3::X, std::f64::consts::PI);
+    let (axis, degrees) = Placed::of(Pose::turned(half)).axis_angle();
+    assert!((degrees - 180.0).abs() < 1e-9, "{degrees}");
+    assert!((axis[0].abs() - 1.0).abs() < 1e-9, "{axis:?}");
+}
+
+#[test]
+fn the_identity_has_no_axis_and_is_given_one_anyway() {
+    // Normalising a zero vector is a `NaN` per component, and a caption reading
+    // `turned NaN° about (NaN, NaN, NaN)` is worse than one reading nothing. So the identity
+    // answers `+z` and zero degrees -- a direction that means nothing because the angle is
+    // nothing, which is the only honest thing to return.
+    let (axis, degrees) = Placed::HERE.axis_angle();
+    assert_eq!(degrees, 0.0);
+    assert_eq!(axis, [0.0, 0.0, 1.0]);
+    assert!(axis.iter().all(|v| v.is_finite()));
+}

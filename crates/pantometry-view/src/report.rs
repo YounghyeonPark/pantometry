@@ -67,7 +67,7 @@
 
 use crate::data::{compact as num, numbers as nums};
 use crate::ramp;
-use pantometry_scene::{Frame, PanelData};
+use pantometry_scene::{Frame, PanelData, Placed};
 
 /// Build the report for a finished run.
 pub fn html(title: &str, frames: &[Frame]) -> String {
@@ -125,9 +125,16 @@ pub fn html(title: &str, frames: &[Frame]) -> String {
             };
             for kind in kinds {
                 let slot = format!("{}-{}", escape(&panel.name), kind);
+                // **Where this panel's frame is**, when it is not the world's. Written
+                // here rather than by the viewer because it is a fact about the run and not about
+                // the drawing, and because every report ever written stays byte-identical: a
+                // domain at the origin emits nothing at all.
+                let placed = placement(&panel.place)
+                    .map(|s| format!("<span class=\"placed\">{s}</span>"))
+                    .unwrap_or_default();
                 out.push_str(&format!(
                     "<section class=\"card\"><div class=\"head\"><h2>{}</h2>\
-                     <span class=\"kind\">{}</span>\
+                     <span class=\"kind\">{}</span>{placed}\
                      <span class=\"read\" id=\"read-{slot}\"></span>\
                      <button class=\"png\" id=\"png-{slot}\" title=\"Save this view as a PNG\">\
                      PNG</button></div>\
@@ -268,6 +275,48 @@ fn json(frames: &[Frame]) -> String {
     out
 }
 
+/// Where a panel's frame is, as a sentence, or nothing when it is the world's.
+///
+/// # Why a sentence and not a transform
+///
+/// The report draws **one panel per card**, so two domains never share a picture and each picture
+/// is right in its own frame. What was missing is any statement of *which* frame: the axes are
+/// labelled in metres, and for a placed domain those were the domain's own metres presented as the
+/// world's. Two busbars 20 mm apart both read `0 .. 32 mm`.
+///
+/// So this states the frame rather than moving the numbers into another one. Baking would also be
+/// wrong for a field: its extent is a **box**, and the axis-aligned box around a rotated one is
+/// bigger than it — which is the information `Panel::place` exists to keep.
+///
+/// Millimetres because a scene here is millimetres, and axis-and-angle because that is how the
+/// scene format states a rotation and how a person reads one back.
+fn placement(place: &Placed) -> Option<String> {
+    if place.is_here() {
+        return None;
+    }
+    let trim = |v: f64| {
+        let s = format!("{v:.3}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let at = format!(
+        "at {}, {}, {} mm",
+        trim(place.at_m[0] * 1e3),
+        trim(place.at_m[1] * 1e3),
+        trim(place.at_m[2] * 1e3)
+    );
+    let (axis, degrees) = place.axis_angle();
+    if degrees.abs() < 1e-9 {
+        return Some(at);
+    }
+    Some(format!(
+        "{at}, turned {}&deg; about ({}, {}, {})",
+        trim(degrees),
+        trim(axis[0]),
+        trim(axis[1]),
+        trim(axis[2])
+    ))
+}
+
 fn quote(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -316,6 +365,7 @@ input[type=range]{flex:1;min-width:120px;accent-color:var(--key)}
 .head{display:flex;align-items:baseline;gap:12px;padding:12px 14px 10px;border-bottom:1px solid var(--rule)}
 h2{margin:0;font-size:15px;font-weight:620;letter-spacing:-.01em}
 .kind{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--dim);letter-spacing:.04em}
+.placed{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--dim);letter-spacing:.04em;padding-left:.6em;border-left:1px solid var(--rule);margin-left:.6em}
 .read{margin-left:auto;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;
  color:var(--key);font-variant-numeric:tabular-nums;white-space:nowrap}
 .png{appearance:none;background:var(--bg);color:var(--dim);border:1px solid var(--rule);

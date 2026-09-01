@@ -238,3 +238,114 @@ fn a_path_is_placed_too_and_used_not_to_be() {
         "a placed path stayed at the origin"
     );
 }
+
+/// One panel of each shape, placed as given, for the report.
+fn one_of_each(place: Placed) -> Frame {
+    Frame {
+        time_s: 0.0,
+        readings: Vec::new(),
+        panels: vec![
+            Panel {
+                name: "here".into(),
+                unit: "K",
+                place: Placed::HERE,
+                data: PanelData::Field {
+                    nx: 2,
+                    ny: 2,
+                    nz: 2,
+                    extent_m: [0.0, 0.0, 0.0, 0.04, 0.04, 0.04],
+                    values: (0..8).map(|i| 300.0 + i as f64).collect(),
+                },
+            },
+            Panel {
+                name: "there".into(),
+                unit: "K",
+                place,
+                data: PanelData::Field {
+                    nx: 2,
+                    ny: 2,
+                    nz: 2,
+                    extent_m: [0.0, 0.0, 0.0, 0.04, 0.04, 0.04],
+                    values: (0..8).map(|i| 300.0 + i as f64).collect(),
+                },
+            },
+        ],
+    }
+}
+
+#[test]
+fn the_report_says_where_a_placed_panel_is() {
+    // **The fourth reader.** The report draws one panel per card, so each picture is right in its
+    // own frame — but it labels every spatial axis in metres, and for a placed domain those were
+    // the domain's own metres presented as the world's. Two busbars 20 mm apart both read
+    // `0 .. 32 mm` and nothing in the file said otherwise.
+    //
+    // Stated rather than baked, for the reason the run format states it: an extent is a **box**,
+    // and the axis-aligned box around a rotated one is bigger than it.
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let (s, c) = ((quarter / 2.0).sin(), (quarter / 2.0).cos());
+    let place = Placed {
+        at_m: [0.020, -0.012, 0.012],
+        turn: [0.0, 0.0, s, c],
+    };
+    let page = pantometry_view::html("a run", &[one_of_each(place)]);
+
+    // Millimetres and axis-and-angle, which is how the scene format states a pose and how a person
+    // reads one back. `90` and `(0, 0, 1)` are the file's own numbers, recovered through the
+    // quaternion the run carries.
+    assert!(
+        page.contains("at 20, -12, 12 mm, turned 90&deg; about (0, 0, 1)"),
+        "the report does not say where `there` is"
+    );
+    // **Two, and not one.** A 3D field gets two cards -- a volume render and the slice montage --
+    // and each states the frame it is drawn in, because a reader looking at one card should not
+    // have to find the other. The panel at the origin contributes none of them, which is what
+    // keeps every report ever written byte-identical.
+    assert_eq!(
+        page.matches("class=\"placed\"").count(),
+        2,
+        "one placed 3D field, two cards"
+    );
+}
+
+/// The text of every `placed` span in a page.
+fn placements(page: &str) -> Vec<String> {
+    page.match_indices("class=\"placed\">")
+        .map(|(i, m)| {
+            let rest = &page[i + m.len()..];
+            rest[..rest.find('<').expect("a closed span")].to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn a_run_with_nothing_placed_gains_no_line() {
+    let page = pantometry_view::html("a run", &[one_of_each(Placed::HERE)]);
+    assert!(
+        !page.contains("class=\"placed\""),
+        "an unplaced run gained a placement line"
+    );
+}
+
+#[test]
+fn a_placement_that_only_moves_says_only_that() {
+    // A turn of nothing is not a turn, and `(0, 0, 1) 0 degrees` in a caption is noise dressed as
+    // information. `axis_angle` returns `+z` and zero for the identity rather than a `NaN` axis
+    // from normalising a zero vector, and this is what the caller does with that.
+    let page = pantometry_view::html(
+        "a run",
+        &[one_of_each(Placed {
+            at_m: [0.5, 0.0, 0.0],
+            ..Placed::HERE
+        })],
+    );
+    // Scoped to the span, because the report ships its own JavaScript and one of its comments
+    // contains the word "turned". A `contains` over a whole document is a search of everything the
+    // document happens to say about itself.
+    let said = placements(&page);
+    assert_eq!(said.len(), 2, "one placed 3D field, two cards");
+    for line in &said {
+        assert_eq!(line, "at 500, 0, 0 mm");
+        assert!(!line.contains("turned"), "a turn of nothing was described");
+    }
+}

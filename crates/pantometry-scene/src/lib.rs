@@ -238,6 +238,44 @@ impl Placed {
         *self == Placed::HERE
     }
 
+    /// The turn as an axis and an angle in **degrees**, which is how a scene writes one.
+    ///
+    /// A quaternion's four numbers carry a constraint between them that no file can express, so
+    /// the scene format states a rotation as an axis and an angle -- and anything that shows a
+    /// placement to a person has to come back the same way. A caption reading
+    /// `(0, 0, 0.707, 0.707)` tells nobody anything.
+    ///
+    /// **`atan2` rather than `acos(w)`, and the reason is the opposite of the one written down.**
+    /// The editor, where this arithmetic was worked out, said `acos` loses precision *near a half
+    /// turn*. It does not: at a half turn `w` is zero and `|d acos/dw|` is **1**, which is the
+    /// best-conditioned point on the curve. It is the *small* angle that hurts, where `w` → 1 and
+    /// the derivative goes as `1/sqrt(1 - w^2)` — 1.1e5 at a thousandth of a degree. Measured:
+    ///
+    /// | turn | `acos` | `atan2` |
+    /// | --- | --- | --- |
+    /// | 0.0001° | 4.6e-5 | 0 |
+    /// | 0.001° | 4.0e-7 | 2.2e-16 |
+    /// | 1° | 2.8e-13 | 0 |
+    /// | 180° | 0 | 0 |
+    ///
+    /// So the choice was right and the account of it was backwards, which is worth more than the
+    /// choice: a nudge of a rotation ring is exactly the small angle, and a reader told to worry
+    /// about half turns would have moved the guard to the wrong end.
+    ///
+    /// An identity returns `+z` and zero degrees rather than a `NaN` axis from normalising a zero
+    /// vector.
+    pub fn axis_angle(&self) -> ([f64; 3], f64) {
+        let [x, y, z, w] = self.turn;
+        let sin_half = (x * x + y * y + z * z).sqrt();
+        if sin_half < 1e-12 {
+            return ([0.0, 0.0, 1.0], 0.0);
+        }
+        (
+            [x / sin_half, y / sin_half, z / sin_half],
+            (2.0 * sin_half.atan2(w)).to_degrees(),
+        )
+    }
+
     /// A [`Pose`] in the shape a writer emits: a translation and a unit quaternion in
     /// `[x, y, z, w]`.
     ///
