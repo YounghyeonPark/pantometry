@@ -65,10 +65,17 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. Twenty of the thirty scenes have geometry to
-export — bodies, ray paths, a 3D field as its cell centres — and the other ten are **refused with
-a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not something to put
-in a 3D viewer, and the message says which panel and why.
+`.gltf` is the one that leaves this workspace. **Twenty-three** of the thirty scenes have geometry
+to export — bodies, ray paths, a 3D field as its cell centres — and the other **seven** are
+**refused with a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not
+something to put in a 3D viewer, and the message says which panel and why.
+
+Those two were nineteen and ten, and had been wrong by three in each direction for long enough that
+nothing records when they stopped being right. Nothing counts them: `counts_in_prose.rs` guards the
+*total* half of this sentence and says in its own doc why it leaves the numerator alone — a
+numerator is a different count with a different source, and this one needs every scene exported to
+establish. So it is a **release-time** count now, with the command in `RELEASING.md`, rather than a
+number somebody remembers. Measured 2026-09-01.
 
 The recommendation on record is to export into the rendering tools rather than rebuild them. This
 is that, and it cost no dependency: glTF is JSON with the binary base64'd inside it, which is the

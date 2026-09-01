@@ -75,6 +75,32 @@ cargo test --locked --workspace --release 2>&1 | grep -E "test result:" \
   | awk -F'[; ]' '{p+=$4} END {print p}'             # tests
 ```
 
+And the two **numerators** in `scenes/README.md`, which nothing guards and which were wrong by three
+in each direction until 0.19.0. They need every scene run, so they are counted here rather than
+continuously — a guard demanding a template edit whenever one moved is a guard somebody rewrites
+rather than reads, which is what `counts_in_prose.rs` says about them in its own doc.
+
+```sh
+cd app
+for f in pantometry-world/scenes/*.json; do
+  n=$(basename "$f" .json)
+  if cargo run --locked -q --release --bin pantometry -- run "$f" "/tmp/$n.gltf" > /tmp/one.log 2>&1
+  then echo exports
+  elif grep -q "nothing in this scene is geometry" /tmp/one.log
+  then echo refused
+  else echo "FAILED $n"
+  fi
+done | sort | uniq -c            # 23 export, 7 refused, 0 otherwise
+
+for f in pantometry-world/scenes/*.json; do
+  cargo run --locked -q --release --bin pantometry -- run "$f" /tmp/one.svg 2>&1 \
+    | grep -q "not drawn" && echo undrawable
+done | wc -l                     # 12 have a domain the filmstrip cannot draw
+```
+
+The second number was already right. The first was not, which is the argument for counting both
+rather than the one that looks stale.
+
 ## Publishing, in order
 
 Each crate must be live on the index before the next one resolves it.
