@@ -238,6 +238,30 @@ impl Placed {
         *self == Placed::HERE
     }
 
+    /// A point in the panel's own frame, in the world's.
+    ///
+    /// **Turn first, then move** — a glTF node's composition and a USD
+    /// `xformOpOrder = [translate, orient]`, so a writer and a reader put the same run in the same
+    /// place. `v + 2 q⃗ × (q⃗ × v + w v)`, which is `q v q*` without building a matrix.
+    ///
+    /// There is a second copy of this in `viewer-core`, and that is the one duplication here that
+    /// is *paid for*: that crate deliberately does not link this one, because the wire format is
+    /// the boundary between them and a viewer that could reach the library would come to depend on
+    /// it. Everything on this side of the boundary calls this.
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        let [qx, qy, qz, qw] = self.turn;
+        let t = [
+            qy * p[2] - qz * p[1] + qw * p[0],
+            qz * p[0] - qx * p[2] + qw * p[1],
+            qx * p[1] - qy * p[0] + qw * p[2],
+        ];
+        [
+            p[0] + 2.0 * (qy * t[2] - qz * t[1]) + self.at_m[0],
+            p[1] + 2.0 * (qz * t[0] - qx * t[2]) + self.at_m[1],
+            p[2] + 2.0 * (qx * t[1] - qy * t[0]) + self.at_m[2],
+        ]
+    }
+
     /// The turn as an axis and an angle in **degrees**, which is how a scene writes one.
     ///
     /// A quaternion's four numbers carry a constraint between them that no file can express, so

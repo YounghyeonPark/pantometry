@@ -184,10 +184,91 @@ pub struct Designed {
     /// What to call the node or prim. The scene's site — `"bracket/parts[0]"` — reads well and is
     /// the same string a rasterisation finding carries.
     pub name: String,
+    /// Which domain it belongs to: the panel whose cells it became.
+    ///
+    /// **Stated and not parsed out of [`Designed::name`].** The site happens to begin with the
+    /// domain and a `split('/')` would work today, which is exactly the sort of coupling that
+    /// holds until somebody renames a site format. glTF and USD do not need this — a design is a
+    /// node beside the panels there — but the HTML report draws one panel per card and has to know
+    /// which card a design belongs in.
+    pub domain: String,
     /// Where the part's own coordinates sit in the world, exactly as a panel states it.
     pub place: Placed,
     /// The triangles, in the part's own frame. [`mesh_surface`] is how an STL becomes one.
     pub surface: Surface,
+}
+
+/// The most edges a designed outline may carry into an HTML report.
+///
+/// A report redraws on every drag, in 2D canvas calls rather than on a GPU, and inlines its data as
+/// JSON in the page. Twenty thousand line segments is about a megabyte of coordinates and a redraw
+/// a reader would feel. Past it the outline is **refused with its count** rather than subsampled:
+/// a decimated wireframe is not a coarser picture of the part, it is a picture of some other part.
+///
+/// `MAX_FACES` subsamples instead, and the difference is what the two are pictures *of* — a field's
+/// boundary at a stride is still that field's boundary at a stride, and every second edge of a
+/// designed outline is nothing at all.
+pub const MAX_OUTLINE_EDGES: usize = 20_000;
+
+impl Designed {
+    /// The unique edges of the surface, as index pairs into its positions.
+    ///
+    /// **Unique**, because a closed mesh shares every edge between two faces and drawing both
+    /// doubles the work and the file for a line that is already there. The bracket's 24 triangles
+    /// have 72 directed edges and 36 distinct ones.
+    ///
+    /// `None` past [`MAX_OUTLINE_EDGES`], so a caller says why rather than drawing a fraction.
+    pub fn outline(&self) -> Option<Vec<[u32; 2]>> {
+        // **By position, and exactly.** `mesh_surface` gives every face its own three vertices so
+        // each can carry a flat normal, so two faces sharing an edge share no *index* — deduping
+        // on indices would return three edges per face and draw every shared one twice.
+        //
+        // The bits, not a tolerance: the positions are the same `f32` values copied from the same
+        // source vertex, so two faces meeting at a corner hold identical bit patterns. A tolerance
+        // here would be a choice about how close is the same, and there is no such choice to make.
+        let mut canonical = std::collections::BTreeMap::new();
+        let mut of = Vec::with_capacity(self.surface.positions.len());
+        for p in &self.surface.positions {
+            let key = [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()];
+            let next = canonical.len() as u32;
+            of.push(*canonical.entry(key).or_insert(next));
+        }
+
+        let mut seen = std::collections::BTreeSet::new();
+        for f in 0..self.surface.faces() {
+            let t: [u32; 3] = std::array::from_fn(|k| of[self.surface.indices[3 * f + k] as usize]);
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if a == b {
+                    continue;
+                }
+                seen.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        if seen.len() > MAX_OUTLINE_EDGES {
+            return None;
+        }
+        // The pairs index the *canonical* positions, which a caller gets from `outline_points`.
+        Some(seen.into_iter().map(|(a, b)| [a, b]).collect())
+    }
+
+    /// The distinct positions the pairs from [`Designed::outline`] index, **placed**.
+    ///
+    /// In the world, because that is where the report draws them and because a wireframe is a
+    /// vertex list — a rigid motion multiplied into one loses nothing, unlike a box.
+    pub fn outline_points(&self) -> Vec<[f64; 3]> {
+        let mut canonical: std::collections::BTreeMap<[u32; 3], u32> =
+            std::collections::BTreeMap::new();
+        let mut out: Vec<[f64; 3]> = Vec::new();
+        for p in &self.surface.positions {
+            let key = [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()];
+            let next = canonical.len() as u32;
+            if canonical.insert(key, next).is_none() {
+                let local = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+                out.push(self.place.apply(local));
+            }
+        }
+        out
+    }
 }
 
 /// The grey a designed part is drawn in, in **linear** RGB.

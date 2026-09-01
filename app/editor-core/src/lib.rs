@@ -230,22 +230,12 @@ pub fn designed(scene: &Scene, files: &dyn Parts) -> Vec<PlacedMesh> {
 
 /// A point in a domain's own frame, in the world's.
 ///
-/// `pantometry::scene::Placed` states a translation and a unit quaternion; this is the quaternion
-/// sandwich written out, `v + 2 q⃗ × (q⃗ × v + w v)`. The same arithmetic `viewer_core::Placed::apply`
-/// holds for the reader's copy of the type -- two crates because the wire format is the boundary
-/// between them, which `the_wire_format_is_enough` explains.
+/// A thin pass to [`pantometry::scene::Placed::apply`], kept as a free function because the
+/// editor's call sites read better without naming the type. It used to be the quaternion sandwich
+/// written out again; `viewer-core` holds the only other copy, and that one is paid for -- the wire
+/// format is the boundary between the two crates, which `the_wire_format_is_enough` explains.
 pub fn place(at: pantometry::scene::Placed, p: [f64; 3]) -> [f64; 3] {
-    let [qx, qy, qz, qw] = at.turn;
-    let t = [
-        qy * p[2] - qz * p[1] + qw * p[0],
-        qz * p[0] - qx * p[2] + qw * p[1],
-        qx * p[1] - qy * p[0] + qw * p[2],
-    ];
-    [
-        p[0] + 2.0 * (qy * t[2] - qz * t[1]) + at.at_m[0],
-        p[1] + 2.0 * (qz * t[0] - qx * t[2]) + at.at_m[1],
-        p[2] + 2.0 * (qx * t[1] - qy * t[0]) + at.at_m[2],
-    ]
+    at.apply(p)
 }
 
 /// Parse and build the text, and lay out its geometry.

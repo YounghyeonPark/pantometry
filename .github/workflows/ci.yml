@@ -135,7 +135,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/reports
-          for scene in 04-heater-and-bar 06-orbits 10-lamp-on-a-mirror 14-a-world                        15-a-hot-spot-in-a-block 16-a-room-with-a-ceiling                        26-poiseuille-in-a-cooling-channel 27-a-cavity-ringing-at-its-own-frequency; do
+          # Eight kinds of view, and scene 29 for the ninth thing: it is the only shipped scene
+          # with `parts`, so it is the only report that carries a designed outline. Without it
+          # the assertions about that outline never run -- they are conditional on the data
+          # being there, which is a check that cannot fail and is therefore also a claim.
+          for scene in 04-heater-and-bar 06-orbits 10-lamp-on-a-mirror 14-a-world                        15-a-hot-spot-in-a-block 16-a-room-with-a-ceiling                        26-poiseuille-in-a-cooling-channel 27-a-cavity-ringing-at-its-own-frequency                        29-a-designed-bracket-becomes-cells; do
             (cd app && cargo run --locked --release -- run                 "pantometry-world/scenes/$scene.json" "../target/reports/$scene.html")
           done
       - name: run the viewer and assert on what it drew

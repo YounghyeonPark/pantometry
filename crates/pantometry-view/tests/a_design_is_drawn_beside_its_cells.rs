@@ -53,6 +53,7 @@ fn tetra(s: f64) -> Vec<[[f64; 3]; 3]> {
 fn designed(place: Placed, s: f64) -> Designed {
     Designed {
         name: "part/parts[0]".into(),
+        domain: "part".into(),
         place,
         surface: mesh::mesh_surface(&tetra(s), 0),
     }
@@ -226,5 +227,136 @@ fn the_cells_are_bigger_than_the_design_and_that_is_the_loss() {
     assert!(
         (volume - exact).abs() / exact < 1e-6,
         "the designed tetrahedron is {volume} m³ against {exact}"
+    );
+}
+
+#[test]
+fn an_outline_is_the_meshs_edges_and_eulers_formula_says_how_many() {
+    // **The closed form for a wireframe.** For any closed polyhedron `V - E + F = 2`, so a
+    // tetrahedron's four faces and four corners force exactly six edges. Nothing about the
+    // implementation is consulted: if it returned three per face it would say twelve, and if it
+    // deduplicated by index rather than by position it would say twelve too — `mesh_surface` gives
+    // every face its own vertices so each can carry a flat normal, and that is the trap.
+    let d = designed(Placed::HERE, 0.04);
+    let pts = d.outline_points();
+    let edges = d.outline().expect("a tetrahedron is under any budget");
+    assert_eq!(d.surface.faces(), 4, "F");
+    assert_eq!(
+        pts.len(),
+        4,
+        "V — four corners, from twelve stored vertices"
+    );
+    assert_eq!(edges.len(), 6, "E — Euler: 4 - E + 4 = 2");
+    assert_eq!(
+        pts.len() as i64 - edges.len() as i64 + d.surface.faces() as i64,
+        2
+    );
+
+    // Every pair indexes a point that exists, and no edge joins a point to itself.
+    for [a, b] in &edges {
+        assert!((*a as usize) < pts.len() && (*b as usize) < pts.len());
+        assert_ne!(a, b);
+    }
+}
+
+#[test]
+fn the_outline_comes_out_placed() {
+    // A wireframe is a vertex list, and a rigid motion multiplied into one loses nothing — unlike a
+    // box, which is why a *field* states its placement instead. So these are in the world, and the
+    // report draws them without a transform of its own.
+    let here = designed(Placed::HERE, 0.04).outline_points();
+    let there = designed(
+        Placed {
+            at_m: [1.0, 2.0, 3.0],
+            ..Placed::HERE
+        },
+        0.04,
+    )
+    .outline_points();
+    assert_eq!(here.len(), there.len());
+    for (a, b) in here.iter().zip(&there) {
+        assert_eq!([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [1.0, 2.0, 3.0]);
+    }
+}
+
+#[test]
+fn an_outline_past_the_budget_is_refused_rather_than_thinned() {
+    // Every second edge of a wireframe is not a coarser picture of the part, it is a picture of a
+    // different one — which is why this refuses where `MAX_FACES` subsamples. A field's boundary at
+    // a stride is still that boundary at a stride; half an outline is nothing.
+    //
+    // One triangle contributes three edges, so the budget is crossed a little over a third of the
+    // way through that many triangles. Built at the smallest size that does it rather than at a
+    // round number, because the assertion is about the threshold.
+    let n = mesh::MAX_OUTLINE_EDGES / 3 + 1;
+    let far = |i: usize| i as f64 * 1e-3;
+    let tris: Vec<[[f64; 3]; 3]> = (0..n)
+        .map(|i| {
+            [
+                [far(i), 0.0, 0.0],
+                [far(i) + 1e-4, 0.0, 0.0],
+                [far(i), 1e-4, 0.0],
+            ]
+        })
+        .collect();
+    let big = Designed {
+        name: "huge".into(),
+        domain: "huge".into(),
+        place: Placed::HERE,
+        surface: mesh::mesh_surface(&tris, 0),
+    };
+    assert!(big.surface.faces() > mesh::MAX_OUTLINE_EDGES / 3);
+    assert!(
+        big.outline().is_none(),
+        "{} faces should be past the budget",
+        big.surface.faces()
+    );
+
+    // And just under it comes back whole.
+    let small = Designed {
+        surface: mesh::mesh_surface(&tris[..n - 2], 0),
+        ..big
+    };
+    assert!(small.outline().is_some());
+}
+
+#[test]
+fn the_report_carries_the_outline_and_says_which_domain_it_is_for() {
+    // **Where the expectation lives.** `tools/report-check` runs the report's JavaScript and
+    // asserts it drew one line per edge — but only when the run *has* a design, so dropping the
+    // outline from the JSON made it assert nothing at all and pass. Measured: that sabotage
+    // survived until this test existed.
+    //
+    // A JS harness can check "the viewer drew what the data said". It cannot check "the data
+    // should have been there", because the page is its only input. That belongs here.
+    let drawing = Drawing::of(Surfaces::Boundary).and(vec![designed(Placed::HERE, 0.04)]);
+    let page = pantometry_view::html_with("a run", &[cells()], &drawing);
+
+    let at = page
+        .find("\"design\":")
+        .expect("the run JSON has no design key at all");
+    let head = &page[at..at + 200.min(page.len() - at)];
+    assert!(
+        head.contains("\"part\":"),
+        "the outline is not keyed by its domain: {head}"
+    );
+    assert!(
+        head.contains("part/parts[0]"),
+        "the outline does not carry the site a finding names: {head}"
+    );
+    // Four points and six edges, flattened: twelve numbers and twelve.
+    assert!(head.contains("\"p\":["), "no points: {head}");
+    assert!(head.contains("\"e\":["), "no edges: {head}");
+}
+
+#[test]
+fn a_report_of_a_run_with_no_design_says_so_rather_than_omitting_the_key() {
+    // An empty object and not a missing key. A reader — the viewer, or the next person writing a
+    // check — can tell "this run has no design" from "this build does not write designs" only if
+    // the key is always there.
+    let page = pantometry_view::html_with("a run", &[cells()], &Drawing::default());
+    assert!(
+        page.contains("\"design\":{}"),
+        "the key is missing entirely"
     );
 }

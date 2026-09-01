@@ -71,6 +71,18 @@ use pantometry_scene::{Frame, PanelData, Placed};
 
 /// Build the report for a finished run.
 pub fn html(title: &str, frames: &[Frame]) -> String {
+    html_with(title, frames, &crate::mesh::Drawing::default())
+}
+
+/// The same, drawing the shapes the scene designed over the cells they became.
+///
+/// Separate rather than an extra argument on [`html`], which is published: an export that changed
+/// shape because a new option appeared is worse than one that never gained it.
+///
+/// **Only the volume view takes them**, and that is a decision rather than a corner cut. A designed
+/// part fills a block; a block is a field; a 3D field is the volume card. A body set and a set of
+/// paths have no `parts` to draw, so a design would have nothing to be over.
+pub fn html_with(title: &str, frames: &[Frame], drawing: &crate::mesh::Drawing) -> String {
     let mut out = String::with_capacity(1 << 16);
     out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n");
@@ -180,7 +192,7 @@ pub fn html(title: &str, frames: &[Frame]) -> String {
     }
 
     out.push_str("</div>\n<script id=\"run\" type=\"application/json\">");
-    out.push_str(&json(frames));
+    out.push_str(&json(frames, drawing));
     out.push_str("</script>\n<script id=\"maps\" type=\"application/json\">{\"seq\":\"");
     // The colour tables are built by `crate::ramp`, whose tests pin what they are: lightness
     // that never falls, no step that stands out, and two arms that mirror. A second table
@@ -195,8 +207,10 @@ pub fn html(title: &str, frames: &[Frame]) -> String {
 }
 
 /// The run as JSON, for the viewer above it.
-fn json(frames: &[Frame]) -> String {
-    let mut out = String::from("{\"frames\":[");
+fn json(frames: &[Frame], drawing: &crate::mesh::Drawing) -> String {
+    let mut out = String::from("{\"design\":");
+    out.push_str(&outlines(drawing));
+    out.push_str(",\"frames\":[");
     for (fi, f) in frames.iter().enumerate() {
         if fi > 0 {
             out.push(',');
@@ -315,6 +329,54 @@ fn placement(place: &Placed) -> Option<String> {
         trim(axis[1]),
         trim(axis[2])
     ))
+}
+
+/// The designed outlines, as a map from a domain to its edges, for the viewer.
+///
+/// **A wireframe and not a solid.** The report's volume view is a raycast into an image buffer, and
+/// the only thing worth putting over it is the boundary the cells were made from — where the
+/// staircase overshoots is exactly what the pair is for. A shaded surface would also hide the
+/// render it is supposed to be compared against.
+///
+/// Points are in the **world**, because a vertex list carries a rigid motion losslessly. Edges are
+/// index pairs into them, deduplicated by position: `mesh_surface` gives every face its own
+/// vertices so each can hold a flat normal, and drawing all three edges of every face draws every
+/// shared one twice.
+///
+/// A part past [`crate::mesh::MAX_OUTLINE_EDGES`] contributes a **count and no edges**, so the
+/// viewer can say which part it left out and how big it was rather than drawing a fraction of it.
+fn outlines(drawing: &crate::mesh::Drawing) -> String {
+    let mut out = String::from("{");
+    let mut first = true;
+    for part in &drawing.designed {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str(&format!("{}:", quote(&part.domain)));
+        match part.outline() {
+            Some(edges) => {
+                let pts: Vec<f64> = part.outline_points().into_iter().flatten().collect();
+                let flat: Vec<f64> = edges
+                    .iter()
+                    .flat_map(|e| [f64::from(e[0]), f64::from(e[1])])
+                    .collect();
+                out.push_str(&format!(
+                    "{{\"name\":{},\"p\":{},\"e\":{}}}",
+                    quote(&part.name),
+                    nums(&pts),
+                    nums(&flat)
+                ));
+            }
+            None => out.push_str(&format!(
+                "{{\"name\":{},\"faces\":{}}}",
+                quote(&part.name),
+                part.surface.faces()
+            )),
+        }
+    }
+    out.push('}');
+    out
 }
 
 fn quote(s: &str) -> String {
@@ -858,7 +920,47 @@ function drawVolume(v, f){
   tmp.getContext("2d").putImageData(img,0,0);
   x.imageSmoothingEnabled=true;
   var scale=Math.min(w/VW,(h-34)/VH);
-  x.drawImage(tmp,(w-VW*scale)/2,(h-34-VH*scale)/2,VW*scale,VH*scale);
+  var offX=(w-VW*scale)/2, offY=(h-34-VH*scale)/2;
+  x.drawImage(tmp,offX,offY,VW*scale,VH*scale);
+
+  /* **The shape somebody designed, over the cells it became.** The raycast above turns a screen
+     point into a ray; this is that inverted -- a world point into a screen point -- so the outline
+     lands on the render rather than beside it. `fwd`, `right` and `up` are orthonormal, so the
+     component along each is a dot product, and `su = b/a`, `sv = c/a` is the same parameterisation
+     the rays were built from.
+
+     A wireframe, because where the staircase overshoots the design is the whole reason both are
+     here, and a shaded surface would cover the render it is meant to be compared against. */
+  var des = RUN.design && RUN.design[v.panel];
+  if(des){
+    if(des.e){
+      var cen=[(e[0]+e[3])/2,(e[1]+e[4])/2,(e[2]+e[5])/2];
+      var to=function(P){
+        var n=[(P[0]-cen[0])/m,(P[1]-cen[1])/m,(P[2]-cen[2])/m];
+        var d=[n[0]-eye[0],n[1]-eye[1],n[2]-eye[2]];
+        var a=d[0]*fwd[0]+d[1]*fwd[1]+d[2]*fwd[2];
+        if(a<=1e-6) return null;
+        var su=(d[0]*right[0]+d[1]*right[1]+d[2]*right[2])/a;
+        var sv=(d[0]*up[0]+d[1]*up[1]+d[2]*up[2])/a;
+        return {x: offX + ((su/(0.75*aspect))+1)*VW/2*scale,
+                y: offY + (1-sv/0.75)*VH/2*scale};
+      };
+      x.strokeStyle="rgba(214,222,232,0.55)"; x.lineWidth=1.1;
+      x.beginPath();
+      for(var ei=0; ei<des.e.length; ei+=2){
+        var A=to([des.p[3*des.e[ei]],des.p[3*des.e[ei]+1],des.p[3*des.e[ei]+2]]);
+        var B=to([des.p[3*des.e[ei+1]],des.p[3*des.e[ei+1]+1],des.p[3*des.e[ei+1]+2]]);
+        if(A&&B){ x.moveTo(A.x,A.y); x.lineTo(B.x,B.y); }
+      }
+      x.stroke();
+      v.designed = des.e.length/2;
+    } else {
+      /* Refused rather than decimated: every second edge of an outline is not a coarser picture
+         of the part, it is a picture of a different one. */
+      v.designed = -des.faces;
+    }
+  }
+
   bar(x, v, R, p.unit);
   v.hit = null;
 
@@ -878,7 +980,14 @@ function drawVolume(v, f){
   cap(v, lens(sx, sy, sz)
        +" · composited along each ray, so this shows shape and not values"
        +" · the montage below carries the numbers · drag to rotate, scroll to zoom"
-       + note);
+       + note
+       + (v.designed > 0
+           ? " · the pale outline is the shape the scene designed, before the grid: where the "
+             + "cells reach past it is what the rasterisation cost"
+           : v.designed < 0
+             ? " · the designed outline is " + (-v.designed) + " faces and is not drawn: past "
+               + "the budget a fraction of a wireframe is a picture of a different part"
+             : ""));
 }
 
 /* ---- 3D: paths, depth sorted --------------------------------------------------------------- */

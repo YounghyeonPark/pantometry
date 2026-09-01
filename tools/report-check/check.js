@@ -63,6 +63,39 @@ function checkReport(path) {
   ok(back === 0, 'no step of the sequential scale is darker than the one below it',
      back + ' of 255 steps run backwards, which is what the four-stop ramp did');
 
+  // --- the designed outline, over the cells it became --------------------------------------------
+  //
+  // The report draws a wireframe of the shape the scene designed over its volume render, which is
+  // the only picture that *shows* the rasterisation loss instead of printing it. It is drawn with
+  // `moveTo`/`lineTo` per edge, so the count is the assertion: a report whose run carries a design
+  // must issue at least one line per edge in the volume view, and a report that carries none must
+  // issue none from this.
+  //
+  // A count and not a pixel, because the overlay is projected through the raycast's own camera
+  // inverted -- a check that it drew *somewhere* would pass with every edge off the canvas. The
+  // caption assertion below is what says the picture claims to have one.
+  const run = JSON.parse(r.byId.run.textContent);
+  const design = run.design || {};
+  for (const c of r.canvases) {
+    if (c.dataset.kind !== 'volume') continue;
+    const d = design[c.dataset.panel];
+    const lines = c._ctx ? c._ctx._calls.moveTo : 0;
+    if (d && d.e) {
+      const edges = d.e.length / 2;
+      ok(lines >= edges, c.dataset.slot + ': the designed outline was drawn',
+         edges + ' edges in the run, ' + lines + ' line starts on the canvas');
+      const cap = r.byId['cap-' + c.dataset.slot];
+      ok(cap && /designed/.test(cap.textContent),
+         c.dataset.slot + ': the caption says what the outline is',
+         cap ? cap.textContent : '(no caption)');
+    } else if (d) {
+      const cap = r.byId['cap-' + c.dataset.slot];
+      ok(cap && /not drawn/.test(cap.textContent),
+         c.dataset.slot + ': an outline too big to draw says so',
+         cap ? cap.textContent : '(no caption)');
+    }
+  }
+
   // --- every view drew something ----------------------------------------------------------------
   const slots = r.canvases.map((c) => c.dataset.slot);
   ok(slots.length > 0, 'the page has at least one view');

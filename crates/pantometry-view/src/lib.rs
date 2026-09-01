@@ -58,5 +58,5 @@ pub use filmstrip::svg;
 pub use gltf::{gltf, gltf_with, Exported};
 pub use mesh::{Designed, Drawing, Surfaces};
 pub use ramp::{diverging, is_signed, sequential};
-pub use report::html;
+pub use report::{html, html_with};
 pub use usd::{usda, usda_with, Staged};

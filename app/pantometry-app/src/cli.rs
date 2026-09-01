@@ -33,7 +33,7 @@ use pantometry::prelude::ThermalNetwork;
 // The views are a library now — `pantometry-view`, above `pantometry-scene`, above the kernel. They
 // were modules in this binary, which is `publish = false`, so a consumer who could state a
 // simulation and run it could not draw one.
-use pantometry::view::{html, readings_csv, svg as filmstrip, to_json};
+use pantometry::view::{html_with, readings_csv, svg as filmstrip, to_json};
 use pantometry_world::{Beside, Scene, World};
 
 /// Build a scene **with the accelerator attached**.
@@ -306,6 +306,7 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 // The site, `bracket/parts[0]`, which is the string a rasterisation finding
                 // already carries — so a loss printed by `--check` names the node in the file.
                 name: m.site,
+                domain: m.name,
                 place: m.place,
                 surface: pantometry::view::mesh::mesh_surface(&m.triangles, 0),
             })
@@ -440,7 +441,9 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 "html" => {
-                    let page = html(world.scene().title.as_str(), &frames);
+                    // The report draws the design over the volume render, which is the one card
+                    // where a designed part has cells to be over.
+                    let page = html_with(world.scene().title.as_str(), &frames, &drawing);
                     write(path, &page)?;
                     println!(
                         "  wrote {path} ({} bytes, a report that opens in a browser)",

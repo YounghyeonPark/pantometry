@@ -20,6 +20,58 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+### Added
+
+- **The HTML report draws the shape the scene designed, over the cells it became.** The exporters
+  gained that in 0.19.0 and the report did not, so the one output a reader opens without a 3D tool
+  was still showing the staircase alone.
+
+  A **wireframe** and not a solid: the volume view is a raycast into an image buffer, and a shaded
+  surface would cover the render it is meant to be compared against. Where the cells reach past the
+  outline is the rasterisation, and that is the whole point of having both.
+
+  The outline is projected through the raycast's own camera **inverted** — the ray builder turns a
+  screen point into a direction, and a world point needs the other way round. `fwd`, `right` and
+  `up` are orthonormal, so `su = b/a` and `sv = c/a` from three dot products.
+
+  `Designed::outline` deduplicates by **position and not by index**: `mesh_surface` gives every face
+  its own three vertices so each can carry a flat normal, so two faces sharing an edge share no
+  index and an index-keyed dedupe draws every shared edge twice. By the bits rather than by a
+  tolerance — the positions are the same `f32` copied from the same source vertex, so there is no
+  question of how close counts as the same. The L-bracket: 14 points, 36 edges, 24 faces, and
+  `V - E + F = 2`.
+
+  `MAX_OUTLINE_EDGES` **refuses** past 20 000 rather than subsampling, which is the opposite of what
+  `MAX_FACES` does and for a stated reason: a field's boundary at a stride is still that boundary at
+  a stride, and every second edge of an outline is a picture of a different part. The caption says
+  the face count instead.
+
+  `Designed` states its `domain` rather than having it parsed out of the site. glTF and USD do not
+  need it — a design is a node beside the panels there — but the report draws one panel per card
+  and has to know which card.
+
+  `Placed::apply` is public, so everything on the library side of the wire boundary shares one
+  quaternion sandwich. `viewer-core` keeps its own copy, and that is the duplication this workspace
+  pays for on purpose.
+
+### Fixed
+
+- **`tools/report-check` had an assertion that could not fail, and CI never ran the new ones.**
+  Two holes found by sabotage rather than by reading.
+
+  The outline check is conditional on the run carrying a design, so dropping the outline from the
+  report's JSON made it assert **nothing** and pass. A JavaScript harness can check that the viewer
+  drew what the data said; it cannot check that the data should have been there, because the page
+  is its only input. That expectation is a Rust test now.
+
+  And the `report viewer` job builds eight reports covering the six view kinds, none of which has
+  `parts` — so every assertion about a designed outline was skipped in CI. Scene 29 is in that list
+  now. A check nothing exercises is not a check, it is a claim.
+
+  A first attempt at the drawing sabotage also "passed" for the wrong reason: emptying the design
+  made the viewer throw, which fails loudly and says nothing about the assertion. Keeping the data
+  and breaking only the loop is what produced `FAIL bracket-volume: the designed outline was drawn`.
+
 ## [0.19.0] — 2026-09-01
 
 ### Added
