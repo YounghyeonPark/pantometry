@@ -788,10 +788,10 @@ pub fn segments(
         starts,
         vertices,
         values,
-        place,
         ..
     } = panel
     {
+        let placed = panel.placed_vertices();
         let (lo, hi) = span;
         let width = if hi > lo { hi - lo } else { 1.0 };
         for (k, start) in starts.iter().enumerate() {
@@ -802,12 +802,11 @@ pub fn segments(
                 .unwrap_or(vertices.len() / 3);
             let shade = ((values.get(k).copied().unwrap_or(0.0) - lo) / width).clamp(0.0, 1.0);
             for i in from..to.saturating_sub(1) {
-                // The panel's own frame is not the world's. A run states which, and until it was
-                // read here a placed optic's rays were drawn at the origin — invisible in this
-                // shell, which draws one panel at a time, and wrong the moment anything puts two
-                // together.
-                let a = camera.project(place.apply(vertex(vertices, i)), framing, aspect);
-                let b = camera.project(place.apply(vertex(vertices, i + 1)), framing, aspect);
+                // Through `placed_vertices` like the editor's two painters, so every place that
+                // turns a panel into geometry applies the placement in one function rather than in
+                // its own four lines. This was the last one that did not.
+                let a = camera.project(placed[i], framing, aspect);
+                let b = camera.project(placed[i + 1], framing, aspect);
                 out.push(Segment {
                     from: a,
                     to: b,
@@ -821,8 +820,4 @@ pub fn segments(
         db.total_cmp(&da)
     });
     out
-}
-
-fn vertex(flat: &[f64], i: usize) -> [f64; 3] {
-    [flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]]
 }

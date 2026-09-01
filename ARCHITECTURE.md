@@ -208,6 +208,32 @@ into a conductance and nothing would fail loudly.
 bounds would be a mesh. So the region to sample has to come from above, and the scene is where
 the size was written down in the first place.
 
+**And a third half, which nobody predicted either: a placement has to leave.** Two halves that do
+not touch is a statement about the *inside* of a run; the outside is **six** readers — the glTF
+and USD writers, the standalone viewer's path projection, the editor's shaded viewport and its flat
+painter, and the HTML report — and `capture` was giving them half of each `Placement`. A field was sampled in the domain's own coordinates and the
+pose dropped; a body had it multiplied into its position. One file, two conventions, and nothing
+in it saying which a panel used. Two blocks half a metre apart came out of glTF at identical
+coordinates.
+
+`Panel::place` and run **format 2** are the fix: every panel is in its own frame and says where
+that frame is. Baking is not wrong for a *vertex list* — a rigid motion loses nothing there — but
+it is for a **box**, where the axis-aligned box around a rotated cell is bigger than the cell. That
+is the asymmetry the whole thing turns on, and it is why a designed mesh's triangles may be placed
+where a field's extent may not.
+
+The glTF writer was fixed in the same commit; the other five took **three more**, found one or
+two at a time, because **under the identity a reader that drops a placement gives exactly the right
+answer** — and every shipped scene was the identity. Scene 30 is the one that is not, and it exists
+for that reason alone.
+
+And the last thing the episode taught is why there were six. Seven *places* were applying the
+placement — three in the editor's shaded pass, three in its flat painter, one in the standalone
+viewer — each in its own four lines, so a seventh careful reader was never going to be the last
+one. `Panel::placed_positions`, `placed_vertices` and `placed_corners` are the one place now, and
+every painter goes through them. The writers keep their own, because a placement leaves glTF and
+USD as a **node transform** rather than as moved numbers.
+
 ---
 
 ## Rules that hold the whole thing up
@@ -343,11 +369,40 @@ different quantities, the second separates domains carrying the same one.
    header calls worse than either being wrong.
 
    Bodies are still points and a field is still composited rather than occluded, so the *flat*
-   renderers in `pantometry-view` need no depth. What a designed mesh does not yet do is travel
-   in a **run**: the report and the glTF and USD writers work from a `Run`, which carries fields,
-   bodies and paths and has no fourth shape for a surface. Adding one is a wire-format change to
-   a reader that is `deny_unknown_fields` on purpose, so it is a decision rather than an
-   oversight — and it is the next thing this entry wants.
+   renderers in `pantometry-view` need no depth. That is still true and still fine.
+
+   **The last thing this entry wanted is done, and not the way it asked for.** It said a designed
+   mesh had to travel in a `Run` — a fourth `PanelData` beside fields, bodies and paths — and
+   called that the next decision. Sizing it turned the question round: **a run is the simulation's
+   output and an STL is its input**, and copying an input into an output is what makes the other
+   answers bad. Repeated per frame it is unbounded — a bracket's 24 triangles are free and a
+   million over a hundred frames are not. A static section is a new *kind* of thing in a format
+   that has never had one. A path resolved on read makes a run depend on a filesystem, whose
+   failure is an empty picture rather than an error.
+
+   So `mesh::Drawing` is an argument to the writer instead. The **three** writers that draw
+   geometry take one — `gltf_with`, `usda_with`, `html_with` — and the editor's viewport had the
+   design before any of them, from the scene rather than from a run. The filmstrip and the CSV
+   draw no geometry and are unchanged. The wire format did not change either, and the
+   `deny_unknown_fields` reader this entry was worried about was never asked to.
+
+   What the pair is *for* is the rasterisation loss. `Rasterised` has reported it as a volume
+   error since designed parts existed, and a number in a terminal is not what a designer looks at.
+   Scene 29 through OpenUSD: the cells reach `0.05096` where the design ends at `0.05`, and the
+   overshoot is the grid.
+
+   It is drawn **uncoloured** in all four, from one constant. The solver ran on cells; tinting a
+   smooth surface from the field would claim a resolution the computation never had, which is the
+   per-frame colour scale's mistake wearing different clothes.
+
+   **What did change the run format was something else entirely**, and finding it is why this
+   entry took five commits rather than one. A run had no coordinate frame: `capture` held each
+   domain's `Placement` and used half of it, sampling a field in the domain's own coordinates
+   while multiplying the pose into a body's. Two blocks half a metre apart exported to glTF at
+   identical coordinates. `Panel::place` and run **format 2** are that fix, and then three more
+   readers of it had to be found one at a time — USD's writer, the editor's viewport, the HTML
+   report — because under the identity a reader that drops a placement gives exactly the right
+   answer and every shipped scene was the identity. Scene 30 is the one that is not.
 7. **Geometry from a designed file.** Done as far as one object goes: `pantometry-shape` reads an STL,
    measures it, and rasterises it into the predicate a domain's `fill` already took. Nothing in the
    physics changed.
@@ -662,7 +717,7 @@ contains, and its scalars go out as time-sampled custom attributes under `pantom
 | | |
 | --- | --- |
 | a viewer | `pantometry view` — a wgpu window that reads the run **file**. `viewer-core` does not link `pantometry`, and `the_wire_format_is_enough` holds that now the workspace boundary does not |
-| export | `pantometry_view::gltf` — one frame as **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. `pantometry_view::usda` — the **whole run**, animated, with every domain's scalars as time-sampled attributes. Both no dependency; the geometry is `pantometry_view::mesh`, shared, so the two cannot disagree about a solid's size |
+| export | `pantometry_view::gltf` — one frame as **surfaces**, with normals and linear colour: a field becomes the boundary of its present cells, a body a sphere. `pantometry_view::usda` — the **whole run**, animated, with every domain's scalars as time-sampled attributes. Both no dependency; the geometry is `pantometry_view::mesh`, shared, so the two cannot disagree about a solid's size. Both take a `mesh::Drawing`: which surface a field becomes, and the shapes the scene **designed**, drawn uncoloured beside the cells they became so the rasterisation loss is a picture rather than a printed number. Both carry `Panel::place` as the format spells it — a glTF node's `[x, y, z, w]`, a USD `quatd`'s `(w, x, y, z)`, measured against `pxr` rather than remembered |
 | GPU physics | `app/pantometry-gpu` — 33–67× at 64³, a wash at 16³, single precision, CPU as the reference. A scene states `"device": "gpu"` and an **application** honours it through `Accelerator`, because the library's workspace cannot carry the stack |
 | an editor | `pantometry edit`: the scene's JSON checked as you type, an outliner and an inspector that **writes** — every number a selected domain states, draggable, spliced back into the text byte for byte so the file keeps its own formatting — run and verify as buttons, and a **shaded viewport** — surfaces from `pantometry_view::mesh` on the GPU with a depth buffer, lit, with the extents as wire boxes occluded by what is in front of them. `viewer-core`'s camera, now also as a matrix, and `one_camera_two_paths` holds the two expressions of it to `2.4e-7` |
 
