@@ -20,7 +20,59 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-09-01
+
+The same day as 0.19.0, which is unusual and deliberate: `Designed` gained a required field hours
+after it was published, and a break is better corrected in the next version than left to accumulate
+behind one.
+
 ### Added
+
+- **`Placed::axis_angle`**, and the HTML report says which frame each panel is drawn in.
+
+  The report draws one panel per card, so two domains never share a picture and each picture is
+  right in its own frame. What was missing is any statement of *which* frame: every spatial axis is
+  labelled in metres, and for a placed domain those were the domain's own metres presented as the
+  world's. Two busbars 20 mm apart both read `0 .. 32 mm`.
+
+  Stated rather than baked, for the reason the run format states it — an extent is a **box**, and
+  the axis-aligned box around a rotated one is bigger than it. `at 20, -12, 12 mm, turned 90° about
+  (0, 0, 1)`, in the scene format's own vocabulary, recovered through the quaternion the run
+  carries. A domain at the origin emits nothing, so every report ever written is byte-identical.
+
+  **`atan2` and not `acos(w)`, and the reason written beside it was backwards.** The editor, where
+  this arithmetic was worked out, said `acos` loses precision near a half turn. At a half turn `w`
+  is zero and `|d acos/dw|` is 1 — the best-conditioned point on the curve. It is the small angle
+  that hurts: 1.1e5 at a thousandth of a degree, which is a nudge of a rotation ring. Measured
+  4.6e-5 relative at 0.0001°, against 0 for `atan2`. The choice was right and the account of it was
+  not, and the account is what sends the next person to the wrong end.
+
+- **A schedule no domain could survive is refused when the scene is built.** `FRICTION.md`'s
+  finding 8. `World::build` asks every evolving domain for `Domain::max_stable_dt` and refuses any
+  non-subcycling schedule whose frame window is longer, so the editor — which checks as you type
+  through the same `build_with` — says so while somebody is still writing the file.
+
+  Half of it was already there: `verify::stability_hazard` asked the same question of the same
+  built, unrun world. The two are one now, in `build`, with the battery's wording kept. Merging
+  them exposed a gap in the new one — it checked only `staggered`, and `one-way` does not subcycle
+  either.
+
+  The suggested frame count is asserted to build, and one fewer to be refused, so it is a threshold
+  rather than a plausible number. The message says it is checked from the **initial** state, because
+  `max_stable_dt` is state-dependent and a green `--check` is not a guarantee.
+
+### Changed
+
+- **`mesh::Designed` gained a required `domain` field, and that breaks a 0.19.0 struct literal.**
+  The one breaking change here, and it is why this release is the same day as the last.
+
+  glTF and USD do not need it — a design is a node beside the panels there — but the HTML report
+  draws **one panel per card** and has to know which card a design belongs in. Parsed out of
+  `Designed::name` it would have worked today: the site happens to begin with the domain, and a
+  `split('/')` is exactly the coupling that holds until somebody changes how a site is spelled.
+
+  A caller constructing one adds `domain: <the panel's name>`. In this workspace that is
+  `PlacedMesh::name`, which already carries it beside the site.
 
 - **The HTML report draws the shape the scene designed, over the cells it became.** The exporters
   gained that in 0.19.0 and the report did not, so the one output a reader opens without a 3D tool
@@ -3389,7 +3441,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.20.0
 [0.19.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.19.0
 [0.18.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.18.0
 [0.17.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.17.0
