@@ -25,7 +25,7 @@ Or, in a clone of this repository:
 ```sh
 cargo run --release --example melting        # a crystal melting, read off its own structure
 cargo run --release --example beam_hot_spot  # a laser on a mirror, and the hot spot a lumped model misses
-cargo test --workspace                       # 747 tests, all against closed forms
+cargo test --workspace                       # 768 tests, all against closed forms
 ```
 
 Add `out.svg` to either example and it draws the result. There are twelve of those; three more
@@ -820,7 +820,7 @@ and GitHub renders it as a **Cite this repository** button; the same content as 
 @software{park_pantometry,
   author  = {Park, Younghyeon},
   title   = {pantometry: physics for simulated worlds, checked against closed forms},
-  version = {0.18.0},
+  version = {0.19.0},
   year    = {2026},
   doi     = {10.5281/zenodo.22142201},
   url     = {https://doi.org/10.5281/zenodo.22024817},

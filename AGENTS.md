@@ -13,7 +13,7 @@ Everything below describes the Rust API.
 
 ```toml
 [dependencies]
-pantometry = "0.18"
+pantometry = "0.19"
 ```
 
 API docs: <https://docs.rs/pantometry>. Source: <https://github.com/YounghyeonPark/pantometry>.

@@ -20,6 +20,8 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-09-01
+
 ### Added
 
 - **The exporters draw the shape somebody designed, beside the cells it became.** Every export of
@@ -3335,7 +3337,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.19.0
 [0.18.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.18.0
 [0.17.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.17.0
 [0.16.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.16.0
