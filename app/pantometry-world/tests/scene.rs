@@ -575,21 +575,25 @@ fn a_heater_and_a_bar_meet_on_the_bus() {
     );
 }
 
-/// A scene can ask for a schedule its domains cannot survive, and the refusal says which.
+/// A scene can ask for a schedule its domains cannot survive, and it is refused **while it is
+/// being built** rather than when the step is taken.
 ///
 /// The same scene as above with `staggered` in place of `multirate`. Half a second is
-/// thirty-eight times the bar's explicit-diffusion limit, and without subcycling the bar
-/// would fill with oscillating nonsense — the classic silently-wrong result.
+/// seventy-six times the bar's explicit-diffusion limit — thirty-eight in Fourier units, which is
+/// how the domain's own refusal reports it and where `FRICTION.md`'s figure comes from — and
+/// without subcycling the bar would fill with oscillating nonsense, the classic silently-wrong
+/// result.
 ///
-/// It does not. The step is refused, and the refusal names the quantity (`Fourier number`),
-/// the site (`bar (explicit conduction)`), the limit and the value. That is the difference
-/// this library is for: an application that chose the wrong schedule from a config file is
-/// told which domain broke and by how much, rather than drawing something plausible.
+/// **This test asserted `it builds; the trouble only shows when it runs`**, and its own doc
+/// recorded that as finding 8: nothing checked a schedule against the domains until the first
+/// step, and a scene format could ask every domain for its `max_stable_dt` and refuse where the
+/// message can name the file. It does now, so the assertion this test was built on is the one
+/// that changed — which is the right kind of breakage.
 ///
-/// **Also a finding.** Nothing checks this until the first step is taken. A scene format
-/// could ask every domain for its `max_stable_dt` at build time and refuse there, where the
-/// message could name the file. `Domain::max_stable_dt` is public, so an application can do
-/// it; this one does not yet.
+/// The step-time refusal is unchanged and is still the complete one, because the build sees only
+/// the initial state. It is tested where it belongs: `pantometry-thermal`'s
+/// `explicit_conduction_refuses_an_unstable_step` asserts the quantity, the site and the limit.
+/// `a_schedule_is_checked_before_the_first_step.rs` has the rest of this half.
 #[test]
 fn a_schedule_a_scene_cannot_survive_is_named_and_refused() {
     let scene: Scene = serde_json::from_str(
@@ -605,20 +609,36 @@ fn a_schedule_a_scene_cannot_survive_is_named_and_refused() {
     )
     .unwrap();
 
-    let violation = World::build(scene)
-        .expect("it builds; the trouble only shows when it runs")
-        .run()
-        .expect_err("half a second is far past the bar's diffusion limit");
+    // `let else` rather than `expect_err`: `World` is not `Debug`, and giving it one so a test
+    // could print it would be a public impl for the sake of a message.
+    let Err(err) = World::build(scene) else {
+        panic!("a scene that could never step must not build");
+    };
 
-    assert_eq!(violation.quantity, "Fourier number");
     assert!(
-        violation.site.starts_with("bar"),
-        "the refusal should name the domain, got {:?}",
-        violation.site
+        err.starts_with("bar:"),
+        "the refusal names the domain: {err}"
     );
-    // 0.5 is the explicit limit and the scene asked for about 38.
-    assert!((violation.before - 0.5).abs() < 1e-12);
-    assert!(violation.after > 30.0, "got {}", violation.after);
+    assert!(
+        err.contains("5.000e-1 s window"),
+        "and the frame it asked for: {err}"
+    );
+    // The battery's vocabulary, kept: `verify` used to say this about a world it had built and
+    // could no longer run, and a reader who knows those words should still meet them.
+    assert!(
+        err.contains("does not subcycle") && err.contains("silently unstable"),
+        "the refusal dropped the words verify used: {err}"
+    );
+    assert!(err.contains("76.1x"), "and by how much: {err}");
+    // The suggestion is the number of frames that fits, and `frames` is the key a reader would
+    // change. Asserted rather than trusted: a message naming an untried number is a plausible
+    // number, and `a_schedule_is_checked_before_the_first_step` builds at it.
+    assert!(
+        err.contains("raise `frames` to at least 609"),
+        "and what to do about it: {err}"
+    );
+    // And that it is the *necessary* half, in the message rather than only in a doc comment.
+    assert!(err.contains("when the step is taken"), "{err}");
 }
 
 /// **A beam that heats where it lands**, over a boundary two domains share, from data.

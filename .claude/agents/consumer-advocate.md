@@ -59,7 +59,7 @@ of them for exactly that reason.
 
 ## Say when the answer is "leave it"
 
-Six of the thirty-four findings were recorded rather than actioned, and one of those because the
+Five of the thirty-four findings were recorded rather than actioned, and one of those because the
 kernel already refuses the mistake it describes. That is a good outcome, not a
 failed one.
 

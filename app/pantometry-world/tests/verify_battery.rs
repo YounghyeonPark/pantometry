@@ -200,14 +200,25 @@ fn the_report_states_what_it_did_not_measure() {
     assert!(!ran(&b.window).shifts.is_empty());
 }
 
-/// **A staggered window past a domain's stability limit is named as the likely cause.**
+/// **A staggered window past a domain's stability limit is refused before anything is built.**
 ///
 /// `ScheduleSpec::Staggered`'s own documentation: a frame interval larger than the limit is
-/// silently unstable. The room turns out not to be silent — its step reports the Courant
-/// number as a created quantity and the audit refuses the very first advance — but a refusal
-/// that only says "Courant number created" leaves the *why* to be worked out. The battery
-/// checks the hazard on the built world before running anything, so its error carries both
-/// halves: what the kernel refused, and the schedule choice that made it inevitable.
+/// silently unstable. The room turns out not to be silent — its step reports the Courant number as
+/// a created quantity and the audit refuses the very first advance — but a refusal that only says
+/// "Courant number created" leaves the *why* to be worked out.
+///
+/// This battery used to supply the why. It asked a **built, unrun** world for every domain's
+/// `max_stable_dt` and appended the answer to a failed run as "likely why", so its error carried
+/// both halves: what the kernel refused, and the schedule choice that made it inevitable.
+///
+/// **`World::build` refuses that scene now**, so there is no run to explain and the reader gets the
+/// cause on its own. `FRICTION.md`'s finding 8 asked for exactly that — a check at build time,
+/// where the message can name the file — and half of it turned out to be sitting in this file
+/// already, reachable only by somebody who ran `verify` on purpose. Two implementations of one
+/// rule became one, and it is the one `--check` and the editor reach while somebody is typing.
+///
+/// The wording is this battery's, kept deliberately: a reader who knows "does not subcycle" and
+/// "silently unstable" meets the same words in the new place.
 #[test]
 fn a_staggered_window_past_the_limit_is_named_as_the_likely_cause() {
     let unstable = r#"{
@@ -222,11 +233,15 @@ fn a_staggered_window_past_the_limit_is_named_as_the_likely_cause() {
       "release": { "as": "mode", "nx": 1, "ny": 1, "amplitude_pa": 1.0 } }
   ]
 }"#;
-    let why = verify(&scene(unstable), false).expect_err("the room refuses an over-CFL step");
+    let why = verify(&scene(unstable), false).expect_err("the room cannot be built at that window");
     assert!(
-        why.contains("likely why") && why.contains("silently unstable"),
+        why.contains("does not subcycle") && why.contains("silently unstable"),
         "the error does not name the schedule hazard: {why}"
     );
+    // And it names the domain, both times, and what to change — which "likely why" appended to a
+    // crash never did. The battery is passing the build's refusal through, not writing its own.
+    assert!(why.starts_with("room:"), "{why}");
+    assert!(why.contains("raise `frames`"), "{why}");
 
     // The same room under multirate subcycles, and the same battery finds nothing.
     let subcycled = unstable.replace("\"staggered\"", "\"multirate\"");

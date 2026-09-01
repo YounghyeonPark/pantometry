@@ -6,9 +6,10 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Twenty-eight of the thirty-four are
+//! Findings are collected in `FRICTION.md` beside this crate. Twenty-nine of the thirty-four are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
-//! The count in that file is under test; this line is not, and had been stale for two releases.
+//! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
+//! written and this line is one of them. It had been stale for two releases before it was.
 //!
 //! The layers it once carried are libraries now. `pantometry-scene` owns capture, and this crate is
 //! left with what an *application* actually is: a file format, the domain types that format names,
@@ -3362,7 +3363,88 @@ impl World {
 
         world.close_expansion();
         world.resolve_structures();
+        world.refuse_an_impossible_schedule()?;
         Ok(world)
+    }
+
+    /// Refuse, at **build** time, a scene whose frame window no domain could survive.
+    ///
+    /// `FRICTION.md`'s finding 8. A scene picks its schedule by name, and `staggered` with a
+    /// half-second frame is thirty-eight times a bar's explicit-diffusion limit. The run was
+    /// refused — correctly, by name, with the limit and the value — but *when the step was taken*.
+    /// `Domain::max_stable_dt` is public, so an application loading scenes from disk can ask
+    /// every domain what it can survive and say so while somebody is still typing. The editor
+    /// checks as you type through `World::build_with`, and this is what makes that check able to
+    /// see it.
+    ///
+    /// # Necessary and not sufficient, which is the whole caveat
+    ///
+    /// `max_stable_dt` takes a `now` and its own doc says so: it is the largest step **from
+    /// here**, and a domain whose conductance rises as it warms has a limit that tightens under
+    /// it. At build time the state is the initial one, so this catches the scene that could never
+    /// have worked and does **not** replace the refusal inside `step`. Both exist, and the one
+    /// inside `step` is the one that is complete.
+    ///
+    /// # Everything that does not subcycle
+    ///
+    /// Under `multirate` an evolving domain subcycles the shared window as its own limit requires,
+    /// so there is no step to refuse — a tight limit costs substeps rather than correctness, and a
+    /// scene that wants the tighter physics and cannot afford the frames is a *cost* question this
+    /// is not the place for. `staggered` and `one-way` both take the whole window in one step.
+    ///
+    /// # There was already one of these, in `verify`
+    ///
+    /// `verify::stability_hazard` asked the same question of the same built, unrun world at the
+    /// same `t = 0`, and appended the answer to a failed run as "likely why". So finding 8 was
+    /// half-answered and `FRICTION.md` did not say so. What it did not reach is the reader who is
+    /// *typing*: `verify` is a command somebody runs on purpose, and `--check` and the editor are
+    /// what run continuously.
+    ///
+    /// Moving it here rather than keeping both, because two implementations of one rule is what
+    /// the last several commits have been removing. The wording is the battery's — a reader who
+    /// knows "does not subcycle" and "silently unstable" keeps them.
+    fn refuse_an_impossible_schedule(&self) -> Result<(), String> {
+        if matches!(self.scene.schedule, ScheduleSpec::Multirate) {
+            return Ok(());
+        }
+        if self.scene.frames == 0 {
+            return Ok(());
+        }
+        let window = self.scene.duration_s / self.scene.frames as f64;
+        for domain in self.sim.domains() {
+            // **Correct, and unreachable today.** Sabotaging this line changes nothing: every
+            // quasi-static domain in this tree returns an infinite limit and the next guard drops
+            // it anyway. It stays because the trait permits a finite one and refusing on it would
+            // be wrong — `Simulation::sweep` gives a quasi-static domain `n = 1` whatever the
+            // window is, so its limit is never a reason a scene cannot run. Written down because a
+            // guard nothing exercises is a guard somebody deletes, and the reason it is not dead is
+            // not visible from the line itself.
+            if domain.kind() != pantometry::prelude::Kind::Evolving {
+                continue;
+            }
+            let limit = domain.max_stable_dt(Time::ZERO).to_si();
+            if !limit.is_finite() || limit <= 0.0 {
+                continue;
+            }
+            // The same slack the domains' own refusals carry, so a scene that sits exactly on the
+            // limit and steps is not refused here for a rounding it survives there.
+            if window / limit > 1.0 + 1e-9 {
+                let needed = (self.scene.duration_s / limit).ceil() as u64;
+                return Err(format!(
+                    "{}: stability limit {limit:.3e} s is smaller than the {window:.3e} s window, \
+                     and the {:?} schedule does not subcycle — this scene is silently unstable. \
+                     It is {:.1}x too long: raise `frames` to at least {needed} for this \
+                     `duration_s`, shorten `duration_s`, or use \"schedule\": \"multirate\", \
+                     which subcycles each domain to its own limit. Checked from the **initial** \
+                     state: a domain whose limit tightens as it runs is still refused when the \
+                     step is taken",
+                    domain.name(),
+                    self.scene.schedule,
+                    window / limit
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The scene this was built from.

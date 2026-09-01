@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Twenty-eight of the thirty-four are fixed**, and six are recorded rather than actioned. The reasons
+**Twenty-nine of the thirty-four are fixed**, and five are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
@@ -207,6 +207,60 @@ where the message can name the file and the line. This one does not yet.
 
 Not a library defect. A note about where the natural seam is, and the sort of thing only
 somebody loading scenes from disk would think to want.
+
+**Half of it was already done and this file did not say so.** `verify::stability_hazard` asked
+the same question of the same built, unrun world at the same `t = 0` and appended the answer to a
+failed run as "likely why". So the finding was true of `--check` and of the editor and false of
+`verify` — which nobody could tell from reading it here, and which is the thing a findings file is
+for.
+
+**Fixed, by moving that check rather than writing a second one.** `World::build` asks every
+evolving domain for `Domain::max_stable_dt` and refuses any non-subcycling schedule whose frame
+window is longer, naming the domain, both numbers, the ratio, and the frame count that would fit.
+The editor checks as you type through the same `build_with`, so a scene that could never have run
+says so while somebody is still writing it, and `verify` passes the same refusal through.
+
+The battery's wording is kept — "does not subcycle", "silently unstable" — because a reader who
+knows those words should meet them in the new place. And merging the two surfaced a gap in the
+one being written: the first draft exempted everything but `staggered`, while the battery's
+exempted only `multirate`, so a **`one-way`** scene would have been let through. It takes the
+whole window in one step exactly the same way. `one_way_does_not_subcycle_either_and_is_refused_too`
+is that case.
+
+Two things the fix had to get right and one it deliberately does not.
+
+**The suggestion is a suggestion.** "Raise `frames` to at least N" is a number, and a message
+naming a number nobody tried is a plausible number. `the_frame_count_it_suggests_actually_builds`
+builds at N and asserts N-1 is still refused, so N is the threshold rather than a comfortable
+round-up.
+
+**It is necessary and not sufficient, and the message says so.** `max_stable_dt` takes a `now`;
+the build sees the initial state, and a domain whose limit tightens as it runs is still refused
+inside `step`. Both checks exist and the one in `step` is the complete one. Putting that in the
+refusal rather than only in a doc comment is the difference between a reader who knows what the
+check covers and one who thinks a green `--check` is a guarantee.
+
+**Only `staggered`.** Under `multirate` a domain subcycles the window to its own limit, so a tight
+limit is a *cost* and not a refusal. Refusing there would be answering a question about affordability
+with an error, which is not this check's business.
+
+**The finding's "thirty-eight times" is in Fourier units.** Measured while writing the refusal,
+which reports a ratio of *times*: the 21-cell bar in `scene.rs` is 38 in Fourier and **76.1x** in
+time, and `0.5 x 76.1 = 38.05` is the relation. The 61-cell bar the new tests use is **642x**. Both
+numbers are right for their own bar and neither is right for the other, which is why the refusal
+prints the two times rather than a ratio alone.
+
+All thirty shipped scenes still build. That is asserted rather than assumed: `max_stable_dt` is
+state-dependent, so a domain whose limit is tightest at `t = 0` and loosens as it runs would have
+been refused at build for a run it survives, and this would have been a regression rather than a
+fix.
+
+Five sabotages, four caught. The fifth — deleting the `Kind::Evolving` guard — **changed nothing**,
+because every quasi-static domain in this tree returns an infinite limit and the next guard drops
+it anyway. The guard stays: the trait permits a finite one, and `Simulation::sweep` gives a
+quasi-static domain one step whatever the window is, so its limit could never be a reason a scene
+cannot run. Recorded because a guard nothing exercises is a guard somebody deletes, and "the test
+did not notice" is worth more written down than quietly left out of the tally.
 
 ## 9. A spatial coupling makes both sides state the discretisation, twice
 

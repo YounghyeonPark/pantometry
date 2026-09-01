@@ -520,7 +520,6 @@ pub struct Battery {
 /// the build did to the geometry.
 struct BeforeTheRun {
     /// Stability limits a non-subcycling schedule would overrun.
-    hazards: Vec<String>,
     /// What every designed part cost the grid, kept whole rather than reduced to findings: the
     /// rows a reader checks a finding against, and — on a scene where nothing was lost — the
     /// evidence that this pass ran at all.
@@ -531,7 +530,6 @@ struct BeforeTheRun {
 fn before_the_run(scene: &Scene, files: &dyn Parts) -> Result<BeforeTheRun, String> {
     let world = World::build_with(scene.clone(), files)?;
     Ok(BeforeTheRun {
-        hazards: stability_hazard(&world, scene),
         rasterised: world.rasterised().to_vec(),
     })
 }
@@ -611,36 +609,6 @@ fn rasterisation_loss(rasterised: &[Rasterised]) -> Vec<String> {
     out
 }
 
-/// The evolving domains whose stability limit a non-subcycling schedule would overrun.
-///
-/// Checked on a **built, unrun** world at `t = 0`, because the hazard it names can keep the
-/// base run from finishing at all: a staggered or one-way schedule takes the whole window in
-/// one step, and a window past a wave domain's CFL limit amplifies every mode it has. Waiting
-/// for the run to measure this would report the crash and not the cause.
-fn stability_hazard(world: &World, scene: &Scene) -> Vec<String> {
-    if matches!(scene.schedule, crate::ScheduleSpec::Multirate) {
-        return Vec::new();
-    }
-    let window_s = scene.duration_s / scene.frames as f64;
-    let mut hazards = Vec::new();
-    for d in world.sim.domains() {
-        if d.kind() != Kind::Evolving {
-            continue;
-        }
-        let limit = d.max_stable_dt(Time::ZERO).to_si();
-        if limit < window_s {
-            hazards.push(format!(
-                "{}: stability limit {limit:.3e} s is smaller than the {window_s:.3e} s window, \
-                 and the {:?} schedule does not subcycle — this scene is silently unstable; use \
-                 multirate or shrink the window",
-                d.name(),
-                scene.schedule
-            ));
-        }
-    }
-    hazards
-}
-
 /// Run the battery.
 ///
 /// The base scene runs twice (determinism), the window sweep once or twice more, and the
@@ -658,7 +626,10 @@ pub fn verify(scene: &Scene, deep: bool) -> Result<Battery, String> {
 /// there is nowhere in a page to put them.
 pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Battery, String> {
     let before = before_the_run(scene, files)?;
-    let mut findings = before.hazards;
+    // The stability hazard used to arrive here, from a copy of the rule that lived in this file.
+    // `World::build` refuses that scene now, so a world this battery is handed cannot carry it and
+    // there is nothing to seed the findings with.
+    let mut findings: Vec<String> = Vec::new();
 
     let base = match run_measured(scene, files) {
         Ok(b) => b,

@@ -189,8 +189,27 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
         "{} findings from using the SDK as a stranger",
         findings,
     );
-    phrase("README.md", "**{} findings, twenty-eight fixed", findings);
-    phrase("README.md", "findings, {} fixed and six argued down", fixed);
+    // The *total*, with the fixed count spelled beside it. Hard-coding that half made this
+    // template refuse a correct README the day a finding was actioned -- twice in one commit,
+    // because the sentence appears in two shapes. Both halves come from the count now.
+    phrase(
+        "README.md",
+        &format!("**{{}} findings, {} fixed", WORDS[fixed]),
+        findings,
+    );
+    // The other half is the total minus the fixed count, so the two add up by construction rather
+    // than by somebody remembering. Hard-coded, it refused a correct README the day finding 8 was
+    // actioned -- and this test is what found that sentence at all, because a grep for
+    // "twenty-eight" missed it: the fixed count and the argued-down count are spelled in the same
+    // line and only one of them was the number being searched for.
+    phrase(
+        "README.md",
+        &format!(
+            "findings, {{}} fixed and {} argued down",
+            WORDS[findings - fixed]
+        ),
+        fixed,
+    );
     phrase(
         "CHANGELOG.md",
         "has already found {} places it is awkward",
@@ -212,9 +231,15 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
         findings,
     );
     phrase(".claude/agents/README.md", "findings, {} fixed", fixed);
+    // "Six of the thirty-four" -- both halves, and the first one was hard-coded here while the
+    // second came from the count. So this template refused a correct file the moment a finding was
+    // actioned, which is the same shape as the two in README.md above and was found the same way.
     phrase(
         ".claude/agents/consumer-advocate.md",
-        "Six of the {} findings were recorded",
+        &format!(
+            "{} of the {{}} findings were recorded",
+            WORDS[findings - fixed]
+        ),
         findings,
     );
 }

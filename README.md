@@ -48,7 +48,7 @@ Where no closed form exists, the README says so.
 There is now one consumer, `pantometry-world`, and its first job was not to be a good application
 but to use the SDK the way a stranger would.
 [`app/pantometry-world/FRICTION.md`](app/pantometry-world/FRICTION.md) is what it came back with:
-**thirty-four findings, twenty-eight fixed and six argued down in writing.** The first twelve came from
+**thirty-four findings, twenty-nine fixed and five argued down in writing.** The first twelve came from
 writing the application. The next four came from running the subagents that were built out of
 what the first twelve taught — and one of those is a first-order accuracy defect in the
 kernel's own scheduler, in the schedule chosen *for* accuracy, which the conservation audit
