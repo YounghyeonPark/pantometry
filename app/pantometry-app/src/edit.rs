@@ -1986,14 +1986,16 @@ impl App {
                     // The run's own extent first, the scene's placed box second — the same order
                     // the flat path uses, and for the same reason: a run opened without the file
                     // that produced it still knows where it was.
-                    // `Placed::corners_of` and not `editor_core::corners_of`: the extent is
-                    // the domain's own box and the placement is where that box is. Eight corners
-                    // rather than a box, so a turned part stays the shape it is -- `field_shell`
-                    // maps a unit cube through them and never needed it to be axis-aligned.
-                    let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
-                        name: name.clone(),
-                        corners: panel.place().corners_of(e),
-                    });
+                    // `Panel::placed_corners` and not the raw extent: the extent is the
+                    // domain's own box and the placement is where that box is. Eight corners rather
+                    // than a box, so a turned part stays the shape it is — `field_shell` maps a unit
+                    // cube through them and never needed it to be axis-aligned.
+                    let from_run = panel
+                        .placed_corners()
+                        .map(|corners| editor_core::PlacedBox {
+                            name: name.clone(),
+                            corners,
+                        });
                     let Some(b) = from_run
                         .as_ref()
                         .or_else(|| self.checked.boxes.iter().find(|b| &b.name == name))
@@ -2044,26 +2046,25 @@ impl App {
                 viewer_core::Panel::Points {
                     positions, values, ..
                 } => {
-                    // Bodies are in the domain's own frame; the radius below is a *size* and
-                    // a rigid motion does not change one, so it is measured here and the centres
-                    // are placed as they are drawn.
-                    let place = panel.place();
-                    let pts: Vec<[f64; 3]> = (0..values.len())
-                        .map(|i| [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]])
-                        .collect();
+                    let pts = panel.placed_positions();
                     if pts.is_empty() {
                         continue;
                     }
+                    let _ = positions;
                     // The radius the exports use, so a body is the same size in the viewport, in
                     // Blender and in usdview. `mesh::body_radius` sizes it from the run's own
                     // bounds rather than from a constant, which is why an orbit and a block do not
                     // both get a dot.
-                    let bounds = panel.bounds();
+                    // World positions, so the box paired with them is the world one.
+                    // `body_radius` reads the box only as a fallback when there are fewer than two
+                    // bodies -- the median nearest-neighbour distance it normally uses is invariant
+                    // under a rigid motion -- but pairing a world point set with a local box is the
+                    // kind of mismatch this whole change is about.
+                    let bounds = panel.world_bounds();
                     let radius = pantometry::view::mesh::body_radius(&pts, &bounds);
                     let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
                     for (i, centre) in pts.iter().enumerate() {
-                        let sphere =
-                            pantometry::view::mesh::body_spheres(&[place.apply(*centre)], radius);
+                        let sphere = pantometry::view::mesh::body_spheres(&[*centre], radius);
                         let colour = colouring.linear(values[i]);
                         let base = solid.vertices();
                         for (p, n) in sphere.positions.iter().zip(&sphere.normals) {
@@ -2085,24 +2086,15 @@ impl App {
                     ..
                 } => {
                     let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
-                    let place = panel.place();
+                    let placed = panel.placed_vertices();
+                    let _ = vertices;
                     for (r, value) in values.iter().enumerate() {
                         let lo = starts[r] as usize;
-                        let hi = starts
-                            .get(r + 1)
-                            .map_or(vertices.len() / 3, |s| *s as usize);
+                        let hi = starts.get(r + 1).map_or(placed.len(), |s| *s as usize);
                         let colour = colouring.linear(*value);
                         let base = lines.vertices();
-                        for w in lo..hi {
-                            lines.push(
-                                framing.local(place.apply([
-                                    vertices[3 * w],
-                                    vertices[3 * w + 1],
-                                    vertices[3 * w + 2],
-                                ])),
-                                [0.0, 0.0, 1.0],
-                                colour,
-                            );
+                        for at in placed.iter().take(hi).skip(lo) {
+                            lines.push(framing.local(*at), [0.0, 0.0, 1.0], colour);
                         }
                         for step in 0..hi.saturating_sub(lo).saturating_sub(1) {
                             lines.indices.push(base + step as u32);
@@ -2641,16 +2633,8 @@ impl App {
                     } => {
                         // Far to near, so a body in front covers one behind rather than whichever
                         // happened to be last in the array.
-                        let place = panel.place();
-                        let pts: Vec<[f64; 3]> = (0..values.len())
-                            .map(|i| {
-                                place.apply([
-                                    positions[3 * i],
-                                    positions[3 * i + 1],
-                                    positions[3 * i + 2],
-                                ])
-                            })
-                            .collect();
+                        let pts = panel.placed_positions();
+                        let _ = positions;
                         let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
                         for i in editor_core::far_to_near(&depths) {
                             let at = to_screen(pts[i]);
@@ -2686,18 +2670,9 @@ impl App {
                             if self.shaded {
                                 continue;
                             }
-                            let place = panel.place();
+                            let placed = panel.placed_vertices();
                             for w in lo..hi.saturating_sub(1) {
-                                let a = place.apply([
-                                    vertices[3 * w],
-                                    vertices[3 * w + 1],
-                                    vertices[3 * w + 2],
-                                ]);
-                                let b = place.apply([
-                                    vertices[3 * w + 3],
-                                    vertices[3 * w + 4],
-                                    vertices[3 * w + 5],
-                                ]);
+                                let (a, b) = (placed[w], placed[w + 1]);
                                 painter.line_segment(
                                     [to_screen(a), to_screen(b)],
                                     egui::Stroke::new(1.5_f32, shade(*value, scale)),
@@ -2720,10 +2695,13 @@ impl App {
                         // placed box is the fallback for a run written before the format carried it,
                         // and a field with neither has nowhere to be drawn — which is said rather
                         // than shown as an absence.
-                        let from_run = panel.extent_m().map(|e| editor_core::PlacedBox {
-                            name: name.clone(),
-                            corners: panel.place().corners_of(e),
-                        });
+                        let from_run =
+                            panel
+                                .placed_corners()
+                                .map(|corners| editor_core::PlacedBox {
+                                    name: name.clone(),
+                                    corners,
+                                });
                         let placed = from_run
                             .as_ref()
                             .or_else(|| self.checked.boxes.iter().find(|b| &b.name == name));

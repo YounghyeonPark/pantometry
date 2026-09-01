@@ -335,6 +335,73 @@ impl Panel {
         out
     }
 
+    /// The bodies' positions, in the world.
+    ///
+    /// Empty for a panel that is not a body set.
+    ///
+    /// # Why this is a method and not four lines at each call site
+    ///
+    /// It was four lines at each call site — **six of them**, three in the editor's shaded pass and
+    /// three in its flat painter — and six places each applying the same rule is the mechanism that
+    /// produced the defect this exists to fix. Three readers of a run each decided for themselves
+    /// what to do with `place` and each decided differently; the answer is not a fourth careful
+    /// reader, it is one function.
+    ///
+    /// A `Vec` per call, deliberately: both painters already built one, so this allocates nothing
+    /// that was not allocated before, and the alternative — an iterator borrowing `self` — makes
+    /// every caller name a lifetime to save a copy neither of them was avoiding.
+    pub fn placed_positions(&self) -> Vec<[f64; 3]> {
+        let Panel::Points {
+            place, positions, ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| place.apply(*p))
+            .collect()
+    }
+
+    /// A path panel's vertices, in the world, in the order the file states them.
+    ///
+    /// Empty for a panel that is not a set of paths. `starts` indexes this the same way it indexes
+    /// the raw array, because the placement moves points and does not reorder them.
+    pub fn placed_vertices(&self) -> Vec<[f64; 3]> {
+        let Panel::Paths {
+            place, vertices, ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        vertices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|v| place.apply(*v))
+            .collect()
+    }
+
+    /// A field's sampled box as **eight world corners**, or `None` for a run written before the
+    /// format carried the extent.
+    ///
+    /// Eight corners rather than a box: under a rotation the axis-aligned box around a placed cell
+    /// is bigger than the cell, and not losing that is why a run states a placement at all. A
+    /// caller drawing the field maps a unit cube through these; a caller fitting a camera wants
+    /// [`Panel::world_bounds`] instead.
+    ///
+    /// `None` and not an empty box, so a caller has to say what it does about a run that cannot
+    /// place its own field — the editor falls back to the scene's own box, which it only has when
+    /// the scene that produced the run is open beside it.
+    pub fn placed_corners(&self) -> Option<[[f64; 3]; 8]> {
+        let Panel::Field { place, .. } = self else {
+            return None;
+        };
+        self.extent_m().map(|e| place.corners_of(e))
+    }
+
     /// The box a field was sampled over, in metres, or `None` if this is not a field or the run
     /// predates the format carrying it.
     ///

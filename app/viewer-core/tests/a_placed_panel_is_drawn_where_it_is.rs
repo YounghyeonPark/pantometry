@@ -270,3 +270,93 @@ fn a_placed_path_projects_where_an_offset_one_does() {
         "the placement changed nothing, which is the defect"
     );
 }
+
+/// Four bodies in a unit box, placed as given.
+fn bodies(place: Placed) -> Panel {
+    Panel::Points {
+        name: "bodies".into(),
+        unit: "m/s".into(),
+        place,
+        boxed: false,
+        bounds: [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+        values: vec![1.0, 2.0, 3.0, 4.0],
+    }
+}
+
+#[test]
+fn every_shape_places_its_own_geometry_and_agrees_with_apply() {
+    // **The six call sites are three functions now.** The editor's shaded pass and its flat painter
+    // each turned a panel into geometry, and each applied `place` in its own four lines — six
+    // places obeying one rule, which is exactly the arrangement that produced this defect in the
+    // first place: three readers of a run each decided for themselves and each decided differently.
+    //
+    // So each accessor is checked against `Placed::apply` on the same points. That is not a
+    // tautology: the failure being prevented is an accessor that forgets the placement or applies
+    // it to the wrong array, and either shows up here as a mismatch.
+    let place = Placed {
+        at_m: [3.0, -2.0, 1.0],
+        turn: eighth_about_z(),
+    };
+
+    let b = bodies(place);
+    let got = b.placed_positions();
+    assert_eq!(got.len(), 4, "one per body");
+    for (i, want) in [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(got[i], place.apply(want), "body {i}");
+    }
+
+    let r = ray(place, vec![0.0, 0.0, 0.0, 1.0, 0.5, 0.0]);
+    let v = r.placed_vertices();
+    assert_eq!(v.len(), 2);
+    assert_eq!(v[0], place.apply([0.0, 0.0, 0.0]));
+    assert_eq!(v[1], place.apply([1.0, 0.5, 0.0]));
+
+    let c = cube(place)
+        .placed_corners()
+        .expect("a field with an extent");
+    assert_eq!(c, place.corners_of([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]));
+}
+
+#[test]
+fn each_accessor_is_empty_for_a_shape_it_is_not_about() {
+    // A panel is one shape. Asking a field for its bodies has to give nothing rather than
+    // something plausible — the silent-failure shape is a caller that draws an empty set and looks
+    // exactly like a caller that drew the wrong one.
+    let here = Placed::default();
+    assert!(cube(here).placed_positions().is_empty());
+    assert!(cube(here).placed_vertices().is_empty());
+    assert!(bodies(here).placed_vertices().is_empty());
+    assert!(bodies(here).placed_corners().is_none());
+    assert!(ray(here, vec![0.0; 6]).placed_positions().is_empty());
+    assert!(ray(here, vec![0.0; 6]).placed_corners().is_none());
+}
+
+#[test]
+fn a_field_from_before_the_extent_existed_has_no_corners_to_place() {
+    // `None`, and not a box of zeroes. A run written before the format carried `extent_m` cannot
+    // say where its field is, and the editor answers that by falling back to the scene's own box —
+    // which it only has when the scene that produced the run is open beside it. A caller handed an
+    // empty box instead would draw a point at the origin and call it a field.
+    let old = Panel::Field {
+        name: "old".into(),
+        unit: "K".into(),
+        place: Placed::default(),
+        nx: 2,
+        ny: 2,
+        nz: 2,
+        extent_m: None,
+        values: vec![300.0; 8],
+    };
+    assert!(old.placed_corners().is_none());
+    // `bounds` still answers, in cell units, which is what it has always done for such a run.
+    assert_eq!(old.bounds(), [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]);
+}

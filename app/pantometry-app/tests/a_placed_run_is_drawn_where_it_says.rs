@@ -21,12 +21,18 @@
 //! scene that states no pose**, which is twenty-nine of the thirty shipped. A missed site collapses
 //! that one panel onto the origin, which is a coordinate and not an appearance.
 //!
-//! # What this does not reach
+//! # The flat painter, which this does not reach and no longer needs to
 //!
-//! The **flat painter** — the unshaded fallback that draws with `egui::Painter` — has three sites
-//! of its own and no headless hook. They take the same one-line change and are not covered here;
-//! said rather than left to be assumed, because an uncovered site is exactly how this defect
-//! reached three readers in the first place.
+//! The unshaded fallback draws straight into an `egui::Painter`, so there is no geometry to
+//! inspect and this hook cannot see it. It had three sites of its own, applying the placement in
+//! its own four lines beside the shaded pass's four — **six places obeying one rule**, which is
+//! the arrangement that produced this defect in the first place.
+//!
+//! They are three functions now: `Panel::placed_positions`, `placed_vertices` and
+//! `placed_corners`, each called by both painters and each checked directly in
+//! `viewer-core`'s `a_placed_panel_is_drawn_where_it_is.rs` against `Placed::apply`. So the flat
+//! painter is covered by construction rather than by a second hook — the answer to six careful
+//! readers is one function, not a seventh.
 
 /// The binary, asked what it would draw for a run.
 fn drawn(run: &str) -> String {
