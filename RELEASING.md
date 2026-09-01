@@ -254,7 +254,8 @@ list actually wants.
 | concept DOI | `10.5281/zenodo.22024817` — always the newest version. Cite this in prose |
 | 0.16.0 | `10.5281/zenodo.22024818` — the first one minted |
 | 0.17.0 | `10.5281/zenodo.22122301` |
-| 0.18.0 | `10.5281/zenodo.22142201` — cite a version DOI when the result depends on which version ran, which for this library it does |
+| 0.18.0 | `10.5281/zenodo.22142201` |
+| 0.19.0 | `10.5281/zenodo.22218821` — cite a version DOI when the result depends on which version ran, which for this library it does. Minted seconds after the release: the `released` delivery answered **202** and the records API had the record on the first query, which is the shape 0.16.0 had and the one to expect |
 
 Both are in `CITATION.cff` and `README.md`'s BibTeX block. The concept DOI is the `doi:` field,
 because that is the one a reader following a reference wants; the version DOI lives on each Zenodo
