@@ -35,6 +35,7 @@
 mod cli;
 mod edit;
 mod render;
+mod start;
 mod view;
 
 fn main() {

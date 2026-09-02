@@ -89,7 +89,15 @@ fn open(passed: &[String]) -> eframe::Result {
             ..eframe::NativeOptions::default()
         },
         Box::new(move |_cc| {
-            let mut app = App::new(path);
+            // **No file named means no file open.** It used to mean the built-in scene, which is
+            // an answer to a question nobody asked: somebody who typed `pantometry edit` either
+            // has a scene somewhere or wants to make one, and both of those are on the start
+            // screen. `App::new(None)` still builds the built-in scene underneath, so `New
+            // project` has something to hand back and the fields are all populated.
+            let mut app = match path {
+                Some(p) => App::new(Some(p)),
+                None => App::empty(),
+            };
             app.run_at_once = run_at_once;
             Ok(Box::new(app))
         }),
@@ -190,7 +198,11 @@ pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, Str
 /// error where a reader will find it**. Elision is exact rather than inferred — egui ends a
 /// truncated galley with `…`, so a label that did not fit says so in its own text.
 pub fn ui_dump(path: Option<String>, width: f32, height: f32) -> String {
-    let mut app = App::new(path);
+    // The same two doors the window opens by, so what this reports is what a person would see.
+    let mut app = match path {
+        Some(p) => App::new(Some(p)),
+        None => App::empty(),
+    };
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -202,27 +214,41 @@ pub fn ui_dump(path: Option<String>, width: f32, height: f32) -> String {
     let _ = ctx.run(input(), |c| app.ui(c));
     let out = ctx.run(input(), |c| app.ui(c));
 
-    let mut texts: Vec<(egui::Rect, String)> = Vec::new();
+    let mut texts: Vec<Drawn> = Vec::new();
     let mut callbacks: Vec<egui::Rect> = Vec::new();
     for clipped in &out.shapes {
-        collect(&clipped.shape, &mut texts, &mut callbacks);
+        collect(
+            &clipped.shape,
+            clipped.clip_rect,
+            &mut texts,
+            &mut callbacks,
+        );
     }
     // Reading order: down the screen, then across. A dump a person can scan and a test can index.
-    texts.sort_by(|a, b| {
-        (a.0.top() as i32)
-            .cmp(&(b.0.top() as i32))
-            .then((a.0.left() as i32).cmp(&(b.0.left() as i32)))
+    texts.sort_by(|a: &Drawn, b| {
+        (a.at.top() as i32)
+            .cmp(&(b.at.top() as i32))
+            .then((a.at.left() as i32).cmp(&(b.at.left() as i32)))
     });
 
-    let elided = texts
-        .iter()
-        .filter(|(_, t)| t.ends_with('\u{2026}'))
-        .count();
+    // **egui's own flag, not the ellipsis at the end of the string.** Read off the suffix, this
+    // counted `New project…` and `Open a scene…` as truncated: a trailing `…` is the convention
+    // for a control that opens a dialog, and two of them made a start screen report two elided
+    // labels with nothing wrong. `Galley::elided` is set by the layout that did the eliding.
+    let elided = texts.iter().filter(|d| d.elided).count();
+    // **Cut off by the window rather than by a widget that scrolls.** The first form of this asked
+    // whether a string reached past the right edge of the window, and the toolbar's path box failed
+    // it honestly: a `TextEdit` lays its whole line out and clips it to its own box, so an absolute
+    // path in a temp directory is 431 points of galley inside 220 points of field and nothing is
+    // wrong. What is wrong is a string clipped by something that goes to the window's own edge --
+    // a panel -- which is what `fit view` at x=704 of a 700-point window was.
+    let cut = |d: &Drawn| d.at.right() > d.clip.right() + 0.5 && d.clip.right() >= width - 0.5;
+    let cut_off = texts.iter().filter(|d| cut(d)).count();
     // **The viewport's rect, because that rect is the defect this whole hook exists for.** It
     // was handed zero width once and drew nothing, correctly, for an afternoon in the renderer.
     // Reported rather than inferred from what happens to be drawn inside it.
     let mut s = format!(
-        "size={width}x{height}\ntexts={}\nelided={elided}\ncallbacks={}\n",
+        "size={width}x{height}\ntexts={}\nelided={elided}\ncut={cut_off}\ncallbacks={}\n",
         texts.len(),
         callbacks.len()
     );
@@ -235,16 +261,29 @@ pub fn ui_dump(path: Option<String>, width: f32, height: f32) -> String {
             r.height()
         ));
     }
-    for (r, t) in &texts {
+    for d in &texts {
         s.push_str(&format!(
-            "  {:>5.0} {:>5.0} {:>5.0}  {}\n",
-            r.left(),
-            r.top(),
-            r.width(),
-            t.replace('\n', "\\n")
+            "{} {:>5.0} {:>5.0} {:>5.0}  {}\n",
+            if cut(d) { "!" } else { " " },
+            d.at.left(),
+            d.at.top(),
+            d.at.width(),
+            d.text.replace('\n', "\\n")
         ));
     }
     s
+}
+
+/// One string the frame drew, where it went, and what was allowed to show of it.
+struct Drawn {
+    /// Where the string was laid out, in window points.
+    at: egui::Rect,
+    /// What it was clipped to. A widget that scrolls clips to itself; a panel clips to the window.
+    clip: egui::Rect,
+    /// The string, with newlines escaped.
+    text: String,
+    /// egui's own flag, set by the layout that shortened the line.
+    elided: bool,
 }
 
 /// Walk a shape tree, keeping the text and counting the paint callbacks.
@@ -253,19 +292,25 @@ pub fn ui_dump(path: Option<String>, width: f32, height: f32) -> String {
 /// own shapes and none of the widgets inside them.
 fn collect(
     shape: &egui::Shape,
-    texts: &mut Vec<(egui::Rect, String)>,
+    clip: egui::Rect,
+    texts: &mut Vec<Drawn>,
     callbacks: &mut Vec<egui::Rect>,
 ) {
     match shape {
         egui::Shape::Text(t) => {
             let text = t.galley.text().trim().to_string();
             if !text.is_empty() {
-                texts.push((t.galley.rect.translate(t.pos.to_vec2()), text));
+                texts.push(Drawn {
+                    at: t.galley.rect.translate(t.pos.to_vec2()),
+                    clip,
+                    text,
+                    elided: t.galley.elided,
+                });
             }
         }
         egui::Shape::Vec(v) => {
             for s in v {
-                collect(s, texts, callbacks);
+                collect(s, clip, texts, callbacks);
             }
         }
         egui::Shape::Callback(c) => callbacks.push(c.rect),
@@ -553,6 +598,14 @@ struct App {
     iso: Option<f64>,
 
     /// Whether the outliner and the inspector are on screen at all.
+    /// Whether the start screen is up instead of a scene.
+    ///
+    /// Set when the editor is opened with no file named. Before this the editor opened onto the
+    /// built-in scene whatever you meant by starting it, and a scene on disk was reachable only by
+    /// typing its path into the toolbar's text box. See [`crate::start`].
+    start: bool,
+    /// What the start screen lists, read once at startup and after each open.
+    recent: Vec<crate::start::Recent>,
     show_outliner: bool,
     show_inspector: bool,
     show_text: bool,
@@ -613,10 +666,38 @@ impl App {
             grabbed: None,
             iso: None,
             framing_hold: None,
+            start: false,
+            recent: Vec::new(),
             show_outliner: true,
             show_inspector: true,
             show_text: true,
         }
+    }
+
+    /// The editor with nothing open: the start screen, and the list of what was open before.
+    fn empty() -> App {
+        let mut app = App::new(None);
+        app.start = true;
+        app.recent = crate::start::remembered();
+        app.status = String::new();
+        app
+    }
+
+    /// Open `path`, and stay where we are if it will not open.
+    ///
+    /// **The start screen is left only on a successful read.** Leaving it on the attempt would put
+    /// an empty editor and an error message where the two ways forward used to be.
+    fn open(&mut self, path: String) {
+        let was = std::mem::replace(&mut self.path, path);
+        if !self.load_from_disk() {
+            self.path = was;
+            return;
+        }
+        self.start = false;
+        if let Err(e) = crate::start::remember(&self.path) {
+            self.status = format!("{}; the recent list was not written: {e}", self.status);
+        }
+        self.recent = crate::start::remembered();
     }
 
     fn recheck(&mut self) {
@@ -891,6 +972,32 @@ impl App {
     /// width, drew nothing correctly, and cost an afternoon in the renderer before anybody printed
     /// the rect.
     fn ui(&mut self, ctx: &egui::Context) {
+        // **Before anything else, and instead of it.** No menu bar, no toolbar, no panels: there is
+        // nothing yet for any of them to act on, and a window of disabled controls is a worse
+        // answer to "what now" than two buttons.
+        if self.start {
+            let mut chose = crate::start::Chose::Nothing;
+            egui::CentralPanel::default().show(ctx, |ui| {
+                chose = crate::start::screen(ui, &self.recent);
+            });
+            match chose {
+                crate::start::Chose::New => {
+                    self.text = default_scene();
+                    self.history.reset(self.text.clone());
+                    self.path = String::from("scene.json");
+                    self.dirty = true;
+                    self.known_mtime = None;
+                    self.recheck();
+                    self.needs_fit = true;
+                    self.start = false;
+                    self.status = String::from("a new scene — save it to give it a name");
+                }
+                crate::start::Chose::Open(p) => self.open(p),
+                crate::start::Chose::Nothing => {}
+            }
+            return;
+        }
+
         if self.run_at_once {
             self.run_at_once = false;
             if self.checked.error.is_none() {
@@ -912,14 +1019,41 @@ impl App {
         // not have to find on a crowded strip: which panels are on screen, what the viewport
         // draws, and the two file operations.
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            // Wrapped for the reason the toolbar is: `menu::bar` is a plain horizontal row, and
+            // below about 160 points `Domain` was laid out at x=114..157 of the window and clipped
+            // by its edge. Measured through `--ui-dump`'s `cut`, which is what that column counts.
+            ui.horizontal_wrapped(|ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Load").clicked() {
+                    if ui.button("Open…").clicked() {
+                        if let Some(p) = crate::start::pick() {
+                            self.open(p);
+                        }
+                        ui.close_menu();
+                    }
+                    // **Named for what it does.** It re-reads the path already in the toolbar's
+                    // box, which is a revert; called `Load`, it was the only thing on this menu
+                    // that looked like a way to open a different file, and it was not one.
+                    if ui.button("Revert").clicked() {
                         self.load_from_disk();
                         ui.close_menu();
                     }
+                    ui.separator();
                     if ui.button("Save").clicked() {
                         self.save_to_disk();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save as…").clicked() {
+                        if let Some(p) = crate::start::pick_save(&self.path) {
+                            self.path = p;
+                            self.save_to_disk();
+                            if let Err(e) = crate::start::remember(&self.path) {
+                                self.status = format!(
+                                    "{}; the recent list was not written: {e}",
+                                    self.status
+                                );
+                            }
+                            self.recent = crate::start::remembered();
+                        }
                         ui.close_menu();
                     }
                     ui.separator();
@@ -1160,7 +1294,12 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.label("file");
                 ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(220.0));
-                if ui.button("load").clicked() {
+                if ui.button("open").clicked() {
+                    if let Some(p) = crate::start::pick() {
+                        self.open(p);
+                    }
+                }
+                if ui.button("revert").clicked() {
                     self.load_from_disk();
                 }
                 if ui.button("save").clicked() {
@@ -1460,7 +1599,7 @@ impl App {
 
 impl App {
     /// Load the file at `path` into the pane, replacing whatever is there.
-    fn load_from_disk(&mut self) {
+    fn load_from_disk(&mut self) -> bool {
         match std::fs::read_to_string(&self.path) {
             Ok(t) => {
                 self.text = t;
@@ -1470,8 +1609,12 @@ impl App {
                 self.recheck();
                 self.needs_fit = true;
                 self.status = format!("loaded {}", self.path);
+                true
             }
-            Err(e) => self.status = format!("{}: {e}", self.path),
+            Err(e) => {
+                self.status = format!("{}: {e}", self.path);
+                false
+            }
         }
     }
 

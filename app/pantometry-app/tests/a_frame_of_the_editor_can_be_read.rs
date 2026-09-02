@@ -26,6 +26,16 @@
 
 /// The binary, asked for one frame.
 fn dump(args: &[&str]) -> String {
+    dump_listing("", args)
+}
+
+/// The binary, asked for one frame, with `recent` named as the file the start screen reads.
+///
+/// **Every dump names one**, including the ones that do not care: without it the start screen would
+/// read whichever list belongs to whoever is running the suite, and a test whose result depends on
+/// the machine it runs on is not a test. The default is a path that does not exist, which the
+/// editor reads as an empty list.
+fn dump_listing(recent: &str, args: &[&str]) -> String {
     let mut p = std::env::current_exe().expect("the test binary knows where it is");
     p.pop();
     if p.ends_with("deps") {
@@ -33,9 +43,18 @@ fn dump(args: &[&str]) -> String {
     }
     let mut argv = vec!["--ui-dump".to_string()];
     argv.extend(args.iter().map(|a| (*a).to_string()));
+    let none = std::env::temp_dir().join("pantometry-no-such-recent-list.json");
     let out =
         std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
             .args(&argv)
+            .env(
+                "PANTOMETRY_RECENT",
+                if recent.is_empty() {
+                    none.to_string_lossy().into_owned()
+                } else {
+                    recent.to_string()
+                },
+            )
             .output()
             .expect("the binary runs");
     assert!(
@@ -44,6 +63,39 @@ fn dump(args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A scene on disk to open, written by the binary's own `emit`.
+///
+/// The built-in scene, which is what the dump used to show when no file was named. Written out
+/// rather than reached at a path relative to this file, because a test binary that knows where the
+/// source tree is, is a test binary that keeps working after the tree has moved — this workspace
+/// has already had six tests pass against a checkout that was no longer there.
+fn scene() -> String {
+    static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let mut p = std::env::current_exe().expect("the test binary knows where it is");
+        p.pop();
+        if p.ends_with("deps") {
+            p.pop();
+        }
+        let dir = std::env::temp_dir().join("pantometry-ui-dump-scene");
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let out = dir.join("built-in.json");
+        let done = std::process::Command::new(
+            p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .args(["emit", &out.to_string_lossy()])
+        .output()
+        .expect("the binary runs");
+        assert!(
+            done.status.success() && out.is_file(),
+            "emit did not write a scene: {}",
+            String::from_utf8_lossy(&done.stderr)
+        );
+        out.to_string_lossy().into_owned()
+    })
+    .clone()
 }
 
 /// The viewport's rect — `left, top, width, height` — out of the header.
@@ -75,7 +127,7 @@ fn count(dump: &str, key: &str) -> usize {
 
 #[test]
 fn a_frame_has_something_on_it_and_a_viewport_to_draw_in() {
-    let d = dump(&[]);
+    let d = dump(&[&scene()]);
     assert!(d.starts_with("size=1500x950"), "{d:.80}");
     // Thirty-six strings on the default window. A floor rather than the number, because the count
     // moves whenever a label is added and the assertion worth having is "the frame is not empty".
@@ -103,7 +155,7 @@ fn the_viewport_keeps_its_floor_at_every_width() {
     for width in [
         1500, 1200, 1000, 950, 900, 800, 700, 600, 533, 500, 420, 360, 300, 260,
     ] {
-        let d = dump(&["--width", &width.to_string()]);
+        let d = dump(&[&scene(), "--width", &width.to_string()]);
         let (_, _, w, h) = viewport(&d);
         let want = floor.min(width as f32 - chrome);
         assert!(
@@ -118,38 +170,68 @@ fn the_viewport_keeps_its_floor_at_every_width() {
 }
 
 #[test]
-fn nothing_is_drawn_past_the_right_edge() {
+fn nothing_the_reader_should_see_is_cut_off_by_the_window() {
     // **A control that does not fit is not elided, it is lost.** The toolbar was a plain
     // `horizontal`, and at 700 points `fit view` was laid out at x=704..746 of a 700-point window
-    // — drawn, clipped by the panel, invisible and unclickable; at 500 the last three controls
-    // were not laid out at all. `elided` saw none of that, because egui does not truncate a
-    // button's text: the row overflows instead. The check that stood here counted a thing that
-    // cannot happen, and a 100-character label at 500 points left it reading zero.
+    // — drawn, clipped by the panel, invisible and unclickable. `elided` saw none of it: egui does
+    // not truncate a button's text, the row overflows instead, so the assertion that stood here
+    // counted a thing that cannot happen and read zero with a hundred-character label at 500.
     //
-    // Measured with that label instead: the widest right edge at 900 points went 885 -> 1057 in a
-    // plain row, and stays inside the window in a wrapped one. `elided` is still in the dump, as
-    // a number to read rather than one to assert.
+    // Nor is it "reaches past the right edge of the window", which was the next try and which the
+    // path box fails honestly: a `TextEdit` lays its whole line out and clips it to its own field,
+    // so an absolute path is 431 points of galley inside 220 points of box and nothing is wrong.
+    // What `cut` counts is a string clipped by something that reaches the window's own edge.
+    for width in [1500, 1100, 900, 700, 620, 500, 420, 300, 260] {
+        let d = dump(&[&scene(), "--width", &width.to_string()]);
+        assert_eq!(
+            count(&d, "cut"),
+            0,
+            "something is cut off at {width}; the lines marked `!`:\n{d}"
+        );
+    }
+
+    // **And the count is one that can move.** Disabling the condition it is computed from changed
+    // nothing at any width above, because nothing is cut at any of them — which is the state to be
+    // in and also the shape of an assertion that cannot fail. So a width where something *must* be
+    // cut: at 40 points `watch file` is a wider string than the whole window, and wrapping a row
+    // cannot help when one item is wider than the row. If this stops being 2, `cut` has stopped
+    // measuring and the zeros above mean nothing.
+    let tiny = dump(&[&scene(), "--width", "40"]);
+    assert!(
+        count(&tiny, "cut") > 0,
+        "nothing is cut in a 40-point window, so `cut` is not measuring:\n{tiny}"
+    );
+}
+
+#[test]
+fn every_control_is_still_there_at_every_width() {
+    // **The other half, and the one `cut` cannot see.** At 500 points the unwrapped toolbar did not
+    // draw its last three controls at all — `watch file`, `run on change` and `fit view` were not
+    // laid out, not clipped, and the status bar said only that the inspector had gone. A control
+    // that is absent reads as a feature the program does not have.
+    let want = [
+        "open",
+        "revert",
+        "save",
+        "run",
+        "verify",
+        "deep",
+        "watch file",
+        "run on change",
+        "fit view",
+    ];
     for width in [1500, 1100, 900, 700, 620, 500, 420] {
-        let d = dump(&["--width", &width.to_string()]);
-        let over: Vec<&str> = d
-            .lines()
-            .filter(|l| l.starts_with("  "))
-            .filter(|l| {
-                let mut it = l.split_whitespace();
-                match (it.next(), it.next(), it.next()) {
-                    (Some(left), Some(_), Some(w)) => {
-                        match (left.parse::<f32>(), w.parse::<f32>()) {
-                            (Ok(left), Ok(w)) => left + w > width as f32,
-                            _ => false,
-                        }
-                    }
-                    _ => false,
-                }
-            })
+        let d = dump(&[&scene(), "--width", &width.to_string()]);
+        // The text begins at column 21: a one-character marker, three five-wide numbers and two
+        // spaces. Sliced rather than split, because a label has spaces in it.
+        let on_screen: Vec<&str> = d.lines().filter_map(|l| l.get(21..)).collect();
+        let missing: Vec<&&str> = want
+            .iter()
+            .filter(|w| !on_screen.iter().any(|t| t == *w))
             .collect();
         assert!(
-            over.is_empty(),
-            "drawn past the right edge at {width}: {over:?}"
+            missing.is_empty(),
+            "gone from the toolbar at {width}: {missing:?}\n{d}"
         );
     }
 }
@@ -159,13 +241,59 @@ fn a_dropped_panel_says_so_rather_than_vanishing() {
     // At 500 points the inspector does not fit. The failure this guards is the silent one — a
     // panel that is simply not there, which reads as a missing feature rather than as a window
     // that is too narrow.
-    let wide = dump(&["--width", "1500"]);
-    let narrow = dump(&["--width", "500"]);
+    let wide = dump(&[&scene(), "--width", "1500"]);
+    let narrow = dump(&[&scene(), "--width", "500"]);
     assert!(wide.contains("Inspector"), "no inspector at 1500:\n{wide}");
     assert!(!narrow.contains("Inspector"), "the inspector fits at 500?");
     assert!(
         narrow.contains("the inspector hidden"),
         "the inspector left without a word:\n{narrow}"
+    );
+}
+
+#[test]
+fn opening_with_no_file_offers_the_two_ways_in_and_no_editor() {
+    // **What `pantometry edit` with no argument used to do was open the built-in scene**, which is
+    // an answer to a question nobody asked: whoever typed it either has a scene somewhere or wants
+    // to make one. Neither of those was on the screen, and the way to a file on disk was to know
+    // that the toolbar's text box was a way in.
+    let d = dump(&[]);
+    assert!(d.contains("New project"), "no way to make one:\n{d}");
+    assert!(d.contains("Open a scene"), "no way to open one:\n{d}");
+    // And none of the editor, because there is nothing yet for it to act on. A window of disabled
+    // controls is a worse answer to "what now" than two buttons.
+    assert_eq!(count(&d, "callbacks"), 0, "a viewport with no scene:\n{d}");
+    assert!(!d.contains("Outliner"), "the outliner over no scene:\n{d}");
+    assert!(
+        !d.contains("a small room ringing"),
+        "still the built-in scene:\n{d}"
+    );
+}
+
+#[test]
+fn a_remembered_file_that_is_gone_is_shown_and_refused() {
+    // A list that silently shortens itself looks like a list that forgot. The reader is then left
+    // wondering whether the editor lost their scene or they imagined opening it — so a path that
+    // has gone is on the screen, named, and not clickable.
+    let dir = std::env::temp_dir().join("pantometry-recent-test");
+    std::fs::create_dir_all(&dir).expect("a temp dir");
+    let list = dir.join("recent.json");
+    let here = scene();
+    let gone = dir.join("deleted-since.json");
+    let _ = std::fs::remove_file(&gone);
+    std::fs::write(
+        &list,
+        serde_json::to_string(&[here.clone(), gone.to_string_lossy().into_owned()])
+            .expect("two strings"),
+    )
+    .expect("writable");
+
+    let d = dump_listing(&list.to_string_lossy(), &[]);
+    assert!(d.contains("Recent"), "no list at all:\n{d}");
+    assert!(d.contains("built-in.json"), "the scene that is there:\n{d}");
+    assert!(
+        d.contains("deleted-since.json — missing"),
+        "the scene that is gone left without a word:\n{d}"
     );
 }
 
@@ -203,7 +331,7 @@ fn the_two_command_rows_are_both_there_and_are_not_the_same_row() {
     // and Save while the toolbar holds `load` and `save`, and `View` holds Fit view while the
     // toolbar holds `fit view`. Whether that is redundancy worth removing is a design question this
     // test does not answer.
-    let d = dump(&[]);
+    let d = dump(&[&scene()]);
     let row = |top: i32| -> Vec<String> {
         d.lines()
             .filter_map(|l| {
