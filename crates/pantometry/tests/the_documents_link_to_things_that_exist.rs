@@ -13,6 +13,16 @@
 //!
 //! A link to a file that exists but is the wrong one, and a link to a *web* address. The first
 //! needs a reader; the second needs the network, which no test here is allowed to want.
+//!
+//! # Not under `wasm32`
+//!
+//! Every document is read off a disk, and a `wasm32` target has none: with nothing readable the
+//! walk finds no links and the "a check that stopped finding links would pass forever" assertion
+//! fires, which is the assertion doing its job about the wrong thing. `counts_in_prose` and
+//! `citation_is_valid` carry the same line for the same reason, and this one shipped without it —
+//! the local gate has no wasm step and CI's `test (wasm32-wasip1, wasmtime)` job found it.
+
+#![cfg(not(target_family = "wasm"))]
 
 /// The repository root, from this crate's manifest.
 fn root() -> std::path::PathBuf {

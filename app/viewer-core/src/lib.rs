@@ -116,6 +116,28 @@ impl Placed {
 /// each is the only way, and a test comparing them is the only thing that makes it one number.
 pub const FORMAT: u32 = 2;
 
+/// Read an array of numbers in which a hole is written `null`.
+///
+/// **JSON has no NaN, and a field with a hole is the ordinary case.** A `block` filled from an STL
+/// marks every cell outside the part not-a-number; `pantometry_view::data::compact` writes any
+/// non-finite value as `null`, which is the only thing JSON offers; and this reader demanded
+/// `f64` and refused the file. So `pantometry run 29-a-designed-bracket-becomes-cells.json out.json`
+/// wrote 56 168 of them and neither `pantometry view` nor the editor could open what it wrote —
+/// *"invalid type: null, expected f64 at line 7 column 5"*, on the status bar of an editor that had
+/// just run the scene.
+///
+/// `null` reads back as `f64::NAN`, which is the value the writer had. The round trip is exact
+/// again for everything except the *kind* of non-finite: an infinity is written `null` too and
+/// comes back NaN. Nothing here produces one — a field value is a temperature or a pressure — and
+/// distinguishing them would need a spelling JSON does not have either.
+fn holes_are_nan<'de, D>(d: D) -> Result<Vec<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<Option<f64>> = serde::Deserialize::deserialize(d)?;
+    Ok(raw.into_iter().map(|x| x.unwrap_or(f64::NAN)).collect())
+}
+
 /// A whole run, as read from a file.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Run {
@@ -191,7 +213,9 @@ pub enum Panel {
         /// thing that cannot be helped.
         #[serde(default)]
         extent_m: Option<[f64; 6]>,
-        /// `nx*ny*nz` values, x fastest then y then z.
+        /// `nx*ny*nz` values, x fastest then y then z. A cell the domain does not occupy is
+        /// `null` in the file and [`f64::NAN`] here.
+        #[serde(deserialize_with = "holes_are_nan")]
         values: Vec<f64>,
     },
     /// A countable set of bodies.
@@ -214,6 +238,7 @@ pub enum Panel {
         /// Flattened `xyz` per body.
         positions: Vec<f64>,
         /// One per body.
+        #[serde(deserialize_with = "holes_are_nan")]
         values: Vec<f64>,
     },
     /// Runs of connected points — rays, trajectories, field lines.

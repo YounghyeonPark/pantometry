@@ -65,8 +65,22 @@ cargo +1.78 build --locked --workspace
 echo "the gate passed"     # and if this line does not appear, it did not
 ```
 
-CI also builds `wasm32-unknown-unknown` and runs the suite under `wasm32-wasip1`. It does **not**
-cover `bindings/python` or `app/` from this gate — each has its own job and its own procedure.
+**The two wasm steps belong in this block, and did not have them.** A test that reads the
+repository off a disk needs `#![cfg(not(target_family = "wasm"))]`, because a `wasm32` target has
+none — `counts_in_prose` and `citation_is_valid` both carry that line. A new one shipped without
+it, passed twenty-seven checks here and turned CI's `test (wasm32-wasip1, wasmtime)` job red. Add:
+
+```sh
+cargo test --locked --workspace --target wasm32-wasip1 --no-run
+cargo build --locked --workspace --target wasm32-unknown-unknown
+```
+
+`--no-run` because *running* needs wasmtime, which the CI job installs and this machine does not.
+That is the half CI keeps; compiling is the half that catches the missing `cfg`, and it is the
+half that was missing here.
+
+CI does **not** cover `bindings/python` or `app/` from this gate — each has its own job and its own
+procedure.
 
 **`app/` has its own gate and it is not optional.** Everything a person *runs* lives there — the
 CLI, the viewer, the editor and the GPU accelerator — and so do the thirty scenes and their

@@ -141,6 +141,20 @@ CI additionally builds on Rust 1.78, builds for `wasm32-unknown-unknown`, and ru
 suite under `wasm32-wasip1` with wasmtime. Those three catch different things and none of them
 is decoration — see below.
 
+### The two targets, and the `cfg` a document test needs
+
+```sh
+cargo test --locked --workspace --target wasm32-wasip1 --no-run
+cargo build --locked --workspace --target wasm32-unknown-unknown
+```
+
+Compiled here, run by CI: the `test (wasm32-wasip1, wasmtime)` job installs wasmtime and this block
+does not ask you to. Compiling is enough to catch what the gate missed once — a test that reads a
+document off a disk and has no `#![cfg(not(target_family = "wasm"))]`. A `wasm32` target has no
+repository, so the walk finds nothing, and the "a check that stopped finding things would pass
+forever" assertion fires about the wrong thing. `counts_in_prose` and `citation_is_valid` carry
+that line; `the_documents_link_to_things_that_exist` shipped without it, twenty-seven checks green.
+
 ### What the gate does not cover, and where those live instead
 
 The gate is the toolchain a Rust change needs. Three things need another one, and each is its own
