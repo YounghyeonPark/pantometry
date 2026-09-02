@@ -65,6 +65,13 @@ cargo run --release -- edit   scene.json            # the editor: check as you t
 `pantometry edit` with no file opens on a start screen: a new project, a scene to open, or one you
 had open before.
 
+![The editor: an outliner, the scene as JSON, a shaded viewport and an inspector](docs/editor.png)
+
+*`pantometry edit 29-a-designed-bracket-becomes-cells.json --run`. An L-bracket designed as an STL,
+filled into 4 100 cells at 2 mm and cooling to still air. The scene is the text on the left and the
+picture is what running it produced — the readings, the colour bar and the frame transport are the
+run's, and the note in orange is the mesher saying what it did.*
+
 ![Temperature along a bar under a laser, at five times, against the lumped mean](docs/beam-hot-spot.svg)
 
 *A laser on a mirror. The thin line is the lumped mean, which every curve has exactly — and the
