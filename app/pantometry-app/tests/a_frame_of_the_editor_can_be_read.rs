@@ -98,6 +98,31 @@ fn scene() -> String {
     .clone()
 }
 
+/// Where a dump line's text begins: two marker columns, three five-wide numbers, two spaces.
+const TEXT_AT: usize = 22;
+
+/// What a dump line says, or `None` if it is not a text line.
+///
+/// **Written once.** This column was written down in four places and then the dump grew a second
+/// marker — `!` for a string the window cut off, `=` for a string drawn on another — and four
+/// tests began failing with *"no menu titled File"*. A constant nobody can get wrong in one place
+/// is worth more than four correct copies.
+fn said(line: &str) -> Option<&str> {
+    line.get(TEXT_AT..).filter(|t| !t.is_empty())
+}
+
+/// A dump line's `left`, `top` and `width`.
+///
+/// Parsed out of the columns before the text, so a marker in either of them is skipped rather
+/// than counted as a field.
+fn box_of(line: &str) -> Option<(f32, f32, f32)> {
+    let mut n = line
+        .get(..TEXT_AT)?
+        .split_whitespace()
+        .filter_map(|w| w.parse::<f32>().ok());
+    Some((n.next()?, n.next()?, n.next()?))
+}
+
 /// The viewport's rect — `left, top, width, height` — out of the header.
 ///
 /// The rect the paint callback was handed, which is the number the original defect was: it was
@@ -204,6 +229,56 @@ fn nothing_the_reader_should_see_is_cut_off_by_the_window() {
 }
 
 #[test]
+fn nothing_is_drawn_on_top_of_anything_else() {
+    // **The viewport's bottom was claimed four times.** The scale bar, the colour bar, the count
+    // of what the shaded pass drew and the frame transport each anchored to `rect.bottom()` on
+    // their own, and with a run open the slider was laid out through the middle of the count.
+    // Legible in a screenshot of the window and invisible to every other column of the dump,
+    // which is why `overlap` exists: `13`, `frame` and `0 triangles, 0 lines, 0 paints` were
+    // marked `=` on three lines four points apart.
+    //
+    // A band each now — 26 points, which is what `colour_bar` and `scale_bar` occupy — and the
+    // transport is two rows rather than one so the reservation above it can be counted rather
+    // than measured. That count is the fragile part, and this is what holds it.
+    //
+    // **Two of the five placements are slack, measured.** Sabotage moved the draw count back to
+    // the viewport's bottom edge and halved the transport's reserved rows, and neither made this
+    // fail: without the ladder those two only *abut* their neighbours, by a point or two, and
+    // `overlap` shrinks each rect by 2 before intersecting so that two adjacent rows of text are
+    // not a collision. So this holds the reservation and the colour bar's band, and the other two
+    // lines buy room to read rather than correctness. Saying which is which is cheaper than a
+    // reader assuming all four are load-bearing.
+    for width in [1500, 1100, 900, 700, 620, 500, 420, 300, 260] {
+        for flag in ["--ran", "--iso"] {
+            let d = dump(&[&scene(), flag, "--width", &width.to_string()]);
+            assert_eq!(
+                count(&d, "overlap"),
+                0,
+                "strings are drawn on each other at {width} with {flag}; \
+                 the lines marked `=`:\n{d}"
+            );
+            assert_eq!(
+                count(&d, "cut"),
+                0,
+                "something is cut off at {width} with {flag}; the lines marked `!`:\n{d}"
+            );
+        }
+    }
+
+    // **And the count is one that can move.** Every width above reads zero, which is the state to
+    // be in and also the shape of an assertion that cannot fail. A menu drawn over the panel
+    // behind it is an overlap by construction — that is what a menu is — so opening one is the
+    // case where the number must not be zero.
+    let plain = dump(&[&scene()]);
+    let (x, y) = menu_at(&plain, "View");
+    let opened = dump(&[&scene(), "--click", &format!("{x},{y}")]);
+    assert!(
+        count(&opened, "overlap") > 0,
+        "an open menu overlaps nothing, so `overlap` is not measuring:\n{opened}"
+    );
+}
+
+#[test]
 fn every_control_is_still_there_at_every_width() {
     // **The other half, and the one `cut` cannot see.** At 500 points the unwrapped toolbar did not
     // draw its last three controls at all — `watch file`, `run on change` and `fit view` were not
@@ -218,7 +293,7 @@ fn every_control_is_still_there_at_every_width() {
         let d = dump(&[&scene(), "--width", &width.to_string()]);
         // The text begins at column 21: a one-character marker, three five-wide numbers and two
         // spaces. Sliced rather than split, because a label has spaces in it.
-        let on_screen: Vec<&str> = d.lines().filter_map(|l| l.get(21..)).collect();
+        let on_screen: Vec<&str> = d.lines().filter_map(said).collect();
         let missing: Vec<&&str> = want
             .iter()
             .filter(|w| !on_screen.iter().any(|t| t == *w))
@@ -326,16 +401,10 @@ fn a_set_that_cannot_share_one_duration_says_so_before_it_is_made() {
 fn menu_at(dump: &str, title: &str) -> (f32, f32) {
     let line = dump
         .lines()
-        .find(|l| {
-            l.get(21..).is_some_and(|t| t == title) && l.split_whitespace().nth(1) == Some("4")
-        })
+        .find(|l| said(l) == Some(title) && box_of(l).is_some_and(|(_, top, _)| top == 4.0))
         .unwrap_or_else(|| panic!("no menu titled {title}:\n{dump}"));
-    let n: Vec<f32> = line
-        .split_whitespace()
-        .take(3)
-        .filter_map(|w| w.parse().ok())
-        .collect();
-    (n[0] + n[2] / 2.0, 10.0)
+    let (left, _, w) = box_of(line).expect("a menu title's box");
+    (left + w / 2.0, 10.0)
 }
 
 #[test]
@@ -408,14 +477,9 @@ fn the_isosurface_level_is_on_the_picture_it_changes() {
     let (vx, vy, vw, vh) = viewport(&d);
     let line = d
         .lines()
-        .find(|l| l.get(21..) == Some("isosurface level"))
+        .find(|l| said(l) == Some("isosurface level"))
         .expect("the slider's line");
-    let n: Vec<f32> = line
-        .split_whitespace()
-        .take(3)
-        .filter_map(|w| w.parse().ok())
-        .collect();
-    let (x, y) = (n[0], n[1]);
+    let (x, y, _) = box_of(line).expect("the slider's box");
     assert!(
         x >= vx && x <= vx + vw && y >= vy && y <= vy + vh,
         "the level is at {x},{y}, outside the viewport at {vx},{vy} {vw}x{vh}:\n{d}"
@@ -602,12 +666,9 @@ fn a_scene_that_does_not_check_out_says_why_on_the_screen() {
     let x = |needle: &str| -> f32 {
         let line = d
             .lines()
-            .find(|l| l.get(21..).is_some_and(|t| t.starts_with(needle)))
+            .find(|l| said(l).is_some_and(|t| t.starts_with(needle)))
             .unwrap_or_else(|| panic!("no {needle} in:\n{d}"));
-        line.split_whitespace()
-            .next()
-            .and_then(|w| w.parse().ok())
-            .expect("a left edge")
+        box_of(line).expect("a left edge").0
     };
     assert!(
         x("1:100") < x("loaded "),
@@ -633,7 +694,7 @@ fn the_two_command_rows_are_both_there_and_are_not_the_same_row() {
             .filter_map(|l| {
                 let mut it = l.split_whitespace();
                 let (_, y) = (it.next()?, it.next()?.parse::<i32>().ok()?);
-                (y == top).then(|| l.split_whitespace().skip(3).collect::<Vec<_>>().join(" "))
+                (y == top).then(|| said(l).unwrap_or("").to_string())
             })
             .collect()
     };

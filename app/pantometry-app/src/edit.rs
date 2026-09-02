@@ -325,11 +325,34 @@ pub fn ui_dump(asked: Dump) -> String {
             || (d.at.left() < d.clip.left() - 0.5 && d.clip.left() <= 0.5)
     };
     let cut_off = texts.iter().filter(|d| cut(d)).count();
+    // **Two strings drawn over each other.** The viewport's bottom was claimed four times — the
+    // scale bar, the count of what the shaded pass drew, the transport and the colour bar's label
+    // — by four pieces of code that each took `rect.bottom()` and none of which knew about the
+    // others. It is legible in a screenshot and invisible to every other column here.
+    //
+    // **Every pair, whatever it is clipped to.** The first rule was "same clip rect", on the
+    // grounds that an open menu is drawn over the panel behind it and that is what a menu is —
+    // and it read zero on the frame that is visibly a pile, because the pair that collides is the
+    // transport, a widget in a scope of its own, against the readouts, which are painted. The
+    // clip told them apart exactly where the count was needed. So: all of them, and a frame with
+    // a menu open is expected to be non-zero; what is asserted is a frame with nothing open.
+    //
+    // Rects are shrunk first, because egui's galley boxes carry the line height's slack above and
+    // below the glyphs and two abutting rows would otherwise count as a collision.
+    let piled = |a: &Drawn, b: &Drawn| a.at.shrink(2.0).intersects(b.at.shrink(2.0));
+    let mut over = 0usize;
+    for (i, a) in texts.iter().enumerate() {
+        for b in texts.iter().skip(i + 1) {
+            if piled(a, b) {
+                over += 1;
+            }
+        }
+    }
     // **The viewport's rect, because that rect is the defect this whole hook exists for.** It
     // was handed zero width once and drew nothing, correctly, for an afternoon in the renderer.
     // Reported rather than inferred from what happens to be drawn inside it.
     let mut s = format!(
-        "size={width}x{height}\ntexts={}\nelided={elided}\ncut={cut_off}\ncallbacks={}\n",
+        "size={width}x{height}\ntexts={}\nelided={elided}\ncut={cut_off}\noverlap={over}\ncallbacks={}\n",
         texts.len(),
         callbacks.len()
     );
@@ -342,10 +365,14 @@ pub fn ui_dump(asked: Dump) -> String {
             r.height()
         ));
     }
+    // A string that sits on another is marked the way a cut one is, so the dump names the pair
+    // rather than only counting it.
     for d in &texts {
+        let on_another = texts.iter().any(|o| !std::ptr::eq(o, d) && piled(o, d));
         s.push_str(&format!(
-            "{} {:>5.0} {:>5.0} {:>5.0}  {}\n",
+            "{}{} {:>5.0} {:>5.0} {:>5.0}  {}\n",
             if cut(d) { "!" } else { " " },
+            if on_another { "=" } else { " " },
             d.at.left(),
             d.at.top(),
             d.at.width(),
@@ -3068,9 +3095,33 @@ impl App {
         // part: the same wireframe serves a 40 mm die and a 4 m room, and until now nothing on
         // screen said which. Drawn from the framing's own span, so it is the model's metres and
         // not the window's pixels.
+        // **One bottom, shared.** The scale bar, the colour bar, the count of what the shaded
+        // pass drew and the frame transport each anchored to `rect.bottom()` on their own, and
+        // with a run open the slider was laid out through the middle of the count: `--ui-dump`
+        // reported `overlap=2` and marked `13`, `frame` and `0 triangles, 0 lines, 0 paints` as
+        // sitting on each other.
+        //
+        // **Counted, not measured.** The transport is a `Ui` and is laid out *after* these are
+        // painted, so there is nothing to ask. What it will take is a row for the frame slider
+        // and two for the isosurface level and its note, and 22 points is a widget row with its
+        // spacing. A number arrived at that way is exactly the kind that goes quietly wrong, so
+        // `a_frame_of_the_editor_can_be_read` asserts `overlap` is zero on a run with both.
+        // One band of the viewport's bottom, and there are three of them above the transport:
+        // the scale bar, the colour bar, and the count of what the shaded pass drew.
+        const BAND: f32 = 26.0;
+        let rows = usize::from(self.run.as_ref().is_some_and(|v| v.run.frames.len() > 1)) * 2
+            + usize::from(self.iso.is_some()) * 2;
+        let reserved = if rows == 0 {
+            0.0
+        } else {
+            8.0 + rows as f32 * 22.0
+        };
+        let floor =
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - reserved));
+
         scale_bar(
             &painter,
-            rect,
+            floor,
             &project,
             &framing,
             ui.visuals().weak_text_color(),
@@ -3121,16 +3172,20 @@ impl App {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         if frames > 1 {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::Slider::new(&mut view.frame, 0..=frames - 1)
-                                        .text("frame"),
-                                );
-                                ui.label(format!(
-                                    "t = {} s",
-                                    editor_core::magnitude(view.run.frames[view.frame].t)
-                                ));
-                            });
+                            // **The time above the slider, not beside it.** Side by side they are
+                            // one row that does not fit a narrow viewport: at 260 points
+                            // `t = 0.020000 s` was laid out past the right edge and clipped by
+                            // it, which `--ui-dump`'s `cut` column reported. Wrapping the row
+                            // would fix the clipping and make the transport's height depend on
+                            // the width, which the band the readouts above it reserve cannot ask
+                            // about. Two rows always is the arrangement with one answer.
+                            ui.add(
+                                egui::Slider::new(&mut view.frame, 0..=frames - 1).text("frame"),
+                            );
+                            ui.label(format!(
+                                "t = {} s",
+                                editor_core::magnitude(view.run.frames[view.frame].t)
+                            ));
                         }
                         if let Some(level) = iso.as_mut() {
                             // **What this frame actually reaches**, because the slider spans the
@@ -3319,7 +3374,18 @@ impl App {
             // which is the whole difference between a picture and a reading, and the report grew one
             // for every view for the same reason.
             if let Some((lo, hi, label, signed)) = legend {
-                colour_bar(&painter, rect, lo, hi, &label, signed, ui.visuals());
+                // **Its own band, not the scale bar's.** The two are drawn at the same height
+                // and separated only by being right- and left-aligned, which clears on a wide
+                // window and meets on a narrow one: `overlap=1` at 900 and 500 points, `room / Pa
+                // (0 at the middle)` sitting on `1 m`. A band each is the arrangement that does
+                // not depend on the width. `colour_bar` occupies `bottom - 34 .. bottom - 10` of
+                // whatever rect it is given, and the scale bar `bottom - 33 .. bottom - 14`, so
+                // one band is 26 points.
+                let above = egui::Rect::from_min_max(
+                    floor.min,
+                    egui::pos2(floor.max.x, floor.max.y - BAND),
+                );
+                colour_bar(&painter, above, lo, hi, &label, signed, ui.visuals());
             }
 
             // The frame's readings, top-right: the numbers for everything that has no picture.
@@ -3361,7 +3427,7 @@ impl App {
                 if let Ok(gpu) = self.gpu.lock() {
                     let (tris, lines, paints) = gpu.drawn;
                     painter.text(
-                        egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
+                        egui::pos2(floor.left() + 8.0, floor.bottom() - 3.0 * BAND),
                         egui::Align2::LEFT_BOTTOM,
                         format!("{tris} triangles, {lines} lines, {paints} paints"),
                         egui::FontId::monospace(10.0),
