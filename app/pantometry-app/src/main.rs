@@ -124,7 +124,13 @@ fn main() {
                     .map(|w| w.split(',').map(str::to_string).collect())
                     .unwrap_or_default()
             });
-            print!("{}", edit::ui_dump(path, width, height, choosing));
+            let click = rest
+                .iter()
+                .position(|a| a == "--click")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|w| w.split_once(','))
+                .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+            print!("{}", edit::ui_dump(path, width, height, choosing, click));
             0
         }
 

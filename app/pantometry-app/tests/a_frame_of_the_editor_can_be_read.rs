@@ -209,17 +209,11 @@ fn every_control_is_still_there_at_every_width() {
     // draw its last three controls at all — `watch file`, `run on change` and `fit view` were not
     // laid out, not clipped, and the status bar said only that the inspector had gone. A control
     // that is absent reads as a feature the program does not have.
-    let want = [
-        "open",
-        "revert",
-        "save",
-        "run",
-        "verify",
-        "deep",
-        "watch file",
-        "run on change",
-        "fit view",
-    ];
+    // What is left after seven of the nine went back to the menus that already held them. `deep`
+    // stays because it changes what `verify` does when you press it; `watch file` and `run on
+    // change` went because they change what happens when nobody presses anything, and that is a
+    // thing to read in the status bar rather than a control to keep room for.
+    let want = ["run", "verify", "deep", "fit view"];
     for width in [1500, 1100, 900, 700, 620, 500, 420] {
         let d = dump(&[&scene(), "--width", &width.to_string()]);
         // The text begins at column 21: a one-character marker, three five-wide numbers and two
@@ -325,6 +319,63 @@ fn a_set_that_cannot_share_one_duration_says_so_before_it_is_made() {
     assert!(
         !near.contains("times apart"),
         "two kinds that run together were warned about:\n{near}"
+    );
+}
+
+/// Where a menu title sits, so a click can be aimed at it.
+fn menu_at(dump: &str, title: &str) -> (f32, f32) {
+    let line = dump
+        .lines()
+        .find(|l| {
+            l.get(21..).is_some_and(|t| t == title) && l.split_whitespace().nth(1) == Some("4")
+        })
+        .unwrap_or_else(|| panic!("no menu titled {title}:\n{dump}"));
+    let n: Vec<f32> = line
+        .split_whitespace()
+        .take(3)
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    (n[0] + n[2] / 2.0, 10.0)
+}
+
+#[test]
+fn what_left_the_toolbar_is_in_the_menu_it_was_taken_from() {
+    // **The claim that justified the removal, checked rather than asserted.** Seven controls came
+    // off the toolbar because a menu already held them, and until `--click` there was no way to
+    // see inside a menu: a frame built with no input shows six titles and nothing under them, so
+    // "it still has a home" was exactly the kind of sentence this repository has learned to
+    // distrust. A press and a release at the title opens one.
+    let plain = dump(&[&scene()]);
+    for (title, items) in [
+        ("File", &["Open…", "Revert", "Save", "Save as…"][..]),
+        ("Watch", &["Watch file", "Run on change"][..]),
+        ("View", &["Fit view"][..]),
+    ] {
+        let (x, y) = menu_at(&plain, title);
+        let opened = dump(&[&scene(), "--click", &format!("{x},{y}")]);
+        for item in items {
+            assert!(
+                opened.contains(item),
+                "{title} does not hold {item} — it left the toolbar for nowhere:\n{opened}"
+            );
+        }
+        // And the menu really opened, rather than the item having been on screen all along.
+        assert!(
+            items.iter().any(|i| !plain.contains(*i)),
+            "{title}'s items were already on screen without opening it, so this proves nothing"
+        );
+    }
+}
+
+#[test]
+fn the_editor_says_what_it_does_when_nobody_is_looking() {
+    // Watching a file and running on change happen with no click, so the status bar is where a
+    // person finds out they are on. They were two checkboxes taking permanent room on the
+    // toolbar, which showed the same state and cost four times the width.
+    let d = dump(&[&scene()]);
+    assert!(
+        d.contains("watching the file"),
+        "nothing says the editor is watching:\n{d}"
     );
 }
 

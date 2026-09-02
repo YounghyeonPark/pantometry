@@ -202,6 +202,7 @@ pub fn ui_dump(
     width: f32,
     height: f32,
     choosing: Option<Vec<String>>,
+    click: Option<(f32, f32)>,
 ) -> String {
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -223,6 +224,24 @@ pub fn ui_dump(
         ..Default::default()
     };
     let _ = ctx.run(input(), |c| app.ui(c));
+    // **A click, when one is asked for.** A menu's items live inside a closed menu, so a frame
+    // built without input can see six menu titles and nothing under them — which made "this
+    // command still has a home in a menu" a claim no test could reach. A press and a release at
+    // a point is the smallest input that opens one, and egui needs the frame after to lay the
+    // opened menu out.
+    if let Some((x, y)) = click {
+        let at = egui::pos2(x, y);
+        let press = |down| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: down,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut with_click = input();
+        with_click.events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
+        let _ = ctx.run(with_click, |c| app.ui(c));
+        let _ = ctx.run(input(), |c| app.ui(c));
+    }
     let out = ctx.run(input(), |c| app.ui(c));
 
     let mut texts: Vec<Drawn> = Vec::new();
@@ -253,7 +272,14 @@ pub fn ui_dump(
     // path in a temp directory is 431 points of galley inside 220 points of field and nothing is
     // wrong. What is wrong is a string clipped by something that goes to the window's own edge --
     // a panel -- which is what `fit view` at x=704 of a 700-point window was.
-    let cut = |d: &Drawn| d.at.right() > d.clip.right() + 0.5 && d.clip.right() >= width - 0.5;
+    // Both edges. Written for the right one only, it stopped seeing anything the moment the
+    // toolbar's two longest labels moved to a menu: what runs off a narrow window now is the
+    // status bar's right-aligned indicator, pushed off the *left* at 40 points. A string clipped
+    // by the window is lost whichever side it went out of.
+    let cut = |d: &Drawn| {
+        (d.at.right() > d.clip.right() + 0.5 && d.clip.right() >= width - 0.5)
+            || (d.at.left() < d.clip.left() - 0.5 && d.clip.left() <= 0.5)
+    };
     let cut_off = texts.iter().filter(|d| cut(d)).count();
     // **The viewport's rect, because that rect is the defect this whole hook exists for.** It
     // was handed zero width once and drew nothing, correctly, for an afternoon in the renderer.
@@ -1328,18 +1354,18 @@ impl App {
             // at every width, and `nothing_is_drawn_past_the_right_edge` is the check that failed
             // before it and holds it now.
             ui.horizontal_wrapped(|ui| {
-                ui.label("file");
-                ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(220.0));
-                if ui.button("open").clicked() {
-                    if let Some(p) = crate::start::pick() {
-                        self.open(p);
-                    }
-                }
-                if ui.button("revert").clicked() {
-                    self.load_from_disk();
-                }
-                if ui.button("save").clicked() {
-                    self.save_to_disk();
+                // **The name, not a field.** This was an editable path 220 points wide, and it
+                // was the only way into a file on disk — which is why it was a control at all.
+                // `Open…` and `Save as…` are that now, so what is left is the question it also
+                // answered: which file am I in. A name answers that; a path a person has to read
+                // sideways does not, and the full one is a hover away.
+                let name = std::path::Path::new(&self.path)
+                    .file_name()
+                    .map_or_else(|| self.path.clone(), |n| n.to_string_lossy().into_owned());
+                ui.label(egui::RichText::new(name).strong())
+                    .on_hover_text(&self.path);
+                if self.dirty {
+                    ui.label(egui::RichText::new("edited").weak());
                 }
                 ui.separator();
                 let runnable = self.checked.error.is_none() && self.busy.is_none();
@@ -1359,8 +1385,6 @@ impl App {
                 }
                 ui.checkbox(&mut self.deep, "deep");
                 ui.separator();
-                ui.checkbox(&mut self.watch, "watch file");
-                ui.checkbox(&mut self.auto_run, "run on change");
                 if ui.button("fit view").clicked() {
                     self.needs_fit = true;
                 }
@@ -1513,14 +1537,42 @@ impl App {
         }
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            match self.checked.error.as_deref() {
-                Some(e) => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), e);
+            // **Right to left, and the message last.** Wrapped in a plain `horizontal` this row
+            // stopped wrapping — a `horizontal` lays out on one line by definition — and the
+            // narrow-window notice, which is 380 points long, was drawn past the edge of a
+            // 420-point window and clipped. `--ui-dump`'s `cut` column found it in the same commit
+            // that caused it. So the indicator is placed first, against the right edge, and the
+            // message takes what is left and wraps into it.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                // **What the editor does when nobody clicks anything, said where a person looks
+                // to find out what it is doing.** These were two checkboxes on the toolbar, which
+                // is the wrong place for the same reason `deep` is the right one: `deep` changes
+                // what a button does when you press it, so it belongs beside that button, and
+                // these change what happens without anyone pressing anything. The toggles are in
+                // the Watch menu; this is their state.
+                let watching = match (self.watch, self.auto_run) {
+                    (true, true) => Some("watching the file, running on change"),
+                    (true, false) => Some("watching the file"),
+                    (false, true) => Some("running on change, but not watching the file"),
+                    (false, false) => None,
+                };
+                if let Some(what) = watching {
+                    ui.label(egui::RichText::new(what).weak());
                 }
-                None => {
-                    ui.label(&self.status);
+                match self.checked.error.as_deref() {
+                    Some(e) => {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(e).color(egui::Color32::from_rgb(220, 80, 80)),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    None => {
+                        ui.add(egui::Label::new(&self.status).wrap());
+                    }
                 }
-            }
+            });
         });
 
         // Rebuilt every paint, from the checked scene and whatever the run has produced so far.

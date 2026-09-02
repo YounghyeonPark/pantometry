@@ -147,11 +147,27 @@ Two real defects were behind that hunt, and neither was the renderer:
   **940 px** and left the viewport nothing: a 3D editor showing no 3D because of a caption. The rows
   truncate now, with the full name on hover.
 
+## One home per command
+
+The strip under the menus carries four things: **run**, **verify**, **deep** and **fit view**.
+It carried nine, and seven of those nine were also in a menu — a toolbar and a menu bar offering
+the same command is two answers to one question, and the screen did not say which was the real
+one. What stayed is what you reach for without thinking; what went back to the menus is what you
+look up. `deep` stayed because it changes what **verify** does when you press it, so it belongs
+beside that button; **Watch file** and **Run on change** went because they change what happens
+when nobody presses anything, and that is a thing to *read* — the status bar says so on the right
+— rather than a control to keep permanent room for.
+
+The file's name sits at the left of that strip, with the full path on hover, and says **edited**
+when the pane is dirty. It used to be an editable 220-point path field, which is what it was for:
+typing a path was the only way into a file on disk. `Open…` and `Save as…` are that now.
+
 ## The live loop
 
-Leave the window open and let a script do the editing. With **watch file** on (the default)
-the editor polls the file's modified time and reloads when something else writes it; with
-**run on change** on as well, the reload runs the scene — so
+Leave the window open and let a script do the editing. With **Watch file** on (the default —
+it is in the Watch menu, and the status bar says when it is on) the editor polls the file's
+modified time and reloads when something else writes it; with
+**Run on change** on as well, the reload runs the scene — so
 `script writes → editor rechecks → runs → draws` closes with no hand on the window, which is
 the loop an agent-driven workflow needs. A change arriving mid-run stops the in-flight run at
 the next frame boundary and starts a fresh one, so the picture converges on the latest text
