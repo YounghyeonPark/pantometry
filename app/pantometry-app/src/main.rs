@@ -96,6 +96,29 @@ fn main() {
             }
         }
 
+        // **One frame of the editor's interface, as text, without a window.** The editor could
+        // not be looked at except by opening it, which is where the HTML report was before
+        // `tools/report-check` — and the viewport-with-no-width bug is what that costs. See
+        // `a_frame_of_the_editor_can_be_read`.
+        Some("--ui-dump") => {
+            let mut it = rest.iter();
+            let path = it.next().filter(|p| !p.starts_with('-')).cloned();
+            let width = rest
+                .iter()
+                .position(|a| a == "--width")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|w| w.parse().ok())
+                .unwrap_or(1500.0);
+            let height = rest
+                .iter()
+                .position(|a| a == "--height")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|h| h.parse().ok())
+                .unwrap_or(950.0);
+            print!("{}", edit::ui_dump(path, width, height));
+            0
+        }
+
         // `verify`, `fit`, `--check`, `--emit-default`, a bare scene path, or nothing.
         _ => cli::run(&args),
     };

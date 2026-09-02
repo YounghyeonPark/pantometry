@@ -7,8 +7,22 @@
 //! and looked precisely like a renderer that did not work — an afternoon went into the renderer
 //! before the rect was printed.
 //!
-//! Opening the window at 1500 × 950 hid that. This is the fix, and it is checked here rather than
-//! by resizing a window, because the decision is a pure function of one number.
+//! Opening the window at 1500 × 950 hid that. The decision is a pure function of one number, and
+//! this checks it at 177 widths rather than by resizing a window.
+//!
+//! # What it cannot see, and did not
+//!
+//! It reads `--layout-at`, which is the *decision*. From `d0c03ea` (2026-08-25) until a week later
+//! the decision reserved the panels' **minimums** — 170, 240 and 200 — while the panels were then
+//! created at their **defaults** — 260, 430 and 320. Every assertion in this file passed, at every
+//! one of those 177 widths, while the rect the paint callback was handed was **zero points wide**
+//! at 1000, 950, 900 and 700: the very defect the paragraph above says was fixed, under a guard
+//! that was checking its own arithmetic and not the program.
+//!
+//! What found it reads the rect itself — `the_viewport_keeps_its_floor_at_every_width` in
+//! `a_frame_of_the_editor_can_be_read.rs`, which is the assertion to add a width to. This file
+//! stays, because sweeping the decision in steps of 17 points is still the cheapest way to land on
+//! every threshold, and it is no longer the only thing standing over the defect it names.
 
 /// The binary, run with an argument that makes it print the decision and exit.
 ///

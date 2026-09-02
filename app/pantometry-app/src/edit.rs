@@ -170,6 +170,138 @@ pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, Str
     ))
 }
 
+/// One frame of the editor's interface, as text: every string it drew and where.
+///
+/// The `--ui-dump` subcommand's whole body, in the pattern `--layout-at` set. `App::new` needs no
+/// window and `App::ui` needs no `eframe::Frame`, so a frame can be built, laid out and read
+/// without a display — and the shaded viewport, which does need a GPU, arrives as a
+/// `Shape::Callback` that is recorded and never run.
+///
+/// # Two passes, and the second is the one reported
+///
+/// egui settles: a panel's width, a scroll area's extent and a menu's size can depend on what the
+/// previous frame measured. One pass reports a layout mid-settle. Two is what the interaction
+/// model needs and what a reader sees.
+///
+/// # Why text and rects rather than pixels
+///
+/// A screenshot answers "does it look right" only to somebody looking. This answers the questions
+/// a test can hold: **is the control there at this width**, **was the label elided**, **is the
+/// error where a reader will find it**. Elision is exact rather than inferred — egui ends a
+/// truncated galley with `…`, so a label that did not fit says so in its own text.
+pub fn ui_dump(path: Option<String>, width: f32, height: f32) -> String {
+    let mut app = App::new(path);
+    let ctx = egui::Context::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, height),
+        )),
+        ..Default::default()
+    };
+    let _ = ctx.run(input(), |c| app.ui(c));
+    let out = ctx.run(input(), |c| app.ui(c));
+
+    let mut texts: Vec<(egui::Rect, String)> = Vec::new();
+    let mut callbacks: Vec<egui::Rect> = Vec::new();
+    for clipped in &out.shapes {
+        collect(&clipped.shape, &mut texts, &mut callbacks);
+    }
+    // Reading order: down the screen, then across. A dump a person can scan and a test can index.
+    texts.sort_by(|a, b| {
+        (a.0.top() as i32)
+            .cmp(&(b.0.top() as i32))
+            .then((a.0.left() as i32).cmp(&(b.0.left() as i32)))
+    });
+
+    let elided = texts
+        .iter()
+        .filter(|(_, t)| t.ends_with('\u{2026}'))
+        .count();
+    // **The viewport's rect, because that rect is the defect this whole hook exists for.** It
+    // was handed zero width once and drew nothing, correctly, for an afternoon in the renderer.
+    // Reported rather than inferred from what happens to be drawn inside it.
+    let mut s = format!(
+        "size={width}x{height}\ntexts={}\nelided={elided}\ncallbacks={}\n",
+        texts.len(),
+        callbacks.len()
+    );
+    for r in &callbacks {
+        s.push_str(&format!(
+            "viewport={:.0},{:.0} {:.0}x{:.0}\n",
+            r.left(),
+            r.top(),
+            r.width(),
+            r.height()
+        ));
+    }
+    for (r, t) in &texts {
+        s.push_str(&format!(
+            "  {:>5.0} {:>5.0} {:>5.0}  {}\n",
+            r.left(),
+            r.top(),
+            r.width(),
+            t.replace('\n', "\\n")
+        ));
+    }
+    s
+}
+
+/// Walk a shape tree, keeping the text and counting the paint callbacks.
+///
+/// `Shape::Vec` nests, so this recurses; a flat scan over `FullOutput::shapes` finds the panels'
+/// own shapes and none of the widgets inside them.
+fn collect(
+    shape: &egui::Shape,
+    texts: &mut Vec<(egui::Rect, String)>,
+    callbacks: &mut Vec<egui::Rect>,
+) {
+    match shape {
+        egui::Shape::Text(t) => {
+            let text = t.galley.text().trim().to_string();
+            if !text.is_empty() {
+                texts.push((t.galley.rect.translate(t.pos.to_vec2()), text));
+            }
+        }
+        egui::Shape::Vec(v) => {
+            for s in v {
+                collect(s, texts, callbacks);
+            }
+        }
+        egui::Shape::Callback(c) => callbacks.push(c.rect),
+        _ => {}
+    }
+}
+
+/// What the viewport must keep, whatever the panels want.
+///
+/// 280 points is about the smallest a shaded scene reads at — narrower and the colour bar, the
+/// readings and the geometry compete for the same forty pixels. Named here because two places
+/// have to agree about it: `panels_that_fit`, which decides how many panels there is room for,
+/// and `panel_budget`, which decides how wide each of them may be. They disagreed, and the
+/// viewport was zero points wide at four of the eleven widths `--ui-dump` was asked about.
+pub const VIEWPORT_FLOOR: f32 = 280.0;
+
+/// The narrowest useful outliner: a tree row with a disclosure arrow, a dot and a truncated name.
+pub const OUTLINER_MIN: f32 = 170.0;
+
+/// The narrowest useful scene text: JSON at this indent wraps unreadably below it.
+pub const TEXT_MIN: f32 = 240.0;
+
+/// The narrowest useful inspector: a label and a number-drag side by side.
+pub const INSPECTOR_MIN: f32 = 200.0;
+
+/// What a side panel costs beyond its own width: the gap egui leaves beside it.
+///
+/// Read from the style rather than written down — it is egui's number, not this program's, and
+/// this program sets no style, so `Style::default()` is the one in force. Left out of both sums
+/// at first, and with three panels up the viewport settled at **264** points against a floor of
+/// 280: three of these, which is exactly the shortfall. A floor that is missed by the width of
+/// the separators is still a floor that does not hold.
+fn panel_gap() -> f32 {
+    egui::Style::default().spacing.item_spacing.x
+}
+
 /// What the panels do at a given window width, as one line.
 ///
 /// The `--layout-at` subcommand's whole body. `panels_that_fit` is a method on `App` because it
@@ -741,6 +873,24 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.ui(ctx);
+    }
+}
+
+impl App {
+    /// One frame of interface, from a context alone.
+    ///
+    /// Split out of [`eframe::App::update`] so a frame can be built **without a window**. The
+    /// `eframe::Frame` argument was already unused — it is `_frame` — so nothing here ever needed
+    /// eframe, and the shaded viewport is a `PaintCallback` that a headless run records and never
+    /// executes, so no GL context is needed either.
+    ///
+    /// That is what `--ui-dump` runs. Before it existed the editor could not be looked at except
+    /// by opening it, which is the same position the HTML report was in before `tools/report-check`
+    /// — and this repository has already paid for that once: the viewport was handed a rect of zero
+    /// width, drew nothing correctly, and cost an afternoon in the renderer before anybody printed
+    /// the rect.
+    fn ui(&mut self, ctx: &egui::Context) {
         if self.run_at_once {
             self.run_at_once = false;
             if self.checked.error.is_none() {
@@ -998,7 +1148,16 @@ impl eframe::App for App {
         });
 
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            // **Wrapped, because a row of controls that does not fit loses its end silently.**
+            // Measured through `--ui-dump` at the moment it gained one: in a 700-point window
+            // `fit view` was laid out at x=704..746 — outside the window, drawn, clipped by the
+            // panel and so invisible and unclickable; at 500 points the last three controls
+            // (`watch file`, `run on change`, `fit view`) were not laid out at all. Neither
+            // showed up as an elided label, because egui does not elide a button's text: the row
+            // overflows instead. Wrapping is the one-word fix that keeps every control reachable
+            // at every width, and `nothing_is_drawn_past_the_right_edge` is the check that failed
+            // before it and holds it now.
+            ui.horizontal_wrapped(|ui| {
                 ui.label("file");
                 ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(220.0));
                 if ui.button("load").clicked() {
@@ -1217,26 +1376,40 @@ impl eframe::App for App {
             self.status =
                 format!("{dropped} hidden — the window is too narrow for it and the view");
         }
+        // Each panel's ceiling is its minimum plus its share of what is over the floor, so the
+        // three of them together can never take the viewport below `VIEWPORT_FLOOR`.
+        //
+        // **The ceiling alone, because `width_range` clamps the default too.** Both were written
+        // — the ceiling and a `default_width` clamped to it — and sabotage found each of them
+        // sufficient on its own: removing either left the panel exactly as wide, at all fourteen
+        // widths, because the other did the clamping. Two mechanisms neither of which any test
+        // could show to be necessary. The ceiling is the one kept, since it also holds a width a
+        // reader has dragged, which `default_width` is not consulted about after the first frame.
+        let share = self.panel_budget(ctx.screen_rect().width(), &fits);
+        let cap = |min: f32, most: f32| (min + share).min(most);
         if fits.outliner {
+            let most = cap(OUTLINER_MIN, 440.0);
             egui::SidePanel::left("outliner")
                 .resizable(true)
                 .default_width(260.0)
-                .width_range(170.0..=440.0)
+                .width_range(OUTLINER_MIN..=most)
                 .show(ctx, |ui| self.outliner(ui, &tree));
         }
         if fits.inspector {
+            let most = cap(INSPECTOR_MIN, 460.0);
             egui::SidePanel::right("inspector")
                 .resizable(true)
                 .default_width(320.0)
-                .width_range(200.0..=460.0)
+                .width_range(INSPECTOR_MIN..=most)
                 .show(ctx, |ui| self.inspector(ui, &tree));
         }
 
         if fits.text {
+            let most = cap(TEXT_MIN, 560.0);
             egui::SidePanel::left("text")
                 .resizable(true)
                 .default_width(430.0)
-                .width_range(240.0..=560.0)
+                .width_range(TEXT_MIN..=most)
                 .show(ctx, |ui| {
                     if let Some(summary) = &self.checked.summary {
                         ui.label(summary.clone());
@@ -2109,20 +2282,27 @@ impl App {
 
     /// Which side panels there is room for, and the first one that had to go.
     ///
-    /// Widths are the minimums the panels are given below; `FLOOR` is what the viewport must keep.
-    /// 280 points is about the smallest a shaded scene reads at — narrower and the colour bar, the
-    /// readings and the geometry are competing for the same forty pixels.
+    /// Widths are the minimums the panels are held to below; [`VIEWPORT_FLOOR`] is what the
+    /// viewport must keep.
     fn panels_that_fit(&self, width: f32) -> (Panels, Option<&'static str>) {
-        const FLOOR: f32 = 280.0;
+        const FLOOR: f32 = VIEWPORT_FLOOR;
         let mut fits = Panels {
             outliner: self.show_outliner,
             text: self.show_text,
             inspector: self.show_inspector,
         };
+        // The viewport has a gap of its own, on the side no panel is against: with one panel up
+        // the chrome measured 16 points, not 8, and the viewport settled at 272 against a floor
+        // of 280. `+ gap` unconditionally is that side.
+        let gap = panel_gap();
         let taken = |p: &Panels| {
-            (if p.outliner { 170.0 } else { 0.0 })
-                + (if p.text { 240.0 } else { 0.0 })
-                + (if p.inspector { 200.0 } else { 0.0 })
+            gap + (if p.outliner { OUTLINER_MIN + gap } else { 0.0 })
+                + (if p.text { TEXT_MIN + gap } else { 0.0 })
+                + (if p.inspector {
+                    INSPECTOR_MIN + gap
+                } else {
+                    0.0
+                })
         };
         let mut dropped = None;
 
@@ -2144,6 +2324,34 @@ impl App {
             dropped = dropped.or(Some("the outliner"));
         }
         (fits, dropped)
+    }
+
+    /// What each shown side panel may grow to, so that the viewport keeps its floor.
+    ///
+    /// **`panels_that_fit` reserved the minimums and the panels spent their defaults.** Measured
+    /// through `--ui-dump`, which reports the callback's own rect: at a 900-point window the
+    /// arithmetic said `view=290` and the rect was **0 x 870** — the panels had taken 260, 430 and
+    /// 320 against the 170, 240 and 200 that were budgeted, and the viewport got the remainder,
+    /// which was nothing. Zero at 1000, 950, 900 and 700 points. That is the same zero-width rect
+    /// the panel comment above was written about; dropping a panel had made it rarer and the sum
+    /// still had the hole in it.
+    ///
+    /// So the budget is handed to the spenders. Every shown panel keeps its minimum and takes an
+    /// equal share of what is left over the floor, which makes the sum of the maxima exactly
+    /// `width - VIEWPORT_FLOOR`: the floor now holds however the panels are dragged, rather than
+    /// only while nobody drags them. `width_range` clamps a remembered width into the range each
+    /// frame, so narrowing the window pulls a panel in rather than eating the view.
+    fn panel_budget(&self, width: f32, fits: &Panels) -> f32 {
+        let mins = (if fits.outliner { OUTLINER_MIN } else { 0.0 })
+            + (if fits.text { TEXT_MIN } else { 0.0 })
+            + (if fits.inspector { INSPECTOR_MIN } else { 0.0 });
+        let shown =
+            usize::from(fits.outliner) + usize::from(fits.text) + usize::from(fits.inspector);
+        if shown == 0 {
+            return 0.0;
+        }
+        let gaps = (shown as f32 + 1.0) * panel_gap();
+        (width - VIEWPORT_FLOOR - mins - gaps).max(0.0) / shown as f32
     }
 
     /// The 3D viewport: wireframe extents from the text, run panels over them by shape.
@@ -2528,17 +2736,25 @@ impl App {
                     );
                 }
             }
-            painter.text(
-                to_screen(placed.corners[0]),
-                egui::Align2::LEFT_BOTTOM,
-                &placed.name,
+            // The name, held inside the viewport. It hangs off a *projected* corner, so the
+            // camera decides where it lands: in a 700-point window the only domain in scene 07
+            // put its label at x=698 of 700 and the word was clipped to its first letters. Laid
+            // out first and then clamped, rather than drawn and left where it fell.
+            let colour = if picked {
+                highlight
+            } else {
+                ui.visuals().text_color()
+            };
+            let galley = painter.layout_no_wrap(
+                placed.name.clone(),
                 egui::FontId::proportional(12.0),
-                if picked {
-                    highlight
-                } else {
-                    ui.visuals().text_color()
-                },
+                colour,
             );
+            let at = to_screen(placed.corners[0]);
+            let x =
+                at.x.min(rect.right() - galley.rect.width())
+                    .max(rect.left());
+            painter.galley(egui::pos2(x, at.y - galley.rect.height()), galley, colour);
         }
 
         // How big any of this is. A viewport with no scale is a picture of a shape and not of a
