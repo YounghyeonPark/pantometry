@@ -162,11 +162,16 @@ fn friction_totals() -> Option<(usize, usize)> {
     (findings > 0 && fixed > 0).then_some((findings, fixed))
 }
 
-/// **The findings total is the same in all seven places it is written.**
+/// **The findings total is the same in all eight places it is written.**
 ///
 /// Four of these were stale at once before the 0.14.0 release — `CLAUDE.md`, two agent files and
 /// `FRICTION.md`'s own closing section — while `friction_counts.rs` passed, because it checks one
-/// sentence in one file. One file under test is not enough when seven restate the number.
+/// sentence in one file. One file under test is not enough when eight restate the number.
+///
+/// The eighth was found by reading rather than by this test: `consumer-advocate.md`'s opening
+/// paragraph said **twenty-two findings, seventeen fixed** — a pair from an earlier moment left
+/// standing as if it were current, while the same file's closing section carried the right one.
+/// Guarded now, which is the only reason to have noticed it twice.
 #[test]
 fn the_findings_total_agrees_everywhere_it_is_written() {
     let Some((findings, fixed)) = friction_totals() else {
@@ -242,6 +247,82 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
         ),
         findings,
     );
+    // The opening paragraph, which restates both halves in a different sentence from the closing
+    // one. It read "Twenty-two findings ... seventeen of them fixed" while the file's other end
+    // said thirty-four and twenty-nine.
+    phrase(
+        ".claude/agents/consumer-advocate.md",
+        &format!(
+            "**{{}}** findings have\ncome out of it, {} of them fixed",
+            WORDS[fixed]
+        ),
+        findings,
+    );
+}
+
+/// **The number of agents is the number of agent files.**
+///
+/// Two of the seven were describing a workspace nobody could see. `domain-builder`'s *description*
+/// — the line an agent picker shows — said the recipe came from "the six existing domains", and
+/// its body said "Five exist", while eleven do. Neither is a count this file could have derived
+/// from the agents themselves, so it derives them from `crates/`.
+///
+/// The count of agents is derived from the directory, because that is the set that can be
+/// enumerated: adding a ninth file and forgetting the two tables is the failure this shape exists
+/// to give instead of a silent pass.
+#[test]
+fn the_agent_team_counts_itself_and_the_domains_it_describes() {
+    let dir = root().join(".claude/agents");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let agents = entries
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.ends_with(".md") && n != "README.md"
+        })
+        .count();
+    if agents == 0 {
+        return;
+    }
+    println!("  {agents} agents");
+    phrase(
+        ".claude/agents/README.md",
+        "{}, each built around work",
+        agents,
+    );
+    phrase("CLAUDE.md", "holds {} reviewers", agents);
+
+    // The domains `domain-builder` claims to have learned from, against the crates that are
+    // domains: everything in `crates/` that is not the facade, the units, the kernel, or one of
+    // the three layers above physics.
+    let Ok(crates) = std::fs::read_dir(root().join("crates")) else {
+        return;
+    };
+    let not_a_domain = [
+        "pantometry",
+        "pantometry-units",
+        "pantometry-core",
+        "pantometry-scene",
+        "pantometry-view",
+        "pantometry-shape",
+    ];
+    let domains = crates
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("pantometry-") && !not_a_domain.contains(&n.as_str())
+        })
+        .count();
+    println!("  {domains} domains");
+    phrase(
+        ".claude/agents/domain-builder.md",
+        "the recipe the {} existing domains established",
+        domains,
+    );
+    phrase(".claude/agents/domain-builder.md", "**{}** exist", domains);
 }
 
 /// **The scene count is the same in all five places it is written.**

@@ -12,9 +12,9 @@ You do not review. You **build**, and then you write down what building was like
 
 ## Why this works, with the receipts
 
-`app/pantometry-world` is the first consumer this library ever had. Twenty-two findings have come
-out of it, seventeen of them fixed, and they include the only real physics defect found in the
-whole period: `Room` and `Tube` were starting a staggered leapfrog with the velocity at the wrong
+`app/pantometry-world` is the first consumer this library ever had. **Thirty-four** findings have
+come out of it, twenty-nine of them fixed, and they include the only real physics defect found in
+the whole period: `Room` and `Tube` were starting a staggered leapfrog with the velocity at the wrong
 time level, `O(h)` and permanent, dragging a second-order scheme to first order.
 
 That survived a second-order interior, a second-order wall fix, energy conservation to 1e-15,

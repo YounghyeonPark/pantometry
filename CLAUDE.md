@@ -135,7 +135,7 @@ back.
 
 ## The subagent team
 
-`.claude/agents/` holds seven reviewers, each built from a defect this repository actually shipped
+`.claude/agents/` holds eight reviewers, each built from a defect this repository actually shipped
 rather than from a generic role. They are for developing pantometry and are useless to a consumer.
 
 | agent | asks |
@@ -143,6 +143,7 @@ rather than from a generic role. They are for developing pantometry and are usel
 | `physics-checker` | Is this claim true? Finds an independent check for it |
 | `numerics-reviewer` | Would this test *notice* if the code were wrong? |
 | `silent-failure-hunter` | What here can come out *empty* and look fine? |
+| `unearned-pass-hunter` | Did the check *run*, and against the thing it claims to test? |
 | `consumer-advocate` | What is this API like from outside? |
 | `invariant-guard` | Kernel purity, cross-domain deps, determinism, docs, licence, MSRV |
 | `domain-builder` | Scaffolds a new physics crate on the kernel |
@@ -150,7 +151,10 @@ rather than from a generic role. They are for developing pantometry and are usel
 
 Run `numerics-reviewer` and `physics-checker` on anything touching physics or tolerances, and
 `invariant-guard` before a commit that adds a crate, a dependency, or anything with randomness in it.
-`prose-auditor` before a release.
+`prose-auditor` before a release. **`unearned-pass-hunter` on anything that adds a check** — a test,
+a harness, a gate step, a CI job, a script that verifies something. The table of disguises above is
+its subject, and four of the nine instances in the session that produced it were caught by the gate
+rather than by anybody reading the output.
 
 **Verify what they report by reproducing it.** Their findings have been wrong in both directions: a
 seed-spread reported as 0.66% measured 0.96%, which would have produced a tolerance that looked
