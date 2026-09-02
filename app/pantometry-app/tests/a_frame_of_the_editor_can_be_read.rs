@@ -368,6 +368,74 @@ fn what_left_the_toolbar_is_in_the_menu_it_was_taken_from() {
 }
 
 #[test]
+fn a_run_can_be_looked_at_without_an_event_loop() {
+    // **Half the editor does not exist until a run does**: the colour bar, the readings, the
+    // transport, the probe and the isosurface strip. The window reaches them by streaming on a
+    // thread and reporting through a channel, which a frame built with no event loop has nowhere
+    // to receive — so until `--ran` the dump could see the empty half and nothing else, which is
+    // the position the whole editor was in before this hook existed.
+    let before = dump(&[&scene()]);
+    let after = dump(&[&scene(), "--ran"]);
+    assert!(
+        !before.contains("frame") || !before.contains("ran: "),
+        "the editor had already run without being asked:\n{before}"
+    );
+    assert!(
+        after.contains("ran: 12 frames"),
+        "no run happened:\n{after}"
+    );
+    assert!(
+        after.contains("t = 0.020000 s"),
+        "no time on the transport:\n{after}"
+    );
+}
+
+#[test]
+fn the_isosurface_level_is_on_the_picture_it_changes() {
+    // **A menu is where a thing is turned on; it is not where a continuous value is set.** The
+    // level's whole point is watching the surface move as you drag it, and it lived inside the
+    // View menu — which is drawn over the viewport it moves in. The toggle stayed; the slider and
+    // the two notes that go with it are on the strip at the bottom of the viewport, under the
+    // colour bar whose scale they share.
+    let d = dump(&[&scene(), "--iso"]);
+    assert_eq!(
+        d.matches("isosurface level").count(),
+        1,
+        "the level is in two places, or none:\n{d}"
+    );
+
+    // On the picture: inside the viewport's own rect, not in a panel beside it.
+    let (vx, vy, vw, vh) = viewport(&d);
+    let line = d
+        .lines()
+        .find(|l| l.get(21..) == Some("isosurface level"))
+        .expect("the slider's line");
+    let n: Vec<f32> = line
+        .split_whitespace()
+        .take(3)
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    let (x, y) = (n[0], n[1]);
+    assert!(
+        x >= vx && x <= vx + vw && y >= vy && y <= vy + vh,
+        "the level is at {x},{y}, outside the viewport at {vx},{vy} {vw}x{vh}:\n{d}"
+    );
+
+    // And the toggle is still in the menu, where turning a thing on belongs.
+    let (mx, my) = menu_at(&d, "View");
+    let opened = dump(&[&scene(), "--iso", "--click", &format!("{mx},{my}")]);
+    assert!(
+        opened.contains("Isosurface at a value"),
+        "the toggle left with the slider:\n{opened}"
+    );
+    assert_eq!(
+        opened.matches("isosurface level").count(),
+        1,
+        "opening the menu produced a second level control:\n{opened}"
+    );
+}
+
+#[test]
 fn the_editor_says_what_it_does_when_nobody_is_looking() {
     // Watching a file and running on change happen with no click, so the status bar is where a
     // person finds out they are on. They were two checkboxes taking permanent room on the

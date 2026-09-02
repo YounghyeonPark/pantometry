@@ -203,6 +203,8 @@ pub fn ui_dump(
     height: f32,
     choosing: Option<Vec<String>>,
     click: Option<(f32, f32)>,
+    ran: bool,
+    iso: bool,
 ) -> String {
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -214,6 +216,16 @@ pub fn ui_dump(
     if let Some(ticked) = choosing {
         app.start = true;
         app.choosing = Some(ticked.into_iter().collect());
+    }
+    if ran {
+        if let Err(e) = app.run_here() {
+            return format!("the run refused: {e}\n");
+        }
+    }
+    if iso {
+        // The same thing the menu's checkbox does: open at the middle of the run's scale,
+        // because a level outside the range draws nothing.
+        app.iso = app.iso_default();
     }
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
@@ -817,6 +829,31 @@ impl App {
         });
     }
 
+    /// Run the scene on this thread and install the result, for `--ui-dump --ran`.
+    ///
+    /// **The colour bar, the readings, the transport, the probe and the isosurface strip do not
+    /// exist until a run does**, so without this the dump could see the editor's empty half and
+    /// nothing else — which is the position the whole editor was in before `--ui-dump`. The
+    /// window's own path is `start_run`, which streams on a thread and reports through a channel;
+    /// a frame built without an event loop has nowhere for that to arrive, so this takes the
+    /// batch call `editor_core::run` and the same `viewer_core::Run::from_json` the channel does.
+    fn run_here(&mut self) -> Result<(), String> {
+        let json = editor_core::run(&self.text, &Beside::of(&self.path))?;
+        let run = viewer_core::Run::from_json(&json)
+            .map_err(|e| format!("the run's own JSON did not read back: {e}"))?;
+        let last = run.frames.len().saturating_sub(1);
+        self.status = format!("ran: {} frames", run.frames.len());
+        self.run = Some(RunView {
+            run,
+            frame: last,
+            playing: false,
+            last_step: None,
+            partial: false,
+        });
+        self.needs_fit = true;
+        Ok(())
+    }
+
     fn start_verify(&mut self) {
         let text = self.text.clone();
         let deep = self.deep;
@@ -1188,50 +1225,17 @@ impl App {
                     // other two do: a surface says where the object is, a splat cloud says what is
                     // inside it, and an isosurface says where a *value* is. None is a rendering of
                     // either other.
+                    // **The toggle is here; the level is not.** A menu is where a thing is turned
+                    // on and where a command is issued. It is not where a *continuous* value is set:
+                    // the level's whole point is watching the surface move as you drag it, and the
+                    // open menu was over the viewport it moves in. The slider and the two notes that
+                    // go with it are on the strip at the bottom of the viewport now, beside the frame
+                    // slider and under the colour bar whose scale they share.
                     let mut on = self.iso.is_some();
                     if ui.checkbox(&mut on, "Isosurface at a value").changed() {
                         // Opens at the middle of whatever the run's scale is, because a level
                         // outside the range draws nothing and an empty viewport reads as broken.
                         self.iso = on.then(|| self.iso_default()).flatten();
-                    }
-                    let (lo, hi) = self.iso_range();
-                    let frame = self.frame_range();
-                    if let Some(level) = &mut self.iso {
-                        ui.add(egui::Slider::new(level, lo..=hi).text("level"));
-                        // **What this frame actually reaches**, because the slider spans the
-                        // *run* and a frame is usually narrower. Scene 15's hot spot starts 60 K
-                        // above ambient and has diffused to 7 K by the last frame, so seven
-                        // eighths of the slider's travel draw the same tiny blob — which reads as
-                        // a broken control rather than as a level nothing has reached.
-                        //
-                        // The range stays the run's: rescaling per frame would make "the surface
-                        // at 300 K" a different temperature at every frame, which is the mistake
-                        // every other picture here avoids. So the silence is labelled instead.
-                        match frame {
-                            Some((flo, fhi)) => {
-                                let inside = (flo..=fhi).contains(level);
-                                let note = format!("this frame: {flo:.6} to {fhi:.6}");
-                                if inside {
-                                    ui.label(egui::RichText::new(note).weak().size(11.0));
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{note} — nothing reaches this level here"
-                                        ))
-                                        .weak()
-                                        .size(11.0)
-                                        .color(egui::Color32::from_rgb(230, 180, 60)),
-                                    );
-                                }
-                            }
-                            None => {
-                                ui.label(
-                                    egui::RichText::new("no field in this frame")
-                                        .weak()
-                                        .size(11.0),
-                                );
-                            }
-                        }
                     }
                     ui.separator();
                     if ui.button("Show everything").clicked() {
@@ -3032,6 +3036,11 @@ impl App {
         // early `return`, which quietly took the rest of the function with it: the translate
         // handles are painted after this point, so on a scene that had not been run they were
         // computed, hit-tested and never drawn. Compiles, passes, does nothing.
+        // Read before `self.run` is borrowed: both are `&self` methods, and the strip below
+        // needs them while it holds the run mutably.
+        let (iso_lo, iso_hi) = self.iso_range();
+        let iso_frame = self.frame_range();
+        let iso = &mut self.iso;
         if let Some(view) = &mut self.run {
             if view.partial {
                 painter.text(
@@ -3043,18 +3052,65 @@ impl App {
                 );
             }
             let frames = view.run.frames.len();
-            if frames > 1 {
+            if frames > 1 || iso.is_some() {
+                // **One strip, because two `bottom_up` scopes on the same rect draw on top of
+                // each other.** The frame slider was here first; the isosurface level joined it
+                // when it left the View menu, and it stacks above rather than over.
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                        ui.horizontal(|ui| {
+                        if frames > 1 {
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Slider::new(&mut view.frame, 0..=frames - 1)
+                                        .text("frame"),
+                                );
+                                ui.label(format!(
+                                    "t = {} s",
+                                    editor_core::magnitude(view.run.frames[view.frame].t)
+                                ));
+                            });
+                        }
+                        if let Some(level) = iso.as_mut() {
+                            // **What this frame actually reaches**, because the slider spans the
+                            // *run* and a frame is usually narrower. Scene 15's hot spot starts
+                            // 60 K above ambient and has diffused to 7 K by the last frame, so
+                            // seven eighths of the slider's travel draw the same tiny blob —
+                            // which reads as a broken control rather than as a level nothing has
+                            // reached.
+                            //
+                            // The range stays the run's: rescaling per frame would make "the
+                            // surface at 300 K" a different temperature at every frame, which is
+                            // the mistake every other picture here avoids. So the silence is
+                            // labelled instead.
+                            match iso_frame {
+                                Some((flo, fhi)) => {
+                                    let inside = (flo..=fhi).contains(level);
+                                    let note = format!("this frame: {flo:.6} to {fhi:.6}");
+                                    if inside {
+                                        ui.label(egui::RichText::new(note).weak().size(11.0));
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{note} — nothing reaches this level here"
+                                            ))
+                                            .weak()
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(230, 180, 60)),
+                                        );
+                                    }
+                                }
+                                None => {
+                                    ui.label(
+                                        egui::RichText::new("no field in this frame")
+                                            .weak()
+                                            .size(11.0),
+                                    );
+                                }
+                            }
                             ui.add(
-                                egui::Slider::new(&mut view.frame, 0..=frames - 1).text("frame"),
+                                egui::Slider::new(level, iso_lo..=iso_hi).text("isosurface level"),
                             );
-                            ui.label(format!(
-                                "t = {} s",
-                                editor_core::magnitude(view.run.frames[view.frame].t)
-                            ));
-                        });
+                        }
                     });
                 });
             }

@@ -162,6 +162,11 @@ The file's name sits at the left of that strip, with the full path on hover, and
 when the pane is dirty. It used to be an editable 220-point path field, which is what it was for:
 typing a path was the only way into a file on disk. `Open…` and `Save as…` are that now.
 
+The same line applies to menus: a menu is where a thing is turned on and where a command is issued,
+and it is not where a continuous value is set. **Isosurface at a value** is a menu item; the level
+it opens at is a slider on the strip along the bottom of the viewport, under the colour bar whose
+scale it shares. It was inside the menu, which is drawn over the picture the level moves in.
+
 ## The live loop
 
 Leave the window open and let a script do the editing. With **Watch file** on (the default —

@@ -130,7 +130,12 @@ fn main() {
                 .and_then(|i| rest.get(i + 1))
                 .and_then(|w| w.split_once(','))
                 .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
-            print!("{}", edit::ui_dump(path, width, height, choosing, click));
+            let ran = rest.iter().any(|a| a == "--ran") || rest.iter().any(|a| a == "--iso");
+            let iso = rest.iter().any(|a| a == "--iso");
+            print!(
+                "{}",
+                edit::ui_dump(path, width, height, choosing, click, ran, iso)
+            );
             0
         }
 
