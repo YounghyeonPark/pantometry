@@ -69,7 +69,7 @@ CI also builds `wasm32-unknown-unknown` and runs the suite under `wasm32-wasip1`
 cover `bindings/python` or `app/` from this gate — each has its own job and its own procedure.
 
 **`app/` has its own gate and it is not optional.** Everything a person *runs* lives there — the
-CLI, the viewer, the editor and the GPU accelerator — and so do the twenty-eight scenes and their
+CLI, the viewer, the editor and the GPU accelerator — and so do the thirty scenes and their
 closed-form checks, which used to run in the line above. Two workspaces, two gates:
 
 ```sh

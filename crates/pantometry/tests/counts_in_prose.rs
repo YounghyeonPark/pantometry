@@ -325,7 +325,7 @@ fn the_agent_team_counts_itself_and_the_domains_it_describes() {
     phrase(".claude/agents/domain-builder.md", "**{}** exist", domains);
 }
 
-/// **The scene count is the same in all five places it is written.**
+/// **The scene count is the same in all seven places it is written.**
 ///
 /// `scene.rs` reads the directory rather than a list, so adding a scene never breaks anything — which is
 /// exactly why the sentences about the count drift. Two agent files said fourteen and `scenes/README.md`
@@ -365,6 +365,20 @@ fn the_scene_count_agrees_everywhere_it_is_written() {
     phrase(readme, "of these {} scenes", scenes);
     phrase(readme, "of the {} scenes have geometry", scenes);
     phrase(readme, "runs all {} on every commit", scenes);
+    // **A sixth place, found by reading rather than by this test.** `CLAUDE.md` says what lives in
+    // `app/` and listed "the twenty-eight scenes" while thirty were there — a live claim about the
+    // present, not one of the two sentences in `editor-core` that say "the twenty-eight scenes of
+    // the time" and mean it. The five above are all in one README, which is how a count can be
+    // guarded in five places and still be wrong in a sixth.
+    phrase("CLAUDE.md", "and so do the {} scenes", scenes);
+    // And a seventh, written in the same session that found the sixth: the editor's README says
+    // where a new scene's duration and frame count come from, which is a claim about how many
+    // scenes there are to take them from.
+    phrase(
+        "app/editor-core/README.md",
+        "against the {} scenes on disk",
+        scenes,
+    );
     phrase(
         "README.md",
         "with {} scenes across all eleven domains",

@@ -2,10 +2,28 @@
 
 ```sh
 cd app
-cargo run --release                          # opens on the built-in room
+cargo run --release                          # opens on the start screen
 cargo run --release -- scene.json            # opens on a file
 cargo run --release -- scene.json --run      # and runs it at once
 ```
+
+With no file named you arrive at **New project**, **Open a scene** and whatever you had open
+before — not at the built-in room, which used to be the answer whatever you meant by starting the
+editor. New project asks what you are simulating: every kind the scene format defines, with a line
+about each. Tick one for a starting point or several for a scene of several domains, which is what
+a custom simulation is here; there is no second flow for that case, because it is the same list.
+
+It says two things while you choose that nothing downstream can. **These kinds do not share a
+timescale** — `atoms` settles in 6e-12 s and a thermal `network` in 1800 s, and a scene carries one
+`duration_s` — so a set that spans orders of magnitude is a *well-formed* scene in which the slowest
+domain barely moves, and the chooser puts the ratio on the screen. And the two kinds that name
+another domain, `beam` and `structure`, say so rather than being wired up: a beam's `faces` has to
+equal the bar's `cells` and its `onto` has to match the bar's `exposes`, so what opens instead is
+the format's own complaint, by name.
+
+The duration and frame count a new scene starts from are not chosen: each comes from a shipped
+scene that uses that kind, and a test holds every one of them
+against the thirty scenes on disk.
 
 The viewport is an instrument, not a preview: a colour bar with numbers on it, a scale bar in
 model metres, a probe that names whatever the cursor is over, and a transport — play, step either
@@ -141,7 +159,10 @@ rather than queueing history.
 
 Two honesty rules hold it together. **Unsaved edits are never clobbered**: if the pane is
 dirty and the disk changes, the status line says so and the disk's version waits for an
-explicit `load` — which of two writers meant it is not the editor's call. And **a prefix is
+explicit **revert** — which of two writers meant it is not the editor's call. That button was
+called `load` and re-read the path already in the box, which made it look like the way to open a
+different file when it was the way to throw away your edits; `Open…` and `Save as…` are beside it
+now, through the platform's own dialog. And **a prefix is
 never dressed as the run**: a streaming or stopped run is labelled on the canvas, because a
 partial run that looks complete is a picture of something that did not happen.
 
@@ -284,8 +305,8 @@ when nothing does — the same guard the frame-stepping keys use, and for the sa
 undos on one key would take back different things depending on where the caret happened to be.
 The menu item works either way.
 
-A load from disk **resets**. A file is a different document, and undoing from one scene back
-into another would offer a text belonging to no path.
+Opening or reverting from disk **resets**. A file is a different document, and undoing from one
+scene back into another would offer a text belonging to no path.
 
 ## What the first version does not do
 
