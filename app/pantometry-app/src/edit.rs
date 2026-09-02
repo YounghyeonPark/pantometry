@@ -1248,10 +1248,6 @@ impl App {
                     ui.radio_value(&mut self.shaded, true, "Shaded surfaces");
                     ui.radio_value(&mut self.shaded, false, "Cells (see inside)");
                     ui.separator();
-                    ui.checkbox(&mut self.show_outliner, "Outliner");
-                    ui.checkbox(&mut self.show_inspector, "Inspector");
-                    ui.checkbox(&mut self.show_text, "Scene text");
-                    ui.separator();
                     // **Solo is the outliner's.** It acts on the *selection*, and the
                     // outliner is where a selection is made — so the checkbox sits in its header,
                     // beside the thing it filters, with its state visible without opening
@@ -1299,6 +1295,21 @@ impl App {
                 // Adding and removing a domain, which used to mean typing an object into the
                 // text pane from memory. The list is `pantometry-world`'s, so a twentieth domain
                 // appears here without this file learning about it.
+                // **What the window is made of, which is not what the view shows.** `View`
+                // held eleven items doing three jobs — how the viewport draws, which panels are on
+                // screen, and where the camera goes — while every other menu did one. These three
+                // are the ones that are not about the picture at all: they are the window's
+                // furniture, and `Window` is where a person looks for them.
+                //
+                // A seventh menu against three fewer items in the largest one. The count went the
+                // wrong way and the mixing went the right way, which is the trade this makes on
+                // purpose: a menu whose name predicts its contents is worth more than one fewer
+                // name to read.
+                ui.menu_button("Window", |ui| {
+                    ui.checkbox(&mut self.show_outliner, "Outliner");
+                    ui.checkbox(&mut self.show_inspector, "Inspector");
+                    ui.checkbox(&mut self.show_text, "Scene text");
+                });
                 ui.menu_button("Domain", |ui| {
                     let mut wanted: Option<&str> = None;
                     ui.menu_button("Add", |ui| {

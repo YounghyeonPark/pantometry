@@ -162,6 +162,19 @@ The file's name sits at the left of that strip, with the full path on hover, and
 when the pane is dirty. It used to be an editable 220-point path field, which is what it was for:
 typing a path was the only way into a file on disk. `Open…` and `Save as…` are that now.
 
+Seven menus, and each is named for one subject: **File** opens and writes, **Edit** takes edits
+back and chooses a handle, **View** is about the picture, **Window** about which panels are on
+screen, **Domain** adds and removes one, **Run** runs and verifies, **Watch** follows the file.
+`View` used to hold eleven items doing three of those jobs at once — it was the only menu whose
+name did not predict its contents, and the panels were the part that was not about the picture at
+all. A seventh name to read is the price; a menu you can guess the contents of is what it buys.
+
+`Solo the selection` came out of that menu without going anywhere: the outliner's header already
+carried the checkbox, beside the selection it filters and with its state visible. Hiding the
+outliner would then have left the viewport drawing one domain out of five with nothing saying why,
+so the status bar says `solo — drawing only the selection` exactly when the control is not on
+screen to say it itself.
+
 The same line applies to menus: a menu is where a thing is turned on and where a command is issued,
 and it is not where a continuous value is set. **Isosurface at a value** is a menu item; the level
 it opens at is a slider on the strip along the bottom of the viewport, under the colour bar whose

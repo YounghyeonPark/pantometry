@@ -436,6 +436,44 @@ fn the_isosurface_level_is_on_the_picture_it_changes() {
 }
 
 #[test]
+fn the_panels_are_in_a_menu_about_the_window_and_not_about_the_view() {
+    // **`View` was doing two jobs.** Eleven items across three subjects — how the viewport draws,
+    // which panels are on screen, and where the camera goes — while every other menu did one.
+    // The three that are not about the picture at all are the window's furniture, and they have a
+    // menu named for that now: a seventh name to read against three fewer items in the largest
+    // menu, which is the trade this makes on purpose.
+    //
+    // Counted rather than searched, because `Outliner` and `Inspector` are also panel headings on
+    // the screen behind the menu: opening the right menu makes each appear a second time.
+    let plain = dump(&[&scene()]);
+    let count = |d: &str, needle: &str| d.matches(needle).count();
+
+    let (wx, wy) = menu_at(&plain, "Window");
+    let window = dump(&[&scene(), "--click", &format!("{wx},{wy}")]);
+    for item in ["Outliner", "Inspector", "Scene text"] {
+        assert!(
+            count(&window, item) > count(&plain, item),
+            "Window does not hold {item}:\n{window}"
+        );
+    }
+
+    let (vx, vy) = menu_at(&plain, "View");
+    let view = dump(&[&scene(), "--click", &format!("{vx},{vy}")]);
+    for item in ["Outliner", "Inspector", "Scene text"] {
+        assert_eq!(
+            count(&view, item),
+            count(&plain, item),
+            "View still offers {item}:\n{view}"
+        );
+    }
+    // And View opened, or the three assertions above are about a menu that never appeared.
+    assert!(
+        count(&view, "Fit view") > count(&plain, "Fit view"),
+        "the View menu did not open, so this proves nothing:\n{view}"
+    );
+}
+
+#[test]
 fn solo_is_offered_once_and_where_the_selection_is_made() {
     // **The eighth duplicate.** Seven came off the toolbar because a menu already held them; this
     // one went the other way. `solo` acts on the *selection*, the outliner is where a selection is
@@ -603,7 +641,7 @@ fn the_two_command_rows_are_both_there_and_are_not_the_same_row() {
     let bar = row(26);
     assert_eq!(
         menu,
-        ["File", "Edit", "View", "Domain", "Run", "Watch"],
+        ["File", "Edit", "View", "Window", "Domain", "Run", "Watch"],
         "the menu row is not what it was"
     );
     assert!(
