@@ -19,7 +19,7 @@
 
 #![cfg(not(target_family = "wasm"))]
 
-use pantometry_world::templates::TEMPLATES;
+use pantometry_world::templates::{Template, TEMPLATES};
 use pantometry_world::{OnDisk, Scene, World};
 use std::collections::BTreeSet;
 
@@ -60,7 +60,7 @@ fn kinds_in_scenes() -> BTreeSet<String> {
 #[test]
 fn the_templates_and_the_scenes_name_the_same_domains() {
     let in_scenes = kinds_in_scenes();
-    let in_templates: BTreeSet<String> = TEMPLATES.iter().map(|(k, _)| k.to_string()).collect();
+    let in_templates: BTreeSet<String> = TEMPLATES.iter().map(|t| t.kind.to_string()).collect();
 
     let missing: Vec<&String> = in_scenes.difference(&in_templates).collect();
     assert!(
@@ -89,7 +89,10 @@ fn the_templates_and_the_scenes_name_the_same_domains() {
 /// or a default removed. Parsing is the cheap half; the next test does the expensive half.
 #[test]
 fn every_template_parses_as_the_domain_it_claims_to_be() {
-    for (kind, text) in TEMPLATES {
+    for Template {
+        kind, json: text, ..
+    } in TEMPLATES
+    {
         let value: serde_json::Value = serde_json::from_str(text)
             .unwrap_or_else(|e| panic!("{kind}: the template is not JSON: {e}\n{text}"));
         assert_eq!(
@@ -123,7 +126,10 @@ fn every_template_parses_as_the_domain_it_claims_to_be() {
 #[test]
 fn every_template_builds_except_the_one_that_cannot() {
     let mut refused_at_build = Vec::new();
-    for (kind, text) in TEMPLATES {
+    for Template {
+        kind, json: text, ..
+    } in TEMPLATES
+    {
         let json = format!(
             r#"{{ "title": "one {kind}", "duration_s": 0.001, "frames": 1,
   "domains": [ {text} ] }}"#
@@ -152,9 +158,9 @@ fn every_template_builds_except_the_one_that_cannot() {
 fn a_beam_aimed_at_a_domain_that_is_not_there_is_stopped_at_the_first_step() {
     let beam = TEMPLATES
         .iter()
-        .find(|(k, _)| *k == "beam")
+        .find(|t| t.kind == "beam")
         .expect("there is a beam template")
-        .1;
+        .json;
     let json = format!(
         r#"{{ "title": "a beam pointed at nothing", "duration_s": 0.05, "frames": 3,
   "domains": [

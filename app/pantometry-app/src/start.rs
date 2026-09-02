@@ -178,6 +178,119 @@ pub fn screen(ui: &mut egui::Ui, recent: &[Recent]) -> Chose {
     chose
 }
 
+/// What the chooser was asked for.
+pub enum Made {
+    /// Nothing yet.
+    Nothing,
+    /// Back to the start screen.
+    Back,
+    /// Make a scene of what is ticked.
+    Create,
+}
+
+/// **Choose what to simulate.** Every kind the scene format defines, with what it is.
+///
+/// # There is no separate "custom"
+///
+/// Ticking one kind is a starting point; ticking several is a scene of several domains, which is
+/// what a custom simulation is here. A second flow for the second case would be a mode to be in
+/// rather than a thing to do, and the list is the same list either way.
+///
+/// # What it says out loud, and why
+///
+/// A scene carries **one** `duration_s`, and these kinds do not share a timescale: `atoms` settles
+/// in picoseconds, a thermal `network` in half an hour — fourteen orders of magnitude across the
+/// table. Every combination of them is a *well-formed* scene, so nothing downstream refuses it;
+/// what happens instead is that the slow domain advances by a millionth of what it needs while the
+/// fast one finishes, and the picture looks like a bug in the physics. So the span is computed and
+/// said here, where the choice is being made.
+///
+/// The two kinds that name another domain say so too. Their references are not wired up — a beam's
+/// `faces` has to equal the bar's `cells` and its `onto` has to match the bar's `exposes`, which is
+/// three fields agreeing and not a name to copy — so the scene opens with the format's own
+/// complaint, which is a better sentence than any this could invent. See
+/// [`pantometry_world::templates::scene`].
+pub fn chooser(ui: &mut egui::Ui, ticked: &mut std::collections::BTreeSet<String>) -> Made {
+    let mut made = Made::Nothing;
+    ui.vertical_centered(|ui| {
+        ui.add_space(24.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(560.0, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.label(egui::RichText::new("What are you simulating?").size(20.0).strong());
+                ui.label(
+                    egui::RichText::new("one kind to start from, or several for a scene of several")
+                        .weak(),
+                );
+                ui.add_space(12.0);
+
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height() - 96.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for t in pantometry_world::templates::TEMPLATES {
+                            let mut on = ticked.contains(t.kind);
+                            ui.horizontal(|ui| {
+                                if ui.checkbox(&mut on, "").changed() {
+                                    if on {
+                                        ticked.insert(t.kind.to_string());
+                                    } else {
+                                        ticked.remove(t.kind);
+                                    }
+                                }
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(t.kind).strong());
+                                    ui.label(egui::RichText::new(t.about).weak().size(11.0));
+                                    if t.needs_a_partner() {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "names another domain — the scene will say which is missing",
+                                            )
+                                            .weak()
+                                            .size(11.0),
+                                        );
+                                    }
+                                });
+                            });
+                            ui.add_space(2.0);
+                        }
+                    });
+
+                ui.add_space(8.0);
+                let chosen: Vec<&str> = ticked.iter().map(String::as_str).collect();
+                if chosen.len() > 1 {
+                    let span = pantometry_world::templates::timescale_span(&chosen);
+                    if span >= 1e3 {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "these settle {span:.0e} times apart — one scene has one duration, so the \
+                                 slowest of them will barely move"
+                            ))
+                            .color(egui::Color32::from_rgb(230, 180, 60)),
+                        );
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Back").clicked() {
+                        made = Made::Back;
+                    }
+                    if ui
+                        .add_enabled(
+                            !ticked.is_empty(),
+                            egui::Button::new("Create").min_size(egui::vec2(120.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        made = Made::Create;
+                    }
+                });
+            },
+        );
+    });
+    made
+}
+
 /// The platform's own open dialog, or `None` if it was dismissed.
 ///
 /// Native and modal. `rfd` is two crates here — everything it needs on this platform was already

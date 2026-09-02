@@ -602,8 +602,8 @@ fn span_of(b: &[u8], start: usize, segments: &[String]) -> Option<Range<usize>> 
 pub fn add_domain(text: &str, kind: &str) -> Result<String, String> {
     let template = pantometry_world::templates::TEMPLATES
         .iter()
-        .find(|(k, _)| *k == kind)
-        .map(|(_, t)| *t)
+        .find(|t| t.kind == kind)
+        .map(|t| t.json)
         .ok_or_else(|| format!("no template for a {kind}"))?;
 
     let root: serde_json::Value =
@@ -1385,7 +1385,8 @@ mod tests {
     /// indentation are right for all of them rather than for the one that was tried by hand.
     #[test]
     fn every_kind_can_be_added() {
-        for (kind, _) in pantometry_world::templates::TEMPLATES {
+        for t in pantometry_world::templates::TEMPLATES {
+            let kind = t.kind;
             let out = add_domain(SCENE, kind).unwrap_or_else(|e| panic!("{kind}: {e}"));
             let root: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| {
                 panic!(
@@ -1427,7 +1428,8 @@ mod tests {
     /// exactly the bytes the removal gives back — the comma, the newline and the indent included.
     #[test]
     fn adding_then_removing_returns_the_original_text() {
-        for (kind, _) in pantometry_world::templates::TEMPLATES {
+        for t in pantometry_world::templates::TEMPLATES {
+            let kind = t.kind;
             let added = add_domain(SCENE, kind).unwrap_or_else(|e| panic!("{kind}: {e}"));
             let back = remove_domain(&added, kind).unwrap_or_else(|e| panic!("{kind}: {e}"));
             assert_eq!(

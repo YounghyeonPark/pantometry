@@ -271,6 +271,64 @@ fn opening_with_no_file_offers_the_two_ways_in_and_no_editor() {
 }
 
 #[test]
+fn the_chooser_offers_every_kind_the_format_defines() {
+    // **Derived from the table, not listed here.** A twentieth domain reaches the chooser without
+    // this file learning about it, and a nineteenth that stops being offered fails rather than
+    // quietly disappearing from a menu — which is how the editor's Add list is checked too.
+    let d = dump(&["--new"]);
+    assert_eq!(count(&d, "callbacks"), 0, "a viewport with no scene:\n{d}");
+    for t in pantometry_world::templates::TEMPLATES {
+        assert!(d.contains(t.kind), "{} is not offered:\n{d}", t.kind);
+        assert!(
+            d.contains(t.about),
+            "{} is offered with nothing said about it:\n{d}",
+            t.kind
+        );
+    }
+}
+
+#[test]
+fn the_kinds_that_need_a_partner_say_so_and_only_they_do() {
+    // `beam` names what it shines `onto` and `structure` names the block it `follows`. Neither is
+    // wired up — three fields have to agree, not one name — so the chooser says it and the scene
+    // opens on the format's own complaint. Exactly two, because a third that stopped saying it
+    // would be a row that looks complete and is not.
+    let d = dump(&["--new"]);
+    let said = d
+        .lines()
+        .filter(|l| l.contains("names another domain"))
+        .count();
+    let want = pantometry_world::templates::TEMPLATES
+        .iter()
+        .filter(|t| t.needs_a_partner())
+        .count();
+    assert_eq!(said, want, "{said} rows say it, {want} kinds need it:\n{d}");
+    assert_eq!(want, 2, "the set of kinds needing a partner has changed");
+}
+
+#[test]
+fn a_set_that_cannot_share_one_duration_says_so_before_it_is_made() {
+    // **The thing a chooser can say and a checker cannot.** Every combination of these kinds is a
+    // *well-formed* scene, so nothing downstream refuses it: what happens is that `atoms` finishes
+    // in picoseconds while a thermal `network` advances by a ten-trillionth of what it needs, and
+    // the picture looks like a bug in the physics. Measured from the same numbers the scene is
+    // built with, and said where the choice is being made.
+    let far = dump(&["--new", "atoms,network"]);
+    assert!(
+        far.contains("3e14 times apart"),
+        "picoseconds against half an hour passed without comment:\n{far}"
+    );
+
+    // And not said about two kinds a shipped scene already runs together, or the warning is
+    // decoration rather than a measurement.
+    let near = dump(&["--new", "bar,heater"]);
+    assert!(
+        !near.contains("times apart"),
+        "two kinds that run together were warned about:\n{near}"
+    );
+}
+
+#[test]
 fn a_remembered_file_that_is_gone_is_shown_and_refused() {
     // A list that silently shortens itself looks like a list that forgot. The reader is then left
     // wondering whether the editor lost their scene or they imagined opening it — so a path that

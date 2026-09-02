@@ -116,7 +116,15 @@ fn main() {
                 .and_then(|i| rest.get(i + 1))
                 .and_then(|h| h.parse().ok())
                 .unwrap_or(950.0);
-            print!("{}", edit::ui_dump(path, width, height));
+            // `--new` opens on the chooser, and takes the kinds to tick as one comma-separated
+            // word so a test can ask for a pair whose timescales are far apart.
+            let choosing = rest.iter().position(|a| a == "--new").map(|i| {
+                rest.get(i + 1)
+                    .filter(|w| !w.starts_with('-'))
+                    .map(|w| w.split(',').map(str::to_string).collect())
+                    .unwrap_or_default()
+            });
+            print!("{}", edit::ui_dump(path, width, height, choosing));
             0
         }
 

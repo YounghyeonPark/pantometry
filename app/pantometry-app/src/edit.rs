@@ -197,12 +197,23 @@ pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, Str
 /// a test can hold: **is the control there at this width**, **was the label elided**, **is the
 /// error where a reader will find it**. Elision is exact rather than inferred — egui ends a
 /// truncated galley with `…`, so a label that did not fit says so in its own text.
-pub fn ui_dump(path: Option<String>, width: f32, height: f32) -> String {
+pub fn ui_dump(
+    path: Option<String>,
+    width: f32,
+    height: f32,
+    choosing: Option<Vec<String>>,
+) -> String {
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
         Some(p) => App::new(Some(p)),
         None => App::empty(),
     };
+    // And the third, which a window reaches by clicking New project. Without it the chooser is
+    // the one screen this hook cannot see, which is the position the whole editor was in.
+    if let Some(ticked) = choosing {
+        app.start = true;
+        app.choosing = Some(ticked.into_iter().collect());
+    }
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -606,6 +617,8 @@ struct App {
     start: bool,
     /// What the start screen lists, read once at startup and after each open.
     recent: Vec<crate::start::Recent>,
+    /// The kinds ticked in the New-project chooser, or `None` when it is not up.
+    choosing: Option<std::collections::BTreeSet<String>>,
     show_outliner: bool,
     show_inspector: bool,
     show_text: bool,
@@ -668,6 +681,7 @@ impl App {
             framing_hold: None,
             start: false,
             recent: Vec::new(),
+            choosing: None,
             show_outliner: true,
             show_inspector: true,
             show_text: true,
@@ -975,14 +989,19 @@ impl App {
         // **Before anything else, and instead of it.** No menu bar, no toolbar, no panels: there is
         // nothing yet for any of them to act on, and a window of disabled controls is a worse
         // answer to "what now" than two buttons.
-        if self.start {
-            let mut chose = crate::start::Chose::Nothing;
+        // The chooser, which is the second half of the start screen rather than a window over
+        // it: there is still nothing open, and the way back is a button on it.
+        if let Some(ticked) = self.choosing.as_mut() {
+            let mut made = crate::start::Made::Nothing;
+            let mut ticked = std::mem::take(ticked);
             egui::CentralPanel::default().show(ctx, |ui| {
-                chose = crate::start::screen(ui, &self.recent);
+                made = crate::start::chooser(ui, &mut ticked);
             });
-            match chose {
-                crate::start::Chose::New => {
-                    self.text = default_scene();
+            match made {
+                crate::start::Made::Back => self.choosing = None,
+                crate::start::Made::Create => {
+                    let kinds: Vec<&str> = ticked.iter().map(String::as_str).collect();
+                    self.text = pantometry_world::templates::scene(&kinds);
                     self.history.reset(self.text.clone());
                     self.path = String::from("scene.json");
                     self.dirty = true;
@@ -990,7 +1009,24 @@ impl App {
                     self.recheck();
                     self.needs_fit = true;
                     self.start = false;
-                    self.status = String::from("a new scene — save it to give it a name");
+                    self.choosing = None;
+                    self.status = format!(
+                        "a new scene of {} — save it to give it a name",
+                        kinds.join(", ")
+                    );
+                }
+                crate::start::Made::Nothing => self.choosing = Some(ticked),
+            }
+            return;
+        }
+        if self.start {
+            let mut chose = crate::start::Chose::Nothing;
+            egui::CentralPanel::default().show(ctx, |ui| {
+                chose = crate::start::screen(ui, &self.recent);
+            });
+            match chose {
+                crate::start::Chose::New => {
+                    self.choosing = Some(std::collections::BTreeSet::new());
                 }
                 crate::start::Chose::Open(p) => self.open(p),
                 crate::start::Chose::Nothing => {}
@@ -1198,9 +1234,9 @@ impl App {
                 ui.menu_button("Domain", |ui| {
                     let mut wanted: Option<&str> = None;
                     ui.menu_button("Add", |ui| {
-                        for (kind, _) in editor_core::TEMPLATES {
-                            if ui.button(kind).clicked() {
-                                wanted = Some(kind);
+                        for t in editor_core::TEMPLATES {
+                            if ui.button(t.kind).on_hover_text(t.about).clicked() {
+                                wanted = Some(t.kind);
                                 ui.close_menu();
                             }
                         }
