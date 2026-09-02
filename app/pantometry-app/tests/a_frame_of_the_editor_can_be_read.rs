@@ -436,6 +436,59 @@ fn the_isosurface_level_is_on_the_picture_it_changes() {
 }
 
 #[test]
+fn solo_is_offered_once_and_where_the_selection_is_made() {
+    // **The eighth duplicate.** Seven came off the toolbar because a menu already held them; this
+    // one went the other way. `solo` acts on the *selection*, the outliner is where a selection is
+    // made, and its header carries the checkbox with the state visible — so the View menu's copy
+    // was the one to go.
+    let plain = dump(&[&scene()]);
+    assert!(
+        plain.contains("solo"),
+        "the outliner's own checkbox is gone:\n{plain}"
+    );
+    let (x, y) = menu_at(&plain, "View");
+    let opened = dump(&[&scene(), "--click", &format!("{x},{y}")]);
+    assert!(
+        !opened.contains("Solo the selection"),
+        "the menu still offers it:\n{opened}"
+    );
+    // The menu did open — otherwise this would pass with the item still there.
+    assert!(
+        opened.contains("Isosurface at a value"),
+        "the View menu did not open, so this proves nothing:\n{opened}"
+    );
+}
+
+#[test]
+fn a_picture_filtered_by_a_hidden_control_says_so() {
+    // **What removing the menu copy would otherwise have left.** The checkbox is in the outliner's
+    // header, so hiding the outliner — narrowing the window until it is squeezed out, or turning
+    // it off in the View menu — leaves the viewport drawing one domain out of five with nothing on
+    // screen saying why. A picture filtered by a control nobody can see is the silence this
+    // repository hunts.
+    //
+    // 460 points is the first width the outliner does not survive; 1500 is one where it does.
+    let hidden = dump(&[&scene(), "--solo", "--width", "420"]);
+    assert!(
+        hidden.contains("solo — drawing only the selection"),
+        "the outliner is gone and nothing says the view is filtered:\n{hidden}"
+    );
+
+    // And it is not said when the checkbox is on screen to say it, or when solo is off — a notice
+    // that is always there is decoration rather than a measurement.
+    let shown = dump(&[&scene(), "--solo", "--width", "1500"]);
+    assert!(
+        !shown.contains("solo — drawing only the selection"),
+        "said while the checkbox is on screen:\n{shown}"
+    );
+    let off = dump(&[&scene(), "--width", "420"]);
+    assert!(
+        !off.contains("solo — drawing only the selection"),
+        "said while solo is off:\n{off}"
+    );
+}
+
+#[test]
 fn the_editor_says_what_it_does_when_nobody_is_looking() {
     // Watching a file and running on change happen with no click, so the status bar is where a
     // person finds out they are on. They were two checkboxes taking permanent room on the

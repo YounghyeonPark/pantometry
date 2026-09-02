@@ -132,9 +132,19 @@ fn main() {
                 .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
             let ran = rest.iter().any(|a| a == "--ran") || rest.iter().any(|a| a == "--iso");
             let iso = rest.iter().any(|a| a == "--iso");
+            let solo = rest.iter().any(|a| a == "--solo");
             print!(
                 "{}",
-                edit::ui_dump(path, width, height, choosing, click, ran, iso)
+                edit::ui_dump(edit::Dump {
+                    path,
+                    width,
+                    height,
+                    choosing,
+                    click,
+                    ran,
+                    iso,
+                    solo,
+                })
             );
             0
         }

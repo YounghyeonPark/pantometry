@@ -178,6 +178,32 @@ pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, Str
     ))
 }
 
+/// Which state to build the frame in.
+///
+/// **A struct because the doors kept arriving.** Each field is a state the window can reach and a
+/// frame built from nothing cannot: a scene chosen rather than opened, a menu opened by a click, a
+/// run that only exists after a thread has reported, a level that only exists after a run. Passed
+/// as eight arguments this tripped `clippy::too_many_arguments`, which was right — and named
+/// fields at the call site say which `true` is which, where four bare booleans in a row do not.
+pub struct Dump {
+    /// The scene to open, or `None` for the start screen.
+    pub path: Option<String>,
+    /// Window width in points.
+    pub width: f32,
+    /// Window height in points.
+    pub height: f32,
+    /// Open on the New-project chooser with these kinds ticked.
+    pub choosing: Option<Vec<String>>,
+    /// Send a press and a release here, which is what opens a menu.
+    pub click: Option<(f32, f32)>,
+    /// Run the scene first, so everything that only exists after a run does.
+    pub ran: bool,
+    /// Run, then turn the isosurface on at its default level.
+    pub iso: bool,
+    /// Draw only the selection.
+    pub solo: bool,
+}
+
 /// One frame of the editor's interface, as text: every string it drew and where.
 ///
 /// The `--ui-dump` subcommand's whole body, in the pattern `--layout-at` set. `App::new` needs no
@@ -197,15 +223,17 @@ pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, Str
 /// a test can hold: **is the control there at this width**, **was the label elided**, **is the
 /// error where a reader will find it**. Elision is exact rather than inferred — egui ends a
 /// truncated galley with `…`, so a label that did not fit says so in its own text.
-pub fn ui_dump(
-    path: Option<String>,
-    width: f32,
-    height: f32,
-    choosing: Option<Vec<String>>,
-    click: Option<(f32, f32)>,
-    ran: bool,
-    iso: bool,
-) -> String {
+pub fn ui_dump(asked: Dump) -> String {
+    let Dump {
+        path,
+        width,
+        height,
+        choosing,
+        click,
+        ran,
+        iso,
+        solo,
+    } = asked;
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
         Some(p) => App::new(Some(p)),
@@ -227,6 +255,10 @@ pub fn ui_dump(
         // because a level outside the range draws nothing.
         app.iso = app.iso_default();
     }
+    // The same thing the outliner's checkbox does. A door rather than a click, because the state
+    // worth looking at is solo *with the outliner not on screen*, and the checkbox is in the
+    // outliner: there is no width at which a click can reach it and leave it hidden.
+    app.solo = solo;
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -1220,7 +1252,13 @@ impl App {
                     ui.checkbox(&mut self.show_inspector, "Inspector");
                     ui.checkbox(&mut self.show_text, "Scene text");
                     ui.separator();
-                    ui.checkbox(&mut self.solo, "Solo the selection");
+                    // **Solo is the outliner's.** It acts on the *selection*, and the
+                    // outliner is where a selection is made — so the checkbox sits in its header,
+                    // beside the thing it filters, with its state visible without opening
+                    // anything. This was the eighth place a command was offered twice: seven came
+                    // off the toolbar because a menu already held them, and this one went the
+                    // other way, because here the panel is the better home and the menu was the
+                    // copy.
                     // A third picture, and the menu says what each is for the same reason the
                     // other two do: a surface says where the object is, a splat cloud says what is
                     // inside it, and an isosurface says where a *value* is. None is a rendering of
@@ -1566,6 +1604,19 @@ impl App {
                 };
                 if let Some(what) = watching {
                     ui.label(egui::RichText::new(what).weak());
+                }
+                // **Solo, when its control is not on screen.** The checkbox is in the outliner's
+                // header, so hiding the outliner — from the View menu, or by narrowing the window
+                // until it is squeezed out — leaves the viewport drawing one domain out of five
+                // with nothing on screen saying why. That is the shape this repository hunts: a
+                // picture filtered by a control nobody can see. Said here, in the same place and
+                // the same weight as what the editor does on its own, and only while it is true.
+                if self.solo && !self.panels_that_fit(ctx.screen_rect().width()).0.outliner {
+                    ui.label(
+                        egui::RichText::new("solo — drawing only the selection")
+                            .weak()
+                            .color(egui::Color32::from_rgb(230, 180, 60)),
+                    );
                 }
                 // **Both, not one or the other.** This was `match error { Some => error, None
                 // => status }`, so while the text did not parse nothing the editor said about its
