@@ -1,4 +1,8 @@
-// Compile-check the two README examples exactly as written.
+// Compile-check the two documented examples exactly as written.
+//
+// The name is where they used to be. `README.md` was cut back to what this is and how to run it,
+// and the snippets moved to `EXAMPLES.md` with the rest of the explaining; the name stays because
+// it is in the gate, in CI and in two documents, and a rename buys nothing a comment does not.
 use pantometry_optics::{fresnel_reflectance, Material, Spectrum, SurfaceFinish};
 use pantometry_units::Length;
 

@@ -165,6 +165,8 @@ earned and was not.
 | read | before |
 | --- | --- |
 | [RELEASING.md](RELEASING.md) | any release. Cadence, the **eight** places a version lives, the crate order, the wheel, what the pipeline has actually been run through — and what it costs to change the project's name, which is not a rename because a published name is permanent |
+| [EVIDENCE.md](EVIDENCE.md) | claiming that something is checked. Nine sections of what the closed forms are and what checking against them found, including two defects the conservation audit called clean |
+| [EXAMPLES.md](EXAMPLES.md) | adding or changing an example. What each one demonstrates and what it checks itself against |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | changing a test or a tolerance. The authority on the gate and on the five conventions in full |
 | [app/pantometry-world/FRICTION.md](app/pantometry-world/FRICTION.md) | changing the public API. Thirty-four findings from using the SDK as a stranger, five of them the same underlying decision |
 | [bindings/python/README.md](bindings/python/README.md) | touching the bindings. Its own cargo workspace, its own gate, and the two boundary decisions not to relitigate |

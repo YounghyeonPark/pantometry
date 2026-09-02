@@ -126,6 +126,254 @@ separately have no way to touch.
 
 ---
 
+## The crates
+
+| Crate | |
+| --- | --- |
+| `pantometry-units` | Dimensional analysis. SI quantities and vectors whose dimension lives in the type, so `Length + Time` does not compile |
+| `pantometry-core` | The kernel: conservation audits, fixed-step integrators, fields, shared boundaries, multi-domain scheduling, deterministic sampling, parallel ensembles for Monte Carlo, closed-form rigid motion |
+| `pantometry-optics` | Light: spectral radiometry, surface optics, dispersion, ray geometry, diffraction |
+| `pantometry-thermal` | Heat: lumped masses, conduction in one dimension and in three, networks of bodies joined by conductances, radiative and convective loss |
+| `pantometry-mechanics` | Motion under force: N-body, Barnes-Hut, penalty contact, rigid rotation |
+| `pantometry-acoustic` | Sound: the wave equation on a staggered grid in one, two and three dimensions, impedance boundaries |
+| `pantometry-molecular` | Matter atom by atom: Lennard-Jones fluids in periodic boxes, cell lists, a Langevin bath, radial distributions |
+| `pantometry-electrical` | Electricity: resistive dissipation into the heat channel, conductors whose resistance moves with temperature, and a **field** formulation where `I²R` is solved out of a shape rather than stated |
+| `pantometry-fluid` | Incompressible Navier–Stokes by projection on a staggered grid. Poiseuille and Couette come out exact against the *discrete* profile, whose gap to the continuum is a closed form and not a tolerance; Taylor–Green checks the nonlinear term against `e^{−2νk²t}`; and momentum in a periodic box drifts by `1e-15` |
+| `pantometry-em` | Maxwell's equations on a Yee grid, where `∇·B = 0` is an **identity of the update** rather than a tolerance: inject a divergence and 500 steps later it is unchanged to nine digits. Cavity resonances at second order, the leapfrog's energy swing against its own closed form, an absorbing boundary that leaves 0.149% of a pulse behind where a conductor leaves all of it, and a waveguide whose dispersion relation comes out of one march |
+| `pantometry-elastic` | What a shape does under load: `∇·σ = 0` solved on trilinear elements, so a stiffness is a property of a geometry. Four moduli come out exactly — `E`, the constrained `M`, the bulk `K` and the shear `G` — and Clapeyron's `2U = Σf·u` says the discretisation is self-consistent |
+| `pantometry-porous` | Flow through a packed bed: Darcy's law solved as a field, the heat the liquid carries, and the dissolution that rides on both. An espresso puck, and also a filter, a catalyst bed and an aquifer |
+| `pantometry-quantum` | A wavefunction in a well: the time-dependent Schrödinger equation, marched with the same staggered leapfrog family the acoustic domain uses — real part on integer steps, imaginary on halves — so **probability is conserved as an identity of the update**, the way `∇·B` is on the Yee grid. Eigenvalues against the discrete operator's own closed form, Gaussian spreading and Ehrenfest's theorem at second order |
+| `pantometry-shape` | Designed geometry as input: an STL read and measured, and rasterised into the cells a domain fills — with a report of what the cells could **not** hold, because a rib finer than the grid does not fail, it disappears. Depends on `pantometry-units` and nothing else |
+| `pantometry-scene` | Where things are and what a run looks like: placement, capture, and the shapes a view can draw. Names no domain |
+| `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
+| `pantometry` | A facade over the other sixteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
+| `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
+| `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
+| `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because a GPU stack is 86 external crates and a GUI shell 371 against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
+| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty scenes across all eleven domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
+
+The last three are the workspace's answer to the same question from three sides: what a
+simulation *is* (`pantometry-scene`), what a picture of one *is* (`pantometry-view`), and what it feels
+like to use both from outside (`pantometry-world`). The first two are libraries because a consumer
+who can state a simulation should not have to write a plotting stack to see it.
+
+```text
+pantometry-units       no dependencies but glam and serde
+pantometry-core        depends on units                     ── the kernel
+pantometry-optics      depends on core     ─┐
+pantometry-thermal     depends on core      │
+pantometry-mechanics   depends on core      ├─  one crate per physics, and
+pantometry-acoustic    depends on core      │   none of them knows another
+pantometry-molecular   depends on core      │
+pantometry-electrical  depends on core      │
+pantometry-elastic     depends on core      │
+pantometry-em          depends on core      │
+pantometry-fluid       depends on core      │
+pantometry-porous      depends on core      │
+pantometry-quantum     depends on core     ─┘
+pantometry-shape       depends on units only                ── designed geometry in
+pantometry-scene       depends on core                      ── where things are
+pantometry-view        depends on scene                     ── how to draw that
+pantometry             depends on all of them
+pantometry-world       depends on the facade, and nothing depends on it
+```
+
+**The kernel must never depend on a domain.** If a new physics needs the kernel
+changed, the kernel was wrong — that rule is what makes "add sound, add fluids" a
+matter of writing a crate rather than editing this one.
+
+**And the layers above must not know one either**, which is the same rule from the other side.
+`pantometry-scene` asks each domain what it *offers* — a field, a set of bodies, some readings — and
+`pantometry-view` dispatches on the shape of what came back. Neither names a domain, and neither
+merely claims that: `pantometry-scene`'s test defines a physics inside the test file and captures it
+whole, and `pantometry-view`'s tests are driven by frames written out by hand, because a test that
+ran a real scene could not tell *a heatmap because the data is a 2D grid* apart from *a heatmap
+because that domain was a room*.
+
+Six domains are now the proof rather than an assertion. Optics publishes absorbed
+light as heat and thermal consumes it; mechanics publishes a dashpot's dissipation on
+the same channel and the same thermal domain consumes that too, with nothing changed
+on either side; acoustics publishes what an absorbing duct end radiates onto the same
+channel again; molecular dynamics arrived without asking for anything; and electricity
+arrived last, publishing `I²R` onto that same channel. None of the six names another and
+none of them needed the kernel changed.
+
+Electricity is the one that closes a circle. Every other producer of heat here answers a
+question about *something else* that happens to warm a thing — light landing on a mirror,
+a dashpot damping a bounce. A winding is the case where getting hot is the entire subject,
+and until that crate existed the workspace's own examples stood a stated number of watts in
+its place. A stated number cannot be wrong, which is another way of saying it is not a model.
+
+One thing did need the kernel changed, and it is worth being precise about why that is
+not a violation of the rule. The rule is that a *domain* must never force a kernel edit.
+What forced this one was the coupling mechanism itself being under-specified from the
+start: a bus carrying one number per channel could not say *where* on a surface a
+quantity crossed, so no domain could ask for that and none of them ever did. Adding
+`Interface` and `Flux` did not teach the kernel any physics — a discretised boundary is
+not optics or heat — and no existing domain had to change to keep working.
+
+They also brought the audit three conserved quantities instead of one, and the three
+hold to wildly different tolerances for structural reasons rather than through
+differences in effort:
+
+| Quantity | Holds to | Because |
+| --- | --- | --- |
+| Linear momentum (`NBody`) | 1e-13 | Exact by construction: equal and opposite forces cancel bit for bit |
+| Linear momentum (`TreeNBody`) | θ-dependent | Each body sees its own approximation of the rest, so nothing cancels |
+| Angular momentum (`RigidBody`) | 1e-9 | Nothing cancels here either; it is only as good as RK4 plus a quaternion renormalisation |
+| Energy across a coupling | 1e-9 | Both sides are closed-form evaluations, nothing is integrated |
+| Energy through a contact | 2e-2 | A penalty contact is a non-smooth potential, so the symplectic bound does not apply |
+
+Auditing a vector component by component also makes the *smallest* component the
+binding constraint, since the absolute error is set by the whole vector while the scale
+it is judged against is only that component. That is a property of the kernel's
+per-quantity audit, and it is written down where it will be met.
+
+Storage is SI base units everywhere: metres, kilograms, seconds, kelvin. Millimetres
+and nanometres are entry and exit forms, and the unit-bearing constructors are the
+only place a factor of a thousand can hide.
+
+## What is not here
+
+No scene *graph* — no parent-child transform hierarchy, no culling, no traversal order. What
+there is, is flat: `pantometry-scene` gives each domain a `Pose` in world coordinates and captures
+what they hold. A hierarchy is what you want when placements are relative and animated, and
+nothing here has needed one.
+
+The renderer is deliberately modest. `pantometry-view` draws a filmstrip, a heatmap, a profile, a
+point scene — depth-sorted back to front, which is painter's algorithm on a 2D canvas, with no
+depth buffer and no shading — and a **raycast** of a 3D field, composited front to back and
+rotatable, beside a montage of every slice. The render shows shape and cannot be read for values;
+the montage is the reverse, and a volume gets both rather than a choice between them. The SVG has one fixed projection; the HTML report can be dragged to
+rotate and scrolled to zoom, and that is the whole camera model. It is enough to see whether a
+simulation did what you expected, and it is not a visualisation package. The JSON export exists
+for when it is not enough.
+
+The **export** is where the pictures in somebody else's renderer come from, and it stopped being a
+point cloud. A three-dimensional field is the surface of its present cells — one quad per face
+whose neighbour is absent, so 89% of a solid block's faces are culled as unseeable and a void
+inside it produces a real interior surface. Bodies are spheres. Both carry normals, so they take
+light and cast shadows, which a point cloud cannot. Rendered from Blender straight off the export,
+scene 23 is a hot part and a cooled lid with a real gap between them, and scene 16's room shows its
+standing wave's nodal planes as dark bands across a solid.
+
+**USD** is the other half of that, and it does what glTF cannot: `out.usda` is the *whole run*.
+USD has time samples on any attribute, so the topology is written once and the colours per frame,
+and usdview's timeline scrubs the physics rather than a camera move. Verified by rendering it
+through Blender's OpenUSD: scene 23's part is cream at frame 0 and green at frame 20 while its lid
+warms from navy, both on one scale across the run so the two frames are comparable.
+
+It carries the numbers too. A domain with no geometry at all — a heater, a lamp, a winding — is
+most of what a scene here contains, and its scalars go out as time-sampled custom attributes under
+`pantometry:`, which usdview shows in its property panel and scrubs with the timeline. There is no
+USD schema for a `Ledger` or a `Violation` and this invents none; a custom attribute is a number
+with a name, which is what a reading is.
+
+Still no dependency. `.usda` is USD's text serialisation and this writes it by hand, for the same
+reason glTF and SVG are written by hand here — and `usdcat -o out.usdc out.usda` is one command if
+a pipeline wants the binary crate.
+
+Three things came out of doing it. The colours were being written into glTF's `COLOR_0` as sRGB
+where the specification says linear, so every export this workspace has ever produced was decoded
+about 2.3x too bright in the midtones. And giving each sample a full cell made an object one whole
+cell larger than the extent it was sampled over — 2x on a two-sample axis — because `capture`
+samples corner to corner and an end node owns *half* a cell, which is the third time that
+arithmetic has been the bug here. And the USD wrote a primvar's interpolation as a separate
+property where USD reads it as attribute **metadata**, so a file holding a colour per vertex was
+drawn with the first one over the whole prim — found by rendering it, where a hot part and a cooled
+lid came out the same colour, and invisible to any check on the text.
+
+Modest is not the same as unreadable, and the report was the second for a while. Axes are in
+metres rather than in cells, hovering reads back the sample under the cursor, the scalar chart has
+an axis per unit instead of normalising every series to itself, and the colour scale is
+constructed in CIE LCh with lightness linear in the value — properties `pantometry-view::ramp`
+pins with tests rather than a designer's judgement. The viewer that draws all of it is executed by
+`tools/report-check`, which is new for the ordinary reason: it was four hundred lines of
+JavaScript that nothing had ever run.
+
+The JSON scene *format* is still `pantometry-world`'s and not the library's, which is why that crate
+is unpublished. A file format is a compatibility promise, and this one is not ready to make one:
+it renamed a field once already and nothing failed, because serde discards unknown keys by
+default — which is how `deny_unknown_fields` came to be on every type in it.
+
+Rigid bodies are spheres where they collide. `RigidBody` rotates with an applied torque
+and an arbitrary inertia tensor, but `Sphere` and `Rolling` are the only things that
+touch anything, and a sphere is chosen because its inertia is the same about every axis
+— so a contact does not have to carry the orientation through. Boxes hitting boxes is a
+different module.
+
+Acoustics is linear. A tube, a room and now a hall — `Hall` is the wave equation in three
+dimensions, which is what the vertical and oblique modes need, and a floor plan does not have
+them at all rather than having them inaccurately. Still no scattering geometry and no
+nonlinearity, so nothing here shocks up or distorts, and no absorbing wall model beyond an
+impedance boundary.
+
+Molecular dynamics is monatomic, so the crate's name is aspirational by one step: no bonds,
+angles or torsions, and therefore no molecules. And no electrostatics, which for a charged
+system is the hard part rather than a missing feature — Coulomb falls off as `1/r` and cannot
+be cut off at all, so it needs Ewald summation or a particle-mesh method, and that is a larger
+piece of work than everything currently in the crate. No constraints, no barostat, no
+free-energy machinery.
+
+Both acoustic domains had a boundary defect until recently, and how it was found is worth
+more than the fix. See [EVIDENCE.md](EVIDENCE.md#a-boundary-defect-and-the-thing-that-found-it).
+
+**There is no fluid domain, and that is deliberate.** Sound *is* the fluid domain here:
+it is what a fluid does when the variations are small enough to linearise, which is
+exactly the regime where every answer has a closed form to check against. Full
+Navier-Stokes has none, and a solver that could not be validated against anything would
+be decoration. See the note below on turbulence.
+
+Gravity comes both ways and the choice is a real one. `NBody` sums every pair: exact,
+momentum conserved to the last bit, `O(n²)`, and awkward to parallelise precisely
+because the `i < j` pairing that makes it exact has two threads writing to one body.
+`TreeNBody` is Barnes-Hut: `O(n log n)`, embarrassingly parallel, and it **gives up
+exact momentum** — each body sees its own approximation of the rest, so their mutual
+forces no longer cancel. The drift is a knob rather than a defect, closing with the
+opening angle and vanishing at `θ = 0`, and the audit tolerance has to be the one the
+angle earns. The expansion carries the quadrupole as well as the monopole, which buys
+back most of that accuracy at close angles — a factor of 6.5 at `θ = 0.3` — but nothing
+past it, so `θ` above about 1 is still asking a centre of mass to stand in for a group
+that is not far enough away.
+
+Fields propagate between planes by the angular spectrum, but only through free space:
+there is nothing to put in the beam's way except an aperture, and the grid's reach is
+`NΔ²/λ`, past which the propagator refuses rather than aliasing.
+
+Partial coherence is a transfer function rather than a simulation. The two exact limits
+are there, and so is the coherence a source has at a distance, but computing an
+arbitrary object's partially coherent image needs the transmission cross-coefficients —
+a four-dimensional integral, and not here.
+
+The tree stops at the quadrupole. Higher multipoles would buy another order in the
+opening angle, and a proper Fast Multipole Method would change the complexity rather
+than the constant.
+
+Meshes and grids are no longer excluded. They were, on the grounds that adding them
+before a second consumer would be guessing at an interface; finite elements and
+finite differences need them, so that decision has been reversed deliberately rather
+than drifted away from.
+
+An `Interface` is one-dimensional: a boundary is a sequence of faces, and `Flux::resample`
+remaps between two of them by overlap in cumulative area. That is enough for a mirror
+face, a bar's side, a row of pixels, and any boundary whose faces have a natural order —
+and it is not enough for a triangulated surface or an arbitrary mesh-to-mesh projection,
+where the overlaps are not an interval intersection and there is no order to walk. The
+conservation argument generalises; the implementation does not, and the doc comment says
+so where a caller will meet it rather than only here.
+
+An `Interface` also carries areas and an order and nothing else — no coordinates, no
+normals, no connectivity. A domain that needs to know where a face *is* in space still
+has nowhere to put that, so a beam profile has to be handed over in the boundary's own
+coordinate rather than computed from geometry. That is the next thing this layer is short
+of, and it is deliberately not guessed at before something needs it.
+
+And some things stay out for reasons that will not change: general relativity and
+quantum field theory are research subjects rather than simulation targets, turbulent
+DNS at world scale is a question about supercomputer budgets rather than about API
+design, and no single `f64` state vector spans the fifteen decades from a nucleus to
+a galaxy — a simulation has to declare which regime it is in.
+
 ## Where the work is: 3D is not the default yet
 
 The physics layer is eleven crates deep and dimensionally uneven. This is the honest state.

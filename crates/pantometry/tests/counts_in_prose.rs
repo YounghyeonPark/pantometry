@@ -379,8 +379,11 @@ fn the_scene_count_agrees_everywhere_it_is_written() {
         "against the {} scenes on disk",
         scenes,
     );
+    // The crate table moved to `ARCHITECTURE.md` when `README.md` was cut back to what this is
+    // and how to run it. The sentence is the same sentence; this test found the move by failing,
+    // which is what it is for.
     phrase(
-        "README.md",
+        "ARCHITECTURE.md",
         "with {} scenes across all eleven domains",
         scenes,
     );
@@ -492,6 +495,11 @@ fn the_crate_and_domain_counts_agree_everywhere_they_are_written() {
         phrase(f, "{} domain crates built on it", domains);
     }
     phrase("ARCHITECTURE.md", "+ {} domain crates", domains);
+    // **The front page's own two.** `README.md` was cut back to what this is and how to run it,
+    // and what survived includes the crate count twice — in the `cargo add` comment and in the
+    // line pointing at the map. A short document's numbers are read more, not less.
+    phrase("README.md", "all {} published crates", crates);
+    phrase("README.md", "the map: three layers, the {} crates", crates);
     phrase(
         "ARCHITECTURE.md",
         "The physics layer is {} crates deep",

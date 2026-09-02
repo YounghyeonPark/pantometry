@@ -31,6 +31,40 @@ cargo +1.78 build --locked --workspace
 echo "the gate passed"     # and if this line does not appear, it did not
 ```
 
+### Why those jobs, and not others
+
+Two of them enforce a claim rather than catch a typo. The suite runs on **Linux, macOS and
+Windows** because `rng::tests::the_stream_is_pinned` asserts a hardcoded digest of ten thousand
+draws: a platform that rounded differently would fail there rather than quietly render a different
+image. And it runs again under **`wasm32-wasip1` in wasmtime**, because "and in WebAssembly" is a
+claim about *results*, which compiling for the target does not establish.
+
+`--locked` throughout, so a stale `Cargo.lock` fails the build rather than being silently updated:
+CI compiles what a contributor compiled.
+
+`-D warnings` is passed to clippy and rustdoc rather than set in `RUSTFLAGS`, because `RUSTFLAGS`
+reaches dependencies too and would break the build on somebody else's warning. Clippy runs the
+rustc lints as well, so our own warnings are still errors.
+
+**The MSRV is set by the lockfile, not by the code.** CI builds on 1.78, and that number came out
+of a failure worth recording: the job was first pinned at 1.75 and died with `failed to parse lock
+file` before compiling anything, because `Cargo.lock` is format version 4 and cargo could not read
+that until 1.78. The newest language feature in the workspace is `let ... else` from 1.65, so the
+source would go lower.
+
+Which floor applies depends on who is asking. A consumer depending on `pantometry-optics` never
+receives this lockfile, so their constraint is the source and its dependencies. CI passes
+`--locked` deliberately, so its constraint is the lockfile format. The declared `rust-version`
+follows CI, because it is the stronger of the two and a declared MSRV should be a promise about
+what has been compiled.
+
+This block carried three `--exclude pantometry-world` flags for as long as that application was a
+member of this workspace: WebAssembly, determinism and the 1.78 floor are promises the *library*
+makes to the people who depend on it, and an unpublished application with no dependents was not
+held to them. The application lives in [`app/`](app/README.md) now, which is its own workspace and
+which cargo keeps out of this one, so there is nothing left to exclude and every member here is
+published and held to all three.
+
 ### This gate has reported a result it had not earned, eight times
 
 Seven were the same mistake — reading the *output* of a check as evidence the check **ran**:
