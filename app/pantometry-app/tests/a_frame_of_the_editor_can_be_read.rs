@@ -426,6 +426,34 @@ fn a_scene_that_does_not_check_out_says_why_on_the_screen() {
         "the parser's reason is not on screen:\n{d}"
     );
     assert!(d.contains("1:100"), "the place is not on screen:\n{d}");
+
+    // **And what the editor did is still on screen while the document is wrong.** The status bar
+    // was `match error { Some => error, None => status }`, so a parse error hid every report the
+    // editor made about its own actions — saving a scene with a missing field wrote the file and
+    // said nothing. The two are facts about different things, and the second is wanted most
+    // exactly when the first is true.
+    assert!(
+        d.contains("loaded "),
+        "the error hid what the editor just did:\n{d}"
+    );
+
+    // Reading order: the document's problem first, then what happened. The error was on the
+    // right-hand side of the window for one commit, because a right-to-left row puts the first
+    // widget added at the right.
+    let x = |needle: &str| -> f32 {
+        let line = d
+            .lines()
+            .find(|l| l.get(21..).is_some_and(|t| t.starts_with(needle)))
+            .unwrap_or_else(|| panic!("no {needle} in:\n{d}"));
+        line.split_whitespace()
+            .next()
+            .and_then(|w| w.parse().ok())
+            .expect("a left edge")
+    };
+    assert!(
+        x("1:100") < x("loaded "),
+        "the error is not the first thing on the line:\n{d}"
+    );
 }
 
 #[test]

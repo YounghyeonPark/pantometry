@@ -1537,12 +1537,16 @@ impl App {
         }
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            // **Right to left, and the message last.** Wrapped in a plain `horizontal` this row
-            // stopped wrapping — a `horizontal` lays out on one line by definition — and the
-            // narrow-window notice, which is 380 points long, was drawn past the edge of a
-            // 420-point window and clipped. `--ui-dump`'s `cut` column found it in the same commit
-            // that caused it. So the indicator is placed first, against the right edge, and the
-            // message takes what is left and wraps into it.
+            // **Three facts, in reading order.** What is wrong with the document, what you just
+            // did, and what the editor is doing on its own — the last against the right edge.
+            //
+            // Wrapped in a plain `horizontal` this row stopped wrapping, a `horizontal` being one
+            // line by definition, and the narrow-window notice — 380 points of it — was drawn past
+            // the edge of a 420-point window and clipped; `--ui-dump`'s `cut` column found that in
+            // the commit that caused it. A `right_to_left` row places the first widget added at
+            // the right, so the indicator goes in first and everything else is nested in a
+            // left-to-right layout inside what is left, which is also what stops the error being
+            // pushed to the right-hand side of the window as it was for one commit.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 // **What the editor does when nobody clicks anything, said where a person looks
                 // to find out what it is doing.** These were two checkboxes on the toolbar, which
@@ -1559,19 +1563,25 @@ impl App {
                 if let Some(what) = watching {
                     ui.label(egui::RichText::new(what).weak());
                 }
-                match self.checked.error.as_deref() {
-                    Some(e) => {
+                // **Both, not one or the other.** This was `match error { Some => error, None
+                // => status }`, so while the text did not parse nothing the editor said about its
+                // own actions reached the screen: saving a scene with a missing field wrote the
+                // file and reported nothing. The two are facts about different things, and the
+                // second is wanted most exactly when the first is true.
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                    if let Some(e) = self.checked.error.as_deref() {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(e).color(egui::Color32::from_rgb(220, 80, 80)),
                             )
                             .wrap(),
                         );
+                        ui.separator();
                     }
-                    None => {
-                        ui.add(egui::Label::new(&self.status).wrap());
+                    if !self.status.is_empty() {
+                        ui.add(egui::Label::new(egui::RichText::new(&self.status).weak()).wrap());
                     }
-                }
+                });
             });
         });
 
