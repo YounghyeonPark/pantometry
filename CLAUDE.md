@@ -187,6 +187,7 @@ earned and was not.
 | [app/README.md](app/README.md) | touching anything a person *runs*. One workspace, one binary: the CLI, the viewer, the editor and the GPU accelerator. What the merge bought, what it cost, and the gate it has of its own |
 | [app/viewer-core/README.md](app/viewer-core/README.md) | touching the viewer. Why it does not link `pantometry`, and the test that holds that now the workspace boundary does not |
 | [app/editor-core/README.md](app/editor-core/README.md) | touching the editor. Why it *does* link `pantometry`, the shaded viewport, and the two halves the platform rules keep apart |
+| [tools/screenshot/README.md](tools/screenshot/README.md) | changing the editor's interface. `docs/editor.png` is the one figure no command in CI can refresh, so it carries `docs/editor.txt` — the same frame through `--ui-dump` — and a test that fails when the picture is stale |
 | [tools/report-check/README.md](tools/report-check/README.md) | touching the HTML report's viewer. It is four hundred lines of JavaScript in a Rust string and this is the only thing that executes it — plus why a `vm.runInContext` harness measured a renderer 30x slower than it is |
 | [.claude/agents/README.md](.claude/agents/README.md) | adding a reviewer |
 
