@@ -771,12 +771,6 @@ pub fn field_splats(
         };
     }
 
-    // The box's axes. Corner 0 is the low one and bits 0, 1, 2 step one axis each, which is the
-    // order [`EDGES`] is written against.
-    let o = corners[0];
-    let axis = |c: [f64; 3]| [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
-    let (ax, ay, az) = (axis(corners[1]), axis(corners[2]), axis(corners[4]));
-
     let colouring = Colouring::of(unit, values, scale);
     let physical = colouring.physical();
 
@@ -786,50 +780,34 @@ pub fn field_splats(
     } else {
         1
     };
-    let frac = |i: usize, n: usize| {
-        if n > 1 {
-            i as f64 / (n - 1) as f64
-        } else {
-            0.5
-        }
-    };
 
+    // **Where each sample is, from the one place that knows.** This function carried the walk —
+    // corner 0 as origin, `i / (n - 1)` along each axis, non-finite skipped — and then the viewer
+    // needed the same thing to draw a field at all. Two copies of *where is sample `i`* are two
+    // pictures of one run that can disagree about it, so there is one, in the crate that owns the
+    // panel: [`viewer_core::field_points`].
     let mut splats = Vec::new();
-    for k in (0..nz).step_by(stride) {
-        for j in (0..ny).step_by(stride) {
-            for i in (0..nx).step_by(stride) {
-                let v = values[i + nx * (j + ny * k)];
-                if !v.is_finite() {
-                    continue;
-                }
-                let (u, w, t) = (frac(i, nx), frac(j, ny), frac(k, nz));
-                let at = [
-                    o[0] + ax[0] * u + ay[0] * w + az[0] * t,
-                    o[1] + ax[1] * u + ay[1] * w + az[1] * t,
-                    o[2] + ax[2] * u + ay[2] * w + az[2] * t,
-                ];
-                // One scale across the whole run, never per frame, for the reason
-                // `viewer-core` states.
-                let s = colouring.place(v);
-                let [r, g, b] = colouring.srgb(v);
-                let rgba = if physical {
-                    [r, g, b, ((colouring.brightness(v) * 235.0) as u8).max(6)]
-                } else {
-                    // Opacity climbs with the value's place in the range, so the quiet bulk
-                    // of a field clears out of the way. The colour is not computed from
-                    // that place: a signed field's colour is placed about **zero** and its
-                    // opacity about the middle of the deflection, and those are not the same
-                    // point unless the range happens to be symmetric.
-                    let a = if colouring.signed() {
-                        (2.0 * s - 1.0).abs()
-                    } else {
-                        s
-                    };
-                    [r, g, b, (30.0 + 200.0 * a * a) as u8]
-                };
-                splats.push(Splat { at, rgba });
-            }
-        }
+    for (at, v) in viewer_core::field_points(corners, counts, values, stride) {
+        // One scale across the whole run, never per frame, for the reason
+        // `viewer-core` states.
+        let s = colouring.place(v);
+        let [r, g, b] = colouring.srgb(v);
+        let rgba = if physical {
+            [r, g, b, ((colouring.brightness(v) * 235.0) as u8).max(6)]
+        } else {
+            // Opacity climbs with the value's place in the range, so the quiet bulk
+            // of a field clears out of the way. The colour is not computed from
+            // that place: a signed field's colour is placed about **zero** and its
+            // opacity about the middle of the deflection, and those are not the same
+            // point unless the range happens to be symmetric.
+            let a = if colouring.signed() {
+                (2.0 * s - 1.0).abs()
+            } else {
+                s
+            };
+            [r, g, b, (30.0 + 200.0 * a * a) as u8]
+        };
+        splats.push(Splat { at, rgba });
     }
 
     Splatted {

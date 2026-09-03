@@ -33,7 +33,7 @@
 
 use std::sync::Arc;
 
-use viewer_core::{segments, Camera, Framing, Panel, Run};
+use viewer_core::{segments, Camera, Framing, Run};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -95,22 +95,17 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    // Which panel to show. The first one with paths, because that is what this shell draws; a
-    // field or a point cloud needs a different pipeline and saying so beats opening a blank
-    // window and letting the reader wonder.
-    let drawable = run.panels().into_iter().find(|name| {
-        run.frames
-            .iter()
-            .flat_map(|f| &f.panels)
-            .any(|p| p.name() == name && matches!(p, Panel::Paths { .. }))
-    });
-    let Some(panel) = drawable else {
-        eprintln!(
-            "{}: no panel of paths to draw. This shell draws paths; fields and point clouds are \
-             different pipelines and are not built yet.",
-            run.title
-        );
-        eprintln!("  panels in this run: {:?}", run.panels());
+    // Which panel to show: the first one there is.
+    //
+    // **It used to be the first one with `Paths`**, and it refused everything else — "fields and
+    // point clouds are different pipelines and are not built yet". They are not different
+    // pipelines: a body and a field sample are points, and a point is two short segments in
+    // screen space, which is the pipeline that was already here. What the old rule cost is that
+    // `PanelData::paths` is built by two examples and by tests and by no `Domain` at all, so
+    // **none of the thirty shipped scenes could be drawn by this shell** — the refusal was the
+    // only thing it ever said about a scene.
+    let Some(panel) = run.panels().into_iter().next() else {
+        eprintln!("{}: this run has no panels at all", run.title);
         std::process::exit(1);
     };
 

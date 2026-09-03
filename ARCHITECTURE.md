@@ -896,6 +896,27 @@ each other, land on the same reflectance to 0.5% at eighty cells per wavelength,
 second order. That is the shape the rest of this list wants — not a domain absorbing another's job,
 but a test that fails if they ever stop being two limits of one physics.
 
+8. ~~**A shell that can draw a scene.**~~ Done, and it is here because it was invisible for as long
+   as it existed. `pantometry view` drew `Panel::Paths` and refused everything else — *"fields and
+   point clouds are different pipelines and are not built yet"* — which is a clear thing to say and
+   hid how far it went: `PanelData::paths` is built by two examples and by tests and by **no
+   `Domain` at all**. Not one of the thirty shipped scenes produced a panel it could draw. The
+   refusal was the only sentence it ever said about a scene, and it read as a limitation rather
+   than as *nothing works*.
+
+   They are not different pipelines. A body and a field sample are points, and a point is two short
+   segments in screen space, which is the pipeline that was already there — so `viewer_core::
+   segments` grew two arms and the shell, the depth sort and the snapshot were not touched.
+   **Twenty-seven of the thirty draw now**; the other three are a `network` and two `winding`s,
+   whose domains report readings rather than places, and that set is pinned in both directions.
+
+   The part worth keeping is what it nearly cost. *Where is sample `i` in the world* lived in
+   `editor_core::field_splats`, and the viewer needed the same answer: two copies of that
+   arithmetic are two pictures of one run that can disagree about where a hot spot is. It is
+   `viewer_core::field_points` now, in the crate that owns the panel, with both shells walking
+   through it — and a closed-form test over the mapping itself, because the pixel count that says
+   a scene drew *something* passed a sabotage that put every sample at the origin.
+
 ---
 
 ## Rendering, and the decision not to compete on it

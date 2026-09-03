@@ -409,6 +409,35 @@ impl Panel {
             .collect()
     }
 
+    /// Every sample of a field, as a placed world point and its value.
+    ///
+    /// **One walk, because two shells were about to have one each.** `editor_core::field_splats`
+    /// had this loop and the viewer's `segments` needed it, and a second copy of "where is sample
+    /// `i` in the world" is two pictures of the same run that can disagree. The mapping is the
+    /// one the editor established: corner 0 is the origin, bits 0, 1 and 2 of the corner index
+    /// step one axis each, and a sample sits at `i / (n - 1)` along its axis — **on** the box's
+    /// faces, not at cell centres, because that is where a `Room`'s samples are and the format
+    /// does not distinguish.
+    ///
+    /// A single sample along an axis sits at the middle of it, which is the only place it can be.
+    /// Non-finite values are skipped: a cell the domain does not occupy has no position worth
+    /// drawing, and `null` in the file reads back as `f64::NAN` here.
+    ///
+    /// `stride` takes every `stride`-th sample along each axis, which is what a shell with a
+    /// budget wants; 1 takes all of them.
+    pub fn field_samples(&self, stride: usize) -> Vec<([f64; 3], f64)> {
+        let Panel::Field {
+            nx, ny, nz, values, ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        let Some(corners) = self.placed_corners() else {
+            return Vec::new();
+        };
+        field_points(&corners, (*nx, *ny, *nz), values, stride)
+    }
+
     /// A field's sampled box as **eight world corners**, or `None` for a run written before the
     /// format carried the extent.
     ///
@@ -782,6 +811,67 @@ pub struct Segment {
     pub shade: f64,
 }
 
+/// Where each sample of a field sits in the world, and what it holds.
+///
+/// **One walk, because two shells had one each.** `editor_core::field_splats` carried this loop
+/// and the viewer's `segments` needed it, and a second copy of *where is sample `i`* is two
+/// pictures of the same run that can disagree about it. The editor cannot use
+/// [`Panel::field_samples`] — it draws a field against the *scene's* box when the run has no
+/// placement of its own — so the shared thing is this, over plain arrays.
+///
+/// The mapping is the one the editor established: corner 0 is the origin, bits 0, 1 and 2 of the
+/// corner index step one axis each, and a sample sits at `i / (n - 1)` along its axis — **on** the
+/// box's faces rather than at cell centres, because that is where a `Room`'s samples are and the
+/// format does not distinguish the two. One sample along an axis sits at its middle, which is the
+/// only place it can be.
+///
+/// Non-finite values are skipped: a cell the domain does not occupy has no position worth drawing,
+/// and `null` in the file reads back as `f64::NAN` here. `stride` takes every `stride`-th sample
+/// along each axis; 1 takes all of them.
+pub fn field_points(
+    corners: &[[f64; 3]; 8],
+    counts: (usize, usize, usize),
+    values: &[f64],
+    stride: usize,
+) -> Vec<([f64; 3], f64)> {
+    let (nx, ny, nz) = counts;
+    if nx == 0 || ny == 0 || nz == 0 || values.len() < nx * ny * nz {
+        return Vec::new();
+    }
+    let o = corners[0];
+    let axis = |c: [f64; 3]| [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
+    let (ax, ay, az) = (axis(corners[1]), axis(corners[2]), axis(corners[4]));
+    let frac = |i: usize, n: usize| {
+        if n > 1 {
+            i as f64 / (n - 1) as f64
+        } else {
+            0.5
+        }
+    };
+    let step = stride.max(1);
+    let mut out = Vec::new();
+    for k in (0..nz).step_by(step) {
+        for j in (0..ny).step_by(step) {
+            for i in (0..nx).step_by(step) {
+                let v = values[i + nx * (j + ny * k)];
+                if !v.is_finite() {
+                    continue;
+                }
+                let (u, w, t) = (frac(i, nx), frac(j, ny), frac(k, nz));
+                out.push((
+                    [
+                        o[0] + ax[0] * u + ay[0] * w + az[0] * t,
+                        o[1] + ax[1] * u + ay[1] * w + az[1] * t,
+                        o[2] + ax[2] * u + ay[2] * w + az[2] * t,
+                    ],
+                    v,
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Build the segments for one panel at one frame, shaded against `span`.
 ///
 /// Sorted **back to front**, so a renderer without a depth buffer still draws them in an order
@@ -809,6 +899,69 @@ pub fn segments(
     span: (f64, f64),
 ) -> Vec<Segment> {
     let mut out = Vec::new();
+
+    // **A cross, for the two panels that are not lines.** A body and a field sample are points,
+    // and this shell has one pipeline, which draws segments — so each becomes two of them, in
+    // *screen* space so a sample near the eye is no larger than one far from it. Depth comes from
+    // the projection and the sort below is what puts the far ones behind.
+    //
+    // Written because the shell refused every scene that ships. It drew `Panel::Paths` only, and
+    // `PanelData::paths` is built by two examples and by tests and by no `Domain` at all: none of
+    // the thirty scenes could be drawn by `pantometry view` or captured by its `--snapshot`.
+    let mut cross = |at: [f64; 3], shade: f64| {
+        let c = camera.project(at, framing, aspect);
+        const ARM: f64 = 0.006;
+        let tick = |dx: f64, dy: f64| Projected {
+            x: c.x + dx,
+            y: c.y + dy,
+            depth: c.depth,
+        };
+        out.push(Segment {
+            from: tick(-ARM, 0.0),
+            to: tick(ARM, 0.0),
+            shade,
+        });
+        out.push(Segment {
+            from: tick(0.0, -ARM),
+            to: tick(0.0, ARM),
+            shade,
+        });
+    };
+
+    let (lo, hi) = span;
+    let width = if hi > lo { hi - lo } else { 1.0 };
+    let shade_of = |v: f64| ((v - lo) / width).clamp(0.0, 1.0);
+
+    if let Panel::Points { values, .. } = panel {
+        for (at, v) in panel.placed_positions().into_iter().zip(values) {
+            if v.is_finite() {
+                cross(at, shade_of(*v));
+            }
+        }
+    }
+
+    if matches!(panel, Panel::Field { .. }) {
+        // **A stride, because a field is not a handful of bodies.** Scene 29 is 26 x 26 x 12 and
+        // scene 16 is larger; every sample would be two segments each and most of them behind
+        // another. The budget is the same shape `editor_core::field_splats` uses and the walk is
+        // the same walk — `Panel::field_samples`, so the two pictures cannot disagree about where
+        // a sample is.
+        const MOST: usize = 20_000;
+        let (nx, ny, nz) = match panel {
+            Panel::Field { nx, ny, nz, .. } => (*nx, *ny, *nz),
+            _ => (0, 0, 0),
+        };
+        let total = nx * ny * nz;
+        let stride = if total > MOST {
+            ((total as f64 / MOST as f64).cbrt().ceil() as usize).max(1)
+        } else {
+            1
+        };
+        for (at, v) in panel.field_samples(stride) {
+            cross(at, shade_of(v));
+        }
+    }
+
     if let Panel::Paths {
         starts,
         vertices,
@@ -817,15 +970,13 @@ pub fn segments(
     } = panel
     {
         let placed = panel.placed_vertices();
-        let (lo, hi) = span;
-        let width = if hi > lo { hi - lo } else { 1.0 };
         for (k, start) in starts.iter().enumerate() {
             let from = *start as usize;
             let to = starts
                 .get(k + 1)
                 .map(|s| *s as usize)
                 .unwrap_or(vertices.len() / 3);
-            let shade = ((values.get(k).copied().unwrap_or(0.0) - lo) / width).clamp(0.0, 1.0);
+            let shade = shade_of(values.get(k).copied().unwrap_or(0.0));
             for i in from..to.saturating_sub(1) {
                 // Through `placed_vertices` like the editor's two painters, so every place that
                 // turns a panel into geometry applies the placement in one function rather than in
