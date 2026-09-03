@@ -37,6 +37,7 @@ pub mod beam;
 pub mod fit;
 pub mod heater;
 pub mod light;
+pub mod presets;
 pub mod templates;
 pub mod verify;
 

@@ -346,7 +346,12 @@ fn the_chooser_offers_every_kind_the_format_defines() {
     // **Derived from the table, not listed here.** A twentieth domain reaches the chooser without
     // this file learning about it, and a nineteenth that stops being offered fails rather than
     // quietly disappearing from a menu — which is how the editor's Add list is checked too.
-    let d = dump(&["--new"]);
+    //
+    // `--custom`, because `--new` is no longer this screen: New project opens on the shipped
+    // scenes now and the kinds are behind `Custom…`. Both tests here read `--new` and both went on
+    // passing against the wrong screen for exactly as long as the preset screen happened to
+    // contain the word `bar`.
+    let d = dump(&["--new", "--custom"]);
     assert_eq!(count(&d, "callbacks"), 0, "a viewport with no scene:\n{d}");
     for t in pantometry_world::templates::TEMPLATES {
         assert!(d.contains(t.kind), "{} is not offered:\n{d}", t.kind);
@@ -364,7 +369,7 @@ fn the_kinds_that_need_a_partner_say_so_and_only_they_do() {
     // wired up — three fields have to agree, not one name — so the chooser says it and the scene
     // opens on the format's own complaint. Exactly two, because a third that stopped saying it
     // would be a row that looks complete and is not.
-    let d = dump(&["--new"]);
+    let d = dump(&["--new", "--custom"]);
     let said = d
         .lines()
         .filter(|l| l.contains("names another domain"))
@@ -712,4 +717,200 @@ fn the_two_command_rows_are_both_there_and_are_not_the_same_row() {
         "the toolbar row is not below the menu row: {bar:?}"
     );
     assert_ne!(menu, bar, "the two rows collapsed into one");
+}
+
+/// **The screen with the pictures on it, at every width and in every area.**
+///
+/// This is the screen a person lands on, and it is the one the dump could not reach: the tiles
+/// only exist once an area is expanded, so a frame built from nothing has all eleven shut and
+/// shows nothing to measure. `--open <n>` expands one, and this walks all of them.
+///
+/// Both defects it was written after were invisible in a dump of the shut screen and obvious in
+/// one of an open area:
+///
+/// * `ui.vertical` inside `horizontal_wrapped` gives the row no item size to break on, so nothing
+///   wrapped and the fifth tile's caption was laid out at x=1384 of a 1500-point window — `cut=1`,
+///   and the dump named the string.
+/// * Reserving the rect fixed that and `allocate_ui` inherits the *parent's* layout, which for a
+///   wrapped row is left-to-right. The three strings in a tile were laid out along it instead of
+///   stacked: `overlap=8`, at every width.
+///
+/// Neither would have failed a test of the shut screen and neither shows up in a screenshot of the
+/// first area alone — the second one did not, and it was found by widening the sweep.
+#[test]
+fn every_area_of_the_start_screen_lays_out_at_every_width() {
+    let areas = pantometry_world::presets::AREA_COUNT;
+    assert!(
+        areas >= 8,
+        "only {areas} areas — the walk would prove little"
+    );
+    // 500 is narrower than the 780-point column the screen asks for, which is the case that
+    // found the column had asked for it unconditionally.
+    for w in ["1500", "1100", "900", "700", "500"] {
+        let shut = dump(&["--new", "--width", w]);
+        assert_eq!(
+            count(&shut, "cut"),
+            0,
+            "at {w} with every area shut:
+{shut}"
+        );
+        assert_eq!(
+            count(&shut, "overlap"),
+            0,
+            "at {w} with every area shut:
+{shut}"
+        );
+        for a in 0..areas {
+            let n = a.to_string();
+            let d = dump(&["--new", "--open", &n, "--width", w]);
+            // **Something was drawn**, or the three zeros below are true of an empty screen.
+            // Measured: a `if ui.ctx().screen_rect().width() < 800.0 { continue; }` inserted into
+            // the tile loop passed all 22 tests in this file, because the only check that an open
+            // area shows anything ran at the default width alone — 22 of these 55 combinations
+            // were asserting three zeros about nothing.
+            //
+            // *One* title rather than all of them: at 500 points the column scrolls and only the
+            // first three of an area's seven are laid out, which is the screen working.
+            let key = pantometry_world::presets::AREAS[a].0;
+            assert!(
+                pantometry_world::presets::PRESETS
+                    .iter()
+                    .any(|p| p.area == key && d.contains(p.title)),
+                "area {a} ({key}) at {w} is open and drew no tile:
+{d}"
+            );
+            assert_eq!(
+                count(&d, "cut"),
+                0,
+                "area {a} at {w}:
+{d}"
+            );
+            assert_eq!(
+                count(&d, "overlap"),
+                0,
+                "area {a} at {w}:
+{d}"
+            );
+            assert_eq!(
+                count(&d, "elided"),
+                0,
+                "area {a} at {w}:
+{d}"
+            );
+        }
+    }
+}
+
+/// **Opening an area shows its scenes, and shutting it stops showing them.**
+///
+/// The walk above measures geometry and would pass just as well against a screen that drew no
+/// tiles at all — an area whose contents silently stopped rendering has nothing to lay out badly.
+/// This is the other half: the titles of that area's scenes are on the screen when it is open and
+/// are not when it is shut.
+#[test]
+fn an_open_area_shows_its_scenes_and_a_shut_one_does_not() {
+    use pantometry_world::presets::{AREAS, PRESETS};
+    let shut = dump(&["--new"]);
+    for (a, (key, name, _)) in AREAS.iter().enumerate() {
+        let held: Vec<&str> = PRESETS
+            .iter()
+            .filter(|p| p.area == *key)
+            .map(|p| p.title)
+            .collect();
+        assert!(!held.is_empty(), "{key} holds nothing");
+        for title in &held {
+            assert!(
+                !shut.contains(title),
+                "{name} is shut and `{title}` is on the screen:
+{shut}"
+            );
+        }
+        let open = dump(&["--new", "--open", &a.to_string()]);
+        for title in &held {
+            assert!(
+                open.contains(title),
+                "{name} is open and `{title}` is not on the screen:
+{open}"
+            );
+        }
+        // And only that area's, or opening one would open all eleven and the collapsing would be
+        // decoration.
+        let others = PRESETS.iter().filter(|p| p.area != *key).count();
+        let showing = PRESETS
+            .iter()
+            .filter(|p| p.area != *key && open.contains(p.title))
+            .count();
+        assert_eq!(
+            showing, 0,
+            "{name} is open and {showing} of {others} scenes from other areas are showing too"
+        );
+
+        // **The sentence the screen says about a scene with no picture, counted.** `Art::of`
+        // decodes a tile and turns *any* failure into the same `None` that "this scene has no
+        // geometry" is — so a tile that stopped decoding would put a claim about the physics
+        // under a scene that draws perfectly well. Measured: forcing one preset's decode to fail
+        // left all 22 tests in this file green.
+        //
+        // Counted against the data rather than pinned, so it follows the presets.
+        let wordless = PRESETS
+            .iter()
+            .filter(|p| p.area == *key && p.thumb.is_none())
+            .count();
+        assert_eq!(
+            open.matches("no picture").count(),
+            wordless,
+            "{name} has {wordless} scenes with no picture and the screen says so {} times:
+{open}",
+            open.matches("no picture").count()
+        );
+    }
+}
+
+/// **`--open` refuses an index that is not an area.**
+///
+/// This door exists only so a test can see the tiles, and it used to ignore anything it could not
+/// read: `--open 99`, `--open banana`, `--open -1` and a bare `--open` each produced a dump
+/// byte-identical to the shut screen and exited 0. The shut screen satisfies every geometric
+/// assertion the sweep makes about an open one, so a mistyped index bought a green — which is the
+/// one thing a door built for tests must not do.
+#[test]
+fn a_bad_area_is_refused_rather_than_shown_shut() {
+    let mut p = std::env::current_exe().expect("the test binary knows where it is");
+    p.pop();
+    if p.ends_with("deps") {
+        p.pop();
+    }
+    let bin = p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let last = pantometry_world::presets::AREA_COUNT - 1;
+    for bad in [
+        last.saturating_add(1).to_string(),
+        "banana".into(),
+        "-1".into(),
+    ] {
+        let out = std::process::Command::new(&bin)
+            .args(["--ui-dump", "--new", "--open", &bad])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "--open {bad} was not refused: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("takes an area from 0 to"),
+            "--open {bad} was refused without saying what it takes"
+        );
+    }
+    // And the last real one is not refused, or the bound is off by one and every test above it
+    // has been reading a shut screen.
+    let out = std::process::Command::new(&bin)
+        .args(["--ui-dump", "--new", "--open", &last.to_string()])
+        .output()
+        .expect("the binary runs");
+    assert!(
+        out.status.success(),
+        "--open {last} is the last area and was refused"
+    );
 }

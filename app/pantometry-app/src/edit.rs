@@ -202,6 +202,10 @@ pub struct Dump {
     pub iso: bool,
     /// Draw only the selection.
     pub solo: bool,
+    /// Expand this area of the New-project screen, which is where its pictures are.
+    pub open: Option<usize>,
+    /// Show the kinds screen even with nothing ticked, which is what `Custom…` opens on.
+    pub custom: bool,
 }
 
 /// One frame of the editor's interface, as text: every string it drew and where.
@@ -233,6 +237,8 @@ pub fn ui_dump(asked: Dump) -> String {
         ran,
         iso,
         solo,
+        open,
+        custom,
     } = asked;
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -243,7 +249,15 @@ pub fn ui_dump(asked: Dump) -> String {
     // the one screen this hook cannot see, which is the position the whole editor was in.
     if let Some(ticked) = choosing {
         app.start = true;
+        // **The two screens, reached the way a person reaches them.** `--new` with nothing named
+        // is what New project opens on: the shipped scenes, by what they are a simulation of.
+        // Naming kinds is the screen behind `Custom…`, which is where a set of them can be ticked.
+        app.picking = ticked.is_empty() && !custom;
         app.choosing = Some(ticked.into_iter().collect());
+        // The tiles only exist once an area is expanded, and a frame built from nothing has all
+        // eleven shut. Without this the one screen carrying pictures is the one screen this hook
+        // cannot see, which is the position the whole editor was in.
+        app.area = open;
     }
     if ran {
         if let Err(e) = app.run_here() {
@@ -717,6 +731,12 @@ struct App {
     recent: Vec<crate::start::Recent>,
     /// The kinds ticked in the New-project chooser, or `None` when it is not up.
     choosing: Option<std::collections::BTreeSet<String>>,
+    /// Whether the chooser is showing the shipped scenes rather than the list of kinds.
+    picking: bool,
+    /// Which area of the preset screen is open, if any.
+    area: Option<usize>,
+    /// The preset tiles, decoded once each.
+    art: crate::start::Art,
     show_outliner: bool,
     show_inspector: bool,
     show_text: bool,
@@ -780,6 +800,9 @@ impl App {
             start: false,
             recent: Vec::new(),
             choosing: None,
+            picking: false,
+            area: None,
+            art: crate::start::Art::default(),
             show_outliner: true,
             show_inspector: true,
             show_text: true,
@@ -793,6 +816,25 @@ impl App {
         app.recent = crate::start::remembered();
         app.status = String::new();
         app
+    }
+
+    /// Open some text as a new, unsaved project.
+    ///
+    /// Two things do this now — `New project` from a preset, and `Create` from a set of kinds —
+    /// and a second copy of "and also clear the mtime" is how one of them comes to think the file
+    /// on disk is its own.
+    fn open_text(&mut self, text: String, status: String) {
+        self.text = text;
+        self.history.reset(self.text.clone());
+        self.path = String::from("scene.json");
+        self.dirty = true;
+        self.known_mtime = None;
+        self.recheck();
+        self.needs_fit = true;
+        self.start = false;
+        self.choosing = None;
+        self.picking = false;
+        self.status = status;
     }
 
     /// Open `path`, and stay where we are if it will not open.
@@ -1114,6 +1156,42 @@ impl App {
         // answer to "what now" than two buttons.
         // The chooser, which is the second half of the start screen rather than a window over
         // it: there is still nothing open, and the way back is a button on it.
+        //
+        // **Two screens.** New project offers the thirty shipped scenes by what they are a
+        // simulation of; `Custom…` opens the list of kinds. The first screen asked the kind
+        // question directly and answered it in the format's vocabulary — `bar`, `block`, `hall` —
+        // which is right for a file and wrong for somebody deciding what to make.
+        if self.choosing.is_some() && self.picking {
+            let mut made = crate::start::Made::Nothing;
+            egui::CentralPanel::default().show(ctx, |ui| {
+                made = crate::start::presets(ui, &mut self.area, &mut self.art);
+            });
+            match made {
+                crate::start::Made::Back => {
+                    self.choosing = None;
+                    self.picking = false;
+                }
+                crate::start::Made::Custom => self.picking = false,
+                crate::start::Made::Preset(i) => {
+                    let preset = &pantometry_world::presets::PRESETS[i];
+                    self.open_text(
+                        preset.json.to_string(),
+                        format!(
+                            "a new scene from {} — save it to give it a name",
+                            preset.title
+                        ),
+                    );
+                }
+                // **Named, not `_`.** This was `_ => {}`, which absorbed `Create` as well as
+                // `Nothing` — so a Create affordance added to this screen would have done nothing
+                // at all, with no compiler warning, because the catch-all already covered it.
+                crate::start::Made::Nothing => {}
+                crate::start::Made::Create => {
+                    unreachable!("the preset screen has no Create; the kinds screen does")
+                }
+            }
+            return;
+        }
         if let Some(ticked) = self.choosing.as_mut() {
             let mut made = crate::start::Made::Nothing;
             let mut ticked = std::mem::take(ticked);
@@ -1121,22 +1199,39 @@ impl App {
                 made = crate::start::chooser(ui, &mut ticked);
             });
             match made {
-                crate::start::Made::Back => self.choosing = None,
+                // **The ticks survive going back.** `ticked` was taken out of `self.choosing` at
+                // the top of this block, and this arm neither restored it nor consumed it — so
+                // `self.choosing` stayed `Some({})` and every checkbox cleared. It did not matter
+                // while `Back` meant "leave the chooser"; it does now that it means "up one level
+                // to the pictures", because `Custom…` comes straight back to this screen.
+                crate::start::Made::Back => {
+                    self.choosing = Some(ticked);
+                    self.picking = true;
+                    return;
+                }
+                crate::start::Made::Preset(i) => {
+                    // **Custom can start from a preset.** Ticking a scene's kinds rather than
+                    // opening it: what somebody wants from "start from that one" while building
+                    // their own is its *physics*, not its numbers. The control is the combo box
+                    // at the top of `start::chooser`, which this arm went without for a while —
+                    // the wiring was here and nothing on the screen could reach it.
+                    for k in pantometry_world::presets::PRESETS[i].kinds {
+                        ticked.insert((*k).to_string());
+                    }
+                    self.choosing = Some(ticked);
+                    return;
+                }
+                crate::start::Made::Custom => {
+                    unreachable!("the kinds screen is what Custom opens; it does not offer it")
+                }
                 crate::start::Made::Create => {
                     let kinds: Vec<&str> = ticked.iter().map(String::as_str).collect();
-                    self.text = pantometry_world::templates::scene(&kinds);
-                    self.history.reset(self.text.clone());
-                    self.path = String::from("scene.json");
-                    self.dirty = true;
-                    self.known_mtime = None;
-                    self.recheck();
-                    self.needs_fit = true;
-                    self.start = false;
-                    self.choosing = None;
-                    self.status = format!(
+                    let text = pantometry_world::templates::scene(&kinds);
+                    let said = format!(
                         "a new scene of {} — save it to give it a name",
                         kinds.join(", ")
                     );
+                    self.open_text(text, said);
                 }
                 crate::start::Made::Nothing => self.choosing = Some(ticked),
             }
@@ -1150,6 +1245,7 @@ impl App {
             match chose {
                 crate::start::Chose::New => {
                     self.choosing = Some(std::collections::BTreeSet::new());
+                    self.picking = true;
                 }
                 crate::start::Chose::Open(p) => self.open(p),
                 crate::start::Chose::Nothing => {}

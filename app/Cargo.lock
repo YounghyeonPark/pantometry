@@ -2419,6 +2419,7 @@ dependencies = [
  "editor-core",
  "eframe",
  "glam",
+ "image",
  "pantometry",
  "pantometry-gpu",
  "pantometry-world",
@@ -2581,6 +2582,7 @@ name = "pantometry-world"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "image",
  "pantometry",
  "serde",
  "serde_json",

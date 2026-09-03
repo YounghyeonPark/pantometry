@@ -33,6 +33,7 @@
 
 use std::sync::Arc;
 
+use image::ImageEncoder;
 use viewer_core::{segments, Camera, Framing, Run};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -121,29 +122,56 @@ pub fn run(args: &[String]) -> i32 {
     // From the dispatcher, past the run file. `std::env::args().skip(2)` was right when this was
     // its own binary and is off by one as a subcommand — it would have read the run file's path as
     // the flag.
-    let mut args = args.iter().skip(1);
-    if args.next().map(String::as_str) == Some("--snapshot") {
-        let out = args
-            .next()
-            .cloned()
-            .unwrap_or_else(|| "snapshot.ppm".into());
+    // **Found by scanning, like its siblings.** `--snapshot` had to be the argument straight after
+    // the run file while `--frame` and `--thumbnail` are looked for anywhere, and the asymmetry
+    // was silent both ways: `view run.json --thumbnail --snapshot out.png` fell past this branch
+    // and opened a window, and `view run.json --snapshot --frame 5` took `--frame` as the output
+    // path and wrote a 1100x720 PPM into a file called `--frame`.
+    let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+    if let Some(i) = rest.iter().position(|a| *a == "--snapshot") {
+        let out = match rest.get(i + 1) {
+            Some(p) if !p.starts_with("--") => (*p).to_string(),
+            _ => {
+                eprintln!(
+                    "--snapshot takes a file to write; got {:?}",
+                    rest.get(i + 1)
+                );
+                return 2;
+            }
+        };
         // Which frame, because the first one is often the least interesting: a run that fills up
         // over its length — a shot, a spreading spot — has nothing in it at `t = 0`, and a
         // snapshot of that is a picture of an empty box that still counts as "the renderer works".
-        let at: usize = match args.next().map(String::as_str) {
-            Some("--frame") => args
-                .next()
-                .and_then(|n| n.parse().ok())
-                .unwrap_or(0)
-                .min(run.frames.len().saturating_sub(1)),
-            _ => 0,
-        };
+        let at: usize = rest
+            .iter()
+            .position(|a| *a == "--frame")
+            .and_then(|i| rest.get(i + 1))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+            .min(run.frames.len().saturating_sub(1));
+        // **A tile for the New-project chooser**: cropped to what was drawn and shrunk. The
+        // cropping is the point — the camera fits the panel's bounds, and a one-dimensional bar
+        // is a hairline in a frame that is otherwise background.
+        let tile = rest.contains(&"--thumbnail");
         let mut app = App::new(run, panel);
         app.frame = at;
         println!("  snapshot of frame {at} of {}", app.run.frames.len());
-        match app.snapshot(1100, 720) {
+        // Rendered three times the tile and averaged down, because a marker one pixel wide
+        // vanishes under nearest-neighbour and a tile is not where to discover that.
+        let (rw, rh) = if tile {
+            (THUMB.0 * 3, THUMB.1 * 3)
+        } else {
+            (1100, 720)
+        };
+        match app.snapshot(rw, rh) {
             Ok(pixels) => {
-                write_ppm(&out, 1100, 720, &pixels);
+                let (pw, ph, pixels) = if tile {
+                    let (cw, ch, cropped) = crop_to_content(rw, rh, &pixels);
+                    (THUMB.0, THUMB.1, shrink(cw, ch, &cropped, THUMB.0, THUMB.1))
+                } else {
+                    (rw, rh, pixels)
+                };
+                write_image(&out, pw, ph, &pixels);
                 // **Compared against the corner pixel, not against a constant.** The target is
                 // sRGB, so the clear colour is stored far brighter than the linear number the
                 // pass was given — 56,66,77 rather than 10,14,19. A fixed threshold called every
@@ -162,10 +190,15 @@ pub fn run(args: &[String]) -> i32 {
                         shades.push(c);
                     }
                 }
+                // **The image's own size, not the default one.** `lit` is counted over
+                // `pixels`, which under `--thumbnail` is 240x156 and not 1100x720 — so a tile
+                // lighting 173 of its 37 440 was reported as "173 of 792000 (0.02%)", a fifth of
+                // a percent read as a fiftieth. The count was right and the denominator was a
+                // constant from before there was a second size.
+                let all = pw as u64 * ph as u64;
                 println!(
-                    "  wrote {out} — {lit} of {} pixels carry a line ({:.2}%), in {} shades",
-                    1100 * 720,
-                    100.0 * lit as f64 / (1100.0 * 720.0),
+                    "  wrote {out} — {lit} of {all} pixels carry a line ({:.2}%), in {} shades",
+                    100.0 * lit as f64 / all as f64,
                     shades.len()
                 );
                 if lit == 0 {
@@ -567,13 +600,154 @@ impl App {
 }
 
 /// A plain PPM, because a picture nothing can open is not evidence and an encoder is a dependency.
-fn write_ppm(path: &str, width: u32, height: u32, rgba: &[u8]) {
-    let mut out = format!("P6\n{width} {height}\n255\n").into_bytes();
-    let (pixels, _) = rgba.as_chunks::<4>();
-    for p in pixels {
-        out.extend_from_slice(&p[..3]);
+/// A thumbnail's size. Wide enough to tell a room's standing wave from a block's hot core in a
+/// grid of thirty, small enough that thirty of them are under two hundred kilobytes.
+pub const THUMB: (u32, u32) = (240, 156);
+
+/// Trim the background around what was drawn, then pad back to `THUMB`'s aspect.
+///
+/// **The camera fits the panel's bounds, and a bar is a line across an otherwise empty frame.**
+/// At thumbnail size that is a picture of nothing: measured on `05-beam-on-bar`, where the drawn
+/// content was a diagonal hairline in a frame that was 95% background. Cropping to the content is
+/// what makes a grid of these worth looking at.
+///
+/// The background is the corner pixel, which is what the snapshot's own "not background" count
+/// already assumes: the shell follows no theme, but the clear colour is one place and this reads
+/// it rather than naming it twice.
+///
+/// # The magnification is clamped, and the number is chosen rather than derived
+///
+/// A scene with one body has a content box one marker wide, and cropping to that fills the tile
+/// with a single cross — a picture of the *marker* rather than of the run. Measured on
+/// `07-bouncing-ball`, which is exactly one body. **Three** is a rendering taste; it is written
+/// down as one so the next reader does not go looking for where it came from.
+fn crop_to_content(w: u32, h: u32, rgba: &[u8]) -> (u32, u32, Vec<u8>) {
+    const MAGNIFY: f64 = 3.0;
+    const MARGIN: f64 = 0.06;
+    let at = |x: u32, y: u32| ((y * w + x) * 4) as usize;
+    let bg = [rgba[0], rgba[1], rgba[2]];
+    let (mut x0, mut y0, mut x1, mut y1) = (w as i64, h as i64, -1i64, -1i64);
+    for y in 0..h {
+        for x in 0..w {
+            let k = at(x, y);
+            if (0..3).any(|c| rgba[k + c].abs_diff(bg[c]) > 6) {
+                x0 = x0.min(x as i64);
+                y0 = y0.min(y as i64);
+                x1 = x1.max(x as i64);
+                y1 = y1.max(y as i64);
+            }
+        }
     }
-    if let Err(e) = std::fs::write(path, out) {
+    if x1 < x0 || y1 < y0 {
+        return (w, h, rgba.to_vec());
+    }
+
+    let (mut cw, mut ch) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
+    let (cx, cy) = (x0 as f64 + cw / 2.0, y0 as f64 + ch / 2.0);
+    let pad = cw.max(ch) * MARGIN;
+    cw += 2.0 * pad;
+    ch += 2.0 * pad;
+    cw = cw.max(w as f64 / MAGNIFY);
+    ch = ch.max(h as f64 / MAGNIFY);
+
+    // To the tile's aspect, so nothing is stretched.
+    let want = THUMB.0 as f64 / THUMB.1 as f64;
+    if cw / ch < want {
+        cw = ch * want;
+    } else {
+        ch = cw / want;
+    }
+    let (x0, y0) = (cx - cw / 2.0, cy - ch / 2.0);
+
+    let (ow, oh) = (cw.round() as u32, ch.round() as u32);
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for y in 0..oh {
+        for x in 0..ow {
+            let (sx, sy) = (x0 as i64 + x as i64, y0 as i64 + y as i64);
+            let k = ((y * ow + x) * 4) as usize;
+            if sx >= 0 && sy >= 0 && (sx as u32) < w && (sy as u32) < h {
+                let j = at(sx as u32, sy as u32);
+                out[k..k + 4].copy_from_slice(&rgba[j..j + 4]);
+            } else {
+                out[k..k + 3].copy_from_slice(&bg);
+                out[k + 3] = 255;
+            }
+        }
+    }
+    (ow, oh, out)
+}
+
+/// Box-average down to `THUMB`.
+///
+/// Averaged rather than sampled, because a marker one pixel wide vanishes under
+/// nearest-neighbour: five bodies at 1100 points across become nothing at 240.
+fn shrink(w: u32, h: u32, rgba: &[u8], tw: u32, th: u32) -> Vec<u8> {
+    let mut out = vec![255u8; (tw * th * 4) as usize];
+    for y in 0..th {
+        let y0 = y * h / th;
+        let y1 = (((y + 1) * h / th).max(y0 + 1)).min(h);
+        for x in 0..tw {
+            let x0 = x * w / tw;
+            let x1 = (((x + 1) * w / tw).max(x0 + 1)).min(w);
+            let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let k = ((yy * w + xx) * 4) as usize;
+                    r += rgba[k] as u64;
+                    g += rgba[k + 1] as u64;
+                    b += rgba[k + 2] as u64;
+                    n += 1;
+                }
+            }
+            let k = ((y * tw + x) * 4) as usize;
+            out[k] = (r / n) as u8;
+            out[k + 1] = (g / n) as u8;
+            out[k + 2] = (b / n) as u8;
+        }
+    }
+    out
+}
+
+/// Write the pixels, as whatever the path's extension asks for.
+///
+/// PPM is what this wrote and is a format you can produce in six lines and read in a hex editor,
+/// which is why the snapshot started there. PNG is what a picture that goes anywhere else has to
+/// be, and `image` is already in this binary's tree through `eframe` — declaring it added no crate
+/// to the lockfile, which is the only reason it is here.
+fn write_image(path: &str, width: u32, height: u32, rgba: &[u8]) {
+    let png = std::path::Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+    let wrote = if png {
+        // **Three channels, not four.** The pass writes an opaque frame and the alpha is 255
+        // everywhere; carrying it cost 536 kB across thirty tiles against 188 kB without, for a
+        // channel that says nothing.
+        let (pixels, _) = rgba.as_chunks::<4>();
+        let rgb: Vec<u8> = pixels.iter().flat_map(|p| p[..3].to_vec()).collect();
+        // **Best compression, chosen rather than defaulted.** These are written once and read
+        // from a binary that embeds them, so encoder time is free and every kilobyte is carried
+        // in the repository for as long as the scene exists: the default setting cost 520 kB
+        // across twenty-seven tiles against 188 kB at this one.
+        std::fs::File::create(path)
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                image::codecs::png::PngEncoder::new_with_quality(
+                    std::io::BufWriter::new(f),
+                    image::codecs::png::CompressionType::Best,
+                    image::codecs::png::FilterType::Adaptive,
+                )
+                .write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
+                .map_err(|e| e.to_string())
+            })
+    } else {
+        let mut out = format!("P6\n{width} {height}\n255\n").into_bytes();
+        let (pixels, _) = rgba.as_chunks::<4>();
+        for p in pixels {
+            out.extend_from_slice(&p[..3]);
+        }
+        std::fs::write(path, out).map_err(|e| e.to_string())
+    };
+    if let Err(e) = wrote {
         eprintln!("cannot write {path}: {e}");
         std::process::exit(1);
     }

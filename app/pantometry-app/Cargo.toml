@@ -35,6 +35,7 @@ wgpu = "22"
 winit = "0.30"
 pollster = "0.4"
 rfd = "0.17.2"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 # The regression test runs one scene both ways and reads the result back through the run file's own

@@ -63,6 +63,7 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
     let mut blank = Vec::new();
     let mut empty = Vec::new();
     let mut skipped = 0;
+    let paths_seen = paths.len();
     for scene in paths {
         let name = scene
             .file_stem()
@@ -143,10 +144,26 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         ],
         "the set of scenes with nothing to draw has changed"
     );
-    // A run in which every scene skipped would report nothing and pass, which is the shape of a
-    // check that turned itself off.
+    // **Every scene landed in exactly one bucket.** The guard here was `drawn > 0 || skipped > 0`,
+    // written against "a run in which every scene skipped would report nothing and pass" — and
+    // `|| skipped > 0` admits precisely that run, which is CI's: `ci.yml` says the runner has no
+    // adapter, so all 27 drawable scenes skip and this passes on the second term. A disjunction
+    // cannot be false in the environment it was written to protect.
+    //
+    // Arithmetic instead. A scene that fell out of the walk — a `continue` added above, a bucket
+    // that stopped being pushed to — is a number that no longer adds up, whatever the machine.
+    assert_eq!(
+        drawn + skipped + empty.len() + blank.len(),
+        paths_seen,
+        "{paths_seen} scenes walked and {} accounted for",
+        drawn + skipped + empty.len() + blank.len()
+    );
+    // And which machine this is, said rather than left to be inferred from a fold in a log. There
+    // is no middle: an adapter renders all 27 or there is none and all 27 skip. A run that drew 24
+    // is a renderer that started refusing scenes, and under the old guard it was just a smaller
+    // number.
     assert!(
-        drawn > 0 || skipped > 0,
-        "no scene was either drawn or skipped — the walk broke"
+        (drawn == 27 && skipped == 0) || (drawn == 0 && skipped == 27),
+        "{drawn} drew and {skipped} skipped — with an adapter all 27 draw, without one all 27 skip"
     );
 }

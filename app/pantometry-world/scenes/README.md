@@ -81,7 +81,7 @@ The recommendation on record is to export into the rendering tools rather than r
 is that, and it cost no dependency: glTF is JSON with the binary base64'd inside it, which is the
 same reason SVG was chosen over a raster format.
 
-Nothing generated is committed.
+Nothing generated is committed — with one exception, and it is named so that this sentence stays true: `tools/presets` writes `presets.rs` and the chooser's tiles, which are build *inputs* rather than outputs and cannot be produced without a GPU.
 
 `cargo run -p pantometry-world -- --emit-default scene.json` writes a starting point.
 

@@ -11,6 +11,10 @@ repository.workspace = true
 # outside, and shipping it to crates.io would say something about it that is not true.
 publish = false
 
+[dev-dependencies]
+# Only to decode the tiles a test reads. The crate itself hands them out as bytes.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [dependencies]
 pantometry = { workspace = true }
 # For the vector constructors the mechanics domains take, and for the molecular crate's

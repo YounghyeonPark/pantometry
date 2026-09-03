@@ -79,7 +79,7 @@ Each one prints its numbers and **asserts** them, so CI runs all of them on ever
 An example is a claim that the library works, which makes a quietly broken one worse than
 no example at all — every value printed has been checked against a closed form or against
 a calculation that did not go through the same code. Give a path and it also writes an SVG;
-give none and it just checks. Nothing generated is committed.
+give none and it just checks. Nothing generated is committed — with one exception, and it is named so that this sentence stays true: `tools/presets` writes `presets.rs` and the chooser's tiles, which are build *inputs* rather than outputs and cannot be produced without a GPU.
 
 Plotting has no dependency. SVG is text, so it is a `format!` and a file write — no
 encoder, no fonts, and it opens by double-click. `examples/common/svg.rs` is about three

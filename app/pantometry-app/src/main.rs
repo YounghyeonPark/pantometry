@@ -130,23 +130,56 @@ fn main() {
                 .and_then(|i| rest.get(i + 1))
                 .and_then(|w| w.split_once(','))
                 .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+            // The kinds screen with *nothing* ticked had no door: `--new` alone is the preset
+            // screen and `--new bar` is the kinds screen with `bar` ticked, so the empty chooser —
+            // which is what `Custom…` actually opens on — could not be looked at.
+            let custom = rest.iter().any(|a| a == "--custom");
             let ran = rest.iter().any(|a| a == "--ran") || rest.iter().any(|a| a == "--iso");
             let iso = rest.iter().any(|a| a == "--iso");
             let solo = rest.iter().any(|a| a == "--solo");
-            print!(
-                "{}",
-                edit::ui_dump(edit::Dump {
-                    path,
-                    width,
-                    height,
-                    choosing,
-                    click,
-                    ran,
-                    iso,
-                    solo,
-                })
-            );
-            0
+            // **A bad index is refused, not ignored.** `--open 99`, `--open banana`, `--open -1`
+            // and a bare `--open` all used to produce a dump byte-identical to the shut screen
+            // and exit 0 — and the shut screen satisfies every geometric assertion the tests make
+            // about an open one, so a mistyped index bought a green. This door exists only so a
+            // test can see the tiles; it should say when it did not open one.
+            let last = pantometry_world::presets::AREA_COUNT - 1;
+            let open = match rest.iter().position(|a| a == "--open") {
+                None => Ok(None),
+                Some(i) => {
+                    let said = rest.get(i + 1);
+                    match said
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .filter(|n| *n <= last)
+                    {
+                        Some(n) => Ok(Some(n)),
+                        None => Err(said.map_or("nothing", String::as_str).to_string()),
+                    }
+                }
+            };
+            match open {
+                Err(said) => {
+                    eprintln!("--open takes an area from 0 to {last}; got {said}");
+                    2
+                }
+                Ok(open) => {
+                    print!(
+                        "{}",
+                        edit::ui_dump(edit::Dump {
+                            path,
+                            width,
+                            height,
+                            choosing,
+                            click,
+                            ran,
+                            iso,
+                            solo,
+                            open,
+                            custom,
+                        })
+                    );
+                    0
+                }
+            }
         }
 
         // `verify`, `fit`, `--check`, `--emit-default`, a bare scene path, or nothing.

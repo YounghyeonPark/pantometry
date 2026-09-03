@@ -184,8 +184,268 @@ pub enum Made {
     Nothing,
     /// Back to the start screen.
     Back,
+    /// Open this shipped scene as a new project.
+    Preset(usize),
+    /// Show the list of kinds instead.
+    Custom,
     /// Make a scene of what is ticked.
     Create,
+}
+
+/// **What are you simulating?**, answered with the things this repository ships.
+///
+/// The first version of this screen listed the nineteen `kind`s — `bar`, `block`, `hall`. That is
+/// the scene format's vocabulary, which is right for a file and wrong for somebody deciding what
+/// to make: a reader has to already know what a `puck` is to discover it is an espresso basket.
+/// So the offer is thirty worked scenes, grouped by what they are a simulation *of*, and the kind
+/// list is where you go when none of them is it.
+///
+/// Every one of them runs in CI on every commit and checks itself against a closed form, so a
+/// starting point that works is held by tests that already exist.
+pub fn presets(ui: &mut egui::Ui, open: &mut Option<usize>, art: &mut Art) -> Made {
+    let mut made = Made::Nothing;
+    ui.vertical_centered(|ui| {
+        ui.add_space(24.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width().min(780.0), ui.available_height()),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.label(
+                    egui::RichText::new("What are you simulating?")
+                        .size(20.0)
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "open one of these and change it, or start from the physics",
+                    )
+                    .weak(),
+                );
+                ui.add_space(12.0);
+
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height() - 64.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (a, (key, name, about)) in
+                            pantometry_world::presets::AREAS.iter().enumerate()
+                        {
+                            let held = pantometry_world::presets::PRESETS
+                                .iter()
+                                .filter(|p| p.area == *key)
+                                .count();
+                            let showing = *open == Some(a);
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                // **egui paints the triangle; the font does not have one.**
+                                // `\u{25b8}` is what the outliner types and it comes out as a
+                                // missing-glyph box in the bundled face — measured on this screen,
+                                // where all eleven rows drew a square. `paint_default_icon` is the
+                                // toolkit's own arrow, drawn rather than typed.
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(14.0, 14.0),
+                                    egui::Sense::hover(),
+                                );
+                                let icon = ui.interact(rect, ui.id().with(a), egui::Sense::hover());
+                                let openness = if showing { 1.0 } else { 0.0 };
+                                egui::collapsing_header::paint_default_icon(ui, openness, &icon);
+                                if ui
+                                    .add(
+                                        egui::Button::new(egui::RichText::new(*name).strong())
+                                            .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    *open = if showing { None } else { Some(a) };
+                                }
+                                ui.label(egui::RichText::new(format!("{held}")).weak().size(11.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add_space(18.0);
+                                ui.label(egui::RichText::new(*about).weak().size(11.0));
+                            });
+                            if !showing {
+                                continue;
+                            }
+                            // **The pictures, once an area is open.** Thirty tiles at once is the
+                            // same wall of choices the list of kinds was; a shut area is one line.
+                            ui.add_space(4.0);
+                            let mut column = 0;
+                            ui.horizontal_wrapped(|ui| {
+                                for (i, preset) in
+                                    pantometry_world::presets::PRESETS.iter().enumerate()
+                                {
+                                    if preset.area != *key {
+                                        continue;
+                                    }
+                                    column += 1;
+                                    let _ = column;
+                                    // **A reserved rect with a stated layout.** Two defects, one
+                                    // call. A wrapped row decides where to break from each item's
+                                    // size and a `vertical` scope does not have one until it is
+                                    // built, so nothing wrapped and the fifth tile's caption was
+                                    // laid out at x=1384 of a 1500-point window. Reserving the
+                                    // rect fixed that and introduced the second: `allocate_ui`
+                                    // inherits the *parent's* layout, and the parent of a tile is
+                                    // a left-to-right wrapped row. The tile's three strings were
+                                    // laid out in it rather than stacked, and `--ui-dump --new
+                                    // --open 0` reported `overlap=8`. The layout is said here.
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(240.0, 268.0),
+                                        egui::Layout::top_down(egui::Align::Min),
+                                        |ui| {
+                                            let picture = art.of(ui.ctx(), i, preset.thumb);
+                                            let hit = match picture {
+                                            Tile::Ready(tex) => ui.add(
+                                                egui::ImageButton::new(
+                                                    egui::load::SizedTexture::new(
+                                                        tex.id(),
+                                                        egui::vec2(240.0, 156.0),
+                                                    ),
+                                                )
+                                                .frame(true),
+                                            ),
+                                            // Three scenes carry no panel, so there is nothing to
+                                            // draw and no tile was ever rendered: a network and
+                                            // two windings report readings rather than places.
+                                            Tile::Nothing => ui.add_sized(
+                                                [240.0, 156.0],
+                                                egui::Button::new(
+                                                    egui::RichText::new(
+                                                        "no picture — this one reports readings, \
+                                                         not places",
+                                                    )
+                                                    .weak()
+                                                    .size(11.0),
+                                                ),
+                                            ),
+                                            // A fourth sentence for the fourth fact. This case
+                                            // used to say the one above, which is a claim about
+                                            // the scene used to report that a file would not read.
+                                            Tile::Broken => ui.add_sized(
+                                                [240.0, 156.0],
+                                                egui::Button::new(
+                                                    egui::RichText::new(
+                                                        "this scene's tile would not decode",
+                                                    )
+                                                    .size(11.0)
+                                                    .color(egui::Color32::from_rgb(230, 180, 60)),
+                                                ),
+                                            ),
+                                        };
+                                            if hit.on_hover_text(preset.file).clicked() {
+                                                made = Made::Preset(i);
+                                            }
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(preset.title).size(12.0),
+                                                )
+                                                .wrap(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(preset.kinds.join(", "))
+                                                    .weak()
+                                                    .size(11.0),
+                                            );
+                                            if preset.needs_a_part {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "needs its part file beside it",
+                                                    )
+                                                    .weak()
+                                                    .size(11.0)
+                                                    .color(egui::Color32::from_rgb(230, 180, 60)),
+                                                );
+                                            }
+                                        },
+                                    );
+                                }
+                            });
+                            ui.add_space(8.0);
+                        }
+                    });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Back").clicked() {
+                        made = Made::Back;
+                    }
+                    if ui
+                        .add(egui::Button::new("Custom\u{2026}").min_size(egui::vec2(120.0, 28.0)))
+                        .on_hover_text("choose the physics yourself")
+                        .clicked()
+                    {
+                        made = Made::Custom;
+                    }
+                });
+            },
+        );
+    });
+    made
+}
+
+/// What the chooser has to draw for one preset.
+///
+/// **Three states, not two.** A tile that will not decode and a scene that has no picture were one
+/// `None`, and `None` is drawn as "no picture — this one reports readings, not places" — a claim
+/// about the *scene*, used to report that the decoder failed. Measured: forcing one preset's
+/// decode to fail left all 22 dump tests green, because nothing counted that sentence.
+pub enum Tile<'a> {
+    /// Decoded, and ready to draw.
+    Ready(&'a egui::TextureHandle),
+    /// The scene carries no panel, so nothing was ever rendered for it. Three are like this.
+    Nothing,
+    /// There are bytes and `image` would not read them.
+    Broken,
+}
+
+/// The tiles, decoded once each and kept.
+///
+/// A `TextureHandle` is dropped when the last one goes, so these are held here rather than made
+/// per frame: decoding twenty-seven PNGs sixty times a second is not a thing to discover from a
+/// fan. Decoded on the frame an area is first opened, so a session that never opens one never
+/// decodes anything.
+#[derive(Default)]
+pub struct Art {
+    ready: std::collections::HashMap<usize, Option<egui::TextureHandle>>,
+    /// The ids whose bytes would not decode, so the screen can say that rather than the other
+    /// thing. Separate from `ready`, whose `None` already means "asked and got nothing" — one
+    /// word for two facts is what this exists to undo.
+    broken: std::collections::BTreeSet<usize>,
+}
+
+impl Art {
+    /// The tile for preset `i`, decoding it the first time it is asked for.
+    fn of(&mut self, ctx: &egui::Context, i: usize, png: Option<&'static [u8]>) -> Tile<'_> {
+        if !self.ready.contains_key(&i) {
+            let mut broke = false;
+            let made = png.and_then(|bytes| match image::load_from_memory(bytes) {
+                Ok(img) => {
+                    let img = img.to_rgba8();
+                    let size = [img.width() as usize, img.height() as usize];
+                    Some(ctx.load_texture(
+                        format!("preset-{i}"),
+                        egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+                Err(e) => {
+                    eprintln!("preset {i}: its tile will not decode: {e}");
+                    broke = true;
+                    None
+                }
+            });
+            if broke {
+                self.broken.insert(i);
+            }
+            self.ready.insert(i, made);
+        }
+        match self.ready.get(&i).and_then(Option::as_ref) {
+            Some(tex) => Tile::Ready(tex),
+            None if self.broken.contains(&i) => Tile::Broken,
+            None => Tile::Nothing,
+        }
+    }
 }
 
 /// **Choose what to simulate.** Every kind the scene format defines, with what it is.
@@ -224,6 +484,35 @@ pub fn chooser(ui: &mut egui::Ui, ticked: &mut std::collections::BTreeSet<String
                         .weak(),
                 );
                 ui.add_space(12.0);
+
+                // **Start from a shipped scene's physics.** Ticking what a scene is made of
+                // rather than opening it: what somebody wants from "start from that one" while
+                // building their own is its kinds, not its numbers.
+                //
+                // The wiring for this existed before the control did. `edit.rs` had a
+                // `Made::Preset(i)` arm on this screen with a comment selling the feature, and
+                // nothing on the screen could produce one — a reader of the diff would have
+                // believed it was there. `silent-failure-hunter` found the arm was dead.
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("or start from one of these:").weak());
+                    egui::ComboBox::from_id_salt("preset-kinds")
+                        .selected_text("a shipped scene…")
+                        .width(300.0)
+                        .show_ui(ui, |ui| {
+                            for (i, preset) in
+                                pantometry_world::presets::PRESETS.iter().enumerate()
+                            {
+                                if ui
+                                    .selectable_label(false, preset.title)
+                                    .on_hover_text(preset.kinds.join(", "))
+                                    .clicked()
+                                {
+                                    made = Made::Preset(i);
+                                }
+                            }
+                        });
+                });
+                ui.add_space(8.0);
 
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 96.0)
