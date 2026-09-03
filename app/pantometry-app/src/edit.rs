@@ -449,7 +449,8 @@ pub const INSPECTOR_MIN: f32 = 200.0;
 /// Read from the style rather than written down — it is egui's number, not this program's, and
 /// this program sets no style, so `Style::default()` is the one in force. Left out of both sums
 /// at first, and with three panels up the viewport settled at **264** points against a floor of
-/// 280: three of these, which is exactly the shortfall. A floor that is missed by the width of
+/// 280: **two** of these, which is exactly the shortfall — this said three until the changelog
+/// was written and the arithmetic checked, and 280 - 264 is 16. A floor that is missed by the width of
 /// the separators is still a floor that does not hold.
 fn panel_gap() -> f32 {
     egui::Style::default().spacing.item_spacing.x
@@ -1045,7 +1046,7 @@ impl App {
             // Announced, sticky, and not applied. Which of two writers meant it is not the
             // editor's call; the disk's version waits for an explicit `load`.
             self.status = format!(
-                "{} changed on disk while the pane has unsaved edits — press load to take \
+                "{} changed on disk while the pane has unsaved edits — press revert to take \
                  the disk's version",
                 self.path
             );

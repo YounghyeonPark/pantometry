@@ -325,7 +325,7 @@ fn the_agent_team_counts_itself_and_the_domains_it_describes() {
     phrase(".claude/agents/domain-builder.md", "**{}** exist", domains);
 }
 
-/// **The scene count is the same in all seven places it is written.**
+/// **The scene count is the same in all ten places it is written.**
 ///
 /// `scene.rs` reads the directory rather than a list, so adding a scene never breaks anything — which is
 /// exactly why the sentences about the count drift. Two agent files said fourteen and `scenes/README.md`
@@ -377,6 +377,14 @@ fn the_scene_count_agrees_everywhere_it_is_written() {
     phrase(
         "app/editor-core/README.md",
         "against the {} scenes on disk",
+        scenes,
+    );
+    // **A tenth, found by `prose-auditor` on the changelog that announced the eighth.** The same
+    // sentence as `CLAUDE.md`'s, in `CONTRIBUTING.md`, still saying twenty-eight — and unguarded,
+    // which is why fixing one of the two did not find the other.
+    phrase(
+        "CONTRIBUTING.md",
+        "{} scenes and their closed-form checks live there now",
         scenes,
     );
     // The crate table moved to `ARCHITECTURE.md` when `README.md` was cut back to what this is

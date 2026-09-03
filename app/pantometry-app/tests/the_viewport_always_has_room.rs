@@ -14,10 +14,16 @@
 //!
 //! It reads `--layout-at`, which is the *decision*. From `d0c03ea` (2026-08-25) until a week later
 //! the decision reserved the panels' **minimums** — 170, 240 and 200 — while the panels were then
-//! created at their **defaults** — 260, 430 and 320. Every assertion in this file passed, at every
-//! one of those 177 widths, while the rect the paint callback was handed was **zero points wide**
-//! at 1000, 950, 900 and 700: the very defect the paragraph above says was fixed, under a guard
-//! that was checking its own arithmetic and not the program.
+//! created at their **defaults** — 260, 430 and 320. Every assertion in this file passed while the
+//! rect the paint callback was handed was **zero points wide** at 1000, 950, 900 and 700: the very
+//! defect the paragraph above says was fixed, under a guard that was checking its own arithmetic
+//! and not the program.
+//!
+//! **And it did not visit one of those four.** `(200..3200).step_by(17)` reaches 897 and 914 and
+//! nothing between them; 700, 900, 950 and 1000 are each between two steps. The sweep was chosen
+//! to land on every *threshold* of the decision, which it does, and that is a different set from
+//! the widths the layout went wrong at. The four are swept explicitly now — a width a defect has
+//! been seen at is a width to keep testing, whatever the stride says.
 //!
 //! What found it reads the rect itself — `the_viewport_keeps_its_floor_at_every_width` in
 //! `a_frame_of_the_editor_can_be_read.rs`, which is the assertion to add a width to. This file
@@ -48,7 +54,8 @@ fn layout_at(width: f32) -> String {
 fn the_view_never_loses_all_of_its_width() {
     // Every width from a phone to a wall, in steps small enough to land on each threshold.
     let mut narrowest_view = f32::MAX;
-    for w in (200..3200).step_by(17) {
+    // The stride, plus the four the stride steps over and the layout was measured broken at.
+    for w in (200..3200).step_by(17).chain([700, 900, 950, 1000]) {
         let width = w as f32;
         let text = layout_at(width);
         let view: f32 = text

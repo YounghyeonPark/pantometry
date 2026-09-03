@@ -20,6 +20,161 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+Fifteen commits, and the theme is the editor: it gained a way in, a way to choose what to simulate,
+and one home per command. Most of what is recorded here is what looking at it found — the editor
+could not be *looked at* except by opening it, and the hook that fixed that is the reason the rest
+of this section exists.
+
+### Added
+
+- **`--ui-dump`, one frame of the editor's interface as text.** `App::update` split into an eframe
+  entry point and `App::ui(&egui::Context)` — the `eframe::Frame` argument was already unused — so a
+  frame can be built, laid out and read with **no window and no GPU**: the shaded viewport arrives
+  as a `Shape::Callback` that a headless run records and never executes. Two `ctx.run` passes,
+  because egui settles.
+
+  It reports every string with its rect, the paint callback's own rect, `callbacks`, and four
+  counts over the strings: `texts`, `elided`, `cut` and `overlap`. Doors for the states a frame built from nothing cannot reach —
+  `--click x,y` sends a press and a release, which is the smallest input that opens a menu;
+  `--ran` runs the scene through `editor_core::run` so everything that only exists after a run
+  does; `--iso`, `--solo` and `--new` set the three pieces of state a click cannot reach from
+  outside.
+
+  Twenty tests over it. Five of the defects below were found by looking at what it printed — the
+  zero-width viewport, `fit view` laid out at x=704 of a 700-point window, `Domain` clipped at 160,
+  the status bar that stopped wrapping, and the time label cut at 260 — and **three of its own
+  columns were measuring nothing when written**: `elided` counted the ellipsis that means "opens a
+  dialog", `cut` watched one edge after the strings that ran off the other had moved, and `overlap`
+  compared clip rects, which is what told the colliding pair apart.
+
+- **A start screen.** `pantometry edit` with no file opened the built-in scene, which is an answer
+  to a question nobody asked. **New project**, **Open a scene** and what you had open before. The
+  recent list is a JSON array beside the platform's other per-user configuration, written with
+  `serde_json` rather than by turning on eframe's `persistence`, which would add `ron` and `home`
+  to carry eight strings. A path that has gone is shown greyed and refused rather
+  than dropped: a list that silently shortens itself looks like a list that forgot.
+
+- **New project asks what you are simulating.** Every kind the scene format defines, with a line
+  about each. Ticking one is a starting point; ticking several is a scene of several domains, which
+  is what a custom simulation is here — there is no second flow for that case, because it is the
+  same list.
+
+  **It says what a checker cannot.** A scene carries one `duration_s` and these kinds do not share
+  a timescale: `atoms` settles in 6e-12 s and a thermal `network` in 1800 s, fourteen orders of
+  magnitude between them, and sixteen across the whole table — `well` at 2e-13 s to `orbit` at
+  7200 s. Every combination of them is a *well-formed* scene, so nothing
+  downstream refuses it — what happens is that the slow domain advances by a ten-trillionth of what
+  it needs while the fast one finishes, and the picture looks like a bug in the physics. The
+  chooser computes the span from the same numbers the scene is built with and puts it on the
+  screen.
+
+  The `duration_s` and `frames` a new scene starts from are not chosen: each comes from a shipped
+  scene that uses that kind, and a test holds all nineteen against the thirty on disk. A starting
+  point whose duration nothing has ever run is a starting point that opens on a refusal.
+
+- **`File > Open…` and `File > Save as…`**, through the platform's own dialog. `rfd` is two new
+  crates — everything it needs here was already in the tree for the window — and on Linux it talks
+  to the desktop portal rather than linking GTK.
+
+- **An eighth reviewer, `unearned-pass-hunter`**, for the failure the other seven are downstream
+  of: did the check *run*, and against the thing it claims to test. Its table of disguises is drawn
+  from instances this repository has shipped.
+
+- **`EVIDENCE.md` and `EXAMPLES.md`**, and figures under `docs/`.
+
+### Changed
+
+- **`README.md` is 169 lines and was 883.** Eighty of them said what this is; the rest was
+  explanation. What it is, install, run, and a table of where everything else went: ten sections
+  of verification into `EVIDENCE.md`, the crate table and *What is not here* into
+  `ARCHITECTURE.md`, why those CI jobs exist into `CONTRIBUTING.md`, and the API sample and the
+  example table into `EXAMPLES.md`.
+
+- **Seven of the toolbar's nine controls were also in a menu**, and the screen did not say which
+  was the real one. `open`, `revert` and `save` are in File; `deep` is in Run; `watch file` and
+  `run on change` are in Watch; `fit view` is in View. What is left is **run**, **verify**,
+  **deep** and **fit view**, on a rule worth writing down: *state that changes what a button does
+  stays beside that button; state that changes what happens when nobody presses anything goes to
+  the status bar.* The strip is one row at every width down to 420 points; it was two at 500 and
+  three at 420.
+
+  The path field is a label. It was 220 points of editable absolute path, and it was a control
+  because typing a path was the only way into a file on disk.
+
+- **Seven menus, each named for one subject.** `View` held eleven items doing three jobs — how the
+  viewport draws, which panels are on screen, and where the camera goes — and was the only menu
+  whose name did not predict its contents. The three panel toggles are in a `Window` menu now. A
+  seventh name to read is the price; a menu you can guess the contents of is what it buys.
+
+- **The isosurface level left the View menu.** A menu is where a thing is turned on and where a
+  command is issued; it is not where a *continuous* value is set, and this one was inside a menu
+  drawn over the viewport whose surface it moves. The toggle stayed; the slider and the note that
+  goes with it — what this frame reaches, and whether the level is inside it — are on the strip
+  along the bottom of the viewport, under the colour bar whose scale they share.
+
+- **`solo` is offered once.** It acts on the selection, the outliner is where a selection is made,
+  and its header carries the checkbox with the state visible — so the View menu's copy went. Hiding
+  the outliner would then have left the viewport drawing one domain out of five with nothing saying
+  why, so the status bar says `solo — drawing only the selection` exactly when the control is not on
+  screen to say it itself.
+
+- **`File > Load` is `File > Revert`.** It re-reads the path already open, which is a revert; called
+  `Load` it was the only item on that menu that looked like a way to open a different file.
+
+- **The gate is 29 steps.** The two wasm targets were added after a test that reads documents off a
+  disk shipped without `#![cfg(not(target_family = "wasm"))]`, passed twenty-seven local checks and
+  turned CI's `test (wasm32-wasip1, wasmtime)` job red.
+
+### Fixed
+
+- **The editor's viewport was zero points wide at four window sizes, under a guard that passed.**
+  `--layout-at 900` printed `view=290`; the rect the paint callback was handed was `0 x 870`.
+  `panels_that_fit` reserved each side panel's *minimum* — 170, 240, 200 — and the panels were then
+  created at their *defaults* — 260, 430, 320 — so the sum it checked against the 280-point floor
+  was 400 points short of what the layout spent. Zero at 1000, 950, 900 and 700 points.
+
+  That is the same defect `the_viewport_always_has_room` was written about, still there, because
+  that guard reads the decision function and the decision function was not the layout. It passes at
+  177 widths — 200 to 3 192 in steps of 17 — and **not one of the four is among them**: 897 and
+  914 straddle 900. The panels are held to the budget the arithmetic
+  reserves now, and both sums count the separator egui puts beside a panel — with three panels up
+  the viewport settled at 264 against a floor of 280, and 16 points is two of them.
+
+- **A parse error hid every report the editor made about its own actions.** The status bar was
+  `match error { Some => error, None => status }`, and thirty-three places assign that status:
+  *loaded X*, *saved X*, *ran: 11 frames*, *still busy with the last job*. Saving a scene with a
+  missing field wrote the file and said nothing. Both now, left to right in reading order.
+
+- **The editor could not read back the JSON it had written one second earlier.** JSON has no NaN. A
+  `block` filled from an STL marks every cell outside the part not-a-number and
+  `pantometry_view::data::compact` writes any non-finite value as `null`, which is the only thing
+  JSON offers; `viewer_core::Run` declared those values `Vec<f64>` and refused the file. **Two of
+  the thirty scenes** — 2 772 nulls in `23-a-part-radiating-to-its-lid` and 56 168 in
+  `29-a-designed-bracket-becomes-cells` — so neither `pantometry view` nor the editor could open
+  what `pantometry run` had just written. `null` reads back as `f64::NAN` now, which is the value
+  the writer had.
+
+  CI ran all thirty scenes through the binary and read none of them back through `viewer_core`,
+  which is the reader the viewer and the editor both use. Thirty of thirty were green while two
+  could not be opened. `a_streamed_run_reads_back` closes that.
+
+- **Four things took the viewport's bottom and none of them knew about the others.** The scale bar,
+  the colour bar, the count of what the shaded pass drew and the frame transport each anchored to
+  `rect.bottom()`, and with a run open the slider was laid out through the middle of the count. A
+  band each — 26 points — with the transport's rows reserved above them. The time label moved above
+  the frame slider rather than beside it, because side by side they are one row that does not fit a
+  260-point viewport.
+
+- **A stale count in `CLAUDE.md`**: "the twenty-eight scenes" when there are thirty. The scene count
+  was guarded in **seven** places, five of them sentences in one README, which is how a number can
+  be guarded seven times and wrong in an eighth — and in a ninth, `CONTRIBUTING.md`, which this
+  changelog's own audit found still saying twenty-eight. Ten places now. The menu bar and the
+  toolbar both wrap as well, so neither runs off a narrow window.
+
+- **`README.md`'s BibTeX and the version DOI.** 0.20.0's Zenodo record is
+  [10.5281/zenodo.22233493](https://doi.org/10.5281/zenodo.22233493), and the citation block was a
+  ninth place a version lives that no list covered.
+
 ## [0.20.0] — 2026-09-01
 
 The same day as 0.19.0, which is unusual and deliberate: `Designed` gained a required field hours

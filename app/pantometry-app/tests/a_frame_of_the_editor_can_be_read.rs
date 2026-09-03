@@ -170,7 +170,9 @@ fn the_viewport_keeps_its_floor_at_every_width() {
     // 200 — and the panels then took their defaults — 260, 430, 320. The sum had a hole in it at
     // 1000, 950, 900 and 700 points: the same zero-width viewport that once cost an afternoon in
     // the renderer, still there, under a guard that was checking its own arithmetic rather than
-    // the program. `the_viewport_always_has_room` passes against every one of those widths.
+    // the program — and it never looked at these four: its sweep is `(200..3200).step_by(17)`, so
+    // it tests 897 and 914 and nothing between them. A guard that passes about a different
+    // repository, at widths it does not visit.
     //
     // So this reads the rect the paint callback was actually handed. A window narrower than the
     // floor plus its two gaps cannot honour the floor and is not asked to — at 260 points every

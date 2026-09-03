@@ -17,7 +17,7 @@ batch those and let them ride along with the next real one.
 `main` being ahead of the registries is the normal state, and the changelog's `[Unreleased]` section
 is where the batch accumulates.
 
-## The eight places a version lives
+## The nine places a version lives
 
 All of them, or the release is broken in a way only one CI job can see:
 
