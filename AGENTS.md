@@ -143,6 +143,7 @@ A domain that overrides `books_balance` to `true` claims its ledger changes by e
 | `pantometry-molecular` | `Fluid` with Lennard-Jones, `PeriodicBox`, cell lists, Langevin thermostat, `RadialDistribution` |
 | `pantometry-electrical` | `Winding`: `I²R` onto the heat channel, copper rising 0.393%/K, and `runaway_current` — the exact threshold `√(g/(R₂₀α))` where the feedback overtakes the heat path. `Conductor`: `∇·(σ∇φ)=0` solved on a grid, so a resistance is a property of a *shape* — `ρL/A` exactly for a bar, and whatever a notch gives for a notch |
 | `pantometry-quantum` | `Well`: a 1D wavefunction between hard walls, marched with the same staggered-leapfrog family the acoustic domain uses. `in_eigenstate(n)`, `with_gaussian(centre, sigma, k0)`, `with_harmonic(omega)`; probability sits on the ledger as an identity of the update |
+| `pantometry-pharmacokinetic` | `CompartmentModel`: *n* well-stirred compartments joined by intercompartmental clearances, with elimination out of the ones that eliminate. `bolus`, `infuse`, and a `Clearance` that is a volume per time rather than a rate constant. Checked against the one- and two-compartment closed forms — `A₀e^{−kt}`, `(R/k)(1−e^{−kt})`, and the bi-exponential whose `α` and `β` are the roots of `λ² − (k10+k12+k21)λ + k10k21 = 0`. No field and no bodies: `readings` is the whole output |
 | `pantometry-scene` | One layer up. `Placement`, `Extent`, `capture` — where a domain sits and what one instant of a run looks like, as `Frame`, `Panel`, `PanelData`. Names no domain |
 | `pantometry-view` | Two layers up. `svg` filmstrip, `html` report that opens in a browser with nothing installed, `readings_csv`, `to_json`, and `gltf` for Blender/three.js/USD. The view is chosen by the shape of the data, the axes are in metres, and the colour scale is `ramp`'s — built in CIE LCh so a larger value is never darker |
 
@@ -258,7 +259,7 @@ also pass it, then go and check *that*.
 - **[README.md](README.md)** — the long version, including what is deliberately *not* here.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — the conventions, and the gate CI runs.
 - **[CLAUDE.md](CLAUDE.md)** — working on pantometry rather than with it.
-- **[RELEASING.md](RELEASING.md)** — the seventeen crates, the wheel, the eight places a version
+- **[RELEASING.md](RELEASING.md)** — the eighteen crates, the wheel, the eight places a version
   lives, and the DOI, which was minted at 0.16.0 after failing silently at 0.13.0 and 0.14.0. Read
   once per release and not otherwise, which is why it is not in `CLAUDE.md`.
 - **[CITATION.cff](CITATION.cff)** — how to cite this. Co-authorship is not requested and could not be

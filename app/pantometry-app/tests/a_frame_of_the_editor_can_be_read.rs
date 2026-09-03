@@ -389,10 +389,15 @@ fn a_set_that_cannot_share_one_duration_says_so_before_it_is_made() {
     // in picoseconds while a thermal `network` advances by a ten-trillionth of what it needs, and
     // the picture looks like a bug in the physics. Measured from the same numbers the scene is
     // built with, and said where the choice is being made.
-    let far = dump(&["--new", "atoms,network"]);
+    // **`well` against `orbit`, not `atoms` against `network`.** This asked for `3e14 times
+    // apart`, and that number was a product of the units error in `atoms`: it held 6e-12 s against
+    // a domain whose own time unit is one second. Corrected to 6.0 the two are 300 apart, under the
+    // threshold, and this test had nothing to look at. The table's real extremes are a quantum
+    // `well` at 2e-13 s and an `orbit` at 7200 — 3.6e16, which no correction is going to move.
+    let far = dump(&["--new", "well,orbit"]);
     assert!(
-        far.contains("3e14 times apart"),
-        "picoseconds against half an hour passed without comment:\n{far}"
+        far.contains("times apart"),
+        "2e-13 s against two hours passed without comment:\n{far}"
     );
 
     // And not said about two kinds a shipped scene already runs together, or the warning is
@@ -912,5 +917,103 @@ fn a_bad_area_is_refused_rather_than_shown_shut() {
     assert!(
         out.status.success(),
         "--open {last} is the last area and was refused"
+    );
+}
+
+/// **Every string on every screen can actually be drawn by the font that draws it.**
+///
+/// A codepoint the bundled face does not have comes out as a hollow square, and nothing here could
+/// see it: the dump reports the *string*, and the string is fine — `\u{25b8}` is a triangle by
+/// every measure except the one that matters. The outliner drew **two** missing-glyph squares on
+/// every row, a fold arrow and an eye, for as long as it had rows; the chooser drew eleven. Both
+/// were found by taking a screenshot and looking, which is not a check.
+///
+/// `unwritable` asks `epaint`'s own `has_glyphs` of the family each string was laid out in, so it
+/// is the same question the renderer will ask. Control characters are excluded — a `TextEdit`'s
+/// buffer carries newlines and no face has a glyph for one.
+#[test]
+fn every_string_is_one_the_font_can_draw() {
+    let scene = scene();
+    let screens: [(&str, Vec<&str>); 7] = [
+        ("the front screen", vec![]),
+        ("the preset screen", vec!["--new"]),
+        ("an open area", vec!["--new", "--open", "0"]),
+        ("the last area", vec!["--new", "--open", "10"]),
+        ("the kinds screen", vec!["--new", "--custom"]),
+        ("a scene, not run", vec![&scene]),
+        ("a scene, run", vec![&scene, "--ran"]),
+    ];
+    for (what, args) in screens {
+        for w in ["1500", "900", "700"] {
+            let mut argv = args.clone();
+            argv.extend(["--width", w]);
+            let d = dump(&argv);
+            let squares: Vec<&str> = d.lines().filter(|l| l.starts_with('?')).collect();
+            assert_eq!(
+                count(&d, "unwritable"),
+                0,
+                "{what} at {w} draws {} string(s) the font has no glyphs for:\n{}",
+                squares.len(),
+                squares.join("\n")
+            );
+        }
+    }
+}
+
+/// Where a string sits, as a point to click. Read from the dump rather than written down, because
+/// a coordinate typed into a test goes on pressing whatever moves under it.
+fn centre_of(dump: &str, text: &str) -> (f32, f32) {
+    let line = dump
+        .lines()
+        .find(|l| said(l) == Some(text))
+        .unwrap_or_else(|| panic!("nothing on screen says `{text}`:\n{dump}"));
+    let (left, top, w) = box_of(line).expect("a box");
+    (left + w / 2.0, top + 7.0)
+}
+
+/// **Going back to the pictures and returning does not clear what was ticked.**
+///
+/// `Back` used to drop every tick on the floor. The set is taken out of `self.choosing` at the top
+/// of the frame with `mem::take`, and that arm neither restored it nor consumed it — harmless
+/// while `Back` meant "leave the chooser entirely", wrong the moment it came to mean "up one level
+/// to the pictures", because `Custom…` comes straight back to a list with nothing in it.
+///
+/// It needs **two** clicks to see: the ticks are on neither screen, so what is checked is that the
+/// kinds screen still says the thing it only says when two kinds are ticked. `--click` took one
+/// point until this test, which is why a state change across screens had never been checked.
+#[test]
+fn what_was_ticked_survives_a_trip_to_the_pictures_and_back() {
+    let kinds = dump(&["--new", "well,orbit"]);
+    // The warning only appears with both ticked, and `Create` only with at least one.
+    let warned = |d: &str| d.contains("times apart");
+    assert!(
+        warned(&kinds),
+        "the kinds screen did not warn to begin with:\n{kinds}"
+    );
+    let (bx, by) = centre_of(&kinds, "Back");
+
+    let back = format!("{bx},{by}");
+    let pictures = dump(&["--new", "well,orbit", "--click", &back]);
+    assert!(
+        pictures.contains("open one of these and change it"),
+        "clicking Back did not reach the pictures:\n{pictures}"
+    );
+    let (cx, cy) = centre_of(&pictures, "Custom\u{2026}");
+
+    let again = dump(&[
+        "--new",
+        "well,orbit",
+        "--click",
+        &back,
+        "--click",
+        &format!("{cx},{cy}"),
+    ]);
+    assert!(
+        !again.contains("open one of these and change it"),
+        "clicking Custom did not leave the pictures:\n{again}"
+    );
+    assert!(
+        warned(&again),
+        "the ticks were dropped on the way to the pictures and back:\n{again}"
     );
 }

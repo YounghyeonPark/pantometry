@@ -144,6 +144,18 @@ clear it a quarter faster — and `1.25` is `1/0.8` with the density and the lat
 better at getting heat in and out of the thing that stores it, which is what a metal-matrix phase-change
 buffer is for.
 
+**That conductivity is inert in this scene, and the sentence above was worth checking rather than
+believing.** The block has no cooling, one material and a spatially uniform source, so every face flux is
+identically zero and a uniform field is an exact fixed point of the update — for *any* conductivity.
+Measured: 0.5, 5.0 and 30.0 W/m·K, a sixtyfold range inside the bounds the format enforces, produce
+**byte-identical** output in every frame, and so do the same three with the reserve cut so the plateau
+cannot mask them. What the scene does exercise is the mixture's density and latent heat, and those are
+live — `melted` differs from `21` by 23% and matches the first-principles rule `ρL = φ_wax ρ_wax L_wax` to
+8e-9. The conductivity is live too, checked separately by giving the same composite a half-block step and
+fitting the slowest Neumann mode: `α = k/ρc_p` predicts a decay rate of 5.8487e-2 s⁻¹ and the solver gives
+5.8503e-2, **+0.03%**. It is the *scene* that does not ask the question, not the solver that cannot answer
+it. A cooled face would make it ask; that is a change to a shipped scene's physics and has not been made.
+
 That 5 is **the caller's choice and the format checks it**. No single conductivity exists for a composite
 without knowing its microstructure, so the scene has to say which, and a value outside the Voigt and Reuss
 bounds — 0.4473 to 33.6864 for this pair — is refused with both bounds and the tighter Hashin–Shtrikman
@@ -262,7 +274,8 @@ consumed. Two plates under one lamp warm at the rate of one plate. That is refus
 had been in every released version.
 
 **A world's tolerance is set by its loosest domain.** The first attempt included the atom box,
-which runs at 5e-2 over six picoseconds; the rest of this scene holds 1e-9 over 0.2 seconds.
+which runs at 5e-2 over a few of its own time units; the rest of this scene holds 1e-9 over
+0.2 seconds.
 Those are not reconcilable, and that is physics rather than a defect — a Lennard-Jones fluid and
 a planetary orbit do not share a clock. "Physics for simulated worlds" means *a* world, not all
 of them at once.
@@ -293,6 +306,25 @@ the kernel refuses the step, which is correct and is worth seeing once.
 Same seed, same density, same box — only the temperature differs, so the two pictures side by
 side are melting. The periodic cell is drawn as a wireframe, because it is a real boundary
 rather than the edge of a picture.
+
+**Both were frozen lattices until 2026-09-04, and the sentences above were describing nothing.**
+The domain is built with `LennardJones::reduced()`, where σ = ε = m = 1 in SI and the only time
+scale is `τ = σ√(m/ε)` — one second. Both scenes asked for `duration_s: 6.0e-12`, which is 6e-12 τ:
+ten orders of magnitude short of the 0.01 τ the domain itself suggests for a *single step*. Six
+picoseconds is where argon melts (σ = 3.405 Å, ε/k = 119.8 K, m = 39.948 u give τ = 2.16 ps), and
+that is the number that got written down.
+
+Measured: the mean square displacement grew as exactly `t²` — the ratio between the last frame and
+the half-way one was **4.000**, which is free flight with not one collision — and the "liquid" sat
+on the crystal's own lattice sites to 1e-11 σ. Every check the scenes had passed throughout, because
+the *speeds* were right: equipartition gives `⟨v²⟩ = 4.161` against `3T*` = 4.2, the 321/324 of a
+box with its centre-of-mass momentum removed. The initialisation was correct and only the clock was
+wrong.
+
+At `duration_s: 6.0` the crystal saturates at **0.075** of a neighbour spacing (Lindemann melts near
+0.1) with a growth ratio of 0.875, and the liquid reaches **1.174** neighbour spacings with a ratio
+of 2.42, which is diffusion. `every_scene_that_ships_runs_and_says_something_true` asserts both, and
+that is what the equipartition check could not see.
 
 ## Light — `pantometry-optics`
 

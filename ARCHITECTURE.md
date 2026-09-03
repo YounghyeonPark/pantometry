@@ -31,7 +31,7 @@ promise dates.
     ┌───────────────────────────┴─────────────────────────────────┐
     │  PHYSICS       what evolves, and what it conserves           │
     │                the kernel, and one crate per physics         │
-    │                         `pantometry-core` + eleven domain crates │
+    │                         `pantometry-core` + twelve domain crates │
     └───────────────────────────▲─────────────────────────────────┘
                                 │  fills
     ┌───────────────────────────┴─────────────────────────────────┐
@@ -376,7 +376,7 @@ a galaxy — a simulation has to declare which regime it is in.
 
 ## Where the work is: 3D is not the default yet
 
-The physics layer is eleven crates deep and dimensionally uneven. This is the honest state.
+The physics layer is twelve crates deep and dimensionally uneven. This is the honest state.
 
 | crate | space it lives in | for the goal |
 | --- | --- | --- |
@@ -391,6 +391,7 @@ The physics layer is eleven crates deep and dimensionally uneven. This is the ho
 | `pantometry-em` | **3D** — Maxwell on a Yee grid, conducting walls | done |
 | `pantometry-fluid` | **3D** — incompressible Navier–Stokes by projection | done |
 | `pantometry-quantum` | **1D** `Well` — a wavefunction between walls | arrived one-dimensional, as every wave here did; higher dimensions are cells and cost, not new physics |
+| `pantometry-pharmacokinetic` | **no space at all** — `CompartmentModel` is a graph, like `ThermalNetwork`. A compartment is an apparent volume, not a place | done, and 3D is not what it is missing |
 
 Two observations follow, and they point in opposite directions.
 
@@ -490,7 +491,7 @@ These are not style. Each one is what makes some part of the goal reachable.
 
 1. **The kernel must never depend on a domain.** Without this, "add a physics" means "edit the
    kernel", and the goal is a rewrite each time.
-2. **No domain may depend on another.** They meet on the bus. Eleven domains have now been added
+2. **No domain may depend on another.** They meet on the bus. Twelve domains have now been added
    without this breaking, which is the evidence that the split is real.
 3. **The arrows point one way.** Analysis → scene → physics. A domain that can see the scene can
    see another domain through it. This is enforced by cargo rather than by discipline now that
@@ -544,9 +545,11 @@ different quantities, the second separates domains carrying the same one.
    `dx/(c√3)`, checked against the rigid-wall mode frequencies and a second-order convergence
    rate measured across three doublings.
 
-   Nine of the eleven domains are three-dimensional now. What is left is `pantometry-optics`, whose rays
+   Nine of the twelve domains are three-dimensional now. What is left is `pantometry-optics`, whose rays
    are already 3D and whose *fields* are not — and gap 4 below, which closed `pantometry-electrical`,
-   is why this sentence used to say eight.
+   is why this sentence used to say eight. `pantometry-quantum` is one-dimensional and
+   `pantometry-pharmacokinetic` has no space at all; the second of those is not a gap, in the
+   same sense `ThermalNetwork` is not a gap in `pantometry-thermal`.
 
    Building the first one **found a gap in the layer above it**, which is what a first
    three-dimensional anything is for. The second one found nothing, which is the evidence that

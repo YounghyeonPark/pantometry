@@ -1,7 +1,7 @@
 //! pantometry: physics for simulated worlds, in one dependency.
 //!
 //! A facade over the workspace. Nothing is implemented here — the point is that a
-//! consumer writes `pantometry = "0.20"` rather than naming eleven crates, and that the
+//! consumer writes `pantometry = "0.20"` rather than naming twelve crates, and that the
 //! integration tests which need two domains at once have somewhere to live.
 //!
 //! ```
@@ -56,22 +56,24 @@
 //! # The dependency rule
 //!
 //! ```text
-//! pantometry-units       no dependencies but glam and serde
-//! pantometry-core        depends on units          the kernel: what evolves, what it conserves
-//! pantometry-optics      depends on core   ┐
-//! pantometry-thermal     depends on core   │
-//! pantometry-mechanics   depends on core   ├ one crate per physics, and none knows another
-//! pantometry-acoustic    depends on core   │
-//! pantometry-molecular   depends on core   │
-//! pantometry-electrical  depends on core   ┘
-//! pantometry-scene       depends on core           where things are, and what a run looks like
-//! pantometry-view        depends on scene          how to draw that, chosen by the data's shape
-//! pantometry             depends on all of them
+//! pantometry-units            no dependencies but glam and serde
+//! pantometry-core             depends on units     the kernel: what evolves, what it conserves
+//! pantometry-optics           depends on core   ┐
+//! pantometry-thermal          depends on core   │
+//! pantometry-mechanics        depends on core   │
+//! pantometry-acoustic         depends on core   ├ one crate per physics, and none knows another
+//! pantometry-molecular        depends on core   │   -- twelve of them, and six more not listed
+//! pantometry-electrical       depends on core   │
+//! pantometry-pharmacokinetic  depends on core   ┘
+//! pantometry-scene            depends on core      where things are, and what a run looks like
+//! pantometry-view             depends on scene     how to draw that, chosen by the data's shape
+//! pantometry                  depends on all of them
 //! ```
 //!
-//! None of the ten domains knows about any of the others. They meet on the kernel's
+//! None of the twelve domains knows about any of the others. They meet on the kernel's
 //! [`Exchange`](pantometry_core::Exchange), and each one that arrived left the others
-//! untouched — which is the claim the split was made to test, now held six times.
+//! untouched — which is the claim the split was made to test, and has held every time a domain
+//! has been added, most recently for compartmental pharmacokinetics.
 //!
 //! [`scene`] and [`view`] are layers up rather than domains, and they are bound by the same rule
 //! from the other side: neither names a domain. A physics that arrives tomorrow is captured
@@ -92,6 +94,7 @@ pub use pantometry_fluid as fluid;
 pub use pantometry_mechanics as mechanics;
 pub use pantometry_molecular as molecular;
 pub use pantometry_optics as optics;
+pub use pantometry_pharmacokinetic as pharmacokinetic;
 pub use pantometry_porous as porous;
 pub use pantometry_quantum as quantum;
 pub use pantometry_scene as scene;
@@ -144,6 +147,7 @@ pub mod prelude {
         fresnel_reflectance, fresnel_split, Hit, Material, Mtf, Psf, Pupil, Ray, Scatter,
         SpectralPower, Spectrum, SurfaceFinish, SurfaceOptics, Zernike, VISIBLE_RANGE,
     };
+    pub use pantometry_pharmacokinetic::{Clearance, Compartment, CompartmentModel};
     pub use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck, Shot};
     pub use pantometry_quantum::{Wavenumber, Well, PROBABILITY};
     pub use pantometry_scene::{
@@ -158,6 +162,6 @@ pub mod prelude {
         Density, ElectricField, Energy, Force, ForceVec, Frequency, HeatCapacity, Irradiance,
         Length, LengthVec, Mass, Momentum, MomentumVec, Power, Pressure, Resistance, Resistivity,
         SpecificHeat, Stiffness, Temperature, ThermalConductivity, ThermalExpansion, Time,
-        Velocity, VelocityVec, Voltage, Volume, G0,
+        Velocity, VelocityVec, Voltage, Volume, VolumetricFlow, G0,
     };
 }

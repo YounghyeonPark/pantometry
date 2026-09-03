@@ -52,8 +52,14 @@ use crate::{Environment, HEAT};
 ///
 /// Carries the network's identity as well as the index, so a handle from one network used on
 /// another is refused rather than silently addressing whatever sits at that index. The identity
-/// is a hash of the network's name, which is deterministic: no counter, no clock, no global
-/// state, and [`Simulation`](pantometry_core::Simulation) already refuses two domains with one name.
+/// is a hash of the network's name, which is deterministic: no counter, no clock, no global state.
+///
+/// **The limit is that two networks given the same name share an identity**, and a handle from
+/// either would address the other. This said [`Simulation`](pantometry_core::Simulation) "already
+/// refuses two domains with one name", which is not true and was never measured:
+/// [`Simulation::with`](pantometry_core::Simulation::with) pushes onto a `Vec` with no check, two
+/// domains sharing a name advance without complaint, and `Simulation::domain` returns the first.
+/// Naming two networks the same thing is the caller's mistake to avoid; nothing here catches it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Node {
     index: u32,

@@ -194,8 +194,12 @@ pub struct Dump {
     pub height: f32,
     /// Open on the New-project chooser with these kinds ticked.
     pub choosing: Option<Vec<String>>,
-    /// Send a press and a release here, which is what opens a menu.
-    pub click: Option<(f32, f32)>,
+    /// Send a press and a release at each of these, in order.
+    ///
+    /// One opens a menu, which is what it was for. Two is the smallest thing that can show a
+    /// state change survived leaving a screen: `Back` then `Custom…`, with the state in
+    /// between on neither screen.
+    pub click: Vec<(f32, f32)>,
     /// Run the scene first, so everything that only exists after a run does.
     pub ran: bool,
     /// Run, then turn the isosurface on at its default level.
@@ -287,7 +291,11 @@ pub fn ui_dump(asked: Dump) -> String {
     // command still has a home in a menu" a claim no test could reach. A press and a release at
     // a point is the smallest input that opens one, and egui needs the frame after to lay the
     // opened menu out.
-    if let Some((x, y)) = click {
+    // **In order, because a state change needs two of them to be seen.** One click was enough to
+    // open a menu, which is what this was written for. It is not enough to check that leaving a
+    // screen and coming back kept anything: `Back` and then `Custom...` is two, and the state
+    // between them is not on either screen.
+    for &(x, y) in &click {
         let at = egui::pos2(x, y);
         let press = |down| egui::Event::PointerButton {
             pos: at,
@@ -324,6 +332,24 @@ pub fn ui_dump(asked: Dump) -> String {
     // for a control that opens a dialog, and two of them made a start screen report two elided
     // labels with nothing wrong. `Galley::elided` is set by the layout that did the eliding.
     let elided = texts.iter().filter(|d| d.elided).count();
+    // **A codepoint the bundled face does not have draws a hollow square, and the dump could not
+    // see it.** It reports the *string*, and the string is fine: `\u{25b8}` is a triangle by every
+    // measure except the one that matters. The outliner drew two missing-glyph squares on every
+    // row for as long as it existed, and a screenshot is what eventually said so.
+    //
+    // Asked of the family the string was laid out in, because coverage is per-family: the kind
+    // tags are monospace and everything else is proportional.
+    //
+    // Control characters are not asked about: a `TextEdit`'s buffer carries its newlines and the
+    // monospace face has no glyph for one, so the whole JSON pane reported itself unwritable on
+    // the first run. egui lays a newline out as a line break rather than drawing it.
+    let unwritable: Vec<&Drawn> = texts
+        .iter()
+        .filter(|d| {
+            let printable: String = d.text.chars().filter(|c| !c.is_control()).collect();
+            !ctx.fonts(|f| f.has_glyphs(&d.font, &printable))
+        })
+        .collect();
     // **Cut off by the window rather than by a widget that scrolls.** The first form of this asked
     // whether a string reached past the right edge of the window, and the toolbar's path box failed
     // it honestly: a `TextEdit` lays its whole line out and clips it to its own box, so an absolute
@@ -366,8 +392,9 @@ pub fn ui_dump(asked: Dump) -> String {
     // was handed zero width once and drew nothing, correctly, for an afternoon in the renderer.
     // Reported rather than inferred from what happens to be drawn inside it.
     let mut s = format!(
-        "size={width}x{height}\ntexts={}\nelided={elided}\ncut={cut_off}\noverlap={over}\ncallbacks={}\n",
+        "size={width}x{height}\ntexts={}\nelided={elided}\ncut={cut_off}\noverlap={over}\nunwritable={}\ncallbacks={}\n",
         texts.len(),
+        unwritable.len(),
         callbacks.len()
     );
     for r in &callbacks {
@@ -383,9 +410,16 @@ pub fn ui_dump(asked: Dump) -> String {
     // rather than only counting it.
     for d in &texts {
         let on_another = texts.iter().any(|o| !std::ptr::eq(o, d) && piled(o, d));
+        let unwritten = unwritable.iter().any(|o| std::ptr::eq(*o, d));
         s.push_str(&format!(
             "{}{} {:>5.0} {:>5.0} {:>5.0}  {}\n",
-            if cut(d) { "!" } else { " " },
+            if cut(d) {
+                "!"
+            } else if unwritten {
+                "?"
+            } else {
+                " "
+            },
             if on_another { "=" } else { " " },
             d.at.left(),
             d.at.top(),
@@ -406,6 +440,8 @@ struct Drawn {
     text: String,
     /// egui's own flag, set by the layout that shortened the line.
     elided: bool,
+    /// The font it was laid out in, so glyph coverage is asked of the family that will draw it.
+    font: egui::FontId,
 }
 
 /// Walk a shape tree, keeping the text and counting the paint callbacks.
@@ -427,6 +463,13 @@ fn collect(
                     clip,
                     text,
                     elided: t.galley.elided,
+                    // The family this was laid out in, so "can the font draw it" is asked of the
+                    // font that will draw it. Sections cannot be empty in a laid-out galley; the
+                    // fallback is the body font, which is what a caller with no opinion gets.
+                    font: t.galley.job.sections.first().map_or_else(
+                        || egui::FontId::proportional(12.0),
+                        |s| s.format.font_id.clone(),
+                    ),
                 });
             }
         }
@@ -1984,9 +2027,22 @@ impl App {
 
                     ui.horizontal(|ui| {
                         ui.add_space(node.depth as f32 * 12.0);
+                        // **Painted, not typed.** Every icon in this column was a codepoint the
+                        // bundled face does not have — `\u{25b8}`, `\u{25be}`, `\u{25cf}`,
+                        // `\u{25cb}` and `\u{2013}` — so the whole column drew missing-glyph
+                        // squares, two per row. A screenshot is the only thing that could have
+                        // said so: `--ui-dump` reports the *string*, and the string is fine.
                         if has_children {
-                            let glyph = if is_collapsed { "\u{25b8}" } else { "\u{25be}" };
-                            if ui.small_button(glyph).clicked() {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            let icon = ui.interact(
+                                rect,
+                                ui.id().with(("fold", &node.path)),
+                                egui::Sense::click(),
+                            );
+                            let openness = if is_collapsed { 0.0 } else { 1.0 };
+                            egui::collapsing_header::paint_default_icon(ui, openness, &icon);
+                            if icon.clicked() {
                                 if is_collapsed {
                                     self.collapsed.remove(&node.path);
                                 } else {
@@ -1994,20 +2050,38 @@ impl App {
                                 }
                             }
                         } else {
-                            ui.add_space(18.0);
+                            ui.add_space(14.0);
                         }
-                        // The eye. Greyed rather than removed for a row hidden by an ancestor,
-                        // so a reader can see *that* it is hidden and where from.
+                        // The eye: a filled dot for shown, a ring for hidden, and a bar for a row
+                        // hidden by an ancestor — greyed rather than removed, so a reader can see
+                        // *that* it is hidden and where from.
                         let own = self.hidden.contains(&node.path);
-                        let eye = if own {
-                            "\u{2013}"
-                        } else if shown {
-                            "\u{25cf}"
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
+                        let eye = ui.interact(
+                            rect,
+                            ui.id().with(("eye", &node.path)),
+                            egui::Sense::click(),
+                        );
+                        let ink = if shown {
+                            ui.visuals().strong_text_color()
                         } else {
-                            "\u{25cb}"
+                            ui.visuals().weak_text_color()
                         };
-                        if ui
-                            .small_button(eye)
+                        let at = rect.center();
+                        if own {
+                            ui.painter().hline(
+                                at.x - 4.0..=at.x + 4.0,
+                                at.y,
+                                egui::Stroke::new(1.5_f32, ink),
+                            );
+                        } else if shown {
+                            ui.painter().circle_filled(at, 3.5, ink);
+                        } else {
+                            ui.painter()
+                                .circle_stroke(at, 3.5, egui::Stroke::new(1.0_f32, ink));
+                        }
+                        if eye
                             .on_hover_text(if own { "show" } else { "hide" })
                             .clicked()
                         {

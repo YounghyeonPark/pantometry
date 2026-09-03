@@ -25,7 +25,103 @@ and one home per command. Most of what is recorded here is what looking at it fo
 could not be *looked at* except by opening it, and the hook that fixed that is the reason the rest
 of this section exists.
 
+The exception is the twelfth domain, which is not about the editor at all: compartmental
+pharmacokinetics, and the count of commits above does not include it.
+
+### Fixed
+
+- **Two scenes called themselves a crystal and a liquid and were the same frozen lattice.**
+  `08-atoms-crystal` and `09-atoms-liquid` asked for `duration_s: 6.0e-12` against a domain built
+  with `LennardJones::reduced()`, where the only time scale is `τ = σ*sqrt(m/ε)` and all three
+  are 1 in SI — **one second**. The whole run was 6e-12 of it, ten orders short of the 0.01 the
+  domain suggests for a single step. Six picoseconds is where *argon* melts, and argon's is
+  2.16 ps.
+
+  Measured: mean square displacement grew as exactly `t^2` — a ratio of **4.000** between the last
+  frame and the half-way one, which is free flight with not one collision — and the "liquid" sat
+  on the crystal's own fcc sites to 1e-11. At `duration_s: 6.0` the crystal saturates at 0.075 of
+  a neighbour spacing (Lindemann melts near 0.1) and the liquid reaches 1.174 with a ratio of
+  2.42, which is diffusion.
+
+  **Every check those scenes had went on passing**, because the speeds were right and only the
+  clock was wrong. And the 5e-2 conservation tolerance passed with 11.9 digits in hand on a run in
+  which nothing moved; at the corrected duration it has 1.5. It had never been tested. `scene.rs`
+  now asserts the displacement, which is what equipartition cannot see.
+
+- **The chooser's timescale span said fourteen orders of magnitude and it is sixteen.** The
+  extremes are a quantum `well` at 2e-13 s and an `orbit` at 7200 — 3.6e16 — and they always were,
+  so the count was stale whatever `atoms` held. The example pair named in three doc comments was
+  `atoms` against a thermal `network`, whose "3e14 times apart" was a product of the units error
+  above; corrected, those two are 300 apart and the warning does not fire for them.
+
+- **Every icon in the outliner was a missing glyph.** Five codepoints, all absent from the bundled
+  face, so every row drew two hollow squares — a fold arrow and an eye — for as long as the
+  outliner has had rows. Painted now.
+
+  `--ui-dump` could not see this and no test could: it reports the *string*, and the string is
+  fine. `unwritable=N` asks `epaint`'s own `has_glyphs` of the family each string was laid out in,
+  which is the question the renderer will ask, and marks the line with `?`. Zero across seven
+  screens at three widths.
+
+- **Going back from the kinds screen to the pictures dropped every tick.** The set is taken out of
+  `choosing` with `mem::take` at the top of the frame and that arm neither restored nor consumed
+  it — harmless while `Back` meant "leave the chooser", wrong once it meant "up one level".
+  Seeing it needs two clicks and `--ui-dump --click` took one point, which is why no state change
+  across screens had ever been checked; it takes several now, in order.
+
+- **`thermal::network`'s `Node` documented a guarantee that does not exist.** It said
+  `Simulation` "already refuses two domains with one name", and `Simulation::with` pushes onto a
+  `Vec` with no check: two domains sharing a name advance without complaint and `domain` returns
+  the first. The handle's identity is a hash of that name, so the doc was resting a safety
+  argument on it. The real limit is written down instead.
+
 ### Added
+
+- **`pantometry-pharmacokinetic`, the twelfth domain: where a drug goes in a body.**
+  `CompartmentModel` is *n* well-stirred compartments joined by intercompartmental clearances,
+  with elimination out of the ones that eliminate — the same algebra as `ThermalNetwork`, whose
+  module docs it copies the reasoning of, plus the two things that are not in a thermal network:
+  drug leaving the system, and a dose arriving from outside it.
+
+  **The kernel is unchanged, which is the twelfth time that claim has held.** The domain names no
+  other domain and never touches the `Exchange` — it neither produces nor consumes anything
+  another domain could want, and publishing on a channel nobody consumes is refused by the bus's
+  own audit, correctly.
+
+  Checked against the closed forms and nothing else: `A(t) = A₀e^{−kt}` for a one-compartment
+  bolus; `(R/k)(1 − e^{−kt})` for an infusion, whose steady state `R·V/CL` explicit Euler
+  reproduces *exactly* because the fixed point of the discrete map is the fixed point of the
+  differential equation; the bi-exponential for two compartments, with `α` and `β` the roots of
+  `λ² − (k10 + k12 + k21)λ + k10k21 = 0`, which is the only one of these that would notice a
+  transposed index in a link — a link contributes `+q` and `−q` to the same sum, so the
+  conservation audit is blind to it by construction; mass balance to `1e-12` of the dose over
+  14 400 steps; and the **rate**, four step sizes each half the last, with the error required to
+  halve within 3%.
+
+  `max_stable_dt` is derived rather than chosen. Gershgorin on the concentration-basis matrix
+  puts every eigenvalue within `Σ Q_ij/V_i` of `−(ΣQ + CL)/V_i`, so `|λ|max ≤ 2 max_i r_i` and
+  `h ≤ 1/max_i r_i` implies the `2/|λ|max` explicit Euler needs. The same expression is the
+  **positivity** limit — `A ← A(1 − h r) + …` — and that is the half worth having, because the
+  scheme is still *stable* at twice this and a model run in between holds negative amounts of
+  drug without ever diverging. Verified against the true `α` of the two-compartment model, which
+  is available in closed form, rather than trusted.
+
+  Five deliberate absences, in the module docs: no absorption compartment (`kₐ` acts on an amount,
+  a clearance acts on a concentration — different mechanisms), no Michaelis–Menten elimination
+  (which is exactly where the closed forms stop), no pharmacodynamics (a response model has no
+  conserved quantity), no population variability (a sampling problem on a different execution
+  axis from the one this kernel has), and no AUC as a typed quantity.
+
+- **`VolumetricFlow` in `pantometry-units`, m³·s⁻¹ — `MassFlow`'s missing sibling.** New public
+  API in a published crate, so it is here rather than only in the domain that wanted it. A
+  pharmacokinetic clearance is a volume of plasma emptied per unit time and there was no name for
+  that dimension; `pantometry-pharmacokinetic::Clearance` is an alias of this one. It is in the
+  units crate rather than the domain crate for a reason the orphan rule decides: an inherent
+  `impl` on a foreign type is not allowed, so a local alias could carry no `l_per_h` or
+  `ml_per_min` — and a clearance whose only constructor is `from_si` is a factor of 3.6 million
+  waiting to happen. `product!(Concentration, VolumetricFlow => MassFlow)` and
+  `product!(VolumetricFlow, Time => Volume)` come with it, so `CL·C` landing in kg/s is checked
+  by the compiler rather than claimed by a comment.
 
 - **`--ui-dump`, one frame of the editor's interface as text.** `App::update` split into an eframe
   entry point and `App::ui(&egui::Context)` — the `eframe::Frame` argument was already unused — so a

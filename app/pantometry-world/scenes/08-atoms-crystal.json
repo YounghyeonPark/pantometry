@@ -1,7 +1,7 @@
 {
   "title": "a Lennard-Jones crystal at T* = 0.15: atoms rattling in place",
   "schedule": "multirate",
-  "duration_s": 6.0e-12,
+  "duration_s": 6.0,
   "frames": 12,
   "conservation_tolerance": 5e-2,
   "domains": [

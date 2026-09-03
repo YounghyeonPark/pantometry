@@ -369,6 +369,19 @@ pub type MassFlow = Qty<0, 1, -1, 0, 0, 0, 0>;
 /// The same dimension as [`Density`] and deliberately a distinct name: a coffee's TDS and the
 /// density of the water carrying it are both kg/m³ and confusing them is a factor of a hundred.
 pub type Concentration = Qty<-3, 1, 0, 0, 0, 0, 0>;
+/// m³·s⁻¹ — a volumetric flow rate, and [`MassFlow`]'s missing sibling.
+///
+/// A [`Concentration`] times this is a [`MassFlow`], declared below so the type system checks
+/// it rather than a comment claiming it. That product is the whole content of a *clearance*:
+/// a pharmacokinetic `CL` is not a rate but a volume of plasma emptied of drug per unit time,
+/// so `CL·C` is the mass leaving per second, and the dimensions say so.
+///
+/// The unit-bearing constructors matter more here than for most quantities. Nobody quotes a
+/// clearance or a pump rate in m³/s: a syringe driver is mL/min, a renal clearance is mL/min,
+/// a hepatic one is L/h, and the gap between L/h and m³/s is a factor of 3.6 million. There
+/// was no name for this dimension at all until a compartmental domain needed one, and a bare
+/// `Qty<3, 0, -1, 0, 0, 0, 0>` has no place to hang the constructors on.
+pub type VolumetricFlow = Qty<3, 0, -1, 0, 0, 0, 0>;
 
 /// Cycles per second. Dimensionally identical to an angular velocity, since a
 /// radian is m/m — the type system cannot and should not pretend otherwise.
@@ -532,6 +545,13 @@ product!(SpecificHeat, Temperature => LatentHeat);
 product!(Conductance, Temperature => Power);
 product!(Conductance, Time => HeatCapacity);
 product!(HeatCapacity, Temperature => Energy);
+// A clearance times a concentration is the mass leaving per second, and a flow times a time is
+// the volume that went through. Both are identities a compartmental model is built out of, so
+// the type system checks them: `CL * C` coming out as a `MassFlow` is the statement that a
+// clearance is a volume rate and not a rate constant, which is the single most common confusion
+// in pharmacokinetics and the one a dimension can actually catch.
+product!(Concentration, VolumetricFlow => MassFlow);
+product!(VolumetricFlow, Time => Volume);
 product!(Frequency, Time => Dimensionless);
 
 impl Volume {
@@ -550,6 +570,34 @@ impl Volume {
     /// Litres.
     pub fn litres(v: f64) -> Volume {
         Qty(v * 1e-3)
+    }
+    /// As litres, which is the unit a compartment volume or a tank is read in.
+    pub fn in_litres(self) -> f64 {
+        self.0 * 1e3
+    }
+}
+
+impl VolumetricFlow {
+    /// Cubic metres per second, which is what is stored and what nobody quotes.
+    pub fn m3_per_s(v: f64) -> VolumetricFlow {
+        Qty(v)
+    }
+    /// Litres per hour. A hepatic clearance lives here: propofol is about 100 L/h.
+    pub fn l_per_h(v: f64) -> VolumetricFlow {
+        Qty(v * 1e-3 / 3600.0)
+    }
+    /// Millilitres per minute. A renal clearance and a syringe driver both live here, and
+    /// a healthy glomerular filtration rate is 120.
+    pub fn ml_per_min(v: f64) -> VolumetricFlow {
+        Qty(v * 1e-6 / 60.0)
+    }
+    /// As litres per hour.
+    pub fn in_l_per_h(self) -> f64 {
+        self.0 * 3600.0 * 1e3
+    }
+    /// As millilitres per minute.
+    pub fn in_ml_per_min(self) -> f64 {
+        self.0 * 60.0 * 1e6
     }
 }
 
@@ -1009,6 +1057,43 @@ mod tests {
         assert_eq!(format!("{:?}", Force::from_si(6.0)), "6·m·kg·s^-2");
         assert_eq!(format!("{:?}", Dimensionless::ratio(0.5)), "0.5");
         assert_eq!(Force::dimension(), [1, 1, -2, 0, 0, 0, 0]);
+    }
+
+    /// A clearance is a **volume** per time, and the arithmetic a compartmental model does
+    /// with it lands in the right dimension without being told.
+    ///
+    /// The conversions are checked against figures nobody has to take on trust: a glomerular
+    /// filtration rate of 120 mL/min is 7.2 L/h, and a 100 L/h hepatic clearance acting on a
+    /// 1 mg/L plasma concentration removes 100 mg an hour. Getting the seconds-per-hour the
+    /// wrong way round is a factor of 1.3e7 and would pass any test that only round-tripped.
+    #[test]
+    fn a_clearance_is_a_volume_per_time_and_the_products_say_so() {
+        let gfr = VolumetricFlow::ml_per_min(120.0);
+        assert!(
+            (gfr.in_l_per_h() - 7.2).abs() < 1e-12,
+            "{}",
+            gfr.in_l_per_h()
+        );
+        assert!((gfr.to_si() - 2e-6).abs() < 1e-18, "{gfr:?}");
+        assert_eq!(VolumetricFlow::dimension(), [3, 0, -1, 0, 0, 0, 0]);
+
+        // 100 L/h on 1 mg/L. 1 mg/L is 1e-3 kg/m3, so this is 1e-4 kg/s * ... check it in the
+        // units a pharmacologist reads: 100 mg an hour.
+        let cl = VolumetricFlow::l_per_h(100.0);
+        let plasma = Concentration::from_si(1e-3);
+        let removed: MassFlow = cl * plasma;
+        let over_an_hour: Mass = Mass::from_si(removed.to_si() * 3600.0);
+        assert!(
+            (over_an_hour.to_si() - 1e-4).abs() < 1e-18,
+            "100 mg in an hour, got {} kg",
+            over_an_hour.to_si()
+        );
+
+        // And a flow over a time is the volume that went through: a 3 mL/min driver runs a
+        // 20 mL syringe dry in 400 s.
+        let driver = VolumetricFlow::ml_per_min(3.0);
+        let through: Volume = driver * Time::s(400.0);
+        assert!((through.in_litres() - 0.02).abs() < 1e-15, "{through:?}");
     }
 
     /// Serialised as the bare SI number: the dimension is in the field's type,

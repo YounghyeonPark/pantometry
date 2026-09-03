@@ -39,10 +39,25 @@
 ///
 /// Grown from a `(kind, json)` pair when the editor gained a chooser: a person picking what to
 /// simulate needs to be told what each kind *is*, and a scene made of one needs a duration and a
-/// frame count that the kind can actually run under. Those two numbers span fourteen orders of
-/// magnitude across this table — `atoms` settles in picoseconds, a thermal `network` in half an
-/// hour — which is a fact about the physics and the reason a chooser has to say so rather than
+/// frame count that the kind can actually run under. Those two numbers span **sixteen** orders of
+/// magnitude across this table — `well` settles in 2e-13 s and an `orbit` takes 7200, a span of
+/// 3.6e16 — which is a fact about the physics and the reason a chooser has to say so rather than
 /// pick a default and hope.
+///
+/// **It said fourteen orders and named `atoms` against a thermal `network`**, and both halves were
+/// wrong. The extremes have always been `well` and `orbit`, so the count was stale whatever
+/// `atoms` held; and `atoms` itself was 6e-12 against a domain whose time unit is one second,
+/// which is the units error the doc below records. Measured from this table rather than
+/// remembered: `well` 2e-13, `orbit` 7200.
+///
+/// **`atoms` said picoseconds and asked for 6e-12 s, and that was a units error.** The domain is
+/// built with `LennardJones::reduced()`, where σ = ε = m = 1 in SI and the only time scale is
+/// `τ = σ√(m/ε) = 1 second`. Six picoseconds is 6e-12 τ, ten orders of magnitude short of the
+/// 0.01 τ the domain suggests for one step: measured, the mean square displacement grew as `t²`
+/// with a ratio of exactly **4.000** between the last frame and the half-way one, which is free
+/// flight — not one collision in the whole run. Argon is where the picoseconds came from: at
+/// σ = 3.405 Å, ε/k = 119.8 K and m = 39.948 u, τ = 2.16 ps and six of those is a real run. The
+/// number here is in the units the domain actually uses.
 pub struct Template {
     /// The `kind` the scene format spells.
     pub kind: &'static str,
@@ -76,7 +91,7 @@ pub const TEMPLATES: [Template; 19] = [
     Template {
         kind: "atoms",
         about: "A Lennard-Jones fluid in a periodic box",
-        duration_s: 6e-12,
+        duration_s: 6.0,
         frames: 12,
         json: r#"{ "kind": "atoms", "name": "atoms", "cells": 3, "density": 0.8442, "temperature": 1.4,
           "thermostat_t": 1.4, "seed": 20260808 }"#,
@@ -237,8 +252,8 @@ pub const TEMPLATES: [Template; 19] = [
 ///
 /// # The duration is the shortest of them, and that is a decision with a reason
 ///
-/// A scene has **one** `duration_s`, and these span fourteen orders of magnitude: `atoms` settles
-/// in picoseconds and a thermal `network` in half an hour. There is no duration at which both are
+/// A scene has **one** `duration_s`, and these span **sixteen** orders of magnitude: `well` settles
+/// in 2e-13 s and an `orbit` takes 7200. There is no duration at which both are
 /// a simulation — one of them does nothing at any number you pick. So the shortest is taken,
 /// together with the frame count from the same shipped scene, and the chooser says on screen when
 /// the span is wide rather than quietly producing a scene in which half the domains are frozen.

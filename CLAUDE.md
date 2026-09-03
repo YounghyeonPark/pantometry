@@ -119,9 +119,9 @@ Stated in full in CONTRIBUTING.md. The compressed version:
    are bit-for-bit identical across platforms, optimisation levels, WebAssembly and thread
    counts, and there is a pinned digest that says so.
 4. **The kernel must never depend on a domain**, and no domain may depend on another. That
-   claim is the reason for the crate split and has now been held through eleven domains.
-5. **Every public item is documented.** `#![deny(missing_docs)]` in all **twenty-two** crates: the
-   seventeen in `crates/` and the five libraries in `app/`. It said eighteen through the
+   claim is the reason for the crate split and has now been held through twelve domains.
+5. **Every public item is documented.** `#![deny(missing_docs)]` in all **twenty-three** crates:
+   the eighteen in `crates/` and the five libraries in `app/`. It said eighteen through the
    consolidation and one crate had never had the rule at all.
 
 ## Commit messages
@@ -179,7 +179,7 @@ earned and was not.
 | read | before |
 | --- | --- |
 | [RELEASING.md](RELEASING.md) | any release. Cadence, the **nine** places a version lives, the crate order, the wheel, what the pipeline has actually been run through — and what it costs to change the project's name, which is not a rename because a published name is permanent |
-| [EVIDENCE.md](EVIDENCE.md) | claiming that something is checked. Ten sections of what the closed forms are and what checking against them found, including two defects the conservation audit called clean |
+| [EVIDENCE.md](EVIDENCE.md) | claiming that something is checked. Eleven sections of what the closed forms are and what checking against them found, including two defects the conservation audit called clean |
 | [EXAMPLES.md](EXAMPLES.md) | adding or changing an example. What each one demonstrates and what it checks itself against |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | changing a test or a tolerance. The authority on the gate and on the five conventions in full |
 | [app/pantometry-world/FRICTION.md](app/pantometry-world/FRICTION.md) | changing the public API. Thirty-four findings from using the SDK as a stranger, five of them the same underlying decision |

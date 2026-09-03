@@ -142,9 +142,15 @@ fn exactly_two_kinds_name_a_partner() {
 
 /// **The span is a ratio, and it is 1 for one kind and enormous for the wrong two.**
 ///
-/// The number the chooser says out loud. `atoms` settles in picoseconds and a thermal `network` in
-/// half an hour: there is no `duration_s` at which both are a simulation, and the format cannot
-/// refuse the scene because it is well formed.
+/// The number the chooser says out loud. A quantum `well` settles in 2e-13 s and an `orbit` takes
+/// 7200: there is no `duration_s` at which both are a simulation, and the format cannot refuse the
+/// scene because it is well formed.
+///
+/// **This asked about `atoms` against a thermal `network` and wanted `> 1e12`.** That pair was
+/// 3e14 apart because `atoms` held `duration_s: 6e-12` against a domain whose own time unit is one
+/// second — a units error, not a timescale. Corrected to 6.0 they are **300** apart, under the
+/// chooser's own 1e3 threshold, and this test was measuring the bug. The table's real extremes are
+/// `well` and `orbit`, and they do not depend on anybody's units being right.
 #[test]
 fn the_timescale_span_says_when_a_set_cannot_run_together() {
     assert_eq!(templates::timescale_span(&["room"]), 1.0);
@@ -152,9 +158,20 @@ fn the_timescale_span_says_when_a_set_cannot_run_together() {
         (templates::timescale_span(&["bar", "heater"]) - 1.0).abs() < 1e-12,
         "two kinds a scene already runs together are not one apart"
     );
-    let far = templates::timescale_span(&["atoms", "network"]);
+    let far = templates::timescale_span(&["well", "orbit"]);
+    assert!(far > 1e12, "2e-13 s against two hours came out as {far}");
+    // And the extremes are the extremes: nothing in the table is further apart than these two, or
+    // the sentence above names the wrong pair and the count in `templates`' own doc is stale
+    // again. Measured from the table rather than remembered.
+    let every: Vec<&str> = templates::TEMPLATES.iter().map(|t| t.kind).collect();
+    let widest = templates::timescale_span(&every);
     assert!(
-        far > 1e12,
-        "picoseconds against half an hour came out as {far}"
+        (widest - far).abs() / far < 1e-12,
+        "the widest pair in the table spans {widest}, and `well` against `orbit` spans {far}"
+    );
+    // Sixteen orders, which is what three doc comments now say.
+    assert!(
+        (3.6e16..3.7e16).contains(&widest),
+        "the table spans {widest}, and the docs say 3.6e16"
     );
 }

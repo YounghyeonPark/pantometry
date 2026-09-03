@@ -8,8 +8,8 @@ message: >-
   each store exactly one, and `Cargo.toml` carries the authoritative expression.
 title: "pantometry: physics for simulated worlds, checked against closed forms"
 abstract: >-
-  A Rust workspace of seventeen crates: a kernel that knows conservation, integration,
-  scheduling and sampling but no physics, eleven domain crates built on it, and scene and
+  A Rust workspace of eighteen crates: a kernel that knows conservation, integration,
+  scheduling and sampling but no physics, twelve domain crates built on it, and scene and
   view layers above. Every claim is checked against a closed form, an exact limit, a
   conservation law or a convergence rate rather than against a second implementation.
   Results are bit-for-bit reproducible across platforms, optimisation levels,

@@ -82,19 +82,29 @@ their counts — so a third one arriving is a failure rather than something to n
 By rank because the threshold it replaced sat at 90 and the third-lowest tile is 94: four pixels of
 37 440, which is not a margin.
 
-## And four pairs of tiles are the same picture
+## Three groups of tiles are the same picture, and one of them was a real defect
 
-27 tiles, **23 distinct images**. `08-atoms-crystal` and `09-atoms-liquid` draw the identical
-picture; so do `24` and `25`, and so do `20`, `21` and `22`.
+27 tiles, **24 distinct images**: `20`, `21` and `22` draw one image between them, and `24` and
+`25` another.
 
-This is explicable rather than a fault. A tile's shade is the sample's value normalised over the
-run's own range, and the frame is the last one — so three heat scenes in the same block, driven to
-the same steady state by the same heater, produce the same *normalised* field whatever the material
-between them is. `--frame` is not the culprit: `20-melting-a-block-of-ice` at frames 0, 6 and 11
-gives three different pictures, and 21 and 22 reach the shared one by frame 6 while 20 does not
-until 11.
+**It was 23, and the extra collision is why this check exists.** `08-atoms-crystal` and
+`09-atoms-liquid` drew the identical picture because both scenes were frozen lattices — they asked
+for `duration_s: 6.0e-12` against a domain built in reduced units where `τ` is one second, so the
+whole run was 6e-12 τ and the mean square displacement grew as exactly `t²`: free flight, not one
+collision in twelve frames. A liquid sitting on the crystal's own sites draws the crystal's own
+picture. Every check those scenes had went on passing, because the *speeds* were right and only the
+clock was wrong. The duration is 6.0 now, `scene.rs` asserts the displacement, and the two tiles
+differ.
+
+The rest are explicable. A tile's shade is the sample's value normalised over the run's own range
+and the frame is the last one, so three heat scenes in the same block driven to the same steady
+state give the same *normalised* field whatever the material between them is — and for those three
+it is exact rather than approximate, because with no cooling, one material and a uniform source a
+uniform field is a fixed point of the update for any conductivity. All 1331 cells hold one number.
+`--frame` is not the culprit: `20-melting-a-block-of-ice` at frames 0, 6 and 11 gives three
+different pictures.
 
 Honest, and still bad on the screen: a chooser whose pictures cannot tell two scenes apart is a
 chooser with no pictures, for those two. `the_tiles_tell_the_scenes_apart_or_say_which_they_do_not`
-pins the collision set so a new one fails, and choosing a better frame — or drawing the run rather
-than one instant of it — is the open question.
+pins the set so a new one fails, and drawing the run rather than one instant of it is the open
+question.

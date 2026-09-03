@@ -14,7 +14,7 @@ about each. Tick one for a starting point or several for a scene of several doma
 a custom simulation is here; there is no second flow for that case, because it is the same list.
 
 It says two things while you choose that nothing downstream can. **These kinds do not share a
-timescale** — `atoms` settles in 6e-12 s and a thermal `network` in 1800 s, and a scene carries one
+timescale** — a quantum `well` settles in 2e-13 s and an `orbit` takes 7200, and a scene carries one
 `duration_s` — so a set that spans orders of magnitude is a *well-formed* scene in which the slowest
 domain barely moves, and the chooser puts the ratio on the screen. And the two kinds that name
 another domain, `beam` and `structure`, say so rather than being wired up: a beam's `faces` has to

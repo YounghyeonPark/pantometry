@@ -4,8 +4,8 @@ Read this before a release and not otherwise. It was inside `CLAUDE.md`, which i
 session, and a procedure you follow once per release does not need to be in front of you for the
 hundred commits in between.
 
-Seventeen crates are published together and share one version. **A published version is permanent** —
-it can be yanked, never replaced — so the cost of a release is seventeen permanent version numbers on
+Eighteen crates are published together and share one version. **A published version is permanent** —
+it can be yanked, never replaced — so the cost of a release is eighteen permanent version numbers on
 crates.io, one on PyPI, and a prose sweep.
 
 ## When
@@ -23,7 +23,7 @@ All of them, or the release is broken in a way only one CI job can see:
 
 | | occurrences |
 | --- | --- |
-| `Cargo.toml` | 18 — the workspace version and all seventeen path pins |
+| `Cargo.toml` | 19 — the workspace version and all eighteen path pins |
 | `bindings/python/Cargo.toml` | 2 — the crate's own version **and** the exact `pantometry` pin |
 | `bindings/python/pyproject.toml` | 1 — the wheel's version |
 | `AGENTS.md` | 1 — `pantometry = "0.x"`, which `documented_version.rs` checks |
@@ -116,11 +116,15 @@ Each crate must be live on the index before the next one resolves it.
 set -euo pipefail
 for c in pantometry-units pantometry-core pantometry-acoustic pantometry-mechanics pantometry-molecular \
          pantometry-optics pantometry-thermal pantometry-electrical pantometry-elastic pantometry-em \
-         pantometry-fluid pantometry-porous pantometry-quantum pantometry-shape pantometry-scene pantometry-view pantometry; do
+         pantometry-fluid pantometry-porous pantometry-quantum pantometry-pharmacokinetic \n         pantometry-shape pantometry-scene pantometry-view pantometry; do
   cargo publish -p "$c" --locked      # once per crate. Twice publishes the first and stops on it
 done
 git tag -a vX.Y.Z -F message.txt && git push origin vX.Y.Z   # the tag publishes the wheel
 ```
+
+`pantometry-pharmacokinetic` is new at the next release and goes after the other domains and
+before `pantometry`, which is the only ordering constraint on it: it depends on `pantometry-units`
+and `pantometry-core` and nothing else, and only the facade depends on it.
 
 A **new** crate hits crates.io's new-crate rate limit — a burst of five, then roughly one per ten
 minutes. Existing crates do not, so a release that adds no crate goes through in one pass. A release

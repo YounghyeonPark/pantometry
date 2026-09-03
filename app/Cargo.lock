@@ -2394,6 +2394,7 @@ dependencies = [
  "pantometry-mechanics",
  "pantometry-molecular",
  "pantometry-optics",
+ "pantometry-pharmacokinetic",
  "pantometry-porous",
  "pantometry-quantum",
  "pantometry-scene",
@@ -2516,6 +2517,14 @@ dependencies = [
  "pantometry-core",
  "pantometry-units",
  "serde",
+]
+
+[[package]]
+name = "pantometry-pharmacokinetic"
+version = "0.20.0"
+dependencies = [
+ "pantometry-core",
+ "pantometry-units",
 ]
 
 [[package]]

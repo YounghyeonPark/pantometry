@@ -5,6 +5,48 @@ use pantometry::electrical::Winding;
 use pantometry::prelude::*;
 use pantometry_world::{DomainSpec, Scene, World};
 
+/// How far the atoms wandered, and whether that grew like `t`, like `t²`, or not at all.
+///
+/// Returns `(rms displacement at the last frame in units of the nearest-neighbour spacing,
+/// MSD(t) / MSD(t/2))`. The ratio is the discriminator and it needs no constant remembered from
+/// anywhere: **4** is free flight, `r = vt` with not one collision; **2** is diffusion, the
+/// Einstein relation; **1** is a solid, saturated about its lattice sites.
+///
+/// Displacements are taken to the nearest periodic image, or an atom crossing the wall counts as
+/// having moved a box length — which is how a frozen lattice first read as `mean 0.617841, max
+/// 7.12592`, the second of which is exactly `L√2`, a two-axis wrap and nothing else.
+fn wandered(frames: &[pantometry_world::Frame], panel: usize) -> (f64, f64) {
+    let at = |i: usize| match &frames[i].panels[panel].data {
+        pantometry_world::PanelData::Points {
+            positions, bounds, ..
+        } => (positions.clone(), bounds[3] - bounds[0]),
+        _ => panic!("atoms are bodies, not a field"),
+    };
+    let (first, side) = at(0);
+    let image = |d: f64| d - side * (d / side).round();
+    let rms = |i: usize| {
+        let (now, _) = at(i);
+        let total: f64 = first
+            .iter()
+            .zip(&now)
+            .map(|(a, b)| (0..3).map(|c| image(b[c] - a[c]).powi(2)).sum::<f64>())
+            .sum();
+        (total / first.len() as f64).sqrt()
+    };
+    // fcc with four atoms to a cube of side `side / cells`; the nearest neighbour is a face
+    // diagonal's half. `cells` is 3 in both scenes, and the cube side is what `bounds` gives.
+    let neighbour = side / 3.0 / std::f64::consts::SQRT_2;
+    let (half, end) = (rms(frames.len() / 2), rms(frames.len() - 1));
+    (
+        end / neighbour,
+        if half > 0.0 {
+            (end / half).powi(2)
+        } else {
+            0.0
+        },
+    )
+}
+
 fn scene_from(text: &str) -> Scene {
     serde_json::from_str(text).expect("it parsed once already")
 }
@@ -1150,16 +1192,45 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             // Equipartition, twice. The mean square speed is `3(N-1)k_B T / N m`, so the
             // liquid at T* = 1.4 must be quicker than the crystal at 0.15 by about
             // sqrt(1.4/0.15) = 3.06. Peaks are noisier than means, so this is a band.
+            //
+            // **And that they moved at all**, which equipartition cannot see. Both scenes ran with
+            // `duration_s: 6.0e-12` against a domain built in reduced units, where `τ = σ√(m/ε)`
+            // is one SI second: the whole run was 6e-12 τ, ten orders short of the 0.01 τ the
+            // domain suggests for a single step. Measured, MSD grew as exactly `t²` — ratio
+            // **4.000** — which is free flight with not one collision, and the "liquid" sat on the
+            // crystal's own lattice sites to 1e-11 σ. Its title, its row in the README and its
+            // picture in the chooser all described something that had not happened, and the
+            // equipartition check above passed throughout, because the speeds were right.
             "08-atoms-crystal.json" => {
                 assert!(
                     (0.5..4.0).contains(&peak),
                     "{name}: a cold crystal's fastest atom, got {peak:.3}"
+                );
+                let (moved, growth) = wandered(&frames, 0);
+                // Lindemann: a solid melts near 0.1 of the neighbour spacing. This one vibrates
+                // at 0.075 and saturates, so the growth has stopped rather than gone diffusive.
+                assert!(
+                    moved < 0.12,
+                    "{name}: a crystal keeps its sites, and these wandered {moved:.3} of a                      neighbour spacing"
+                );
+                assert!(
+                    growth < 1.5,
+                    "{name}: saturated growth is about 1 and this is {growth:.3} — 4 would be                      free flight and 2 diffusion"
                 );
             }
             "09-atoms-liquid.json" => {
                 assert!(
                     peak > 3.0,
                     "{name}: at nine times the temperature the atoms are quicker, got {peak:.3}"
+                );
+                let (moved, growth) = wandered(&frames, 0);
+                assert!(
+                    moved > 1.0,
+                    "{name}: a liquid leaves its site, and these moved {moved:.3} of a neighbour                      spacing"
+                );
+                assert!(
+                    (1.5..3.0).contains(&growth),
+                    "{name}: diffusion grows like t, so the ratio is about 2 and this is                      {growth:.3} — 4 is free flight and 1 is a solid"
                 );
             }
             // Every joule the lamp paid arrived in the mirror.

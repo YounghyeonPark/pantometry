@@ -274,23 +274,34 @@ fn every_tile_decodes_to_something() {
     );
 }
 
-/// **No two tiles are the same picture** — and four pairs of them are.
+/// **No two tiles are the same picture** — and three groups of them are.
 ///
 /// A chooser whose pictures do not tell two scenes apart is a chooser with no pictures, and the
 /// per-tile checks above cannot see it: each of these decodes, is the right size, and is far from
-/// blank. Measured over the 27 committed tiles: **23 distinct images**.
+/// blank. Measured over the 27 committed tiles: **24 distinct images**.
 ///
-/// The collisions are explicable rather than a rendering fault, which is why they are pinned
-/// rather than fixed here. A tile's shade is the sample's value normalised over the run's own
-/// range, and the frame is the last one — so three heat scenes in the same block, driven to the
-/// same steady state by the same heater, produce the same *normalised* field whatever the material
-/// between them is. `--frame` is not the culprit: rendering `20-melting-a-block-of-ice` at frames
-/// 0, 6 and 11 gives three different pictures, and 21 and 22 reach the shared one by frame 6 while
-/// 20 does not until 11.
+/// # One of the collisions was a real defect and this is how it was found
+///
+/// `08-atoms-crystal` and `09-atoms-liquid` drew the identical picture, and the reason was not the
+/// renderer: both scenes were **frozen lattices**. They asked for `duration_s: 6.0e-12` against a
+/// domain built in reduced units where `τ` is one second, so the run was 6e-12 τ and the mean
+/// square displacement grew as exactly `t²` — free flight, not one collision. A liquid sitting on
+/// the crystal's own sites draws the crystal's own picture. `scene.rs` now asserts the
+/// displacement; the duration is 6.0; and the two tiles differ.
+///
+/// # The rest are explicable, and pinned rather than fixed
+///
+/// A tile's shade is the sample's value normalised over the run's own range, and the frame is the
+/// last one — so three heat scenes in the same block, driven to the same steady state by the same
+/// heater, produce the same *normalised* field whatever the material between them is. That one is
+/// exact rather than approximate: with no cooling, one material and a uniform source, a uniform
+/// field is a fixed point of the update for any conductivity, so all 1331 cells hold one number.
+/// `--frame` is not the culprit — `20-melting-a-block-of-ice` at frames 0, 6 and 11 gives three
+/// different pictures.
 ///
 /// So this is honest and it is still bad on the screen. What is asserted is the *set* of
-/// collisions: a new one is a scene that stopped being distinguishable from another, and that is
-/// worth a failure rather than something to notice while scrolling.
+/// collisions: a new one is a scene that stopped being distinguishable from another, and the last
+/// time that happened it was a units error ten orders of magnitude wide.
 #[test]
 fn the_tiles_tell_the_scenes_apart_or_say_which_they_do_not() {
     let mut by_bytes: std::collections::BTreeMap<&[u8], Vec<&str>> =
@@ -305,7 +316,6 @@ fn the_tiles_tell_the_scenes_apart_or_say_which_they_do_not() {
     assert_eq!(
         same,
         [
-            vec!["08-atoms-crystal.json", "09-atoms-liquid.json"],
             vec![
                 "20-melting-a-block-of-ice.json",
                 "21-a-wax-thermal-buffer.json",
@@ -320,7 +330,7 @@ fn the_tiles_tell_the_scenes_apart_or_say_which_they_do_not() {
     );
     assert_eq!(
         by_bytes.len(),
-        23,
+        24,
         "27 tiles, and {} of them are distinct pictures",
         by_bytes.len()
     );

@@ -1,8 +1,9 @@
 size=1500x950
-texts=79
+texts=63
 elided=1
 cut=0
 overlap=0
+unwritable=0
 callbacks=1
 viewport=698,52 474x870
       12     4    19  File
@@ -30,46 +31,30 @@ viewport=698,52 474x870
     1017    74   147  bracket mean 118.08 C
     1188    76   297  nothing selected — pick a row in the outliner, or click something in the viewport
      268    77   381  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
-      12    78    13  ▾
-      41    78    13  ●
-      66    78   144  an aluminium bracket, designed as a mesh and solved as cells, cooling to still air: 1 domain(s), 120.000 s in 13 frames
+      54    78   159  an aluminium bracket, designed as a mesh and solved as cells, cooling to still air: 1 domain(s), 120.000 s in 13 frames
      222    79    30  Scene
      996    88   168  bracket coldest 118.05 C
-      24    99    13  ▾
-      53    99    13  ●
-      78    99    81  Placed extents
+      66    99    81  Placed extents
      222   100    30  Group
     1024   102   140  bracket absorbed 0 J
-      54   120    13  ●
-      79   120    42  bracket
+      70   120    42  bracket
      216   121    36  Extent
      272   133   406  {\n  "title": "an aluminium bracket, designed as a mesh and solved as cells, cooling to still air",\n  "schedule": "multirate",\n  "duration_s": 120.0,\n  "frames": 13,\n  "conservation_tolerance": 1e-9,\n  "domains": [\n    {\n      "kind": "block",\n      "name": "bracket",\n      "cells": [26, 26, 12],\n      "cell_mm": 2.0,\n      "initial_c": 120.0,\n      "parts": [\n        { "stl": "parts/l-bracket.stl", "material": "aluminium" }\n      ],\n      "cooling": [\n        { "face": "z-min", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }\n      ]\n    }\n  ]\n}
-      24   141    13  ▾
-      53   141    13  ●
-      78   141    22  Run
+      66   141    22  Run
      222   142    30  Group
-      54   162    13  ●
-      79   162    42  bracket
+      70   162    42  bracket
      222   163    30  Field
-      24   183    13  ▾
-      53   183    13  ●
-      78   183    50  Readings
+      66   183    50  Readings
      222   184    30  Group
-      36   204    13  ▾
-      65   204    13  ●
-      90   204    42  bracket
+      78   204    42  bracket
      222   205    30  Group
-      66   225    13  ●
-      91   225    26  peak
+      82   225    26  peak
      216   226    36  Scalar
-      66   246    13  ●
-      91   246    31  mean
+      82   246    31  mean
      216   247    36  Scalar
-      66   267    13  ●
-      91   267    40  coldest
+      82   267    40  coldest
      216   268    36  Scalar
-      66   288    13  ●
-      91   288    51  absorbed
+      82   288    51  absorbed
      216   289    36  Scalar
      830   592    38  bracket
      830   606   249  field: false colour — nothing here is hot enough to glow

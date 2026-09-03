@@ -124,12 +124,15 @@ fn main() {
                     .map(|w| w.split(',').map(str::to_string).collect())
                     .unwrap_or_default()
             });
-            let click = rest
+            // `--click x,y` may be given more than once, and they land in the order written.
+            let click: Vec<(f32, f32)> = rest
                 .iter()
-                .position(|a| a == "--click")
-                .and_then(|i| rest.get(i + 1))
-                .and_then(|w| w.split_once(','))
-                .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+                .enumerate()
+                .filter(|(_, a)| *a == "--click")
+                .filter_map(|(i, _)| rest.get(i + 1))
+                .filter_map(|w| w.split_once(','))
+                .filter_map(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))
+                .collect();
             // The kinds screen with *nothing* ticked had no door: `--new` alone is the preset
             // screen and `--new bar` is the kinds screen with `bar` ticked, so the empty chooser —
             // which is what `Custom…` actually opens on — could not be looked at.

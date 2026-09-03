@@ -458,9 +458,9 @@ impl Art {
 ///
 /// # What it says out loud, and why
 ///
-/// A scene carries **one** `duration_s`, and these kinds do not share a timescale: `atoms` settles
-/// in picoseconds, a thermal `network` in half an hour — fourteen orders of magnitude across the
-/// table. Every combination of them is a *well-formed* scene, so nothing downstream refuses it;
+/// A scene carries **one** `duration_s`, and these kinds do not share a timescale: a quantum
+/// `well` settles in 2e-13 s and an `orbit` takes 7200 — **sixteen** orders of magnitude across the
+/// table, measured from it rather than remembered. Every combination of them is a *well-formed* scene, so nothing downstream refuses it;
 /// what happens instead is that the slow domain advances by a millionth of what it needs while the
 /// fast one finishes, and the picture looks like a bug in the physics. So the span is computed and
 /// said here, where the choice is being made.

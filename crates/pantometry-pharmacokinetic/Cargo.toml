@@ -1,0 +1,15 @@
+[package]
+name = "pantometry-pharmacokinetic"
+description = "Compartmental pharmacokinetics as a simulation domain: distribution, clearance, boluses and infusions"
+keywords = ["pharmacokinetics", "compartment", "medical", "physics", "simulation"]
+categories = ["science", "simulation"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+pantometry-core = { workspace = true }
+pantometry-units = { workspace = true }

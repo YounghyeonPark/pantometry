@@ -109,6 +109,37 @@ RK4 is more accurate per step and steadily *dissipates*, while the symplectic me
 is second order and holds its energy within a bound. The test module proves that on a
 harmonic oscillator against the closed-form energy.
 
+## A discretisation that is exact where it matters, and three things checking it found
+
+`pantometry-pharmacokinetic` is the one domain here whose *whole* model has closed forms, so the
+interesting result is not that they matched. It is what asking for them turned up.
+
+**Explicit Euler reproduces a constant infusion's steady state exactly, at any step.** The scheme
+is first order and the transient is first order, but the fixed point of `A ← A + h(R − kA)` is
+`A* = R/k`, which is the fixed point of `A' = R − kA` — the discretisation error is in *how* the
+solution approaches the plateau and not in where the plateau is. So that assertion is written at
+`1e-12` where every other assertion about the same run is written at a tolerance derived from
+`t k² h/2`, and the difference between the two numbers is a statement about the scheme rather than
+about how much slack was needed. A single loose tolerance covering both would have hidden it.
+
+**Two tolerances in one test, differing by three orders of magnitude, for a reason that is not
+slack.** After one step from a bolus, the peripheral compartment's *gain* is checked to `1e-22` and
+the central compartment's *loss* to `1e-19`. The gain is read directly; the loss is
+`dose − amount`, a difference of two numbers near `1e-4` whose difference is near `2e-6`, so it
+carries `ε·dose ≈ 2e-20` of cancellation. Both numbers are the arithmetic's, and writing the
+looser one everywhere would have made the tighter check stop meaning anything.
+
+**And a mutation that changes no behaviour proves nothing about a test.** The known failure mode
+here is the one `ThermalNetwork` measured at 0.31% on a three-node ladder: apply an arriving amount
+to the compartment before computing the fluxes, and the compartment's outflow is taken from an
+already-raised concentration — every total stays exactly right and the steady state sits low by
+exactly the turnover number `h·CL/V`. The first attempt to check that the tests would catch it
+moved the dose onto `amount` inside the infusion loop and all fifteen still passed. The mutation
+was a **no-op**: the concentration snapshot is taken before that loop, so the fluxes could not see
+the change. Moving the snapshot as well — the real bug — is caught by two tests. Reporting the
+first result as "the tests are blind to this" would have been wrong in the direction that reads
+like diligence.
+
 ## What implementing the field interface found
 
 The kind of thing that only surfaces when something uses a trait, and more of it once there
