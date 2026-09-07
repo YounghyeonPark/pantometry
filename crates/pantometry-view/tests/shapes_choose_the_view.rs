@@ -10,7 +10,7 @@
 //! being non-empty — a renderer that silently drew nothing would pass every `len() > 0` check
 //! ever written for it.
 
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::{html, readings_csv, svg, to_json};
 
 /// A 3D field, a 2D field, a 1D field, some bodies, and two readings — one of each shape.
@@ -36,6 +36,7 @@ fn frames() -> Vec<Frame> {
                             // same aspect as the grid: 3x2 samples over 0.30 x 0.20 m is 1.5 both
                             // ways by coincidence, so the y extent is 0.15 and it is not.
                             extent_m: [0.0, 0.0, 0.0, 0.30, 0.15, 0.0],
+                            lattice: Lattice::Nodal,
                             values: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0 + t],
                         },
                     },
@@ -51,6 +52,7 @@ fn frames() -> Vec<Frame> {
                             // Twelve values, x fastest then y then z, and every slice different
                             // — so a view that drew slice 0 three times, or that read the array
                             // as one 2×6 plane, produces something this test can tell apart.
+                            lattice: Lattice::Nodal,
                             values: vec![
                                 300.0,
                                 301.0,
@@ -76,6 +78,7 @@ fn frames() -> Vec<Frame> {
                             ny: 1,
                             nz: 1,
                             extent_m: [0.0, 0.0, 0.0, 0.4, 0.0, 0.0],
+                            lattice: Lattice::Nodal,
                             values: vec![300.0, 310.0, 305.0 + t, 300.0],
                         },
                     },

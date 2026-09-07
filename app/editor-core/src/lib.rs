@@ -756,6 +756,7 @@ pub const MAX_SPLATS: usize = 8000;
 pub fn field_splats(
     corners: &[[f64; 3]; 8],
     counts: (usize, usize, usize),
+    lattice: viewer_core::Lattice,
     values: &[f64],
     unit: &str,
     scale: Option<(f64, f64)>,
@@ -787,7 +788,7 @@ pub fn field_splats(
     // pictures of one run that can disagree about it, so there is one, in the crate that owns the
     // panel: [`viewer_core::field_points`].
     let mut splats = Vec::new();
-    for (at, v) in viewer_core::field_points(corners, counts, values, stride) {
+    for (at, v) in viewer_core::field_points(corners, counts, lattice, values, stride) {
         // One scale across the whole run, never per frame, for the reason
         // `viewer-core` states.
         let s = colouring.place(v);
@@ -854,13 +855,24 @@ pub fn field_splats(
 pub fn field_shell(
     corners: &[[f64; 3]; 8],
     counts: (usize, usize, usize),
+    lattice: viewer_core::Lattice,
     values: &[f64],
     unit: &str,
     scale: Option<(f64, f64)>,
     level: Option<f64>,
 ) -> Shelled {
     let colouring = Colouring::of(unit, values, scale);
-    let unit_cube = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    // **Where the samples are inside the box**, in the unit cube this meshes over. A centred
+    // field's values are cell averages with nothing on the boundary, and meshing them corner to
+    // corner stretched every block to its faces.
+    let unit_cube = pantometry::view::mesh::sampled_box(
+        counts,
+        [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        match lattice {
+            viewer_core::Lattice::Nodal => pantometry::scene::Lattice::Nodal,
+            viewer_core::Lattice::Centred => pantometry::scene::Lattice::Centred,
+        },
+    );
     let mesh = match level {
         Some(v) => pantometry::view::mesh::isosurface(counts, unit_cube, values, v),
         None => pantometry::view::mesh::field_surface(counts, unit_cube, values),

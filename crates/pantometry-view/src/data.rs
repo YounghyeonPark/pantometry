@@ -118,11 +118,19 @@ pub fn to_json(title: &str, frames: &[Frame]) -> String {
                     ny,
                     nz,
                     extent_m,
+                    lattice,
                     values,
                 } => out.push_str(&format!(
                     "\"kind\": \"field\", \"nx\": {nx}, \"ny\": {ny}, \"nz\": {nz}, \
-                     \"extent_m\": {}, \"values\": {}",
+                     \"extent_m\": {}, {}\"values\": {}",
                     numbers(extent_m),
+                    // **Written only when it is not the default**, so a nodal run's bytes are
+                    // unchanged and a reader that has never heard of the key keeps working. The
+                    // same rule `place` follows above, for the same reason.
+                    match lattice {
+                        pantometry_scene::Lattice::Nodal => "",
+                        pantometry_scene::Lattice::Centred => "\"lattice\": \"centred\", ",
+                    },
                     numbers(values)
                 )),
                 PanelData::Paths {

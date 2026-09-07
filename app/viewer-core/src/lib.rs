@@ -172,6 +172,36 @@ pub struct Reading {
     pub unit: String,
 }
 
+/// Where a field's samples sit inside the box it was sampled over.
+///
+/// This crate does not link `pantometry`, so it carries its own copy of the wire format's types —
+/// see the crate docs. The library's `pantometry_core::Lattice` is the same two cases and this
+/// reads the same two strings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lattice {
+    /// Sample `i` of `n` at `i/(n-1)` of the box: the first and last **on** the boundary.
+    #[default]
+    Nodal,
+    /// Sample `i` of `n` at `(i+0.5)/n` of the box: cell averages, none on the boundary.
+    Centred,
+}
+
+impl Lattice {
+    /// Where sample `i` of `n` sits along an axis, as a fraction of the box.
+    ///
+    /// One sample sits at the middle whichever the lattice, which is what a flat axis wants.
+    pub fn along(self, i: usize, n: usize) -> f64 {
+        if n <= 1 {
+            return 0.5;
+        }
+        match self {
+            Lattice::Nodal => i as f64 / (n - 1) as f64,
+            Lattice::Centred => (i as f64 + 0.5) / n as f64,
+        }
+    }
+}
+
 /// One domain, captured, in whichever shape it has.
 ///
 /// Tagged by `kind`, which is what the writer emits. An unknown kind is an **error** rather than a
@@ -213,6 +243,16 @@ pub enum Panel {
         /// thing that cannot be helped.
         #[serde(default)]
         extent_m: Option<[f64; 6]>,
+        /// Where the samples sit inside `extent_m`.
+        ///
+        /// **Optional, and absent means `nodal`** — the convention every run written before this
+        /// key used, and the one this crate assumed for all of them. A cell-based field's values
+        /// are averages with nothing on the boundary, and drawing them corner to corner put every
+        /// sample half a cell out; the library says which now instead of leaving it to be
+        /// guessed. Same compatibility story as `extent_m` above, and the same reason the enum
+        /// stays `deny_unknown_fields`: a key this crate has not heard of should stop it.
+        #[serde(default)]
+        lattice: Lattice,
         /// `nx*ny*nz` values, x fastest then y then z. A cell the domain does not occupy is
         /// `null` in the file and [`f64::NAN`] here.
         #[serde(deserialize_with = "holes_are_nan")]
@@ -427,7 +467,12 @@ impl Panel {
     /// budget wants; 1 takes all of them.
     pub fn field_samples(&self, stride: usize) -> Vec<([f64; 3], f64)> {
         let Panel::Field {
-            nx, ny, nz, values, ..
+            nx,
+            ny,
+            nz,
+            lattice,
+            values,
+            ..
         } = self
         else {
             return Vec::new();
@@ -435,7 +480,7 @@ impl Panel {
         let Some(corners) = self.placed_corners() else {
             return Vec::new();
         };
-        field_points(&corners, (*nx, *ny, *nz), values, stride)
+        field_points(&corners, (*nx, *ny, *nz), *lattice, values, stride)
     }
 
     /// A field's sampled box as **eight world corners**, or `None` for a run written before the
@@ -831,6 +876,7 @@ pub struct Segment {
 pub fn field_points(
     corners: &[[f64; 3]; 8],
     counts: (usize, usize, usize),
+    lattice: Lattice,
     values: &[f64],
     stride: usize,
 ) -> Vec<([f64; 3], f64)> {
@@ -841,13 +887,10 @@ pub fn field_points(
     let o = corners[0];
     let axis = |c: [f64; 3]| [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
     let (ax, ay, az) = (axis(corners[1]), axis(corners[2]), axis(corners[4]));
-    let frac = |i: usize, n: usize| {
-        if n > 1 {
-            i as f64 / (n - 1) as f64
-        } else {
-            0.5
-        }
-    };
+    // **Where the field says its samples are**, not where a corner-to-corner grid would put
+    // them. A centred field's values are cell averages with nothing on the boundary, and drawing
+    // them at `i/(n-1)` stretched every block to its faces and put every sample half a cell out.
+    let frac = |i: usize, n: usize| lattice.along(i, n);
     let step = stride.max(1);
     let mut out = Vec::new();
     for k in (0..nz).step_by(step) {

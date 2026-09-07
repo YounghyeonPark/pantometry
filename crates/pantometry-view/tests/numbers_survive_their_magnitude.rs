@@ -16,7 +16,7 @@
 //! trailing-zero trim must still spell.
 
 use pantometry_core::Reading;
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::{html, readings_csv, to_json};
 
 /// Times and values a real scene actually produces, spanning nineteen decades between them.
@@ -38,6 +38,7 @@ fn frames() -> Vec<Frame> {
                     ny: 2,
                     nz: 1,
                     extent_m: [0.0, 0.0, 0.0, 2.4e-3, 2.4e-3, 0.0],
+                    lattice: Lattice::Nodal,
                     values: vec![VALUES[k], -VALUES[k], 0.0, VALUES[(k + 1) % 5]],
                 },
             }],

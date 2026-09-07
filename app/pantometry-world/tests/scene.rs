@@ -754,13 +754,17 @@ fn a_beam_heats_the_bar_where_it_lands() {
     // And the total is exactly what was paid, independent of where it went. 0.4 J into
     // 20 mm x 1 cm^2 of aluminium, insulated, computed from the substance rather than the bar.
     //
-    // **Read from the bar and not from the panel**, which is a trap worth naming. A panel is
-    // `ScalarField` *sampled* at evenly spaced points including both ends; the bar's grid is
-    // cell-centred, so the two end samples sit half a cell outside the outermost centres.
-    // Averaging the samples is not averaging the cells, and it comes out about 1/2n low —
-    // 1.2% at 41 cells, which is exactly what this assertion caught the first time. An
-    // application that reported a mean temperature from its own render buffer would be wrong
-    // by that much and would have no way to know. See `FRICTION.md`, finding 10.
+    // **This used to say "read from the bar and not from the panel", and it was describing a
+    // defect it had decided to keep.** A panel was `ScalarField` sampled at evenly spaced points
+    // *including both ends*, and the bar's grid is cell-centred, so the two end samples sat half
+    // a cell outside the outermost centres and the average came out about 1/2n low — 1.2% at 41
+    // cells. That was measured, written down here, pinned by the assertion below and recorded in
+    // `FRICTION.md` finding 10 as "not a defect anywhere".
+    //
+    // It was a defect. The same arithmetic wrote a six-cell block holding `0 0 100 0 0 0` into
+    // the run file as `0 0 90 0 0 0` — the array the viewer, the report, glTF, USD and the CSV
+    // all read — while `readings` beside it said `peak 100`. A field says where its own values
+    // are now (`Lattice`), the sampler asks, and the panel *is* the cells.
     let capacity = Substance::aluminium_6061()
         .heat_capacity(Volume::from_si(20e-3 * 100e-6))
         .expect("aluminium has a specific heat");
@@ -774,12 +778,14 @@ fn a_beam_heats_the_bar_where_it_lands() {
         "the bar holds every joule the beam paid: {mean_rise:.5} K"
     );
 
-    // The sampled panel is close but not equal, and the gap is the sampling and not a leak.
+    // And the panel's average **is** the bar's, which is what the sentence above now buys. The
+    // assertion here required `gap > 1e-4` — it asserted the error was present, so a fix would
+    // have failed it, and it did.
     let sampled_rise = profile.iter().sum::<f64>() / cells as f64 - 293.15;
     let gap = (sampled_rise / mean_rise - 1.0).abs();
     assert!(
-        gap > 1e-4 && gap < 0.05,
-        "the panel average should differ from the cell average by about 1/2n, got {gap:.4}"
+        gap < 1e-9,
+        "the panel is the cells now, and its average is {gap:.3e} from the bar's"
     );
 }
 
@@ -902,6 +908,53 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                  and nothing to check"
             );
             assert!(peak.is_finite(), "{name}: the field went to {peak}");
+
+            // **The panel is the cells, and the readings say so independently.**
+            //
+            // `readings.peak` is taken from what the domain holds; the panel is the same field
+            // sampled on a grid. They are two paths to one number and they must agree, and for
+            // every cell-based scene in this repository they did not: the sampler placed its
+            // points at `i/(n-1)` of the extent, which for a field of cell averages is the cell
+            // *boundaries*. A six-cell block holding `0 0 100 0 0 0` was written out as
+            // `0 0 90 0 0 0` while `readings` beside it said `peak 100` — one frame carrying two
+            // answers, in the array the viewer, the report, glTF, USD and the CSV all read.
+            //
+            // `Lattice` is the fix at the field's end and this is the check at the run's. It also
+            // found the other half of the same defect: a `Room` builds `dx = width/(nx-1)` and
+            // quantises its height to whole cells, so a 4.4 x 3.1 m room asked for 81 across is
+            // 3.080 m tall — and the *extent* said 3.1, putting every sample in y between nodes.
+            // `03-room-pulse` was 0.149% low and is now exact.
+            //
+            // **1e-6 relative**, which is what the panel's own precision earns: `to_json` writes
+            // seven significant figures, so a value near 294 K round-trips to about 2e-7. Not a
+            // chosen tolerance — the worst of the eighteen scenes that have both is 1.7e-7.
+            if let Some(panel) = last.panels.first() {
+                let held = last
+                    .readings
+                    .iter()
+                    .find(|r| r.domain == panel.name && r.label == "peak");
+                let sampled = panel
+                    .values()
+                    .iter()
+                    .copied()
+                    .filter(|v| v.is_finite())
+                    .fold(f64::NEG_INFINITY, f64::max);
+                if let Some(held) = held.filter(|_| sampled.is_finite()) {
+                    // The readings report celsius where the field is kelvin, which is a view's
+                    // choice and not a disagreement. Nothing else in the workspace differs.
+                    let want = held.value
+                        + if held.unit == "C" && panel.unit == "K" {
+                            273.15
+                        } else {
+                            0.0
+                        };
+                    let off = (sampled - want).abs() / want.abs().max(1e-30);
+                    assert!(
+                        off < 1e-6,
+                        "{name}: the panel's peak is {sampled:.8} and the cells hold                          {want:.8} — {off:.3e} apart, so the samples are not on the values"
+                    );
+                }
+            }
         }
 
         match name.as_str() {

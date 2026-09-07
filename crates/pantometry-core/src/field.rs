@@ -29,10 +29,75 @@
 use glam::DVec3;
 use pantometry_units::{Length, LengthVec, Time};
 
+/// Where a discrete field's own samples sit inside the box it occupies.
+///
+/// # Why the kernel knows this
+///
+/// It is a property of a *field*, not of a physics — the kernel learns nothing about any domain
+/// from it, which is the rule this has to clear. What it prevents is a lossy round trip: a
+/// solver's values are exact where the solver put them, and asking anywhere else runs them
+/// through an interpolant for no reason. A caller sampling a field on the field's own grid should
+/// get the field's own numbers back.
+///
+/// **Measured, before this existed.** A six-cell block holding `0 0 100 0 0 0 °C` was written to
+/// the run file as `0 0 90 0 0 0` — the peak 10% low — because the sampler placed its six points
+/// at `i/(n−1)` of the extent, which is the cell *boundaries*, and every consumer in the
+/// workspace reads that array: the viewer, the report, glTF, USD and the CSV.
+///
+/// # Both conventions are here and neither is a mistake
+///
+/// `Room` and `Hall` take `dx = width/(nx−1)`, so their outermost samples are *on* the wall,
+/// which is where a pressure antinode is; `Well` stores the exact zeros at its walls. Those are
+/// [`Nodal`](Lattice::Nodal) and sampling them corner to corner is right. `Bar1D`, `Solid3D`,
+/// `Conductor`, `Cavity`, `Channel` and `Puck` hold cell averages and have nothing on the
+/// boundary. Those are [`Centred`](Lattice::Centred). A single convention would have been wrong
+/// for one half or the other, which is why this is a question the field answers rather than a
+/// decision the sampler makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Lattice {
+    /// At the corners of a grid spanning the box: `x_i = min + i·(max − min)/(n − 1)`, with the
+    /// first and last **on** the boundary. A solver that stores its boundary values.
+    ///
+    /// The default, because it is what a continuous field wants — an [`Analytic`] or a
+    /// [`Uniform`] has no grid of its own, and asking for the endpoints of the box is the
+    /// answer that loses nothing.
+    #[default]
+    Nodal,
+    /// At the centres of a partition of the box: `x_i = min + (i + ½)·(max − min)/n`, with
+    /// **none** on the boundary. A finite-volume solver holding cell averages.
+    Centred,
+}
+
+impl Lattice {
+    /// Where sample `i` of `n` sits along an axis, as a fraction of the box.
+    ///
+    /// One sample is taken at the middle whichever the lattice: for a flat extent the two
+    /// conventions meet there anyway, and for an extent with real thickness asked for at one
+    /// sample the middle is the honest representative and a corner is not.
+    pub fn along(self, i: usize, n: usize) -> f64 {
+        if n <= 1 {
+            return 0.5;
+        }
+        match self {
+            Lattice::Nodal => i as f64 / (n - 1) as f64,
+            Lattice::Centred => (i as f64 + 0.5) / n as f64,
+        }
+    }
+}
+
 /// A scalar field: temperature, pressure, concentration, potential.
 pub trait ScalarField {
     /// The value at a place and time, in this field's SI base unit.
     fn at(&self, p: LengthVec, t: Time) -> f64;
+
+    /// Where this field's own samples sit inside the box it is asked for.
+    ///
+    /// Defaults to [`Lattice::Nodal`], which is what a field with no grid of its own wants and
+    /// what every implementor did before this existed. A cell-based field **must** override it,
+    /// or a caller sampling on the field's own grid gets an interpolation of it instead of it.
+    fn lattice(&self) -> Lattice {
+        Lattice::Nodal
+    }
 
     /// What this field is measured in — `"Pa"`, `"C"`, `"V"`.
     ///

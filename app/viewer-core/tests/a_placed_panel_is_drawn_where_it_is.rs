@@ -18,7 +18,7 @@
 //! here from trigonometry, and `the_wire_format_is_enough.rs` explains why that separation is worth
 //! paying for.
 
-use viewer_core::{Panel, Placed};
+use viewer_core::{Lattice, Panel, Placed};
 
 /// A quarter turn about z, in `[x, y, z, w]`.
 fn quarter_about_z() -> [f64; 4] {
@@ -47,6 +47,7 @@ fn cube(place: Placed) -> Panel {
         ny: 2,
         nz: 2,
         extent_m: Some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+        lattice: Lattice::Nodal,
         values: vec![300.0; 8],
     }
 }
@@ -354,6 +355,7 @@ fn a_field_from_before_the_extent_existed_has_no_corners_to_place() {
         ny: 2,
         nz: 2,
         extent_m: None,
+        lattice: Lattice::Nodal,
         values: vec![300.0; 8],
     };
     assert!(old.placed_corners().is_none());

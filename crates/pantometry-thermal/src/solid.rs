@@ -63,6 +63,7 @@
 
 use glam::DVec3;
 use pantometry_core::conserved::quantity;
+use pantometry_core::Lattice;
 use pantometry_core::Reading;
 use pantometry_core::{
     units::{
@@ -2221,6 +2222,14 @@ impl Domain for Solid3D {
 }
 
 impl ScalarField for Solid3D {
+    /// **Centred** — the values are cell averages and none sits on a boundary.
+    ///
+    /// Without this a caller sampling on this field's own grid gets its cell *boundaries*, and
+    /// the peak of anything sharp comes out low. See [`Lattice`].
+    fn lattice(&self) -> Lattice {
+        Lattice::Centred
+    }
+
     /// **Kelvin**, because that is what the cells hold. See [`Bar1D`](crate::Bar1D).
     fn unit(&self) -> &'static str {
         "K"

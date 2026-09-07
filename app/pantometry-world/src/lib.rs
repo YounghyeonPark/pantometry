@@ -3723,12 +3723,21 @@ impl DomainSpec {
                 ..
             } => {
                 let nx = (*cells_across).max(3);
-                let ny = ((height_m / width_m) * (nx - 1) as f64).round() as usize + 1;
+                let ny = (((height_m / width_m) * (nx - 1) as f64).round() as usize + 1).max(3);
+                // **The grid's height, not the stated one.** `Room` takes `dx = width/(nx-1)`
+                // and then quantises the height to a whole number of those, so a 4.4 x 3.1 m
+                // room asked for 81 across is 3.080 m tall — 20 mm short, which is 0.36 of a
+                // cell. The extent said 3.1, so every sample in y landed *between* nodes and
+                // came back interpolated: measured on `03-room-pulse`, the panel's peak was
+                // 0.1905 against the 0.1908 the nodes held, 0.149% low, and the last row was
+                // clamped past the final node. A box that does not match the grid inside it is
+                // the same defect `Lattice` fixes at the other end.
+                let dx = width_m / (nx - 1) as f64;
                 Placement::field(Extent::rectangle(
                     Length::m(*width_m),
-                    Length::m(*height_m),
+                    Length::m((ny - 1) as f64 * dx),
                     nx,
-                    ny.max(3),
+                    ny,
                 ))
             }
             // A bar is a line. One row, and the report picks a profile rather than a heatmap

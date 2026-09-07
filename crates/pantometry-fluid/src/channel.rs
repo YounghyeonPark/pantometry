@@ -88,6 +88,14 @@ struct Saved {
 }
 
 impl pantometry_core::ScalarField for Channel {
+    /// **Centred** — the values are cell averages and none sits on a boundary.
+    ///
+    /// Without this a caller sampling on this field's own grid gets its cell *boundaries*, and
+    /// the peak of anything sharp comes out low. See [`pantometry_core::Lattice`].
+    fn lattice(&self) -> pantometry_core::Lattice {
+        pantometry_core::Lattice::Centred
+    }
+
     /// Metres per second — a **speed**, not a velocity. See [`Channel::as_field`].
     fn unit(&self) -> &'static str {
         "m/s"

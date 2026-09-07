@@ -550,6 +550,43 @@ fn emit(out: &mut Surface, tri: [u32; 3], behind: [f64; 3]) {
     }
 }
 
+/// The box the samples actually span, which is not the box the field occupies.
+///
+/// Everything in this module places sample `i` of `n` at `lo + i·(hi−lo)/(n−1)` — corner to
+/// corner, first and last on the boundary. That is exactly right for a
+/// [`Nodal`](pantometry_scene::Lattice::Nodal) field, whose outermost values *are* on the
+/// boundary, and half a cell wrong at every sample for a
+/// [`Centred`](pantometry_scene::Lattice::Centred) one, whose values are cell averages with
+/// nothing on the boundary at all.
+///
+/// Rather than teach every drawing function about lattices, the caller converts once: a centred
+/// field's `n` samples over `[lo, hi]` span `[lo + h/2, hi − h/2]` with `h = (hi − lo)/n`, and
+/// corner-to-corner over *that* box lands on the cell centres exactly.
+///
+/// **The values sit here; the object occupies `extent_m`.** They are different boxes for a
+/// centred field, by half a cell each side, and a view that wants the object's outline should
+/// draw the extent rather than this.
+pub fn sampled_box(
+    counts: (usize, usize, usize),
+    extent: [f64; 6],
+    lattice: pantometry_scene::Lattice,
+) -> [f64; 6] {
+    if lattice == pantometry_scene::Lattice::Nodal {
+        return extent;
+    }
+    let mut out = extent;
+    for (axis, n) in [counts.0, counts.1, counts.2].into_iter().enumerate() {
+        if n <= 1 {
+            continue;
+        }
+        let (lo, hi) = (extent[axis], extent[axis + 3]);
+        let half = (hi - lo) / n as f64 / 2.0;
+        out[axis] = lo + half;
+        out[axis + 3] = hi - half;
+    }
+    out
+}
+
 /// The surface of the cells of a field that hold a value.
 ///
 /// A field of one dimension returns an empty surface: a row of samples along a line is a graph and

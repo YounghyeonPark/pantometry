@@ -149,8 +149,13 @@ pub fn usda_with(title: &str, frames: &[Frame], drawing: &mesh::Drawing) -> Stag
                 ny,
                 nz,
                 extent_m,
+                lattice,
                 values,
             } => {
+                // Where the samples are, which for a centred field is half a cell inside the box
+                // the object occupies. Drawing them at the extent's corners stretched every
+                // cell-based field to its boundary. See `mesh::sampled_box`.
+                let extent_m = &mesh::sampled_box((*nx, *ny, *nz), *extent_m, *lattice);
                 if [*nx, *ny, *nz].iter().filter(|&&n| n > 1).count() < 2 {
                     skipped.push(format!(
                         "{} is a {nx}x{ny}x{nz} field: a row of samples along a line is a graph, \

@@ -231,10 +231,18 @@ fn json(frames: &[Frame], drawing: &crate::mesh::Drawing) -> String {
                     ny,
                     nz,
                     extent_m,
+                    lattice,
                     values,
                 } => out.push_str(&format!(
                     "\"kind\":\"field\",\"nx\":{nx},\"ny\":{ny},\"nz\":{nz},\"e\":{},\"v\":{}",
-                    nums(extent_m),
+                    // The browser viewer draws from `e`, so it is handed the box the samples
+                    // span rather than the one the object occupies -- the same conversion the
+                    // exporters make, in the one place this file places anything.
+                    nums(&crate::mesh::sampled_box(
+                        (*nx, *ny, *nz),
+                        *extent_m,
+                        *lattice
+                    )),
                     nums(values)
                 )),
                 PanelData::Paths {

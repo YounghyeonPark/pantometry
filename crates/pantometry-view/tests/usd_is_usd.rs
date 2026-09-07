@@ -19,7 +19,7 @@
 //! writers agreeing on one frame. See `a_placement_reaches_the_file.rs`.
 
 use pantometry_core::Reading;
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::usda;
 
 /// A block that cools, a body that moves, a ray, and a domain with no shape at all.
@@ -40,6 +40,7 @@ fn run() -> Vec<Frame> {
                             nz: 2,
                             extent_m: [0.1, 0.2, 0.3, 0.14, 0.24, 0.34],
                             // Cooling, so the colours have to change between samples.
+                            lattice: Lattice::Nodal,
                             values: (0..8).map(|i| 400.0 - 20.0 * k as f64 + i as f64).collect(),
                         },
                     },
@@ -254,6 +255,7 @@ fn a_line_of_samples_is_not_geometry_and_the_writer_says_so() {
                 ny: 1,
                 nz: 1,
                 extent_m: [0.0, 0.0, 0.0, 0.4, 0.0, 0.0],
+                lattice: Lattice::Nodal,
                 values: vec![300.0, 310.0, 305.0, 300.0],
             },
         }],

@@ -42,6 +42,13 @@
 #![forbid(unsafe_code)]
 
 use pantometry_core::{Pose, Reading, ScalarField, Simulation};
+
+/// Where a field's samples sit inside the box it occupies, re-exported from the kernel.
+///
+/// [`PanelData::Field`] carries one, and `pantometry-view` deliberately does not depend on
+/// `pantometry-core` — the wire format is this crate's, so anything the format names has to be
+/// reachable from here or that boundary is a lie.
+pub use pantometry_core::Lattice;
 use pantometry_units::{Length, LengthVec, Time};
 use std::collections::BTreeMap;
 
@@ -375,6 +382,17 @@ pub enum PanelData {
         /// be a bounding box, which is a different and larger thing. How long the bar is should
         /// not change when the bar is moved.
         extent_m: [f64; 6],
+        /// Where the samples sit inside [`extent_m`](PanelData::Field::extent_m).
+        ///
+        /// **The array alone does not say, and every consumer had to assume.** They assumed
+        /// corner to corner — `x_i = x0 + i·(x1−x0)/(n−1)` — which is right for a nodal field and
+        /// puts a cell-centred one half a cell out at every sample, drawing a block that reaches
+        /// the boundary with values that never did. Written beside the values so a reader is not
+        /// guessing, and so the two conventions this workspace genuinely has can both be exact.
+        ///
+        /// Absent in a file written before this existed, where it reads back as
+        /// [`Lattice::Nodal`] — which is what those files were.
+        lattice: Lattice,
         /// `nx * ny * nz` values, x fastest, then y, then z.
         values: Vec<f64>,
     },
@@ -590,16 +608,20 @@ pub fn sample_field(
 fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Time) -> Panel {
     let (nx, ny, nz) = extent.samples;
     let (lo, hi) = (extent.min.to_si(), extent.max.to_si());
-    // A single sample along an axis is taken at the **middle** of it rather than at `min`. For a
-    // flat extent the two are the same point; for an extent with real thickness that was asked
-    // for at one sample, the middle is the honest representative and the low face is a corner.
-    let along = |i: usize, n: usize| {
-        if n > 1 {
-            i as f64 / (n - 1) as f64
-        } else {
-            0.5
-        }
-    };
+    // **Where the field keeps its own values**, which it is now asked rather than assumed.
+    //
+    // This was `i/(n-1)` for everything — corner to corner, endpoints on the boundary. That is
+    // right for `Room`, `Hall` and `Well`, whose outermost values sit *on* the wall, and wrong
+    // for every cell-based field, whose values are averages with nothing on the boundary. On a
+    // six-cell block holding `0 0 100 0 0 0 °C` the six points landed on the cell boundaries and
+    // the file was written as `0 0 90 0 0 0`: the peak 10% low, in the array the viewer, the
+    // report, glTF, USD and the CSV all read.
+    //
+    // A single sample along an axis is still taken at the **middle** of it whichever the lattice.
+    // For a flat extent the two conventions meet there; for an extent with real thickness asked
+    // for at one sample, the middle is the honest representative and a corner is not.
+    let lattice = field.lattice();
+    let along = |i: usize, n: usize| lattice.along(i, n);
     let mut values = Vec::with_capacity(extent.count());
     for k in 0..nz {
         for j in 0..ny {
@@ -624,6 +646,7 @@ fn sample(name: &str, field: &dyn ScalarField, extent: Extent, pose: Pose, t: Ti
             ny,
             nz,
             extent_m: [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z],
+            lattice,
             values,
         },
     }

@@ -66,8 +66,18 @@ fn brick_stl(dir: &std::path::Path, name: &str, low: [f32; 3], high: [f32; 3]) -
 }
 
 /// A scratch directory of this test's own, removed by the OS eventually and unique per run.
+///
+/// **It said "unique per run" and was not**: the name was `pantometry-assembly-{tag}` with no
+/// process in it, so any two runs of this binary at once wrote and read the same `left.stl`. One
+/// finishing its write while another read gave `no facets found; is this an STL?` on a fixture
+/// the failing test had itself just written — four tests in one gate run, all passing alone. The
+/// process id is what makes the sentence true.
+///
+/// Not a determinism problem: this is a path for a fixture, not an input to any physics. Nothing
+/// downstream of it reads the number.
 fn scratch(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pantometry-assembly-{tag}"));
+    let dir =
+        std::env::temp_dir().join(format!("pantometry-assembly-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     dir
 }

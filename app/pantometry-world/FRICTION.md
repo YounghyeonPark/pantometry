@@ -294,12 +294,32 @@ at 41 cells.
 Found by an assertion failing, not by reasoning: a test checked that the bar held every joule
 the beam paid, computed the mean from the render panel, and missed by 1.2%.
 
-**Not a defect anywhere.** `ScalarField` is a function of position and is behaving exactly as
-documented; the renderer is sampling it exactly as it should. But an application that reported
-a mean temperature from its own render buffer would be wrong by that much with nothing to tell
-it, and the two numbers look interchangeable right up until they are compared. The test now
-reads the total from the domain and the shape from the panel, and pins the gap between them so
-it stays understood rather than rediscovered.
+**This said "not a defect anywhere", and that was wrong.** Fixed 2026-09-07.
+
+The reasoning was that `ScalarField` is a function of position behaving as documented and the
+renderer was sampling it as it should. Both halves are true and the conclusion does not follow,
+because the *array* was never labelled as samples of a function — it is `nx * ny * nz` values
+beside an `nx, ny, nz`, and every consumer in the workspace read it as the cells: the viewer, the
+report, glTF, USD and the CSV. What made it visible was a six-cell block holding
+`0 0 100 0 0 0 °C` written into the run file as `0 0 90 0 0 0`, with `readings` in the same frame
+saying `peak 100`. One frame, two answers, and the file said nothing about which.
+
+The fix is not a better place to sample. A field now says where its own values are —
+`pantometry_core::Lattice`, `Nodal` or `Centred` — and the sampler asks. Both conventions are
+real here and a single one would have been wrong for half of them: `Room` and `Hall` take
+`dx = width/(nx-1)` so their outermost values sit *on* the wall where a pressure antinode is,
+while `Bar1D` and `Solid3D` hold cell averages with nothing on the boundary. `PanelData::Field`
+carries the answer, absent meaning nodal, so every run written before this reads back as what it
+was.
+
+It also found a second half of the same shape. A `Room` quantises its height to whole cells, so a
+4.4 x 3.1 m room asked for 81 across is **3.080 m** tall — and the extent the world declared said
+3.1, putting every sample in y between nodes. `03-room-pulse`'s panel peak was 0.149% below the
+value its own cells held; it is exact now.
+
+The general lesson is the one this repository keeps meeting from a new direction: **the thing that
+holds a value should be the thing that says where it is.** Both halves here were something else
+guessing — the sampler about the field, the world about the room.
 
 ## 11. `as_field` covers half the domains, and there is no counterpart for the other half
 

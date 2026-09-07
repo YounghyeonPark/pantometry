@@ -19,7 +19,7 @@
 //! scale per frame, wearing different clothes. So the design gets one flat grey, and the test
 //! below asserts it carries **no** variation rather than asserting its exact shade.
 
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::mesh::{self, Designed, Drawing, Surfaces};
 use pantometry_view::{gltf_with, usda_with};
 
@@ -38,6 +38,7 @@ fn cells() -> Frame {
                 nz: 2,
                 extent_m: [0.0, 0.0, 0.0, 0.04, 0.04, 0.04],
                 // Distinct, so the field's own colours vary and the design's must not.
+                lattice: Lattice::Nodal,
                 values: (0..8).map(|i| 300.0 + 10.0 * i as f64).collect(),
             },
         }],

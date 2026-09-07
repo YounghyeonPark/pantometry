@@ -2658,6 +2658,7 @@ impl App {
                     nx,
                     ny,
                     nz,
+                    lattice,
                     values,
                     ..
                 } => {
@@ -2683,6 +2684,7 @@ impl App {
                     let shell = editor_core::field_shell(
                         &b.corners,
                         (*nx, *ny, *nz),
+                        *lattice,
                         values,
                         unit,
                         scale,
@@ -3487,6 +3489,7 @@ impl App {
                         nx,
                         ny,
                         nz,
+                        lattice,
                         values,
                         ..
                     } => {
@@ -3526,6 +3529,7 @@ impl App {
                                 pointer,
                                 &mut probe,
                                 name,
+                                *lattice,
                             )
                         };
                         if let Some(note) = note {
@@ -3865,8 +3869,9 @@ fn draw_field(
     pointer: Option<egui::Pos2>,
     probe: &mut Probe,
     name: &str,
+    lattice: viewer_core::Lattice,
 ) -> Option<&'static str> {
-    let out = editor_core::field_splats(&placed.corners, counts, values, unit, scale);
+    let out = editor_core::field_splats(&placed.corners, counts, lattice, values, unit, scale);
     if out.splats.is_empty() {
         return Some(out.note);
     }

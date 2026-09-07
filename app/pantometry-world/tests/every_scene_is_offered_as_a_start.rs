@@ -274,11 +274,11 @@ fn every_tile_decodes_to_something() {
     );
 }
 
-/// **No two tiles are the same picture** — and three groups of them are.
+/// **No two tiles are the same picture** — and two groups of them are.
 ///
 /// A chooser whose pictures do not tell two scenes apart is a chooser with no pictures, and the
 /// per-tile checks above cannot see it: each of these decodes, is the right size, and is far from
-/// blank. Measured over the 27 committed tiles: **24 distinct images**.
+/// blank. Measured over the 27 committed tiles: **25 distinct images**.
 ///
 /// # One of the collisions was a real defect and this is how it was found
 ///
@@ -315,22 +315,16 @@ fn the_tiles_tell_the_scenes_apart_or_say_which_they_do_not() {
     same.sort_unstable();
     assert_eq!(
         same,
-        [
-            vec![
-                "20-melting-a-block-of-ice.json",
-                "21-a-wax-thermal-buffer.json",
-                "22-wax-in-an-aluminium-matrix.json"
-            ],
-            vec![
-                "24-a-power-module-junction-to-ambient.json",
-                "25-what-140-kelvin-does-to-the-solder.json"
-            ],
-        ],
+        [vec![
+            "20-melting-a-block-of-ice.json",
+            "21-a-wax-thermal-buffer.json",
+            "22-wax-in-an-aluminium-matrix.json"
+        ],],
         "the set of scenes whose tiles are the same picture has changed"
     );
     assert_eq!(
         by_bytes.len(),
-        24,
+        25,
         "27 tiles, and {} of them are distinct pictures",
         by_bytes.len()
     );

@@ -42,6 +42,7 @@ fn what_the_writer_produces_is_what_the_reader_reads() {
                 nx: 2,
                 ny: 1,
                 nz: 1,
+                lattice: pantometry::scene::Lattice::Nodal,
                 values: vec![300.0, 301.0],
                 extent_m: [0.0, 0.0, 0.0, 0.01, 0.0, 0.0],
             },

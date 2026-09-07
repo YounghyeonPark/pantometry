@@ -11,7 +11,7 @@
 //! direction arithmetic says, and that a level with nothing at it is reported rather than
 //! written as an empty file.
 
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::mesh::{Drawing, Surfaces};
 
 /// A ball of radius `r` inside a `n³` box one metre across, as a field whose value is the
@@ -46,6 +46,7 @@ fn ball(n: usize) -> Frame {
                 ny: n,
                 nz: n,
                 extent_m: [-0.5, -0.5, -0.5, 0.5, 0.5, 0.5],
+                lattice: Lattice::Nodal,
                 values,
             },
         }],
@@ -78,6 +79,7 @@ fn the_default_is_what_it_always_was() {
         ny,
         nz,
         extent_m,
+        lattice: _,
         values,
     } = &frame.panels[0].data
     else {

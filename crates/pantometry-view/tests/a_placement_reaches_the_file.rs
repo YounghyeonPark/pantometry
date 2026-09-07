@@ -24,7 +24,7 @@
 //! everything below holds it in place without a USD library, which is what the rest of
 //! `usd_is_usd.rs` explains.
 
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::{gltf, usda};
 
 /// A 60° turn about z: `w = cos 30°`, `z = sin 30°`. Chosen so no two components are equal and no
@@ -52,6 +52,7 @@ fn placed(place: Placed) -> Vec<Frame> {
                 ny: 2,
                 nz: 2,
                 extent_m: [0.0, 0.0, 0.0, 0.04, 0.04, 0.04],
+                lattice: Lattice::Nodal,
                 values: (0..8).map(|i| 300.0 + i as f64).collect(),
             },
         }],
@@ -182,6 +183,7 @@ fn two_placed_domains_do_not_export_on_top_of_each_other() {
             ny: 2,
             nz: 2,
             extent_m: [0.0, 0.0, 0.0, 0.03, 0.03, 0.03],
+            lattice: Lattice::Nodal,
             values: (0..8).map(|i| 300.0 + i as f64).collect(),
         },
     };
@@ -254,6 +256,7 @@ fn one_of_each(place: Placed) -> Frame {
                     ny: 2,
                     nz: 2,
                     extent_m: [0.0, 0.0, 0.0, 0.04, 0.04, 0.04],
+                    lattice: Lattice::Nodal,
                     values: (0..8).map(|i| 300.0 + i as f64).collect(),
                 },
             },
@@ -266,6 +269,7 @@ fn one_of_each(place: Placed) -> Frame {
                     ny: 2,
                     nz: 2,
                     extent_m: [0.0, 0.0, 0.0, 0.04, 0.04, 0.04],
+                    lattice: Lattice::Nodal,
                     values: (0..8).map(|i| 300.0 + i as f64).collect(),
                 },
             },

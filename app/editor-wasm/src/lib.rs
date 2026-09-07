@@ -454,6 +454,7 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
                         nx,
                         ny,
                         nz,
+                        lattice,
                         values,
                         ..
                     } => {
@@ -471,6 +472,7 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
                         let out = editor_core::field_splats(
                             &corners,
                             (*nx, *ny, *nz),
+                            *lattice,
                             values,
                             unit,
                             scale,

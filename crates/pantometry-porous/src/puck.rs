@@ -2,7 +2,9 @@
 
 use glam::DVec3;
 use pantometry_core::conserved::quantity;
-use pantometry_core::{Domain, Exchange, Kind, Ledger, Reading, ScalarField, Substance, Violation};
+use pantometry_core::{
+    Domain, Exchange, Kind, Lattice, Ledger, Reading, ScalarField, Substance, Violation,
+};
 use pantometry_units::{
     Density, Energy, Length, LengthVec, Mass, MassFlow, Power, Pressure, Temperature,
     ThermalConductivity, Time, Velocity,
@@ -1450,6 +1452,14 @@ impl Puck {
 /// The other four are [`Puck::field`] away, and `pantometry_scene::sample_field` turns any of them
 /// into a panel.
 impl ScalarField for Puck {
+    /// **Centred** — the values are cell averages and none sits on a boundary.
+    ///
+    /// Without this a caller sampling on this field's own grid gets its cell *boundaries*, and
+    /// the peak of anything sharp comes out low. See [`Lattice`].
+    fn lattice(&self) -> Lattice {
+        Lattice::Centred
+    }
+
     fn unit(&self) -> &'static str {
         ""
     }
@@ -1467,6 +1477,14 @@ pub struct PuckField<'a> {
 }
 
 impl ScalarField for PuckField<'_> {
+    /// **Centred** — the values are cell averages and none sits on a boundary.
+    ///
+    /// Without this a caller sampling on this field's own grid gets its cell *boundaries*, and
+    /// the peak of anything sharp comes out low. See [`Lattice`].
+    fn lattice(&self) -> Lattice {
+        Lattice::Centred
+    }
+
     fn unit(&self) -> &'static str {
         match self.what {
             Observable::Temperature => "K",

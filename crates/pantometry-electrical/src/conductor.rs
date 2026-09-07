@@ -57,7 +57,7 @@
 
 use glam::DVec3;
 use pantometry_core::conserved::quantity;
-use pantometry_core::{Domain, Exchange, Kind, Ledger, Reading, ScalarField, Violation};
+use pantometry_core::{Domain, Exchange, Kind, Lattice, Ledger, Reading, ScalarField, Violation};
 use pantometry_units::{
     Conductivity, Current, CurrentDensity, Energy, Length, LengthVec, Power, Resistance,
     Resistivity, Time, Voltage,
@@ -630,6 +630,14 @@ impl Domain for Conductor {
 }
 
 impl ScalarField for Conductor {
+    /// **Centred** — the values are cell averages and none sits on a boundary.
+    ///
+    /// Without this a caller sampling on this field's own grid gets its cell *boundaries*, and
+    /// the peak of anything sharp comes out low. See [`Lattice`].
+    fn lattice(&self) -> Lattice {
+        Lattice::Centred
+    }
+
     fn unit(&self) -> &'static str {
         "V"
     }

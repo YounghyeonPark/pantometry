@@ -6,7 +6,7 @@
 //! actually enforces: buffer lengths that match, accessor counts that match the geometry, indices
 //! in range, four-byte alignment, and `min`/`max` on every `POSITION`.
 
-use pantometry_scene::{Frame, Panel, PanelData, Placed};
+use pantometry_scene::{Frame, Lattice, Panel, PanelData, Placed};
 use pantometry_view::gltf;
 
 /// A frame with one of each shape.
@@ -48,6 +48,7 @@ fn frame() -> Frame {
                     // A 40 mm cube offset from the origin, so the export has both a scale and a
                     // placement to get wrong. Grid indices would put it at 0..1 on every axis.
                     extent_m: [0.1, 0.2, 0.3, 0.14, 0.24, 0.34],
+                    lattice: Lattice::Nodal,
                     values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
                 },
             },
@@ -60,6 +61,7 @@ fn frame() -> Frame {
                     ny: 1,
                     nz: 1,
                     extent_m: [0.0, 0.0, 0.0, 0.4, 0.0, 0.0],
+                    lattice: Lattice::Nodal,
                     values: vec![1.0, 2.0, 3.0, 4.0],
                 },
             },

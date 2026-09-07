@@ -58,7 +58,7 @@ use glam::DVec3;
 pub use network::{Node, SteadyState, ThermalNetwork};
 use pantometry_core::conserved::quantity;
 use pantometry_core::{
-    Domain, Exchange, Interface, Kind, Ledger, Reading, ScalarField, Substance, Violation,
+    Domain, Exchange, Interface, Kind, Lattice, Ledger, Reading, ScalarField, Substance, Violation,
 };
 use pantometry_units::{
     Area, Energy, HeatCapacity, Length, LengthVec, Power, Temperature, Time, Volume,
@@ -723,6 +723,14 @@ impl Domain for Bar1D {
 /// and that is an unavoidable property of sampling a discrete field, not a rough edge that
 /// could be polished out.
 impl ScalarField for Bar1D {
+    /// **Centred** — the values are cell averages and none sits on a boundary.
+    ///
+    /// Without this a caller sampling on this field's own grid gets its cell *boundaries*, and
+    /// the peak of anything sharp comes out low. See [`Lattice`].
+    fn lattice(&self) -> Lattice {
+        Lattice::Centred
+    }
+
     /// **Kelvin**, because that is what the cells hold.
     ///
     /// Not celsius. `readings` reports celsius and a picture of a bar usually wants celsius, but
