@@ -27,13 +27,13 @@ viewport=698,52 474x870
        8    48    47  Outliner
      230    48    22  solo
     1188    48    52  Inspector
-    1017    60   147  bracket peak 118.09 C
-    1017    74   147  bracket mean 118.08 C
+    1017    60   147  bracket peak 116.87 C
+    1017    74   147  bracket mean 116.85 C
     1188    76   297  nothing selected — pick a row in the outliner, or click something in the viewport
      268    77   381  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
       54    78   159  an aluminium bracket, designed as a mesh and solved as cells, cooling to still air: 1 domain(s), 120.000 s in 13 frames
      222    79    30  Scene
-     996    88   168  bracket coldest 118.05 C
+     996    88   168  bracket coldest 116.81 C
       66    99    81  Placed extents
      222   100    30  Group
     1024   102   140  bracket absorbed 0 J
@@ -60,8 +60,8 @@ viewport=698,52 474x870
      830   606   249  field: false colour — nothing here is hot enough to glow
      706   780   180  0 triangles, 0 lines, 0 paints
      949   808    66  bracket / K
-    1023   821    36  391.20
-    1072   821    36  392.18
+    1023   821    36  389.96
+    1072   821    36  391.55
     1120   821    36  393.15
      740   838    30  20 mm
      706   879    64  t = 120.00 s

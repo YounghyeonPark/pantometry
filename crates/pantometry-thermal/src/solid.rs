@@ -256,6 +256,9 @@ pub struct Solid3D {
     worst_rate: f64,
     /// Cells that are **not part of the block** — see [`Solid3D::empty`].
     void: Vec<bool>,
+    /// How many solid cells lie on each face, in `Face` order. Filled by `resolve`; see
+    /// [`Solid3D::cells_on`] for why it is a cache and not a count.
+    solid_on: [usize; 6],
     /// Pairs of solid cells that face each other across a run of void, with the radiative
     /// exchange coefficient between them. Rebuilt whenever the void or the materials change.
     ///
@@ -443,6 +446,7 @@ impl Solid3D {
             cap_liquid: Vec::new(),
             worst_rate: 0.0,
             void: vec![false; counts.0 * counts.1 * counts.2],
+            solid_on: [0; 6],
             source: vec![0.0; counts.0 * counts.1 * counts.2],
             supplied: 0.0,
             saved_supplied: 0.0,
@@ -671,6 +675,7 @@ impl Solid3D {
     /// learned from `Puck::repack` — a mutator that leaves a cached solve stale reports a number
     /// that was true about the previous object, and it looks exactly like a number.
     fn resolve(&mut self) {
+        self.count_faces();
         let (nx, ny, nz) = self.counts;
         let dx = self.dx.to_si();
         let volume = Volume::from_si(dx * dx * dx);
@@ -1316,14 +1321,71 @@ impl Solid3D {
         out
     }
 
-    /// How many cells lie on a face.
+    /// How many **solid** cells lie on a face.
+    ///
+    /// **It counted grid cells, and a designed part is mostly not there.** The stated `area_cm2`
+    /// is divided among the cells on the face so that each carries its share; a void cell takes a
+    /// share and loses nothing with it, so the area that actually cools is the stated one times
+    /// the solid fraction of that face. Measured on `29-a-designed-bracket-becomes-cells`: 410 of
+    /// the 676 cells on `z-min` are solid, so 16.5 cm² of stated cooling acted as **10.0**, and
+    /// the block's 120 s drop came out 1.908 K against the 2.950 K its own lumped balance
+    /// predicts — a ratio of 0.647 that tracks the area shortfall and nothing else.
+    ///
+    /// `cells_on_where` directly above has filtered voids since it was written, for the same
+    /// reason and one line away.
+    ///
+    /// Read from a cache rather than counted, because this is called per cell per face per step.
+    /// `void` is written in exactly one place — [`Solid3D::empty`] — and that calls `resolve`,
+    /// which is where the cache is filled.
     fn cells_on(&self, face: Face) -> usize {
-        let (nx, ny, nz) = self.counts;
+        self.solid_on[Solid3D::face_index(face)]
+    }
+
+    /// Where a face's count sits in `solid_on`.
+    fn face_index(face: Face) -> usize {
         match face {
-            Face::XMin | Face::XMax => ny * nz,
-            Face::YMin | Face::YMax => nx * nz,
-            Face::ZMin | Face::ZMax => nx * ny,
+            Face::XMin => 0,
+            Face::XMax => 1,
+            Face::YMin => 2,
+            Face::YMax => 3,
+            Face::ZMin => 4,
+            Face::ZMax => 5,
         }
+    }
+
+    /// Count the solid cells on each of the six faces. Called by `resolve`.
+    fn count_faces(&mut self) {
+        let (nx, ny, nz) = self.counts;
+        let solid = |s: &Solid3D, i: usize, j: usize, k: usize| !s.void[i + nx * (j + ny * k)];
+        let mut out = [0usize; 6];
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    if !solid(self, i, j, k) {
+                        continue;
+                    }
+                    if i == 0 {
+                        out[0] += 1;
+                    }
+                    if i + 1 == nx {
+                        out[1] += 1;
+                    }
+                    if j == 0 {
+                        out[2] += 1;
+                    }
+                    if j + 1 == ny {
+                        out[3] += 1;
+                    }
+                    if k == 0 {
+                        out[4] += 1;
+                    }
+                    if k + 1 == nz {
+                        out[5] += 1;
+                    }
+                }
+            }
+        }
+        self.solid_on = out;
     }
 
     /// The loss conductance an exposed cell carries, in W/K, summed over the faces it lies on.

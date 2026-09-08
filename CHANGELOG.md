@@ -30,6 +30,20 @@ pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
 
+- **A designed part received 61% of the cooling its scene stated.** `losing_from` takes an area and
+  the block divides it among the cells on that face so each carries its share — divided by the
+  cells the *grid* has there, and a part rasterised from an STL is mostly not there. A void cell
+  took a share and lost nothing with it.
+
+  Measured on `29-a-designed-bracket-becomes-cells`: 410 of the 676 cells on `z-min` are solid, so
+  16.5 cm² acted as **10.0**, and its 120 s drop was 1.908 K against the 2.950 K its own lumped
+  balance predicts. It is 3.151 K now, a ratio of **1.068** to that same balance — and the 6.8%
+  over is the radiation the lumped form omits: 6061's ε = 0.09 gives a secant `h_rad` of
+  0.842 W/m²K against 12 for the film, which predicts 1.070.
+
+  `cells_on_where`, one line above `cells_on` in the same file, has filtered voids since it was
+  written.
+
 - **Asking for more pictures changed the answer by 58%.** A scene's `frames` set the coupling
   window as well as the capture rate, and each domain subdivided that window into whole substeps
   no longer than its own stability limit — so the step, and with it the accuracy, was a function of

@@ -373,3 +373,79 @@ fn a_hot_block_gets_a_shorter_limit_than_a_cool_one() {
         "conduction alone does not care how hot the block is"
     );
 }
+
+/// **The stated area is the area that cools, whatever shape the part is.**
+///
+/// `losing_from` takes an `Area`, and the block divides it among the cells on that face so each
+/// carries its share. It divided by the cells the *grid* has there, and a designed part is mostly
+/// not there: a void cell took a share and lost nothing with it, so the area that actually cooled
+/// was the stated one times the solid fraction of the face.
+///
+/// Measured on `29-a-designed-bracket-becomes-cells`, the one shipped scene whose geometry comes
+/// from an STL: 410 of the 676 cells on `z-min` are solid, so 16.5 cm² of stated cooling acted as
+/// **10.0**, and its 120 s drop came out 1.908 K against the 2.950 K its own lumped balance
+/// predicts. The ratio, 0.647, tracked 410/676 and the radiative addition and nothing else.
+///
+/// The check here is a closed form the domain has no code for: a block small enough to be lumped
+/// (Bi ≪ 1) sheds `hA(T − T∞)` per second, so its initial rate is fixed by the **stated** `A`.
+/// Half the cells are emptied in a checkerboard that leaves exactly half of `z-min` solid, which
+/// is the case that used to halve the answer.
+#[test]
+fn a_part_with_voids_cools_at_the_rate_its_stated_area_says() {
+    let n = 6;
+    let cell_mm = 2.0;
+    let ambient = 20.0;
+    let start = 120.0;
+    // 12 cm², stated. Deliberately not the face's own 1.44 cm²: the area is what the scene says
+    // the part presents to the air, and the grid is how the part is discretised. Conflating them
+    // is the bug next door.
+    let area = Area::from_si(12.0e-4);
+    let h = 25.0;
+
+    let rate = |solid_fraction_of_face: bool| {
+        let mut block = cube(n, cell_mm, start);
+        if solid_fraction_of_face {
+            // Empty every other column, so exactly half of `z-min` is solid and the part is
+            // still connected along z.
+            block = block.empty(|i, _j, _k| i % 2 == 1);
+        }
+        block = block.losing_from(
+            Face::ZMin,
+            Environment {
+                ambient: Temperature::celsius(ambient),
+                convection_w_per_m2_k: h,
+                area,
+            },
+        );
+        let before = stored(&block);
+        let after = run(block, 1.0);
+        (before - stored(&after), after)
+    };
+
+    let (whole, _) = rate(false);
+    let (holed, after) = rate(true);
+
+    // `hA(T − T∞)` over one second, from the stated area and nothing the domain computed.
+    let want = h * area.to_si() * (start - ambient);
+    for (what, shed) in [("solid", whole), ("half emptied", holed)] {
+        let off = (shed - want).abs() / want;
+        assert!(
+            off < 0.02,
+            "{what}: shed {shed:.4} J in a second against hA(T-Tinf) = {want:.4} — {:.1} percent out",
+            off * 100.0
+        );
+    }
+    // And the two agree with each other far more tightly than either agrees with the lumped
+    // form, because they differ only in how many cells share one stated area. This is the
+    // assertion that used to fail, by a factor of two.
+    let between = (whole - holed).abs() / whole;
+    assert!(
+        between < 0.01,
+        "emptying half the face changed the heat leaving by {:.2} percent, and the area was stated",
+        between * 100.0
+    );
+    assert!(
+        after.lost_energy().to_si() > 0.0,
+        "the emptied block shed nothing at all"
+    );
+}
