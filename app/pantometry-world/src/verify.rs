@@ -92,6 +92,17 @@ pub struct Measured {
     /// The final frame's readings — the scalars each domain chose to report, which are the
     /// observables the sweeps compare.
     pub readings: Vec<Reading>,
+    /// The range every reading of one unit covered in one domain over the whole run, keyed by
+    /// `(domain, unit)`.
+    ///
+    /// **The denominator a sensitivity belongs over.** A sweep asks "did the answer move", and
+    /// dividing that by the reading's own magnitude answers a different question — for a
+    /// temperature the magnitude is dominated by 273.15, so halving the window on
+    /// `15-a-hot-spot-in-a-block` moved the peak by 0.579 K and reported **0.212%** while the
+    /// run's whole rise was 7.03 K. The shift was 8.2% of everything that happened and read as
+    /// converged. Measured against the true answer, that scene is 14% out at its shipped frame
+    /// count.
+    pub span: BTreeMap<(String, &'static str), f64>,
     /// FNV-1a digest over the frames' JSON. Two runs of one scene must agree on this exactly,
     /// on every platform, at every optimisation level.
     pub digest: u64,
@@ -140,7 +151,14 @@ pub struct Measured {
 /// with the kernel's own message, because a run the audit refused has no margins to report.
 fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
     let mut world = World::build_with(scene.clone(), files)?;
-    let dt = Time::from_si(scene.duration_s / scene.frames as f64);
+    // **The steps `World::run` would take, not one per frame.** This computed its own
+    // `duration / frames`, which was the same number until `window_s` existed and is not now —
+    // so with a window stated the battery marched a different scene from the one the CLI runs,
+    // and its window sweep reported the shift a *frame* change makes on a scene whose frames no
+    // longer touch the physics. The doc above says the loop is `World::run`'s; this is what makes
+    // that true.
+    let steps = world.steps();
+    let dt = Time::from_si(scene.duration_s / steps as f64);
     let placed = world.placements();
 
     let mut drift: BTreeMap<String, (f64, f64)> = BTreeMap::new();
@@ -153,93 +171,98 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
 
     let mut frames = Vec::with_capacity(scene.frames + 1);
     frames.push(pantometry::scene::capture(&world.sim, &placed));
-    for _ in 0..scene.frames {
-        for d in world.sim.domains() {
-            if d.kind() == Kind::Evolving {
-                let limit = d.max_stable_dt(world.sim.time()).to_si();
-                let entry = stability
-                    .entry(d.name().to_string())
-                    .or_insert((f64::INFINITY, 0));
-                entry.0 = entry.0.min(limit);
-            }
-        }
-
-        let before = world.sim.ledger();
-        let report = world.sim.advance(dt).map_err(|v| {
-            format!(
-                "the audit stopped the run at t = {:.4} s: {v}",
-                world.sim.time().to_si()
-            )
-        })?;
-        let after = world.sim.ledger();
-
-        for (name, n) in &report.substeps {
-            if let Some(entry) = stability.get_mut(name) {
-                entry.1 = entry.1.max(*n);
-            }
-        }
-
-        // The two margins only this step can see. Kept by how close each came to refusing —
-        // `worst / tolerance` — because the transfer audit's number is an absolute amount and the
-        // books check's is a ratio, and ranking them by raw size would compare a joule to a
-        // fraction.
-        let closer = |held: &Option<Margin>, seen: &Option<Margin>| -> bool {
-            match (held, seen) {
-                (_, None) => false,
-                (None, Some(_)) => true,
-                (Some(h), Some(s)) => {
-                    s.worst / s.tolerance.max(f64::MIN_POSITIVE)
-                        > h.worst / h.tolerance.max(f64::MIN_POSITIVE)
+    let mut taken = 0usize;
+    for frame_index in 1..=scene.frames {
+        let want = (frame_index * steps).div_ceil(scene.frames);
+        for _ in taken..want {
+            for d in world.sim.domains() {
+                if d.kind() == Kind::Evolving {
+                    let limit = d.max_stable_dt(world.sim.time()).to_si();
+                    let entry = stability
+                        .entry(d.name().to_string())
+                        .or_insert((f64::INFINITY, 0));
+                    entry.0 = entry.0.min(limit);
                 }
             }
-        };
-        if closer(&worst_transfer, &report.transfer) {
-            worst_transfer = report.transfer.clone();
-        }
-        if closer(&worst_books, &report.books) {
-            worst_books = report.books.clone();
-        }
 
-        // The audit's own arithmetic, run on a step it passed: same scale rule, same
-        // tolerance lookup, recording the worst instead of refusing over a line.
-        let mut names: Vec<&str> = before.quantities().map(|(q, _)| q).collect();
-        for (q, _) in after.quantities() {
-            if !names.contains(&q) {
-                names.push(q);
+            let before = world.sim.ledger();
+            let report = world.sim.advance(dt).map_err(|v| {
+                format!(
+                    "the audit stopped the run at t = {:.4} s: {v}",
+                    world.sim.time().to_si()
+                )
+            })?;
+            let after = world.sim.ledger();
+
+            for (name, n) in &report.substeps {
+                if let Some(entry) = stability.get_mut(name) {
+                    entry.1 = entry.1.max(*n);
+                }
             }
-        }
-        names.sort_unstable();
-        for name in names {
-            seen.insert(name.to_string());
-            let b = before.get(name).unwrap_or(0.0);
-            let a = after.get(name).unwrap_or(0.0);
-            let scale = b
-                .abs()
-                .max(a.abs())
-                .max(before.scale_of(name).unwrap_or(0.0))
-                .max(after.scale_of(name).unwrap_or(0.0));
-            if scale < 1e-300 {
-                continue;
+
+            // The two margins only this step can see. Kept by how close each came to refusing —
+            // `worst / tolerance` — because the transfer audit's number is an absolute amount and the
+            // books check's is a ratio, and ranking them by raw size would compare a joule to a
+            // fraction.
+            let closer = |held: &Option<Margin>, seen: &Option<Margin>| -> bool {
+                match (held, seen) {
+                    (_, None) => false,
+                    (None, Some(_)) => true,
+                    (Some(h), Some(s)) => {
+                        s.worst / s.tolerance.max(f64::MIN_POSITIVE)
+                            > h.worst / h.tolerance.max(f64::MIN_POSITIVE)
+                    }
+                }
+            };
+            if closer(&worst_transfer, &report.transfer) {
+                worst_transfer = report.transfer.clone();
             }
-            let rel = (a - b).abs() / scale;
-            // The audit itself is blind here: `NaN > tol` is false, so a poisoned ledger
-            // passes every step. Recorded as an anomaly rather than folded into the maximum,
-            // which `f64::max` would silently discard it from.
-            if !rel.is_finite() {
-                poisoned.insert(name.to_string());
-                anomalies.insert(format!(
+            if closer(&worst_books, &report.books) {
+                worst_books = report.books.clone();
+            }
+
+            // The audit's own arithmetic, run on a step it passed: same scale rule, same
+            // tolerance lookup, recording the worst instead of refusing over a line.
+            let mut names: Vec<&str> = before.quantities().map(|(q, _)| q).collect();
+            for (q, _) in after.quantities() {
+                if !names.contains(&q) {
+                    names.push(q);
+                }
+            }
+            names.sort_unstable();
+            for name in names {
+                seen.insert(name.to_string());
+                let b = before.get(name).unwrap_or(0.0);
+                let a = after.get(name).unwrap_or(0.0);
+                let scale = b
+                    .abs()
+                    .max(a.abs())
+                    .max(before.scale_of(name).unwrap_or(0.0))
+                    .max(after.scale_of(name).unwrap_or(0.0));
+                if scale < 1e-300 {
+                    continue;
+                }
+                let rel = (a - b).abs() / scale;
+                // The audit itself is blind here: `NaN > tol` is false, so a poisoned ledger
+                // passes every step. Recorded as an anomaly rather than folded into the maximum,
+                // which `f64::max` would silently discard it from.
+                if !rel.is_finite() {
+                    poisoned.insert(name.to_string());
+                    anomalies.insert(format!(
                     "the {name} ledger's step change is not a number ({b} to {a}) — arithmetic \
                      upstream is poisoned, and the audit cannot see it because NaN compares \
                      false against every tolerance"
                 ));
-                continue;
+                    continue;
+                }
+                let tol = world.sim.tolerances().for_quantity(name);
+                let entry = drift.entry(name.to_string()).or_insert((0.0, tol));
+                entry.0 = entry.0.max(rel);
             }
-            let tol = world.sim.tolerances().for_quantity(name);
-            let entry = drift.entry(name.to_string()).or_insert((0.0, tol));
-            entry.0 = entry.0.max(rel);
-        }
 
-        world.close_feedback();
+            world.close_feedback();
+        }
+        taken = want;
         frames.push(pantometry::scene::capture(&world.sim, &placed));
     }
     pantometry::scene::settle_framing(&mut frames);
@@ -254,8 +277,28 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
         .filter(|q| !drift.contains_key(*q) && !poisoned.contains(*q))
         .cloned()
         .collect();
+    // How far each reading travelled, from the frames rather than from the last one.
+    // **Per domain and unit, not per reading.** A block's `peak`, `mean` and `coldest` are three
+    // views of one temperature field and share a scale; judging each against its own travel makes
+    // them incomparable and floods the report — measured, `mean` on `15-a-hot-spot-in-a-block`
+    // barely moves because the energy is fixed, so a 1e-5 K rounding difference read as **9.2%**
+    // beside two printed values that were identical.
+    let mut span: BTreeMap<(String, &'static str), (f64, f64)> = BTreeMap::new();
+    for frame in &frames {
+        for r in &frame.readings {
+            if !r.value.is_finite() {
+                continue;
+            }
+            let e = span
+                .entry((r.domain.clone(), r.unit))
+                .or_insert((r.value, r.value));
+            e.0 = e.0.min(r.value);
+            e.1 = e.1.max(r.value);
+        }
+    }
     Ok(Measured {
         readings,
+        span: span.into_iter().map(|(k, (lo, hi))| (k, hi - lo)).collect(),
         digest: fnv1a(json.as_bytes()),
         drift: drift.into_iter().map(|(q, (d, t))| (q, d, t)).collect(),
         unaudited,
@@ -321,6 +364,28 @@ fn representation_scale(unit: &str, magnitude: f64) -> f64 {
     }
 }
 
+/// How much a halved coupling window may move a reading before it is a finding.
+///
+/// **A chosen number, and the corpus it was chosen against is written down** — the same standing
+/// this workspace gives `crop_to_content`'s magnification cap. Measured over all thirty shipped
+/// scenes: twenty-two move by exactly 0.000%, three by 0.002–0.008% (kelvin rounding), and the
+/// rest by 0.144, 0.238, 0.275, 0.608, 0.674 and 0.966%. The gap between 0.275 and 0.608 is where
+/// this sits.
+///
+/// The argument for half a percent rather than the gap being convenient: the report prints six
+/// decimals, and the shipped scenes assert their own closed forms to 0.02%, 1.6e-4 and 0.3%. A
+/// time error of half a percent swamps every one of those, so a scene carrying one is quoting
+/// digits it has not earned.
+///
+/// **It is a shift, not a convergence order.** For a first-order scheme one halving reveals about
+/// the whole remaining error, which is why this is a usable estimate at all. For an oscillatory
+/// domain it is neither: `27-a-cavity-ringing-at-its-own-frequency` measures 0.608, 0.000, 0.916
+/// and 0.467% at one, two, four and eight times its frames, because what moves is the phase the
+/// sampling lands on. The finding still means what it says there — the answer depends on
+/// `frames` — but it is not an error estimate, and `--deep`'s measured order is what tells the
+/// two apart.
+const WINDOW_SHIFT: f64 = 0.005;
+
 /// One sweep: the scene rerun with one knob moved, and what each reading did.
 #[derive(Debug)]
 pub struct Sweep {
@@ -361,7 +426,11 @@ pub enum SweepOutcome {
     Failed(String),
 }
 
-fn compare(base: &[Reading], other: &[Reading]) -> Sweep {
+fn compare(
+    base: &[Reading],
+    other: &[Reading],
+    span: &BTreeMap<(String, &'static str), f64>,
+) -> Sweep {
     let mut shifts = Vec::new();
     let mut unmatched = Vec::new();
     let mut broken = Vec::new();
@@ -397,7 +466,32 @@ fn compare(base: &[Reading], other: &[Reading]) -> Sweep {
                     ));
                     continue;
                 }
-                let scale = representation_scale(r.unit, r.value.abs().max(o.value.abs()));
+                // **Against what the run did, not against where the origin is.** A sweep asks
+                // whether the answer moved, and the reading's own magnitude answers something
+                // else: for a temperature it is dominated by the 273.15 that celsius carries, so
+                // `15-a-hot-spot-in-a-block` reported 0.212% for a shift that was 8.2% of its
+                // entire 7.03 K rise — and that scene is 14% from converged at its shipped frame
+                // count. A reader saw 0.212% and stopped.
+                //
+                // `representation_scale` stays as the floor, and its own reason still holds: a
+                // reading that never moved has no span to divide by, and a bar cooling *through*
+                // 0 °C would otherwise read a 3 mK shift against a magnitude near zero. So the
+                // denominator is the larger of what happened and what the representation can
+                // resolve, which answers both questions with one number honestly.
+                // Two regimes, stated rather than blended. A reading that moved is judged
+                // against how far it moved; one that never moved has no span to divide by, and
+                // falls back to the representation scale — which is what every reading used
+                // before and is why a bar cooling *through* 0 °C does not read a 3 mK shift
+                // against a magnitude near zero.
+                let travelled = span
+                    .get(&(r.domain.clone(), r.unit))
+                    .copied()
+                    .unwrap_or(0.0);
+                let scale = if travelled > 0.0 {
+                    travelled
+                } else {
+                    representation_scale(r.unit, r.value.abs().max(o.value.abs()))
+                };
                 let relative = if scale > 0.0 {
                     (o.value - r.value).abs() / scale
                 } else {
@@ -706,6 +800,25 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
                 for b in &s.broken {
                     findings.push(format!("{name} sweep: {b}"));
                 }
+                // **A shift the reader has to act on, rather than a row they may skim.**
+                //
+                // The window sweep has always measured this and always reported it as prose.
+                // `15-a-hot-spot-in-a-block` ships at `frames: 11` and is **14% below** its own
+                // grid's converged answer — measured by running it at 2, 5, 11, 26, 51, 101, 201,
+                // 401, 801 and 1601 frames, where the peak goes 5.177, 5.714, 7.027, 7.696,
+                // 7.940, 8.065, 8.129, 8.161, 8.177, 8.186 K. Textbook first order: the error
+                // halves with the step. Its window row said 0.212% and nobody acted.
+                //
+                // The 0.212% was the denominator, fixed above. What is left is that a report
+                // is not a refusal: a scene whose answer moves when you ask for more pictures
+                // has an answer that depends on how many pictures you asked for, and that is a
+                // defect in the scene whatever the number turns out to be.
+                if name == "window" && s.worst > WINDOW_SHIFT {
+                    findings.push(format!(
+                        "halving the coupling window moved a reading by {:.3}% of its own range: this scene's answer depends on `frames`, which is a count of pictures. Raise `frames` until it settles, or say why it cannot",
+                        s.worst * 100.0
+                    ));
+                }
             }
             SweepOutcome::Failed(why) => {
                 findings.push(format!(
@@ -735,7 +848,7 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
 /// counting it is how a list comes up one row short and looks complete.
 fn deepen(sweep: &mut Sweep, base: &Measured, middle: &Measured, finest: &Measured) {
     sweep.orders = orders_of(&base.readings, &middle.readings, &finest.readings);
-    let presence = compare(&base.readings, &finest.readings);
+    let presence = compare(&base.readings, &finest.readings, &base.span);
     for entry in presence.unmatched {
         if !sweep.unmatched.contains(&entry) {
             sweep.unmatched.push(entry);
@@ -755,16 +868,23 @@ fn deepen(sweep: &mut Sweep, base: &Measured, middle: &Measured, finest: &Measur
 }
 
 fn window_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Parts) -> SweepOutcome {
+    // **Halve the window, whichever way the scene states it.** This multiplied `frames`, which
+    // was the same thing until `window_s` existed: a scene that states one has a step the frame
+    // count does not touch, so multiplying frames swept a knob that no longer moves anything and
+    // the sweep reported whatever it had reported before. The physics knob is the window.
     let halve = |s: &Scene, factor: usize| {
         let mut finer = s.clone();
-        finer.frames *= factor;
+        match finer.window_s {
+            Some(w) => finer.window_s = Some(w / factor as f64),
+            None => finer.frames *= factor,
+        }
         finer
     };
     let half = match run_measured(&halve(scene, 2), files) {
         Ok(m) => m,
         Err(e) => return SweepOutcome::Failed(format!("with the window halved, {e}")),
     };
-    let mut sweep = compare(&base.readings, &half.readings);
+    let mut sweep = compare(&base.readings, &half.readings, &base.span);
     for a in &half.anomalies {
         sweep.broken.push(format!("in the halved-window run: {a}"));
     }
@@ -786,7 +906,7 @@ fn resolution_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Part
         Ok(m) => m,
         Err(e) => return SweepOutcome::Failed(format!("refined 2x, {e}")),
     };
-    let mut sweep = compare(&base.readings, &fine.readings);
+    let mut sweep = compare(&base.readings, &fine.readings, &base.span);
     for a in &fine.anomalies {
         sweep.broken.push(format!("in the refined run: {a}"));
     }
@@ -1408,10 +1528,23 @@ mod tests {
     fn a_celsius_reading_is_judged_on_the_kelvin_scale() {
         let c = |v: f64| Reading::new("bar", "mean", v, "C");
         // A 3.2 mK shift near 0 C: relative to the representation, not to the tiny display.
-        let s = compare(&[c(0.00035)], &[c(0.00355)]);
+        // The bar cooled through about 30 K to get to 0 °C, which is the denominator a
+        // sensitivity belongs over: 3.2 mK of it is 1.1e-4, not the 13.8% its *displayed*
+        // magnitude near zero would have given.
+        let travelled: BTreeMap<(String, &'static str), f64> =
+            [(("bar".to_string(), "C"), 30.0)].into();
+        let s = compare(&[c(0.00035)], &[c(0.00355)], &travelled);
+        assert!(
+            s.shifts[0].relative < 1e-3,
+            "a millikelvin of a 30 K cooldown read as {:.3}",
+            s.shifts[0].relative
+        );
+        // And with no span at all — a reading that never moved — the old representation scale
+        // is the fallback, so the same pair still does not read as a fraction of nothing.
+        let s = compare(&[c(0.00035)], &[c(0.00355)], &BTreeMap::new());
         assert!(
             s.shifts[0].relative < 1e-4,
-            "a millikelvin read as {:.3}",
+            "a millikelvin on a still reading read as {:.3}",
             s.shifts[0].relative
         );
         // Kelvin-rounding differences (~6e-14 absolute) sit below the kelvin-scale floor
@@ -1425,11 +1558,19 @@ mod tests {
     #[test]
     fn a_broken_reading_is_reported_rather_than_compared() {
         let r = |d: &str, l: &str, v: f64| Reading::new(d, l, v, "");
-        let s = compare(&[r("d", "x", f64::NAN)], &[r("d", "x", 1.0)]);
+        let s = compare(
+            &[r("d", "x", f64::NAN)],
+            &[r("d", "x", 1.0)],
+            &BTreeMap::new(),
+        );
         assert!(s.shifts.is_empty(), "a NaN was compared as arithmetic");
         assert_eq!(s.broken.len(), 1);
 
-        let s = compare(&[r("d", "x", 1.0), r("d", "x", 2.0)], &[r("d", "x", 1.0)]);
+        let s = compare(
+            &[r("d", "x", 1.0), r("d", "x", 2.0)],
+            &[r("d", "x", 1.0)],
+            &BTreeMap::new(),
+        );
         assert!(
             s.broken
                 .iter()

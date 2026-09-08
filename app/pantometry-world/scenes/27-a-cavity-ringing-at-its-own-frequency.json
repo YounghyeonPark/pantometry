@@ -2,7 +2,7 @@
   "title": "a 120 x 120 mm vacuum cavity ringing in its (1,0,1) mode",
   "schedule": "multirate",
   "duration_s": 4e-09,
-  "frames": 200,
+  "frames": 1600,
   "conservation_tolerance": 1e-06,
   "domains": [
     {

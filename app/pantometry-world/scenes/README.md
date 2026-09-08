@@ -132,7 +132,7 @@ presence is itself the check that `"material": "ice"` reached the domain.
 | `24-a-power-module-junction-to-ambient` | A silicon die dissipating **45 W** through the stack under it — solder, alumina DBC, copper, a 3000 W/m^2K cold plate. The scene the format could not state at all before `dissipation`: every other source here hands watts to the *bus*, which carries an amount and no location, so a die's heat would have spread over the baseplate as fast as over the die and there would be no junction temperature to read. At steady state it is a resistance stack, and the test writes every term of it out from the geometry: **181.19 C measured against 181.21 C** for a 3.1379 K/W path, agreeing to `1.1e-4` of the 141 K rise. The ceramic is 0.46 K/W of that and the film 2.31 |
 | `25-what-140-kelvin-does-to-the-solder` | The same module as `24`, with a **structure** on the same grid whose stress-free strain is the block's temperature — the first scene that couples two physics on one mesh, and the first to reach `pantometry-elastic` at all. The failure mode of a real module is not its temperature: it is the solder, fatigued by silicon at 2.6e-6 per kelvin sitting on solder at 2.15e-5. Assembled at its reflow temperature of 217 C, so it is **already strained before it is switched on** — cold, the solder wants `2.15e-5 x (40 - 217)` = `-3.8055e-3` exactly — and it *relaxes* as it heats back towards where it was built: 0.2314 J of strain energy falling to 0.0274 J, **8.4x**, monotonically |
 | `26-poiseuille-in-a-cooling-channel` | Water driven down a 2 mm channel by a body force, the first scene to reach `pantometry-fluid` — the domain this workspace's own docs call the hardest to trust, because *it looks like a fluid* is the easiest wrong answer in computational physics to accept. So it is written around an exact solution, and against the **discrete** parabola rather than the continuum one: a no-slip wall imposed by reflecting the first cell makes the linear interpolation vanish there, and a parabola is not its own linear interpolation, so the settled mean is `(gh²/12v)(1 + 2/n²)` exactly. Measured `6.691655e-3` against `6.691982e-3` m/s. The tolerance is the **startup transient**, predicted rather than chosen: 4 s is 9.9 time constants of `h²/(pi² v)`, leaving `5.0e-5` of the answer, and the run is off by `4.9e-5` |
-| `27-a-cavity-ringing-at-its-own-frequency` | A 120 x 120 mm vacuum box seeded in its `(1,0,1)` mode, the first scene to reach `pantometry-em`. A resonance is a property of the box, so `f = (c/2)sqrt((l/a)^2 + (n/d)^2)` is what it is checked against: **1.766304 GHz measured against 1.766544**, off `1.4e-4` — and the bound is **Yee's own dispersion**, `(k dx)^2/24` = 1.4e-3, with the measurement required to come out *under* the continuum because a wave on this grid travels slow. The energy the audit watches is **not** `1/2 eE^2 + 1/2 uH^2`: E and H are half a step apart, so the naive sum swings 7.4% about the quantity leapfrog actually conserves, which holds to the bit across 200 frames. `div B` stays at 1.9e-13 — an identity of the discrete curl, not a convergence |
+| `27-a-cavity-ringing-at-its-own-frequency` | A 120 x 120 mm vacuum box seeded in its `(1,0,1)` mode, the first scene to reach `pantometry-em`. A resonance is a property of the box, so `f = (c/2)sqrt((l/a)^2 + (n/d)^2)` is what it is checked against: **1.766304 GHz measured against 1.766544**, off `1.4e-4` — and the bound is **Yee's own dispersion**, `(k dx)^2/24` = 1.4e-3, with the measurement required to come out *under* the continuum because a wave on this grid travels slow. The energy the audit watches is **not** `1/2 eE^2 + 1/2 uH^2`: E and H are half a step apart, so the naive sum swings 7.4% about the quantity leapfrog actually conserves, which holds to the bit across every frame. `div B` stays at 1.9e-13 — an identity of the discrete curl, not a convergence |
 | `28-an-eigenstate-that-does-not-move` | An electron in the third state of a 10 nm hard-walled well — the last of the eleven domains to reach a scene, and the strongest claim a solver can be given: **an eigenstate is stationary.** Energy, position expectation and norm are asserted frame by frame and none of them moves at all. Checked against the **discrete** Hamiltonian's exact eigenvalue `(2hbar^2/m dx^2) sin^2(n pi/2(N+1))`, and the gap to the continuum `n^2 pi^2 hbar^2/2mL^2` is `theta^2/3` exactly — 1.8320e-4 measured against 1.8322e-4 predicted, which is the grid being measured as the grid instead of as the physics |
 | `29-a-designed-bracket-becomes-cells` | The first scene whose geometry comes from a **file** rather than from numbers in the JSON: an L-bracket named as an ASCII STL, rasterised onto 2 mm cells and cooled from its base into still air. The check is the **outline**, not the mesh — the shoelace area of the seven-point profile times the 20 mm extrusion is 33 000 mm3, which 4 125 cells would hold and 4 100 do, **-0.61%**. Comparing against `Mesh::volume` instead would only say the crate agrees with itself, since that is the divergence theorem over the same triangles the rasteriser read |
 | `30-two-phases-crossing-at-a-clearance` | **The first scene that states a `poses` entry**, and it exists because the other twenty-nine could not fail: under the identity a domain's own coordinates and the world's are the same thing, so three separate consumers dropped the placement in turn and every scene agreed with all of them. Two blackened copper busbars, identical but for their current, one turned a quarter turn about z and lifted to a 4 mm clearance — an arrangement where *not* conducting is the design requirement rather than a limitation. The closed form is the steady balance `P = hA(T-Ta) + esA(T^4-Ta^4)`, solved by bisection and matched to **1.6e-4**; the physics worth the scene is that four times the heat is **not** four times the rise — 3.859 against 4 — because radiation carries **46.6%** of it and does so as T^4 |
@@ -337,6 +337,43 @@ rather than march a state — so this one is written in the application, like th
 beam. A flat reflectance would make the colour temperature irrelevant and the whole spectral
 apparatus an expensive way to multiply by a constant, which is why the test compares 2800 K
 against 6500 K rather than checking one number.
+
+## `frames` was a physics knob and is not any more
+
+A scene says `duration_s` and `frames`, and the run used to advance by `duration_s / frames`. Each
+domain then subdivided that into whole substeps no longer than its own stability limit, so the step
+was `window / ceil(window / limit)` — **a function of the frame count**. Asking for more pictures
+made the answer better, and nothing said so.
+
+Measured on `15-a-hot-spot-in-a-block`, whose peak reads
+
+| frames | 2 | 11 | 51 | 101 | 401 | 1601 |
+| --- | --- | --- | --- | --- | --- | --- |
+| peak K | 5.177 | 7.027 | 7.940 | 8.065 | 8.161 | 8.186 |
+
+which is 58% between the ends and textbook first order in the step. It shipped at 11, **14% below
+its own grid's converged answer**.
+
+**A stability limit is not an accuracy limit**, and that is the whole confusion. `Solid3D`'s limit
+here is 2.414e-3 s; at a fifth of it the scene is still 14% out. `max_stable_dt` says what will not
+diverge, and nothing said what would be right.
+
+`window_s` is the separation. State it and the run takes `ceil(duration_s / window_s)` whole steps,
+with `frames` choosing only which of them are photographed — so the frame count cannot move a
+number, and `the_frame_count_is_pictures_and_not_physics` asserts that bit-for-bit. Leave it out and
+the old behaviour stands, which is why every scene written before the key is unchanged.
+
+What tells a scene it needs one is `pantometry verify`. Its window sweep has always measured this;
+what changed is that it now divides the shift by **what the run actually did** rather than by the
+reading's own magnitude — for a celsius temperature that magnitude is dominated by the 273.15 the
+scale carries, so a shift worth 0.966% of everything that happened was reported as 0.212% and read
+as converged. Above half a percent it is a finding and carries the exit code. Three scenes tripped
+it and were corrected: `15` to 88 frames, `05` to 52, and `27` to 1600.
+
+`27` is worth its own sentence. Its shift goes 0.608, 0.000, 0.916 and 0.467% at one, two, four and
+eight times its frames — **not monotone**, because what moves in a resonant cavity is the phase the
+sampling lands on rather than a convergence error. The finding still means what it says there, and
+it is not an error estimate; `--deep`'s measured order is what tells the two apart.
 
 ## Every one of them is run by CI
 

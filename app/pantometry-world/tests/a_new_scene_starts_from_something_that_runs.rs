@@ -175,3 +175,90 @@ fn the_timescale_span_says_when_a_set_cannot_run_together() {
         "the table spans {widest}, and the docs say 3.6e16"
     );
 }
+
+/// **How many pictures you ask for cannot change the answer.**
+///
+/// It could, and by a lot. The run advanced by `duration_s / frames` and each domain subdivided
+/// that into whole substeps no longer than its own stability limit, so the step was
+/// `window / ceil(window / limit)` — a function of the frame count. Measured on
+/// `15-a-hot-spot-in-a-block`, whose peak reads 5.177, 5.714, 7.027, 7.696, 7.940, 8.065, 8.129,
+/// 8.161, 8.177 and 8.186 K at 2, 5, 11, 26, 51, 101, 201, 401, 801 and 1601 frames: **58%**
+/// between the ends, textbook first order, and the shipped `frames: 11` sat 14% below its own
+/// grid's converged answer.
+///
+/// `window_s` is what separates the two. With one stated, the run takes whole steps of it and
+/// `frames` only chooses which are photographed.
+///
+/// The scene here is a block with a hot spot rather than a room mode on purpose: a diffusion
+/// problem's error is first order in the step, so a frame count that leaked into the step would
+/// show up immediately. A wave problem's would partly cancel by phase and could hide it.
+#[test]
+fn the_frame_count_is_pictures_and_not_physics() {
+    let text = r#"{
+  "title": "one hot cell, photographed at several rates",
+  "duration_s": 0.006,
+  "frames": 11,
+  "window_s": 3.75e-6,
+  "domains": [
+    { "kind": "block", "name": "block", "cells": [9, 9, 9], "cell_mm": 1.0,
+      "initial_c": 20.0, "material": "aluminium",
+      "hot_spot": { "at": [4, 4, 4], "above_k": 60.0 } }
+  ]
+}"#;
+    let mut answers = Vec::new();
+    for frames in [2usize, 11, 88] {
+        let mut scene: Scene = serde_json::from_str(text).expect("the scene parses");
+        scene.frames = frames;
+        let mut world = World::build(scene).expect("it builds");
+        let out = world.run().expect("it runs");
+        assert_eq!(
+            out.len(),
+            frames + 1,
+            "{frames} frames asked for, {} captured",
+            out.len()
+        );
+        let last = out.last().expect("a run produces frames");
+        let peak = last.panels[0]
+            .values()
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        answers.push(peak);
+    }
+    // Bit-for-bit, not to a tolerance: the steps taken are identical, so the arithmetic follows
+    // the same path and a tolerance here would hide exactly the coupling this test is about.
+    assert_eq!(
+        answers[0], answers[1],
+        "2 frames and 11 gave {} and {}",
+        answers[0], answers[1]
+    );
+    assert_eq!(
+        answers[1], answers[2],
+        "11 frames and 88 gave {} and {}",
+        answers[1], answers[2]
+    );
+
+    // And without the key the old coupling is still there, which is what makes the key
+    // load-bearing rather than decorative — and is why every scene written before it is unchanged.
+    let mut coupled = Vec::new();
+    for frames in [11usize, 88] {
+        let mut scene: Scene = serde_json::from_str(text).expect("the scene parses");
+        scene.window_s = None;
+        scene.frames = frames;
+        let mut world = World::build(scene).expect("it builds");
+        let out = world.run().expect("it runs");
+        let last = out.last().expect("a run produces frames");
+        coupled.push(
+            last.panels[0]
+                .values()
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max),
+        );
+    }
+    assert!(
+        (coupled[1] - coupled[0]).abs() > 1.0,
+        "without a window the frame count used to move the peak by kelvin; it moved {:.4}",
+        (coupled[1] - coupled[0]).abs()
+    );
+}

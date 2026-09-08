@@ -86,7 +86,33 @@ pub struct Scene {
     /// How long to run, in seconds.
     pub duration_s: f64,
     /// How many frames to capture over that duration.
+    ///
+    /// **Pictures, and — until `window_s` existed — the step as well.** The run advanced by
+    /// `duration_s / frames` and each domain subdivided that into whole substeps no longer than
+    /// its own stability limit, so the step was `window / ceil(window / limit)` and the accuracy
+    /// followed the frame count. Measured on `15-a-hot-spot-in-a-block`, whose peak reads 5.177,
+    /// 7.027, 8.065 and 8.186 K at 2, 11, 101 and 1601 frames: **asking for more pictures changed
+    /// the answer by 58%**, and nothing said so. State [`window_s`](Scene::window_s) and this
+    /// becomes what its name says.
     pub frames: usize,
+    /// The coupling window: how often the domains meet on the bus, in seconds.
+    ///
+    /// **The step is a physics decision and `frames` is not one.** This is what separates them.
+    /// The run takes `ceil(duration_s / window_s)` steps of `duration_s / that`, and `frames`
+    /// only chooses which of those steps are photographed — so raising it adds pictures and
+    /// cannot move a number.
+    ///
+    /// Absent means the old behaviour, `steps = frames`, because a scene written before this key
+    /// existed meant exactly that and changing it silently would move every answer in the
+    /// repository at once. `verify` reports how much the window is hiding and refuses above half
+    /// a percent, which is how a scene without this key learns it needs one.
+    ///
+    /// A stability limit is not an accuracy limit and this is the difference: `Solid3D`'s limit on
+    /// `15-a-hot-spot-in-a-block` is 2.414e-3 s, and at a fifth of that the scene is still 14%
+    /// from its own grid's converged answer. `max_stable_dt` says what will not diverge; this says
+    /// what will be right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_s: Option<f64>,
     /// The relative conservation drift the run may accumulate before it is refused.
     ///
     /// Exposed because it is a property of the scene and not of the engine: a scene with a
@@ -3507,16 +3533,42 @@ impl World {
     /// because a simulation that has stopped conserving is not producing frames worth
     /// drawing.
     pub fn run(&mut self) -> Result<Vec<Frame>, Violation> {
-        let dt = Time::from_si(self.scene.duration_s / self.scene.frames as f64);
+        // **Steps are physics, frames are pictures.** With a stated window the run takes whole
+        // steps of it and photographs `frames` of them; without one, `steps == frames`, which is
+        // what every scene written before the key meant. See [`Scene::window_s`].
+        let steps = self.steps();
+        let dt = Time::from_si(self.scene.duration_s / steps as f64);
         let placed = self.placements();
         let mut frames = Vec::with_capacity(self.scene.frames + 1);
         frames.push(pantometry::scene::capture(&self.sim, &placed));
-        for _ in 0..self.scene.frames {
-            self.advance(dt)?;
+        // Which step each frame lands on, by integer arithmetic so two runs of one scene take the
+        // same path: frame `i` is captured after step `round(i * steps / frames)`, and the last
+        // one is the last step exactly.
+        let mut taken = 0usize;
+        for i in 1..=self.scene.frames {
+            let want = (i * steps).div_ceil(self.scene.frames);
+            for _ in taken..want {
+                self.advance(dt)?;
+            }
+            taken = want;
             frames.push(pantometry::scene::capture(&self.sim, &placed));
         }
         pantometry::scene::settle_framing(&mut frames);
         Ok(frames)
+    }
+
+    /// How many coupling windows the run takes.
+    ///
+    /// `ceil(duration_s / window_s)` when the scene states one, so the window it actually uses is
+    /// no longer than what it asked for; `frames` when it does not, which is what a scene written
+    /// before the key meant. Never zero.
+    pub fn steps(&self) -> usize {
+        match self.scene.window_s {
+            Some(w) if w > 0.0 => ((self.scene.duration_s / w).ceil() as usize)
+                .max(self.scene.frames)
+                .max(1),
+            _ => self.scene.frames.max(1),
+        }
     }
 
     /// Advance the clock by `dt` and close the between-frames feedback — exactly one

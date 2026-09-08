@@ -491,3 +491,61 @@ fn a_commensurate_room_mode_converges_at_second_order() {
         "a second-order scheme on unmoving geometry, measured {p:.3}"
     );
 }
+
+/// **A scene whose answer depends on how many pictures it was asked for is a finding.**
+///
+/// The battery has always measured this — the window sweep halves the coupling window and reports
+/// what moved — and reporting it was not enough. `15-a-hot-spot-in-a-block` shipped at
+/// `frames: 11` and is **14%** below its own grid's converged answer: run at 2, 11, 101 and 1601
+/// frames its peak reads 5.177, 7.027, 8.065 and 8.186 K, which is textbook first order in the
+/// step. Its window row said **0.212%** and nobody acted, because the shift was being divided by
+/// the reading's own magnitude — and for a celsius temperature that is dominated by the 273.15
+/// the scale carries. Against what the run actually did it is 0.966%.
+///
+/// So it carries the exit code now. The threshold is `WINDOW_SHIFT`, half a percent, chosen
+/// against the corpus and written down beside itself.
+#[test]
+fn a_scene_whose_answer_moves_with_the_frame_count_is_a_finding() {
+    // One hot cell in aluminium: diffusion, so the error is first order in the step and a coarse
+    // window shows immediately. Eleven frames over 6 ms is the shipped scene's own setting.
+    let coarse = scene(
+        r#"{
+  "title": "one hot cell, too few windows",
+  "duration_s": 0.006,
+  "frames": 11,
+  "domains": [
+    { "kind": "block", "name": "block", "cells": [9, 9, 9], "cell_mm": 1.0,
+      "initial_c": 20.0, "material": "aluminium",
+      "hot_spot": { "at": [4, 4, 4], "above_k": 60.0 } }
+  ]
+}"#,
+    );
+    let b = verify(&coarse, false).expect("the battery runs");
+    let named: Vec<&String> = b
+        .findings
+        .iter()
+        .filter(|f| f.contains("depends on `frames`"))
+        .collect();
+    assert_eq!(
+        named.len(),
+        1,
+        "a scene 14% from converged reported no finding: {:?}",
+        b.findings
+    );
+    assert!(
+        ran(&b.window).worst > 0.005,
+        "the sweep measured {:.4} and the finding fired anyway",
+        ran(&b.window).worst
+    );
+
+    // And the same scene with a window stated is clean, which is what makes the finding a thing a
+    // reader can act on rather than one they have to live with.
+    let mut settled = coarse.clone();
+    settled.window_s = Some(0.006 / 1600.0);
+    let b = verify(&settled, false).expect("the battery runs");
+    assert!(
+        !b.findings.iter().any(|f| f.contains("depends on `frames`")),
+        "stating a window did not settle it: {:?}",
+        b.findings
+    );
+}

@@ -30,6 +30,35 @@ pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
 
+- **Asking for more pictures changed the answer by 58%.** A scene's `frames` set the coupling
+  window as well as the capture rate, and each domain subdivided that window into whole substeps
+  no longer than its own stability limit — so the step, and with it the accuracy, was a function of
+  the frame count. `15-a-hot-spot-in-a-block` reads 5.177, 7.027, 8.065 and 8.186 K at 2, 11, 101
+  and 1601 frames, textbook first order, and shipped at 11: **14% below its own grid's converged
+  answer**. A stability limit is not an accuracy limit, and nothing in the format said what would
+  be right.
+
+  `window_s` separates them. With one stated the run takes `ceil(duration_s / window_s)` whole
+  steps and `frames` chooses only which are photographed, asserted bit-for-bit. Absent, the old
+  behaviour stands, so every scene written before the key is unchanged.
+
+- **`verify` measured this all along and reported it as 0.212%.** The window sweep divided the
+  shift by the reading's own magnitude, and for a celsius temperature that is dominated by the
+  273.15 the scale carries. Against what the run actually did the same shift is 0.966%. The
+  denominator is now the range the readings of one unit covered in one domain over the run —
+  per domain and unit rather than per reading, because a block's `peak`, `mean` and `coldest` are
+  three views of one field and judging each against its own travel made `mean` read 9.2% beside two
+  printed values that were identical.
+
+  And it is a finding now rather than a row, above half a percent, carrying the exit code. Three
+  scenes tripped it and were corrected: `15` to 88 frames, `05` to 52, `27` to 1600.
+
+- **The battery marched a different scene from the one the CLI runs.** `run_measured` computed its
+  own `duration / frames`, which was the same number until `window_s` existed. Its own doc said the
+  loop was `World::run`'s. Both step by `World::steps` now, and the window sweep halves the window
+  rather than multiplying the frames — which on a scene that states one had become a knob that
+  moved nothing.
+
 - **Two scenes called themselves a crystal and a liquid and were the same frozen lattice.**
   `08-atoms-crystal` and `09-atoms-liquid` asked for `duration_s: 6.0e-12` against a domain built
   with `LennardJones::reduced()`, where the only time scale is `τ = σ*sqrt(m/ε)` and all three
