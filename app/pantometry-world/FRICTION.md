@@ -939,19 +939,36 @@ covered across the whole run:
 `30-two-phases-crossing-at-a-clearance` states two busbars of thirty-two cells apiece whose spread
 is **exactly zero** — uniform copper, uniform dissipation, uniform cooling, so the field is a
 constant and always was. `29-a-designed-bracket-becomes-cells` rasterises **4 100 cells** from an
-STL to hold a range of 0.067 K, a Biot number of 8.6e-4. And `19-a-coating-stops-the-heat` asserts
-that the largest cell-to-cell step lands on the interface, which is true and is a claim about
-**0.08 K** on a block whose excursion was 60 K.
+STL to hold a range of 0.067 K, a Biot number of 8.6e-4. And `19-a-coating-stops-the-heat`
+asserted that the largest cell-to-cell step lands on the interface, which is true and was a claim
+about **0.08 K** on a block whose excursion was 60 K.
 
-**Half fixed.** The battery raises it now, with the corpus above written beside the threshold, and
-`scene.rs` pins the set so a seventh arriving is a failure rather than a quieter list. What is not
-fixed is the six scenes: `pantometry verify` exits 1 on every one of them, which is the honest
-state and not the finished one.
+**The battery raises it now**, with the corpus above written beside the threshold, and `scene.rs`
+pins the set so an arrival or a departure is a failure rather than a quieter list. The table is
+the corpus the threshold was chosen against, not the state of the tree.
 
-Three of the six are melting, where the temperature is the melting point everywhere and the answer
-lives in a phase fraction the readings report only as a total — so the measurement cannot see
-their structure, and the finding says as much in its own words rather than being quietly
-suppressed for them. The other three claim to be designs and are lumps.
+**The coating scene is fixed and left the list.** Its pulse was one cell at +60 K — 0.145 J spread
+over 1 458 cells — and it is the whole heated face now, eighty-one times the energy. The interface
+step is **9.4656 K of a 19.1152 K rise**, half the profile on one face, with the second-steepest
+step at 7.3315 K. It reads 0.1062.
+
+That bought a sweep as well. `verify` refuses to refine a `hot_spot`, because one cell halves its
+physical size when the grid doubles, and it says in as many words to state the initial condition
+as a region instead; as a region the bounds double with the counts. The resolution sweep runs now
+and measures **0.106%** on the peak. This scene had no resolution measurement at all.
+
+**Five scenes are left**, and `pantometry verify` exits 1 on each. Three are melting, where the
+temperature is the melting point everywhere and the answer lives in a phase fraction the readings
+report only as a total — so the measurement cannot see their structure, and the finding says as
+much in its own words rather than being quietly suppressed for them.
+
+The other two claim to be designs. The **bracket** cannot be made one until a *patch* of a face
+can be cooled rather than the whole face: a bracket is bolted at pads, and both `CoolingSpec` and
+`Solid3D::losing_from` take a face entire, so the heat has nowhere to travel from. The **busbars**
+are uniform copper with uniform dissipation and uniform cooling, so their field is a constant and
+always was — and, separately, they cross at a 4 mm clearance and cannot see each other at all:
+two blackened surfaces at 335.6 K and 319.0 K would exchange **6.92 mW**, which is 8.05% of what
+the cooler bar dissipates.
 
 ---
 

@@ -1491,8 +1491,24 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let at = |k: usize| block.temperature_at(4, 4, k).to_si();
 
                 // The books, not the mean: with two capacities it is `Σ Cᵢ Tᵢ` that is fixed, and
-                // the mean temperature is not. 60 K in one aluminium cell of 2.4192 mJ/K.
-                let opening = 2700.0 * 896.0 * 1e-9 * 60.0;
+                // the mean temperature is not. 180 K above ambient across the 81 aluminium cells
+                // of the heated face, each of 2.4192 mJ/K.
+                //
+                // # It was one cell at +60 K, and the whole scene was 0.08 K
+                //
+                // A single cell of a 1 458-cell block carries 0.145 J, and by the time it has
+                // spread the block holds a **0.08 K** range — so every claim below was true and
+                // was a claim about eight hundredths of a kelvin. It is a heated *face* now: the
+                // same pulse, eighty-one times the energy, and the interface step is 9.47 K of a
+                // 19.12 K rise.
+                //
+                // The second thing it bought is a sweep. `verify` refuses to refine a scene with
+                // a `hot_spot` — one cell halves its physical size when the grid doubles, which
+                // is a different problem rather than a finer one — and says in as many words to
+                // state the initial condition as a region instead. As a region the bounds double
+                // with the counts, so the resolution sweep runs, and it measures 0.106% on the
+                // peak. This scene had no resolution measurement at all before.
+                let opening = 2700.0 * 896.0 * 1e-9 * 180.0 * 81.0;
                 let held = block
                     .ledger()
                     .get(quantity::ENERGY)
@@ -1514,6 +1530,22 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     worst, 8,
                     "{name}: the gradient belongs on the interface face, not at cell {worst}: \
                      {steps:?}"
+                );
+                // **And by a margin, which the old magnitude could not show.** 9.4656 K on the
+                // interface face against 7.3315 K on the next one in — a pulse that ran long
+                // enough for the front to enter the glass would put the steepest step *inside*
+                // it, and that is what a run four times this long does. Asserted as a ratio, so
+                // it is the shape of the profile and not the size of the pulse.
+                let runner_up = steps
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| *k != worst)
+                    .map(|(_, s)| *s)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                assert!(
+                    steps[worst] > 1.2 * runner_up,
+                    "{name}: the interface step {:.4} K is not clear of the next {runner_up:.4} K",
+                    steps[worst]
                 );
 
                 // The metal is nearly isothermal and the glass is nearly untouched, which is the
@@ -2937,20 +2969,23 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         }
     }
 
-    // **Pinned, both ways.** These seven are lumps: three are melting, where the temperature is
+    // **Pinned, both ways.** These six are lumps: three are melting, where the temperature is
     // the melting point everywhere and the answer is in a phase fraction this cannot see; two are
-    // busbars of thirty-two cells apiece whose spread is *exactly zero*; one is a bracket at
-    // `Bi = 8.6e-4` rasterised to 4 100 cells to hold 0.067 K; and one is a coating scene whose
-    // whole structure is 0.08 K on a 60 K excursion.
+    // busbars of thirty-two cells apiece whose spread is *exactly zero*; and one is a bracket at
+    // `Bi = 8.6e-4` rasterised to 4 100 cells to hold 0.067 K.
     //
-    // An eighth arriving means a scene lost its gradient, and one leaving means a scene gained
+    // A seventh arriving means a scene lost its gradient, and one leaving means a scene gained
     // one — both worth a failure rather than a quieter list. `pantometry verify` exits 1 on every
     // one of these, which is the state this pin makes visible rather than the state it approves.
+    //
+    // **It was seven.** `19-a-coating-stops-the-heat` was flat to 0.134% because its pulse was a
+    // single cell at +60 K, which is 0.145 J spread over 1 458 cells. Heating the whole face
+    // instead is eighty-one times the energy, and it left this list the day that changed — which
+    // is what a pin is for: the fix is visible as a line removed rather than as a claim.
     flat.sort();
     assert_eq!(
         flat,
         [
-            "19-a-coating-stops-the-heat.json/joint",
             "20-melting-a-block-of-ice.json/ice",
             "21-a-wax-thermal-buffer.json/wax",
             "22-wax-in-an-aluminium-matrix.json/buffer",

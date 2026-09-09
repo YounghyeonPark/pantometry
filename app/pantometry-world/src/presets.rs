@@ -274,7 +274,7 @@ pub const PRESETS: [Preset; 30] = [
     Preset {
         file: "19-a-coating-stops-the-heat.json",
         area: "optics",
-        title: "a hot spot in aluminium, meeting a wall of borosilicate halfway",
+        title: "a hot face in aluminium, meeting a wall of borosilicate halfway",
         kinds: &["block"],
         needs_a_part: false,
         json: include_str!("../scenes/19-a-coating-stops-the-heat.json"),

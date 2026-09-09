@@ -417,6 +417,12 @@ const WINDOW_SHIFT: f64 = 0.005;
 /// within the discretisation error of most of these scenes, so the structure it holds is not a
 /// structure it has earned the right to report.
 ///
+/// **The table is the corpus this was chosen against, not the state of the tree.** The coating
+/// scene has been fixed since it was taken — its pulse was one cell at +60 K, so the whole
+/// block held a 0.08 K range, and heating the face instead is eighty-one times the energy. It
+/// reads 0.1062 now. `scene.rs` pins what is currently named; this records why the line is
+/// it is.
+///
 /// # What it is not evidence of
 ///
 /// **A uniform temperature is not always an idle grid.** A melting block sits at its melting point

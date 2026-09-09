@@ -1,7 +1,7 @@
 {
-  "title": "a hot spot in aluminium, meeting a wall of borosilicate halfway",
+  "title": "a hot face in aluminium, meeting a wall of borosilicate halfway",
   "schedule": "multirate",
-  "duration_s": 0.5,
+  "duration_s": 1.0,
   "frames": 11,
   "conservation_tolerance": 1e-9,
   "domains": [
@@ -9,8 +9,8 @@
       "initial_c": 20.0,
       "material": "aluminium",
       "regions": [
-        { "material": "borosilicate", "from": [0, 0, 9], "to": [9, 9, 18] }
-      ],
-      "hot_spot": { "at": [4, 4, 4], "above_k": 60.0 } }
+        { "material": "borosilicate", "from": [0, 0, 9], "to": [9, 9, 18] },
+        { "material": "aluminium", "from": [0, 0, 0], "to": [9, 9, 1], "initial_c": 200.0 }
+      ] }
   ]
 }
