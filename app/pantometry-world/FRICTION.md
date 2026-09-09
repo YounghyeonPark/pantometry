@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty of the thirty-five are fixed**, and five are recorded rather than actioned. The reasons
+**Thirty of the thirty-six are fixed**, and six are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
@@ -597,7 +597,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Thirty-five findings, and the source has shifted seven times.
+Thirty-six findings, and the source has shifted seven times.
 
 | how many | where they came from |
 | --- | --- |
@@ -904,6 +904,54 @@ negative one is refused by name rather than quietly modelled as an insulator.
 
 The joint has a resistance and **no thickness**, so the cell size can go back to being chosen for
 the part.
+
+---
+
+## 36. Six shipped scenes solve a field on a grid and answer it as a lump
+
+Every finding the `verify` battery could raise was about **arithmetic**: determinism, a sweep, a
+drift, a rasterisation loss. None of them asked whether the scene needed the arithmetic.
+
+A block whose cells all hold the same number has been solved as a field and answered as a lump. It
+is not wrong. It passes every check it has, converges perfectly, conserves to twelve digits, and
+answers a question one ordinary differential equation answers — and the report reads exactly like
+the report of a scene with a real gradient.
+
+Measured across all thirty shipped scenes, of which eleven domains report both a peak and a
+coldest. The number is the last frame's `peak − coldest` over the range that domain's readings
+covered across the whole run:
+
+```text
+  0.00000  20-melting-a-block-of-ice        ice
+  0.00000  21-a-wax-thermal-buffer          wax
+  0.00000  22-wax-in-an-aluminium-matrix    buffer
+  0.00000  30-two-phases-crossing           phase_a
+  0.00000  30-two-phases-crossing           phase_b
+  0.00134  19-a-coating-stops-the-heat      joint
+  0.02108  29-a-designed-bracket            bracket
+  ----------------------------------------------- 0.05
+  0.10645  24-a-power-module                module
+  0.13411  15-a-hot-spot-in-a-block         block
+  0.25896  25-what-140-kelvin-does          module
+  0.79150  23-a-part-radiating-to-its-lid   housing
+```
+
+`30-two-phases-crossing-at-a-clearance` states two busbars of thirty-two cells apiece whose spread
+is **exactly zero** — uniform copper, uniform dissipation, uniform cooling, so the field is a
+constant and always was. `29-a-designed-bracket-becomes-cells` rasterises **4 100 cells** from an
+STL to hold a range of 0.067 K, a Biot number of 8.6e-4. And `19-a-coating-stops-the-heat` asserts
+that the largest cell-to-cell step lands on the interface, which is true and is a claim about
+**0.08 K** on a block whose excursion was 60 K.
+
+**Half fixed.** The battery raises it now, with the corpus above written beside the threshold, and
+`scene.rs` pins the set so a seventh arriving is a failure rather than a quieter list. What is not
+fixed is the six scenes: `pantometry verify` exits 1 on every one of them, which is the honest
+state and not the finished one.
+
+Three of the six are melting, where the temperature is the melting point everywhere and the answer
+lives in a phase fraction the readings report only as a total — so the measurement cannot see
+their structure, and the finding says as much in its own words rather than being quietly
+suppressed for them. The other three claim to be designs and are lumps.
 
 ---
 

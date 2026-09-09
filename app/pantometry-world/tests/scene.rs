@@ -850,6 +850,9 @@ fn a_boundary_the_two_sides_cut_differently_is_refused() {
 /// broke.
 #[test]
 fn every_scene_that_ships_runs_and_says_something_true() {
+    // Which shipped scenes solve a field on a grid and answer it as a lump, collected as the
+    // walk goes and pinned below. See `verify::UNIFORM_FIELD` for the measurement and the corpus.
+    let mut flat: Vec<String> = Vec::new();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
         .expect("the scenes directory is there")
@@ -2891,7 +2894,72 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             }
             other => panic!("{other} ships but nothing checks it; add a claim for it"),
         }
+
+        // **Which of these is a lump written as a grid.** Free here, because the run has already
+        // happened; `pantometry verify` computes the same number and raises it as a finding, and
+        // a finding sets that command's exit code. Without this pin a shipped scene could start
+        // failing its own verification and nothing in the gate would say so.
+        //
+        // Measured exactly as `verify` measures it: the last frame's `peak - coldest`, over the
+        // range that domain's readings of the same unit covered across the whole run.
+        let mut span: std::collections::BTreeMap<(String, &str), (f64, f64)> =
+            std::collections::BTreeMap::new();
+        for frame in &frames {
+            for r in &frame.readings {
+                if !r.value.is_finite() {
+                    continue;
+                }
+                let e = span
+                    .entry((r.domain.clone(), r.unit))
+                    .or_insert((r.value, r.value));
+                e.0 = e.0.min(r.value);
+                e.1 = e.1.max(r.value);
+            }
+        }
+        for peak in last.readings.iter().filter(|r| r.label == "peak") {
+            let Some(coldest) = last
+                .readings
+                .iter()
+                .find(|r| r.domain == peak.domain && r.label == "coldest" && r.unit == peak.unit)
+            else {
+                continue;
+            };
+            let Some((lo, hi)) = span.get(&(peak.domain.clone(), peak.unit)) else {
+                continue;
+            };
+            let travel = hi - lo;
+            if travel <= 0.0 {
+                continue;
+            }
+            if (peak.value - coldest.value) / travel < pantometry_world::verify::UNIFORM_FIELD {
+                flat.push(format!("{name}/{}", peak.domain));
+            }
+        }
     }
+
+    // **Pinned, both ways.** These seven are lumps: three are melting, where the temperature is
+    // the melting point everywhere and the answer is in a phase fraction this cannot see; two are
+    // busbars of thirty-two cells apiece whose spread is *exactly zero*; one is a bracket at
+    // `Bi = 8.6e-4` rasterised to 4 100 cells to hold 0.067 K; and one is a coating scene whose
+    // whole structure is 0.08 K on a 60 K excursion.
+    //
+    // An eighth arriving means a scene lost its gradient, and one leaving means a scene gained
+    // one — both worth a failure rather than a quieter list. `pantometry verify` exits 1 on every
+    // one of these, which is the state this pin makes visible rather than the state it approves.
+    flat.sort();
+    assert_eq!(
+        flat,
+        [
+            "19-a-coating-stops-the-heat.json/joint",
+            "20-melting-a-block-of-ice.json/ice",
+            "21-a-wax-thermal-buffer.json/wax",
+            "22-wax-in-an-aluminium-matrix.json/buffer",
+            "29-a-designed-bracket-becomes-cells.json/bracket",
+            "30-two-phases-crossing-at-a-clearance.json/phase_a",
+            "30-two-phases-crossing-at-a-clearance.json/phase_b",
+        ],
+        "the set of scenes whose grid is not carrying the answer has changed"
+    );
 }
 
 /// **The lamp's colour changes how much of it becomes heat**, and that is the whole point of

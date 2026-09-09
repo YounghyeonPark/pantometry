@@ -386,6 +386,47 @@ fn representation_scale(unit: &str, magnitude: f64) -> f64 {
 /// two apart.
 const WINDOW_SHIFT: f64 = 0.005;
 
+/// How flat a field may be before the grid under it is not carrying the answer.
+///
+/// `(peak − coldest)` at the last frame, over the range that domain's readings covered across
+/// the whole run. A block whose cells all hold the same number is a **lumped node** written as a
+/// grid: the answer is one ordinary differential equation, and every cell beyond the first is
+/// arithmetic that changes nothing.
+///
+/// **A chosen number, and the corpus it was chosen against is written down** — the same standing
+/// `WINDOW_SHIFT` above has. Measured over all thirty shipped scenes, of which eleven domains
+/// report both a peak and a coldest:
+///
+/// ```text
+///   0.00000  20-melting-a-block-of-ice        ice
+///   0.00000  21-a-wax-thermal-buffer          wax
+///   0.00000  22-wax-in-an-aluminium-matrix    buffer
+///   0.00000  30-two-phases-crossing           phase_a
+///   0.00000  30-two-phases-crossing           phase_b
+///   0.00134  19-a-coating-stops-the-heat      joint
+///   0.02108  29-a-designed-bracket            bracket
+///   ----------------------------------------------- 0.05
+///   0.10645  24-a-power-module                module
+///   0.13411  15-a-hot-spot-in-a-block         block
+///   0.25896  25-what-140-kelvin-does          module
+///   0.79150  23-a-part-radiating-to-its-lid   housing
+/// ```
+///
+/// The gap between 0.021 and 0.106 is a factor of five and this sits in it. The argument for a
+/// twentieth rather than the gap being convenient: a field flat to 5% of what the run did is
+/// within the discretisation error of most of these scenes, so the structure it holds is not a
+/// structure it has earned the right to report.
+///
+/// # What it is not evidence of
+///
+/// **A uniform temperature is not always an idle grid.** A melting block sits at its melting point
+/// everywhere that is mushy, and carries its answer in the melt *fraction* instead — a field this
+/// cannot see, because a domain reports the melted volume as a total. The finding says what it
+/// measured and leaves that reading to a person, which is why it is worded as a measurement.
+/// Public because `scene.rs` pins the set of shipped scenes this names, and a pin against a
+/// second copy of the number would agree with itself while the two drifted apart.
+pub const UNIFORM_FIELD: f64 = 0.05;
+
 /// One sweep: the scene rerun with one knob moved, and what each reading did.
 #[derive(Debug)]
 pub struct Sweep {
@@ -758,6 +799,55 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
     }
 
     findings.extend(base.anomalies.iter().cloned());
+
+    // **A grid that is not carrying the answer.** Every finding above this one is about
+    // arithmetic; this one is about whether the scene needed the arithmetic. A block whose cells
+    // all hold the same number has been solved as a field and answered as a lump, and nothing in
+    // the report said so — `30-two-phases-crossing-at-a-clearance` states two eight-cell busbars
+    // whose temperature spread is **exactly zero**, and `29-a-designed-bracket-becomes-cells`
+    // rasterises 4 100 cells to hold a 0.067 K range.
+    //
+    // Read from the same `span` the sweeps divide by, so a flatness and a sensitivity are
+    // measured against the same denominator, and guarded by `representation_scale` so a run that
+    // barely moved cannot make its own flatness look meaningful.
+    for reading in &base.readings {
+        if reading.label != "peak" {
+            continue;
+        }
+        let Some(coldest) = base
+            .readings
+            .iter()
+            .find(|r| r.domain == reading.domain && r.label == "coldest" && r.unit == reading.unit)
+        else {
+            continue;
+        };
+        let spread = reading.value - coldest.value;
+        let Some(travel) = base.span.get(&(reading.domain.clone(), reading.unit)) else {
+            continue;
+        };
+        // A run that did nothing has no scale to judge a flatness against, and the same
+        // representation floor the sweeps use is what says whether it did anything.
+        if !spread.is_finite()
+            || *travel <= representation_scale(reading.unit, reading.value.abs()) * 1e-9
+        {
+            continue;
+        }
+        let flatness = spread / travel;
+        if flatness < UNIFORM_FIELD {
+            findings.push(format!(
+                "{}: the field is flat to {:.3}% of the {:.4} {} this run covered — every cell \
+                 holds within {:.2e} {} of every other, so a single lumped node answers this \
+                 scene and the grid is not carrying the answer. If the structure is in a phase \
+                 fraction rather than in the temperature, this cannot see it and says so",
+                reading.domain,
+                flatness * 100.0,
+                travel,
+                reading.unit,
+                spread.abs(),
+                reading.unit
+            ));
+        }
+    }
 
     // Which of the scene's domains contributed nothing for the sweeps to compare. A battery
     // that measured nothing must not look like one that measured everything and found it

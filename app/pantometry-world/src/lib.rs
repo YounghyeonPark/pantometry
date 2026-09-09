@@ -6,7 +6,7 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Thirty of the thirty-five are
+//! Findings are collected in `FRICTION.md` beside this crate. Thirty of the thirty-six are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
 //! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
 //! written and this line is one of them. It had been stale for two releases before it was.

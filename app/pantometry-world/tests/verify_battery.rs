@@ -549,3 +549,131 @@ fn a_scene_whose_answer_moves_with_the_frame_count_is_a_finding() {
         b.findings
     );
 }
+
+/// **A block whose cells all hold the same number is a finding.**
+///
+/// Every other finding in this battery is about arithmetic — determinism, a sweep, a drift. This
+/// one is about whether the scene needed the arithmetic. A field solved on a grid and answered as
+/// a lump is not wrong; it is a scene that will pass every check it has, converge perfectly, and
+/// answer a question one ordinary differential equation answers.
+///
+/// It shipped twice. `30-two-phases-crossing-at-a-clearance` states two busbars of thirty-two
+/// cells each whose temperature spread is **exactly zero** — uniform copper, uniform dissipation,
+/// uniform cooling — and `29-a-designed-bracket-becomes-cells` rasterises 4 100 cells from an STL
+/// to hold a 0.067 K range, a Biot number of 8.6e-4. Nothing in the report mentioned either.
+///
+/// # Both directions, in one scene each
+///
+/// A bar heated at one end and cooled at the other **has** a gradient and must not be named; the
+/// same bar heated uniformly and cooled on every face has none and must be. The two differ by
+/// where the watts go, so this is measuring the field and not the wording.
+#[test]
+fn a_field_that_is_flat_is_a_finding_and_a_gradient_is_not() {
+    let bar = |dissipation: &str, cooling: &str| {
+        scene(&format!(
+            r#"{{
+  "title": "a bar",
+  "duration_s": 20.0,
+  "frames": 6,
+  "domains": [
+    {{ "kind": "block", "name": "bar", "cells": [12, 2, 2], "cell_mm": 3.0,
+      "initial_c": 20.0, "material": "copper",
+      "dissipation": [{dissipation}],
+      "cooling": [{cooling}] }}
+  ]
+}}"#
+        ))
+    };
+
+    // Heat in at one end, out at the other: a real gradient, and no finding.
+    let gradient = verify(
+        &bar(
+            r#"{ "watts": 40.0, "from": [0, 0, 0], "to": [1, 2, 2] }"#,
+            r#"{ "face": "x-max", "ambient_c": 20.0, "convection_w_per_m2_k": 4000.0,
+                 "area_cm2": 0.36 }"#,
+        ),
+        false,
+    )
+    .expect("it runs");
+    let flat: Vec<&String> = gradient
+        .findings
+        .iter()
+        .filter(|f| f.contains("flat to"))
+        .collect();
+    assert!(
+        flat.is_empty(),
+        "a bar with a gradient was called flat: {flat:?}"
+    );
+
+    // The bracket's own shape: a copper block starting hot and shedding to air, where the film is
+    // so much weaker than the conduction that the whole thing falls together. The Biot number
+    // `h * L_c / k` is 3.5e-4 here and 8.6e-4 on the bracket, so this is the shipped defect at
+    // test scale rather than a contrivance. Uniform watts with cooling at both ends is *not* it:
+    // the middle stays hotter, and the first version of this test measured 0 findings for that
+    // reason.
+    let cooling_only = scene(
+        r#"{
+  "title": "a copper block cooling to air",
+  "duration_s": 200.0,
+  "frames": 6,
+  "domains": [
+    { "kind": "block", "name": "bar", "cells": [12, 2, 2], "cell_mm": 3.0,
+      "initial_c": 200.0, "material": "copper",
+      "cooling": [
+        { "face": "x-max", "ambient_c": 20.0, "convection_w_per_m2_k": 100.0, "area_cm2": 0.36 },
+        { "face": "x-min", "ambient_c": 20.0, "convection_w_per_m2_k": 100.0, "area_cm2": 0.36 }
+      ] }
+  ]
+}"#,
+    );
+    let lump = verify(&cooling_only, false).expect("it runs");
+    let named = lump
+        .findings
+        .iter()
+        .find(|f| f.contains("flat to"))
+        .unwrap_or_else(|| {
+            panic!(
+                "a lump written as a grid was not named: {:?}",
+                lump.findings
+            )
+        });
+    println!("  {named}");
+    assert!(named.starts_with("bar:"), "which domain: {named}");
+    assert!(
+        named.contains("lumped node"),
+        "the finding should say what it means: {named}"
+    );
+    // And it reaches the report a person reads, not only the struct.
+    assert!(lump.render().contains("flat to"), "{}", lump.render());
+}
+
+/// **A run that did nothing cannot report its own flatness.**
+///
+/// The denominator is the range the readings covered, so a scene that barely moved would divide a
+/// rounding difference by a rounding difference and call the answer a structure — or, worse, call
+/// a block that never changed "flat" and be technically right about nothing. The guard is the same
+/// representation floor the sweeps use.
+#[test]
+fn a_run_that_did_nothing_is_not_reported_as_flat() {
+    let s = scene(
+        r#"{
+  "title": "a bar at rest",
+  "duration_s": 1e-6,
+  "frames": 3,
+  "domains": [
+    { "kind": "block", "name": "still", "cells": [6, 2, 2], "cell_mm": 3.0,
+      "initial_c": 20.0, "material": "copper" }
+  ]
+}"#,
+    );
+    let b = verify(&s, false).expect("it runs");
+    let flat: Vec<&String> = b
+        .findings
+        .iter()
+        .filter(|f| f.contains("flat to"))
+        .collect();
+    assert!(
+        flat.is_empty(),
+        "a block that never moved was reported as flat: {flat:?}"
+    );
+}

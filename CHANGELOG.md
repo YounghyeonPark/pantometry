@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found thirty-five places it is awkward, thirty of which have been changed — see
+has already found thirty-six places it is awkward, thirty of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,30 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
+
+- **`verify` could not say that a scene's grid was doing nothing.** Every finding the battery
+  raised was about arithmetic — determinism, a sweep, a drift, a rasterisation loss — and none of
+  them asked whether the scene needed the arithmetic. A block whose cells all hold the same number
+  passes every check it has, converges perfectly, conserves to twelve digits, and answers a
+  question one ordinary differential equation answers; the report reads exactly like the report of
+  a scene with a real gradient.
+
+  It measures the last frame's `peak − coldest` over the range that domain's readings covered
+  across the run, against a threshold with its corpus written beside it. Of thirty shipped scenes,
+  eleven domains report both, and the gap is a factor of five:
+
+      0.00000  30-two-phases-crossing         phase_a and phase_b
+      0.00134  19-a-coating-stops-the-heat    joint
+      0.02108  29-a-designed-bracket          bracket
+      ----------------------------------------------- 0.05
+      0.10645  24-a-power-module              module
+      0.79150  23-a-part-radiating-to-its-lid housing
+
+  `30-two-phases-crossing-at-a-clearance` states two busbars of thirty-two cells apiece whose
+  spread is **exactly zero**, and `29-a-designed-bracket-becomes-cells` rasterises 4 100 cells from
+  an STL to hold 0.067 K at `Bi = 8.6e-4`. `pantometry verify` exits 1 on six shipped scenes now,
+  and `scene.rs` pins that set so a seventh is a failure rather than a quieter list. FRICTION.md
+  finding 36.
 
 - **A closed form agreed to `1.1e-4` with a power module whose junction temperature was 32.5%
   wrong.** `24-a-power-module-junction-to-ambient` is checked against a resistance stack written
