@@ -179,9 +179,13 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
     };
     println!("  {findings} findings, {fixed} fixed");
 
+    // The total was spelled by hand here and in `lib.rs` below, which is the third and fourth
+    // instance of the mistake this file already records twice: a hard-coded half refuses a correct
+    // document the day a finding is actioned, and it did — finding 35 turned the gate red on eight
+    // documents that were all right. Both halves come from the count now, everywhere.
     phrase(
         "app/pantometry-world/FRICTION.md",
-        "**{} of the thirty-four are fixed**",
+        &format!("**{{}} of the {} are fixed**", WORDS[findings]),
         fixed,
     );
     phrase(
@@ -227,7 +231,7 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
     );
     phrase(
         "app/pantometry-world/src/lib.rs",
-        "beside this crate. {} of the thirty-four are",
+        &format!("beside this crate. {{}} of the {} are", WORDS[findings]),
         fixed,
     );
     phrase(

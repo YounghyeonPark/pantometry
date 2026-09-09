@@ -6,7 +6,7 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Twenty-nine of the thirty-four are
+//! Findings are collected in `FRICTION.md` beside this crate. Thirty of the thirty-five are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
 //! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
 //! written and this line is one of them. It had been stale for two releases before it was.
@@ -851,6 +851,18 @@ pub enum DomainSpec {
         /// the gradient between there and the heatsink is the question.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         dissipation: Vec<DissipationSpec>,
+        /// Interior faces that carry a **contact resistance** — a bolted joint, a thermal
+        /// interface material, a solder layer. See [`ContactSpec`].
+        ///
+        /// **The only way to state a layer thinner than a cell.** A `regions` entry is at
+        /// least one cell thick, so the thinnest resistance a grid can state is `dx/k` — a
+        /// floor, not a discretisation error, since refining the mesh only lowers it. The
+        /// power module in this workspace had its 100 µm solder written as a 1.5 mm region
+        /// because 1.5 mm was that floor, carrying fifteen times its own resistance; and the
+        /// interface between its baseplate and the cold plate, the largest resistance in a
+        /// real junction-to-ambient path, could not be written at all.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        contact: Vec<ContactSpec>,
     },
     /// A solid body under load, solved for its displacement — `pantometry-elastic`'s `Block`.
     ///
@@ -2339,6 +2351,7 @@ impl DomainSpec {
                 parts,
                 cooling,
                 dissipation,
+                contact,
                 // The device is the application's to honour, not the builder's: this workspace
                 // cannot carry a GPU stack. `World::build` refuses `Gpu` below, by name.
                 device: _,
@@ -2497,6 +2510,9 @@ impl DomainSpec {
                             area: Area::from_si(cool.area_cm2 * 1e-4),
                         },
                     );
+                    if let Some(h) = cool.contact_w_per_m2_k {
+                        block = block.mounted_on(cool.face.to_face(), h);
+                    }
                 }
                 if let Some(spot) = hot_spot {
                     block.set_temperature(
@@ -2545,6 +2561,79 @@ impl DomainSpec {
                         ));
                     }
                     block = block.dissipating(d.watts, inside);
+                }
+
+                // **Joints last**, because a contact is a property of a face and every key
+                // above decides what is on either side of one: a region changes the
+                // materials the harmonic mean is taken between, and a part or a void can
+                // make a face carry nothing at all.
+                let mut joined: std::collections::BTreeSet<(AxisSpec, usize, usize, usize)> =
+                    std::collections::BTreeSet::new();
+                for (n, c) in contact.iter().enumerate() {
+                    let site = format!("{name}/contact[{n}]");
+                    c.check(&site, *cells)?;
+                    let (axis, _) = c.axis.split();
+                    // How many faces this entry actually reaches, and how many of those
+                    // carry anything. A joint stated across a clearance is inert — the
+                    // harmonic mean is already zero there — and inert is exactly the
+                    // failure this format refuses everywhere else.
+                    let (mut selected, mut live) = (0usize, 0usize);
+                    for k in 0..cells[2] {
+                        for j in 0..cells[1] {
+                            for i in 0..cells[0] {
+                                let cell = [i, j, k];
+                                if cell[axis] != c.at || !c.covers(cell) {
+                                    continue;
+                                }
+                                selected += 1;
+                                let mut low = cell;
+                                low[axis] -= 1;
+                                if block
+                                    .face_conductance((low[0], low[1], low[2]), (i, j, k))
+                                    .is_some_and(|g| g.to_si() > 0.0)
+                                {
+                                    live += 1;
+                                }
+                                if !joined.insert((c.axis, i, j, k)) {
+                                    return Err(format!(
+                                        "{site}: the face at {cell:?} along {:?} already \
+                                          carries a contact from an earlier entry, and a \
+                                          face has one resistance — state the joint that \
+                                          is really there",
+                                        c.axis
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    if selected == 0 {
+                        return Err(format!(
+                            "{site}: {:?} at {} selects no faces of a {}x{}x{} block",
+                            c.axis, c.at, cells[0], cells[1], cells[2]
+                        ));
+                    }
+                    if live == 0 {
+                        return Err(format!(
+                            "{site}: every one of the {selected} faces it names has nothing \
+                              on one side of it, so the {} W/m²K joint would resist a \
+                              clearance that already carries no heat",
+                            c.w_per_m2_k
+                        ));
+                    }
+                    if live < selected {
+                        log.notes.push(format!(
+                            "{name}: contact[{n}] names {selected} faces and {live} of them \
+                              conduct; the rest are clearances and a joint across one \
+                              changes nothing"
+                        ));
+                    }
+                    let axis_of = c.axis.to_axis();
+                    let h = c.w_per_m2_k;
+                    let spec = *c;
+                    block = block.joined(move |a, i, j, k| {
+                        (a == axis_of && [i, j, k][axis] == spec.at && spec.covers([i, j, k]))
+                            .then_some(h)
+                    });
                 }
 
                 for patch in block.gap_patches() {
@@ -2889,6 +2978,23 @@ pub struct CoolingSpec {
     pub convection_w_per_m2_k: f64,
     /// The whole face's area, in square centimetres.
     pub area_cm2: f64,
+    /// A **contact resistance** between this face and whatever cools it, W·m⁻²·K⁻¹.
+    ///
+    /// Thermal grease is five to twenty thousand, a dry bolted joint a few hundred to a few
+    /// thousand, a soldered baseplate hundreds of thousands. Absent is a face bolted to its film
+    /// with nothing in between, which is what every scene written before this key is.
+    ///
+    /// **It is usually the largest resistance in a junction-to-ambient path and this format could
+    /// not say it.** `contact` states a joint between two cells; a mounting is on the one face
+    /// that has no cell on the other side of it. On the power module in this workspace an
+    /// interface at 5000 W·m⁻²·K⁻¹ is 1.39 K/W against a stack of 3.14 K/W — a
+    /// junction-to-ambient answer that was 44% too good, and nothing in the file said so.
+    ///
+    /// The film's radiative half stays in parallel with convection and in series with this, so a
+    /// hot, black, heavily greased face is modelled as radiating from the outside of its own
+    /// interface material. See `Solid3D::mounted_on` for what that costs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_w_per_m2_k: Option<f64>,
 }
 
 /// Which outer face of a block a [`CoolingSpec`] is about.
@@ -2950,7 +3056,171 @@ impl CoolingSpec {
         if !self.ambient_c.is_finite() {
             return Err(format!("{site}: ambient_c is {}", self.ambient_c));
         }
+        if let Some(h) = self.contact_w_per_m2_k {
+            if !h.is_finite() || h < 0.0 {
+                return Err(format!(
+                    "{site}: contact_w_per_m2_k is {h}, and a mounting carries a conductance per \
+                     unit area that is zero or more — zero is a face bolted on through a perfect \
+                     insulator, which loses nothing at all"
+                ));
+            }
+        }
         Ok(())
+    }
+}
+
+/// One sheet of interior faces in a [`DomainSpec::Block`] carrying a contact resistance.
+///
+/// ```json
+/// "contact": [
+///   { "axis": "z", "at": 6, "w_per_m2_k": 20000.0 }
+/// ]
+/// ```
+///
+/// `axis` and `at` name a **plane of faces**: `"z"` with `at: 6` is every face between the cells
+/// at `k = 5` and the cells at `k = 6`. `at` is the index of the cell on the face's high side, so
+/// it runs from `1` to `cells[axis] - 1`; `at: 0` is the block's outer boundary, which is
+/// `cooling`'s to describe and not this key's.
+///
+/// # What the number means
+///
+/// `w_per_m2_k` is a conductance **per unit area**, in series with the two half cells the face
+/// already carries. A dry bolted aluminium joint is a few hundred to a few thousand; the same
+/// joint with a thermal grease is five to twenty thousand; a soldered one is hundreds of
+/// thousands. `0` is a clearance that carries nothing. There is no default and no right one.
+///
+/// It has **no thickness**, which is the whole point. A `regions` entry is a box of cells and so
+/// is at least one cell thick; a joint that is thinner than the grid cannot be written as one at
+/// any bound, and choosing a grid that could resolve it means cells a hundred times finer in every
+/// direction to carry a layer with no interesting field inside it.
+///
+/// # A patch rather than a whole plane
+///
+/// `from` and `to` restrict it to a box on that plane, and they are the **other two axes in
+/// x-y-z order**: for `axis: "z"` they are `[i, j]`, for `axis: "y"` they are `[i, k]`, and for
+/// `axis: "x"` they are `[j, k]`. Half-open like every other index in this format, so a single
+/// face is `to = from + 1`. That is how a bolted bracket says its pads touch and the rest of the
+/// flange does not.
+///
+/// ```json
+/// { "axis": "z", "at": 6, "w_per_m2_k": 3000.0, "from": [2, 2], "to": [6, 6] }
+/// ```
+///
+/// A patch that selects **no live face** is refused rather than ignored — the same silent failure
+/// a `regions` entry with mistyped bounds would be, and the same answer.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactSpec {
+    /// Which direction the faces are normal to.
+    pub axis: AxisSpec,
+    /// The index of the cell on the face's high side, from `1` to `cells[axis] - 1`.
+    pub at: usize,
+    /// The contact conductance, W·m⁻²·K⁻¹. `0` is a clearance.
+    pub w_per_m2_k: f64,
+    /// The first face of the patch, in the two axes other than `axis`. Absent is the whole plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<[usize; 2]>,
+    /// One past the last face of the patch. Absent is the whole plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<[usize; 2]>,
+}
+
+/// Which direction a [`ContactSpec`]'s faces are normal to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum AxisSpec {
+    /// Faces normal to `x`.
+    X,
+    /// Faces normal to `y`.
+    Y,
+    /// Faces normal to `z`.
+    Z,
+}
+
+impl AxisSpec {
+    /// The domain's own axis.
+    fn to_axis(self) -> pantometry::thermal::Axis {
+        use pantometry::thermal::Axis;
+        match self {
+            AxisSpec::X => Axis::X,
+            AxisSpec::Y => Axis::Y,
+            AxisSpec::Z => Axis::Z,
+        }
+    }
+
+    /// Which of `cells` this axis indexes, and the two it does not, in x-y-z order.
+    fn split(self) -> (usize, [usize; 2]) {
+        match self {
+            AxisSpec::X => (0, [1, 2]),
+            AxisSpec::Y => (1, [0, 2]),
+            AxisSpec::Z => (2, [0, 1]),
+        }
+    }
+}
+
+impl ContactSpec {
+    /// Whether the face on the high side of cell `(i, j, k)` is in this patch.
+    ///
+    /// The axis and the plane are the caller's to check; this is the box on the plane. A spec with
+    /// no `from`/`to` covers all of it.
+    fn covers(&self, cell: [usize; 3]) -> bool {
+        let (_, other) = self.axis.split();
+        match (self.from, self.to) {
+            (Some(lo), Some(hi)) => {
+                (0..2).all(|a| cell[other[a]] >= lo[a] && cell[other[a]] < hi[a])
+            }
+            _ => true,
+        }
+    }
+
+    /// Refuse what cannot be meant, naming the file's own words.
+    fn check(&self, site: &str, cells: [usize; 3]) -> Result<(), String> {
+        let (axis, other) = self.axis.split();
+        if self.at == 0 {
+            return Err(format!(
+                "{site}: at is 0, which is the block's outer face along {:?} and not a face \
+                 between two cells — a boundary loses heat through `cooling`, not through a \
+                 contact",
+                self.axis
+            ));
+        }
+        if self.at >= cells[axis] {
+            return Err(format!(
+                "{site}: at is {} and the block is {} cells along {:?}, so the last interior \
+                 face is at {}",
+                self.at,
+                cells[axis],
+                self.axis,
+                cells[axis] - 1
+            ));
+        }
+        if !self.w_per_m2_k.is_finite() || self.w_per_m2_k < 0.0 {
+            return Err(format!(
+                "{site}: w_per_m2_k is {}, and a joint carries a conductance per unit area that \
+                 is zero or more — zero is a clearance",
+                self.w_per_m2_k
+            ));
+        }
+        // A box has to be a box, and it has to be inside the plane. Refused rather than clamped:
+        // a patch silently trimmed to nothing is the failure this whole check exists for.
+        match (self.from, self.to) {
+            (Some(lo), Some(hi)) => {
+                for a in 0..2 {
+                    if hi[a] <= lo[a] || hi[a] > cells[other[a]] {
+                        return Err(format!(
+                            "{site}: {lo:?}..{hi:?} selects no faces of a {}x{} plane; `to` is \
+                             one past the last face, so a single face is `to = from + 1`",
+                            cells[other[0]], cells[other[1]]
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            (None, None) => Ok(()),
+            _ => Err(format!(
+                "{site}: a patch needs both from and to, or neither for the whole plane"
+            )),
+        }
     }
 }
 

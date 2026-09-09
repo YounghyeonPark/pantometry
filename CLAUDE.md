@@ -179,10 +179,10 @@ earned and was not.
 | read | before |
 | --- | --- |
 | [RELEASING.md](RELEASING.md) | any release. Cadence, the **nine** places a version lives, the crate order, the wheel, what the pipeline has actually been run through — and what it costs to change the project's name, which is not a rename because a published name is permanent |
-| [EVIDENCE.md](EVIDENCE.md) | claiming that something is checked. Eleven sections of what the closed forms are and what checking against them found, including two defects the conservation audit called clean |
+| [EVIDENCE.md](EVIDENCE.md) | claiming that something is checked. Twelve sections of what the closed forms are and what checking against them found, including two defects the conservation audit called clean and one a closed form agreed with to `1.1e-4` while it was 32.5% wrong |
 | [EXAMPLES.md](EXAMPLES.md) | adding or changing an example. What each one demonstrates and what it checks itself against |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | changing a test or a tolerance. The authority on the gate and on the five conventions in full |
-| [app/pantometry-world/FRICTION.md](app/pantometry-world/FRICTION.md) | changing the public API. Thirty-four findings from using the SDK as a stranger, five of them the same underlying decision |
+| [app/pantometry-world/FRICTION.md](app/pantometry-world/FRICTION.md) | changing the public API. Thirty-five findings from using the SDK as a stranger, five of them the same underlying decision |
 | [bindings/python/README.md](bindings/python/README.md) | touching the bindings. Its own cargo workspace, its own gate, and the two boundary decisions not to relitigate |
 | [app/README.md](app/README.md) | touching anything a person *runs*. One workspace, one binary: the CLI, the viewer, the editor and the GPU accelerator. What the merge bought, what it cost, and the gate it has of its own |
 | [app/viewer-core/README.md](app/viewer-core/README.md) | touching the viewer. Why it does not link `pantometry`, and the test that holds that now the workspace boundary does not |

@@ -14,26 +14,6 @@
         "expansion": 2.6e-6,
         "emissivity": 0.6
       }
-    },
-    "sac305": {
-      "name": "SAC305 solder",
-      "density": 7400.0,
-      "thermal": {
-        "conductivity": 58.0,
-        "specific_heat": 220.0,
-        "expansion": 2.15e-5,
-        "emissivity": 0.3
-      }
-    },
-    "alumina": {
-      "name": "Al2O3 96% (DBC)",
-      "density": 3720.0,
-      "thermal": {
-        "conductivity": 24.0,
-        "specific_heat": 880.0,
-        "expansion": 7.4e-6,
-        "emissivity": 0.8
-      }
     }
   },
   "domains": [
@@ -45,15 +25,23 @@
       "initial_c": 40.0,
       "material": "copper",
       "regions": [
-        { "material": "alumina", "from": [0, 0, 3], "to": [8, 8, 4] },
-        { "material": "sac305", "from": [0, 0, 5], "to": [8, 8, 6] },
         { "material": "silicon", "from": [0, 0, 6], "to": [8, 8, 8] }
+      ],
+      "contact": [
+        { "axis": "z", "at": 4, "w_per_m2_k": 38095.238095238095 },
+        { "axis": "z", "at": 6, "w_per_m2_k": 580000.0 }
       ],
       "dissipation": [
         { "watts": 45.0, "from": [0, 0, 7], "to": [8, 8, 8] }
       ],
       "cooling": [
-        { "face": "z-min", "ambient_c": 40.0, "convection_w_per_m2_k": 3000.0, "area_cm2": 1.44 }
+        {
+          "face": "z-min",
+          "ambient_c": 40.0,
+          "convection_w_per_m2_k": 3000.0,
+          "area_cm2": 1.44,
+          "contact_w_per_m2_k": 5000.0
+        }
       ]
     }
   ]

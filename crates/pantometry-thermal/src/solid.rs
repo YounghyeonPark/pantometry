@@ -144,6 +144,21 @@ pub enum Face {
     ZMax,
 }
 
+/// Which of the three grid directions a face is normal to.
+///
+/// A [`Face`] names one of the six **outer** faces; this names an interior one, together with the
+/// index of the cell on its high side. `Axis::X` with `i` is the face between `(i-1, j, k)` and
+/// `(i, j, k)`, which is `kx`'s own indexing said in words rather than in arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Axis {
+    /// Faces normal to `x`.
+    X,
+    /// Faces normal to `y`.
+    Y,
+    /// Faces normal to `z`.
+    Z,
+}
+
 /// The resolved seven-point operator, borrowed — see [`Solid3D::coefficients`].
 ///
 /// Named rather than a tuple of five slices, because five slices of the same type in a row is a
@@ -213,6 +228,23 @@ pub struct Solid3D {
     kx: Vec<f64>,
     ky: Vec<f64>,
     kz: Vec<f64>,
+    /// Contact conductance on each face, W·m⁻²·K⁻¹, indexed exactly as `kx`/`ky`/`kz` are — see
+    /// [`Solid3D::joined`]. `+∞` is a face with nothing stated, which is every face of a block
+    /// nobody has joined.
+    ///
+    /// **Empty until a contact is placed**, and read only when it is not. A block with no joints
+    /// carries no array and pays nothing, which matters because these are the same length as the
+    /// face conductivities and those are the largest arrays here after the cells themselves.
+    hx: Vec<f64>,
+    hy: Vec<f64>,
+    hz: Vec<f64>,
+    /// The first contact conductance that cannot be used, if any was stated — negative, or not a
+    /// number. Kept so the refusal can **name what happened**.
+    ///
+    /// Without it a bad joint takes the same road a substance with no conductivity takes, and the
+    /// sweep says "substance has no diffusivity" to a caller whose substances are all fine. That
+    /// message sends them to their materials, which is the one place the fault is not.
+    bad_contact: Option<f64>,
     /// Per-cell `dx / C_i`, which is what multiplies `Σ k_f ΔT` to give a rate of temperature.
     mobility: Vec<f64>,
     /// Per-cell heat capacity `ρ_i c_i dx³`, in J/K. `NaN` where a substance does not say.
@@ -272,6 +304,13 @@ pub struct Solid3D {
     /// Which faces lose heat, and to what. Empty is the adiabatic block every scene had until
     /// now: six insulated faces and no steady state to reach.
     exposed: BTreeMap<Face, Environment>,
+    /// A contact conductance between an outer face and whatever cools it, W·m⁻²·K⁻¹ — see
+    /// [`Solid3D::mounted_on`]. Absent is a face bolted to its film with nothing in between.
+    ///
+    /// Its own map rather than a field on [`Environment`], because that struct is built by
+    /// literal in nineteen places across this workspace and a joint is a property of the
+    /// mounting rather than of the air.
+    mounted: BTreeMap<Face, f64>,
     /// Joules given up to those environments over the run, and the reason the books still
     /// balance: the ledger is `stored + lost`, so what leaves the cells arrives in this
     /// counter and the total moves only by what crossed the bus. `LumpedMass` keeps the same
@@ -436,6 +475,10 @@ impl Solid3D {
             kx: Vec::new(),
             ky: Vec::new(),
             kz: Vec::new(),
+            hx: Vec::new(),
+            hy: Vec::new(),
+            hz: Vec::new(),
+            bad_contact: None,
             mobility: Vec::new(),
             capacity: Vec::new(),
             melt_point: Vec::new(),
@@ -453,6 +496,7 @@ impl Solid3D {
             gaps: Vec::new(),
             face_sum: Vec::new(),
             exposed: BTreeMap::new(),
+            mounted: BTreeMap::new(),
             lost: 0.0,
             saved_lost: 0.0,
             two_phase: false,
@@ -816,6 +860,39 @@ impl Solid3D {
         };
         let k_of = |cell: usize| mixed[cell].0;
 
+        // **A stated contact, in series with the two half cells.** `series` is the resistance
+        // `dx/(2k_L) + dx/(2k_R)` written as a conductivity; a contact adds `1/h` to it, so
+        //
+        //     1/k_face = 1/k_series + 1/(dx·h)
+        //
+        // `h = +∞` is the unstated face and returns `k` bit for bit, which is why an untouched
+        // block cannot be perturbed by this existing. `h = 0` is a clearance and carries nothing.
+        // A `NaN` conductance makes the face `NaN`, which reaches `worst_rate` and refuses the
+        // sweep — the same road a substance that does not say what it conducts already takes.
+        let contact = |k: f64, h: f64| {
+            if h == f64::INFINITY {
+                return k;
+            }
+            // A **negative** conductance is not a poor joint, it is a mistake: a face that would
+            // carry heat up its own gradient. `NaN` reaches `worst_rate` and refuses the sweep,
+            // which is the road a substance that does not say what it conducts already takes.
+            // Clamping it to an insulator instead would model something nobody asked for and
+            // never say so — and an insulator is a plausible enough answer to go unnoticed.
+            if h.is_nan() || h < 0.0 {
+                return f64::NAN;
+            }
+            // `h = 0` needs no case of its own: `1/(dx·0)` is `+∞` and `1/∞` is zero, which is
+            // the clearance. Guarded on `k` because a void's conductivity is zero and `0/0` is
+            // not a boundary condition.
+            if k <= 0.0 {
+                return 0.0;
+            }
+            1.0 / (1.0 / k + 1.0 / (dx * h))
+        };
+        // Read only where one was placed, so a block with no joints does no work and needs no
+        // array. `joined` is what fills these, and it fills all three or none.
+        let joined = !self.hx.is_empty();
+
         self.kx = vec![0.0; (nx + 1) * ny * nz];
         self.ky = vec![0.0; nx * (ny + 1) * nz];
         self.kz = vec![0.0; nx * ny * (nz + 1)];
@@ -824,13 +901,31 @@ impl Solid3D {
                 for i in 0..nx {
                     let c = i + nx * (j + ny * k);
                     if i > 0 {
-                        self.kx[i + (nx + 1) * (j + ny * k)] = series(k_of(c - 1), k_of(c));
+                        let f = i + (nx + 1) * (j + ny * k);
+                        let k_f = series(k_of(c - 1), k_of(c));
+                        self.kx[f] = if joined {
+                            contact(k_f, self.hx[f])
+                        } else {
+                            k_f
+                        };
                     }
                     if j > 0 {
-                        self.ky[i + nx * (j + (ny + 1) * k)] = series(k_of(c - nx), k_of(c));
+                        let f = i + nx * (j + (ny + 1) * k);
+                        let k_f = series(k_of(c - nx), k_of(c));
+                        self.ky[f] = if joined {
+                            contact(k_f, self.hy[f])
+                        } else {
+                            k_f
+                        };
                     }
                     if k > 0 {
-                        self.kz[i + nx * (j + ny * k)] = series(k_of(c - nx * ny), k_of(c));
+                        let f = i + nx * (j + ny * k);
+                        let k_f = series(k_of(c - nx * ny), k_of(c));
+                        self.kz[f] = if joined {
+                            contact(k_f, self.hz[f])
+                        } else {
+                            k_f
+                        };
                     }
                 }
             }
@@ -1117,6 +1212,110 @@ impl Solid3D {
         self.void.iter().filter(|v| **v).count()
     }
 
+    /// A **contact conductance** on the interior faces `which` names, in W·m⁻²·K⁻¹.
+    ///
+    /// Called for every interior face as `which(axis, i, j, k)`, where the triple is the cell on
+    /// the face's high side: `Axis::X` with `i` is the face between `(i-1, j, k)` and `(i, j, k)`.
+    /// `Some(h)` places a contact there and `None` leaves the face as it was.
+    ///
+    /// # The resistance this adds, and why a face is the only place it can go
+    ///
+    /// A face already carries the two half cells in series, `dx/(2k_L) + dx/(2k_R)`, which is the
+    /// harmonic mean written as a conductivity. A contact adds `1/h` to that resistance:
+    ///
+    /// ```text
+    /// 1/k_face = 1/k_series + 1/(dx·h)
+    /// ```
+    ///
+    /// so `h = ∞` returns the harmonic mean **exactly** — an unstated face is unchanged, not
+    /// approximately unchanged — and `h = 0` carries nothing at all, which is a clearance.
+    ///
+    /// **This is the only way to state a layer thinner than a cell.** A bolted joint, a thermal
+    /// interface material, a solder layer, an oxide: all of them are resistances of a few tens of
+    /// microns in a part discretised at a millimetre. A layer of *material* is at least one cell
+    /// thick, so the thinnest resistance a grid can state is `dx/k`, and a grid fine enough to
+    /// resolve a real joint is a hundred times finer in every direction — a million times the work
+    /// to carry a layer with no interesting field inside it. That is a **floor**, not a
+    /// discretisation error: refining the mesh does not approach the right answer, it only makes
+    /// the floor lower and the run longer.
+    ///
+    /// A contact has a resistance and no thickness, so there is no floor and no grid dependence.
+    ///
+    /// Measured on the power module that ships with this workspace: its 100 µm solder was written
+    /// as a 1.5 mm region because 1.5 mm was the floor, carrying **fifteen times** its own
+    /// resistance, and the interface material between the baseplate and the cold plate — the
+    /// largest resistance in a real junction-to-ambient path — could not be written at all.
+    ///
+    /// # What it does not change
+    ///
+    /// **Stability.** A contact only ever lowers a face conductivity, so `Σ_f k_f` falls, so the
+    /// explicit limit gets looser. Adding one can never make a step that was stable unstable.
+    ///
+    /// **Conservation.** The same conductance is read from both sides of the face, so what leaves
+    /// one cell arrives in the other exactly, as it does without one.
+    ///
+    /// A face named more than once takes the **last** value, and a face on the outer boundary is
+    /// ignored: there is no cell on the other side of it, and what a block loses at its boundary
+    /// is [`losing_from`](Solid3D::losing_from).
+    pub fn joined(mut self, which: impl Fn(Axis, usize, usize, usize) -> Option<f64>) -> Solid3D {
+        let (nx, ny, nz) = self.counts;
+        if self.hx.is_empty() {
+            self.hx = vec![f64::INFINITY; (nx + 1) * ny * nz];
+            self.hy = vec![f64::INFINITY; nx * (ny + 1) * nz];
+            self.hz = vec![f64::INFINITY; nx * ny * (nz + 1)];
+        }
+        let mut bad = self.bad_contact;
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let mut note = |h: f64| {
+                        if (h.is_nan() || h < 0.0) && bad.is_none() {
+                            bad = Some(h);
+                        }
+                        h
+                    };
+                    if i > 0 {
+                        if let Some(h) = which(Axis::X, i, j, k) {
+                            self.hx[i + (nx + 1) * (j + ny * k)] = note(h);
+                        }
+                    }
+                    if j > 0 {
+                        if let Some(h) = which(Axis::Y, i, j, k) {
+                            self.hy[i + nx * (j + (ny + 1) * k)] = note(h);
+                        }
+                    }
+                    if k > 0 {
+                        if let Some(h) = which(Axis::Z, i, j, k) {
+                            self.hz[i + nx * (j + ny * k)] = note(h);
+                        }
+                    }
+                }
+            }
+        }
+        self.bad_contact = bad;
+        self.resolve();
+        self
+    }
+
+    /// The contact conductance stated on one interior face, or `None` if none was.
+    ///
+    /// The counterpart of [`face_conductance`](Solid3D::face_conductance), which reports what the
+    /// sweep uses — the two half cells **and** any contact, together. This reports the contact
+    /// alone, so a caller can check the series by hand rather than infer it from the total.
+    pub fn contact_at(&self, axis: Axis, i: usize, j: usize, k: usize) -> Option<f64> {
+        let (nx, ny, nz) = self.counts;
+        if self.hx.is_empty() || i >= nx || j >= ny || k >= nz {
+            return None;
+        }
+        let h = match axis {
+            Axis::X if i > 0 => self.hx[i + (nx + 1) * (j + ny * k)],
+            Axis::Y if j > 0 => self.hy[i + nx * (j + (ny + 1) * k)],
+            Axis::Z if k > 0 => self.hz[i + nx * (j + ny * k)],
+            _ => return None,
+        };
+        h.is_finite().then_some(h)
+    }
+
     /// Expose a face to an environment, so the block can lose heat through it.
     ///
     /// **Until this existed a `Solid3D` was adiabatic on all six faces**, which means no
@@ -1143,6 +1342,47 @@ impl Solid3D {
         self.exposed.insert(face, environment);
         self.resolve();
         self
+    }
+
+    /// A **contact resistance** between an outer face and whatever cools it, W·m⁻²·K⁻¹.
+    ///
+    /// The boundary's half of [`joined`](Solid3D::joined), and the same physics on the one face
+    /// that method cannot reach: `joined` puts a resistance between two cells, and a part bolted
+    /// to a heatsink has one between its last cell and the film. Thermal grease is five to twenty
+    /// thousand; a dry bolted joint a few hundred to a few thousand; a soldered baseplate
+    /// hundreds of thousands.
+    ///
+    /// In series with the film **and** with the half cell of solid the film already sits behind,
+    /// so the path from a boundary cell's centre outwards is
+    ///
+    /// ```text
+    /// dx/(2kA)   +   1/(h_mount·A)   +   1/((h_conv + 4εσT³)·A)
+    /// ```
+    ///
+    /// # Where the radiative term sits, and why it is behind the joint
+    ///
+    /// `Environment` derives radiation from the surface's emissivity, and that term stays in
+    /// parallel with convection and in series with the joint — the coolant sees the *outer* face
+    /// of the interface material. A surface buried under a filled joint does not radiate at all,
+    /// so this is wrong in the limit of a hot, black, heavily greased face; it is worth stating
+    /// because it is not worth measuring here. On the power module that ships with this
+    /// workspace the cold face sits 5 K above a 40 °C plate and copper's emissivity is 0.03, so
+    /// the radiative term is 0.03% of a 3000 W·m⁻²·K⁻¹ film.
+    ///
+    /// **Stability.** A mounting only lowers a boundary conductance, so the limit gets looser —
+    /// the same argument [`joined`](Solid3D::joined) makes for an interior face.
+    ///
+    /// A face with no film is unaffected: there is nothing for the joint to be in series with,
+    /// and a resistance to nowhere carries nothing either way.
+    pub fn mounted_on(mut self, face: Face, w_per_m2_k: f64) -> Solid3D {
+        self.mounted.insert(face, w_per_m2_k);
+        self.resolve();
+        self
+    }
+
+    /// The contact conductance between one outer face and its film, if one was stated.
+    pub fn mounting_of(&self, face: Face) -> Option<f64> {
+        self.mounted.get(&face).copied()
     }
 
     /// Generate `watts` **spread evenly over the cells `where_` selects**, replacing whatever
@@ -1292,6 +1532,25 @@ impl Solid3D {
     ///
     /// The **secant** conductance of the bare surface, which is the exact one for this flux,
     /// put in series with the half cell of solid behind it. Positive means heat leaving.
+    /// A boundary film's conductance with the mounting in series, both in W/K.
+    ///
+    /// **Two callers and one function, deliberately.** The boundary loss is computed twice — once
+    /// by `loss_conductance_at` for the stability limit and once by `film_flux` for the heat that
+    /// actually moves — and the first version of `mounted_on` changed only the first. The limit
+    /// got looser, the flux did not, and a face bolted on through a perfect insulator shed 1004 J
+    /// while reporting a step it had earned. Nothing about that looks wrong from either side.
+    fn outward(&self, face: &Face, film: f64, share: f64) -> f64 {
+        match self.mounted.get(face) {
+            // A joint of zero carries nothing, and nothing is not a small number: a block that
+            // cannot lose heat has no steady state, and one that loses a little has one far away.
+            Some(m) if *m <= 0.0 => 0.0,
+            Some(m) if m.is_finite() => 1.0 / (1.0 / film + 1.0 / (m * share)),
+            // `+∞`, or no mounting at all: the film as it was, bit for bit rather than through a
+            // reciprocal that need not round-trip.
+            _ => film,
+        }
+    }
+
     fn film_flux(&self, old: &[f64], cell: (usize, usize, usize), c: usize) -> f64 {
         let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
         let emissivity = thermal.map_or(0.0, |t| t.emissivity);
@@ -1315,7 +1574,12 @@ impl Solid3D {
             }
             .loss_from(here, emissivity)
             .to_si();
-            let g = series_with_half_cell(bare / gap, conductivity, share, dx);
+            let g = series_with_half_cell(
+                self.outward(face, bare / gap, share),
+                conductivity,
+                share,
+                dx,
+            );
             out += g * gap / dx;
         }
         out
@@ -1437,8 +1701,11 @@ impl Solid3D {
                 let hot = at.to_si().max(env.ambient.to_si());
                 let h = env.convection_w_per_m2_k
                     + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * hot.powi(3);
+                // The mounting, between the film and the half cell — through `outward`, which
+                // `film_flux` also calls, because the limit and the flux disagreeing about a
+                // boundary is a defect with no symptom on either side alone.
                 series_with_half_cell(
-                    h * share,
+                    self.outward(face, h * share, share),
                     thermal.map_or(f64::INFINITY, |t| t.conductivity.to_si()),
                     share,
                     self.dx.to_si(),
@@ -1933,9 +2200,16 @@ impl Domain for Solid3D {
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
         let ratio = self.stability_ratio(dt);
         if ratio.is_nan() {
+            // A bad joint and a substance with no conductivity both leave the limit unsayable, and
+            // they are not the same fault. Naming the first sends a caller to their materials,
+            // which is where a bad joint is not.
             return Err(Violation::at(
                 &self.name,
-                "substance has no diffusivity",
+                match self.bad_contact {
+                    Some(h) if h.is_nan() => "a joint's contact conductance is not a number",
+                    Some(_) => "a joint's contact conductance is negative",
+                    None => "substance has no diffusivity",
+                },
                 f64::INFINITY,
             ));
         }

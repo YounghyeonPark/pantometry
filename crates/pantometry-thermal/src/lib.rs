@@ -64,7 +64,7 @@ use pantometry_units::{
     Area, Energy, HeatCapacity, Length, LengthVec, Power, Temperature, Time, Volume,
     STEFAN_BOLTZMANN,
 };
-pub use solid::{Face, GapPatch, Solid3D, STABLE_FOURIER_3D};
+pub use solid::{Axis, Face, GapPatch, Solid3D, STABLE_FOURIER_3D};
 
 /// The bus channel heat arrives on, in joules.
 ///

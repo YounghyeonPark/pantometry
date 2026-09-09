@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Twenty-nine of the thirty-four are fixed**, and five are recorded rather than actioned. The reasons
+**Thirty of the thirty-five are fixed**, and five are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
@@ -597,7 +597,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Thirty-four findings, and the source has shifted seven times.
+Thirty-five findings, and the source has shifted seven times.
 
 | how many | where they came from |
 | --- | --- |
@@ -863,6 +863,47 @@ for no other reason.
 
 **Fixed.** Both are `{:.9e}`. A scene format spanning nanoseconds to hours and picojoules to
 megajoules has no scale a fixed format could have been chosen for.
+
+---
+
+## 35. A joint thinner than a cell could not be stated, and the module scene was 32.5% low for it
+
+Every real thermal design is a chain of **contact resistances**: a die soldered to a substrate, a
+substrate bonded to a baseplate, a baseplate bolted to a heatsink through grease. All of them are
+tens of microns thick in a part discretised at a millimetre, and this format could state none of
+them.
+
+The reason is not an oversight, it is a floor. A `regions` entry is a box of **cells**, so the
+thinnest resistance it can express is `dx/k`. Refining the mesh only lowers the floor; it does not
+approach the right answer, because there is no right answer being approached — the layer's stated
+thickness is whatever the grid can say. And no grid a real part can afford reaches 100 µm: on a
+12 mm module that is 120 cells a side, a million times the work to carry a layer with no
+interesting field inside it.
+
+So the scenes wrote what they could. `24-a-power-module-junction-to-ambient` had its 100 µm solder
+as a 1.5 mm region — **fifteen times** its own resistance — and its 0.63 mm DBC ceramic as another.
+Meanwhile the **largest** resistance in a real junction-to-ambient path was absent altogether,
+because a mounting is on the one face that has no cell on the other side of it and nothing in the
+format described that face except the film in front of it.
+
+The two errors pushed opposite ways and left a plausible number:
+
+| the scene said | with the joints stated |
+| --- | --- |
+| 3.1379 K/W, junction at 181.19 °C | 4.1594 K/W, junction at 227.15 °C |
+
+**32.5% low on the number the scene is named after**, and every check it had agreed with it to
+`1.1e-4` — because they were all checking the same stack the file described.
+
+**Fixed**, in two halves that are the same physics on two kinds of face. `Solid3D::joined` puts a
+conductance on an interior face, in series with the two half cells already there, so
+`1/k_face = 1/k_series + 1/(dx·h)`; `Solid3D::mounted_on` puts one on an outer face, between the
+half cell and the film. A scene spells them `contact` and `cooling`'s `contact_w_per_m2_k`. An
+unstated joint returns the harmonic mean bit for bit, a joint of zero is a clearance, and a
+negative one is refused by name rather than quietly modelled as an insulator.
+
+The joint has a resistance and **no thickness**, so the cell size can go back to being chosen for
+the part.
 
 ---
 

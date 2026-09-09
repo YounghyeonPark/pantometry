@@ -1145,6 +1145,7 @@ impl DomainSpec {
                 parts,
                 cooling,
                 dissipation,
+                contact,
                 device,
             } => {
                 if hot_spot.is_some() {
@@ -1197,6 +1198,23 @@ impl DomainSpec {
                             watts: d.watts,
                             from: [d.from[0] * 2, d.from[1] * 2, d.from[2] * 2],
                             to: [d.to[0] * 2, d.to[1] * 2, d.to[2] * 2],
+                        })
+                        .collect(),
+                    // **The place doubles and the conductance does not**, which is the
+                    // whole claim a contact makes: a joint is a resistance per unit area
+                    // with no thickness, so the finer grid puts the same joint on the same
+                    // physical plane and the answer must not move. A one-cell region of
+                    // poor material written to mean the same thing gives back half its
+                    // resistance here, and the sweep reports that as discretisation error
+                    // because that is exactly what it is.
+                    contact: contact
+                        .iter()
+                        .map(|c| crate::ContactSpec {
+                            axis: c.axis,
+                            at: c.at * 2,
+                            w_per_m2_k: c.w_per_m2_k,
+                            from: c.from.map(|f| [f[0] * 2, f[1] * 2]),
+                            to: c.to.map(|t| [t[0] * 2, t[1] * 2]),
                         })
                         .collect(),
                 })

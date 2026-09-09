@@ -2054,17 +2054,39 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // written out below from the geometry and the conductivities. Nothing is read back
                 // from the scene: the layers are named here, the harmonic face mean is the two
                 // half-cells in series, and the film carries the last half cell of copper.
+                //
+                // # Two of the layers stopped being layers, and one resistance was missing
+                //
+                // The solder is **100 µm** and the DBC ceramic **0.63 mm**, against a 1.5 mm cell.
+                // A layer of material is at least one cell, so 1.5 mm was the thinnest either
+                // could be stated as and the solder carried **fifteen times** its own resistance.
+                // That is a floor rather than a discretisation error — the resolution sweep
+                // doubles a region's bounds with the counts, so a 1.5 mm layer stays 1.5 mm and
+                // refining does not approach anything. No grid this scene can carry fixes it
+                // either: 100 µm cells are 120 a side. They are `contact` entries now, which have
+                // a resistance and no thickness.
+                //
+                // And the largest resistance in a real junction-to-ambient path was **absent**.
+                // A baseplate is bolted to its cold plate through an interface material, five to
+                // twenty thousand W/m²K, and this format had no way to say it. At 5000 it is
+                // 1.3889 K/W against a stack that was 3.1379 — so the scene answered 32.5% low on
+                // the number it is named after, while the two thick layers pushed the other way
+                // and left something plausible.
                 let dx = 1.5e-3;
                 let area = (8.0 * dx) * (8.0 * dx);
                 let watts = 45.0;
                 let ambient = 40.0;
-                // k = 0,1,2 copper baseplate | 3 alumina | 4 copper | 5 solder | 6,7 silicon
+                // k = 0..5 copper baseplate and DBC copper | 6,7 silicon. The ceramic and the
+                // solder are no longer cells at all; they are the two contacts below.
                 let k_of = |layer: usize| match layer {
-                    3 => 24.0,      // Al2O3 96%
-                    5 => 58.0,      // SAC305
                     6 | 7 => 148.0, // Si
                     _ => 401.0,     // Cu ETP
                 };
+                // Each joint as its own material and thickness, so the file's `w_per_m2_k` is a
+                // number this test derives rather than one it copies.
+                let ceramic = 24.0 / 0.63e-3; // 0.63 mm of Al2O3 96%
+                let solder = 58.0 / 100e-6; // 100 µm of SAC305
+                let mounting = 5000.0; // the interface material under the baseplate
 
                 // Centre to centre, half a cell of each material per face. This *is* the harmonic
                 // mean the sweep uses, written the other way round — as two resistances in series
@@ -2075,8 +2097,12 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     resistance +=
                         (dx / 2.0) / (k_of(upper) * area) + (dx / 2.0) / (k_of(upper - 1) * area);
                 }
-                // The bottom cell's own half, then the film.
+                // The joints, on the faces the scene names: the ceramic between cells 3 and 4,
+                // the solder between 5 and 6. A contact adds `1/(h·A)` to a face and nothing else.
+                resistance += 1.0 / (ceramic * area) + 1.0 / (solder * area);
+                // The bottom cell's own half, then the mounting, then the film.
                 resistance += (dx / 2.0) / (k_of(0) * area);
+                resistance += 1.0 / (mounting * area);
                 resistance += 1.0 / (3000.0 * area);
 
                 let junction = ambient + watts * resistance;
@@ -2232,11 +2258,22 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 );
 
                 // **And the thermal answer is untouched by being watched.** The coupling is
-                // one-way — nothing writes back into the block — so this run is still the same
-                // physics scene `24` settles: climbing monotonically towards the 181.190771 C its
-                // resistance stack fixes, and not past it. A structure that fed back would leave
-                // that path, and the shape of the climb is a stronger statement than one number
-                // because it holds at every frame rather than at the last.
+                // one-way — nothing writes back into the block — so the junction climbs
+                // monotonically towards the 181.190771 C this scene's own resistance stack fixes,
+                // and not past it. A structure that fed back would leave that path, and the shape
+                // of the climb is a stronger statement than one number because it holds at every
+                // frame rather than at the last.
+                //
+                // # It was scene `24`'s number and it is not any more
+                //
+                // This comment said "the same physics scene `24` settles", and that stopped being
+                // true when `24` learned to state a joint: its solder is a 100 µm contact now, its
+                // ceramic a 0.63 mm one, and its baseplate is bolted through an interface
+                // material — 227.15 C, not 181.19. **This scene keeps the layers**, because a
+                // contact has a resistance and no elements, and the question here is what 140 K
+                // does to the solder: a strain needs a thickness and an expansion coefficient to
+                // act on. The two scenes are the same module and no longer the same stack, which
+                // is worth a sentence rather than a shared constant that quietly drifts.
                 let junction: Vec<f64> = frames.iter().map(|f| reading(f, "peak")).collect();
                 for pair in junction.windows(2) {
                     assert!(
@@ -2247,7 +2284,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let peak = *junction.last().expect("frames");
                 assert!(
                     peak < 181.190_771 && peak > 179.0,
-                    "{name}: 60 s is short of steady, so it sits just under scene 24's                      181.190771 C: {peak:.6} C"
+                    "{name}: 60 s is short of steady, so it sits just under this scene's own                      181.190771 C: {peak:.6} C"
                 );
             }
             "26-poiseuille-in-a-cooling-channel.json" => {

@@ -350,6 +350,45 @@ at 0.61 λ/NA; those are the same zero and the factor of two is the numerical ap
 Asking for encircled energy at the wrong one of them gives 59% instead of 84%, which
 is exactly what happened the first time.
 
+## A closed form agreeing to 1.1e-4 with a model that was 32.5% wrong
+
+The strongest check in this repository's scene battery writes a resistance stack out **term by
+term from the geometry** — every half cell, every conductivity, the film — and compares it against
+the marched answer. On `24-a-power-module-junction-to-ambient` it agreed to `1.1e-4` of a 141 K
+rise. It had agreed to `1.1e-4` since the day it was written.
+
+The junction temperature was wrong by **32.5%**.
+
+Not by a discretisation, and not by a tolerance that was too loose. The closed form and the solver
+were describing the same stack faithfully, and the *stack* was not the module. Two of its layers
+were 1.5 mm because 1.5 mm is one cell and a `regions` entry is a box of cells — the solder is
+100 µm, so it carried fifteen times its own resistance — and the largest resistance in a real
+junction-to-ambient path, the interface material under the baseplate, was not in the file at all
+because nothing in the format could name that face.
+
+| | K/W | junction |
+| --- | --- | --- |
+| as checked, to `1.1e-4` | 3.1379 | 181.19 °C |
+| with the joints stated | 4.1594 | 227.15 °C |
+
+**What this says about closed forms, which are the first of this workspace's five conventions.**
+"Check against a closed form, never against another implementation" is a rule about *arithmetic*,
+and it holds: the agreement was real and the solver is right about the problem it was given. What
+a closed form computed from the file cannot see is the file. Both sides read the same three
+regions and the same one film; a premise shared by the model and its check is not tested by their
+agreement, however tight, and tightness is exactly what makes it look tested.
+
+The two errors also happened to push opposite ways — thick layers up, the missing mounting down —
+so the number that came out was plausible on its own terms. A junction 46 K hotter or 90 K cooler
+would have been questioned. 181 °C was not.
+
+**What caught it** was neither a test nor the audit. It was reading the scene against a datasheet:
+asking what a SAC305 die-attach layer actually measures, and what sits between a baseplate and a
+cold plate. The fix is `Solid3D::joined` and `Solid3D::mounted_on` — a resistance per unit area
+with no thickness, checked against `1/(A·h)` exactly and against the marched steady state to four
+figures — and the scene now states three terms it previously could not. The closed-form check
+still agrees to `1.1e-4`, on a stack that is the module.
+
 ## What the audit tolerance is really measuring
 
 A conservation audit needs a tolerance, and the right one is a property of the

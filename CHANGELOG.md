@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found thirty-four places it is awkward, twenty-nine of which have been changed — see
+has already found thirty-five places it is awkward, thirty of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,31 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
+
+- **A closed form agreed to `1.1e-4` with a power module whose junction temperature was 32.5%
+  wrong.** `24-a-power-module-junction-to-ambient` is checked against a resistance stack written
+  out term by term from the geometry, and it had agreed to `1.1e-4` of a 141 K rise since the day
+  it was written. Both the check and the solver were faithful to the stack in the file; the stack
+  was not the module.
+
+  Its 100 µm solder was a 1.5 mm region, fifteen times its own resistance, because 1.5 mm is one
+  cell. Its 0.63 mm DBC ceramic was another. And the **largest** resistance in a junction-to-ambient
+  path — the interface material under the baseplate — was absent altogether, because a mounting is
+  on the one face with no cell on the other side of it.
+
+      as checked, to 1.1e-4    3.1379 K/W    junction 181.19 °C
+      with the joints stated   4.1594 K/W    junction 227.15 °C
+
+  The two errors pushed opposite ways and left something plausible. A closed form computed from the
+  file cannot see the file: a premise shared by a model and its check is not tested by their
+  agreement, however tight — and tightness is what makes it look tested. Recorded as EVIDENCE.md's
+  twelfth section and FRICTION.md's finding 35.
+
+- **A prose-count test hard-coded the total it was checking, twice more.** `counts_in_prose.rs`
+  already carried two comments recording that mistake — a hard-coded half refuses a correct
+  document the day a finding is actioned — and two of its templates still spelled "thirty-four" by
+  hand. Finding 35 turned the gate red on eight documents that were all correct. Both halves come
+  from the count now, everywhere.
 
 - **A designed part received 61% of the cooling its scene stated.** `losing_from` takes an area and
   the block divides it among the cells on that face so each carries its share — divided by the
@@ -119,6 +144,27 @@ pharmacokinetics, and the count of commits above does not include it.
   argument on it. The real limit is written down instead.
 
 ### Added
+
+- **A face can carry a stated contact resistance.** `Solid3D::joined` puts a conductance on an
+  interior face, in series with the two half cells already there — `1/k_face = 1/k_series +
+  1/(dx·h)` — and `Solid3D::mounted_on` puts one on an outer face, between the half cell and the
+  film. A scene spells them `contact` and `cooling`'s `contact_w_per_m2_k`.
+
+  Every real thermal design is a chain of these: a die soldered to a substrate, a substrate bonded
+  to a baseplate, a baseplate bolted to a heatsink through grease. All are tens of microns thick in
+  a part discretised at a millimetre, and none of them could be stated. That is a **floor**, not a
+  discretisation error: a `regions` entry is a box of cells, so the thinnest resistance it can
+  express is `dx/k`, and refining the mesh lowers the floor rather than approaching an answer. No
+  grid a real part can afford reaches 100 µm — on a 12 mm module that is 120 cells a side.
+
+  A contact has a resistance and no thickness. Checked against `1/(A·h)` exactly across five
+  decades of `h`, and against a marched steady state to four figures: 226.7028 K measured against a
+  closed form of 226.7028, with the joint itself 78.1250 K against `P/(hA)` of 78.1250. `h = +∞`
+  returns the harmonic mean bit for bit; `h = 0` is a clearance; a negative one is refused by name.
+
+  It only ever lowers a conductance, so the explicit stability limit gets looser and a joint can
+  never make a stable step unstable. The same conductance is read from both sides of a face, so
+  conservation is untouched.
 
 - **`pantometry-pharmacokinetic`, the twelfth domain: where a drug goes in a body.**
   `CompartmentModel` is *n* well-stirred compartments joined by intercompartmental clearances,
