@@ -167,3 +167,89 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         "{drawn} drew and {skipped} skipped — with an adapter all 27 draw, without one all 27 skip"
     );
 }
+
+/// **A field is drawn as a solid, and the solid is the exporters' geometry.**
+///
+/// This shell drew every panel as line segments — a body and a field sample each became a small
+/// cross — so a block of cells came out as a cloud of `+` glyphs with no surface, no shading and
+/// no way to tell which way is up. `render.rs` was written to answer exactly that criticism for
+/// the editor's viewport and says so in its own first paragraph; the shell a person reaches by
+/// typing `pantometry view` kept the old picture.
+///
+/// Measured on `24-a-power-module-junction-to-ambient`, four materials in a stack:
+///
+/// | | lit pixels | shades |
+/// | --- | --- | --- |
+/// | crosses | 5 045 (0.64%) | **8** |
+/// | solid | 152 160 (19.2%) | 17 |
+///
+/// What is asserted is the property rather than those numbers, which are a camera's business: a
+/// scene with a field covers a **substantial** fraction of the canvas, because a solid does, and a
+/// scatter of markers cannot. Twelve percent is far above the 0.64% the crosses managed and far
+/// below what a background fill would give.
+///
+/// # Not under `wasm32`, and not without an adapter
+///
+/// The same conditions the walk above runs under, and the same loud skip.
+#[test]
+fn a_field_is_drawn_as_a_solid() {
+    let (bin, out) = tools();
+    let scenes = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("pantometry-app has a parent")
+        .join("pantometry-world/scenes");
+    // Three shapes of field: a three-dimensional stack, a plane, and a part with voids in it.
+    // A `Points` panel is deliberately not here — a set of bodies has no surface and is still
+    // drawn as crosses, which is what it is.
+    for name in [
+        "24-a-power-module-junction-to-ambient",
+        "01-room-mode",
+        "29-a-designed-bracket-becomes-cells",
+    ] {
+        let run = out.join(format!("{name}.solid.json"));
+        let ran = std::process::Command::new(&bin)
+            .args([
+                "run",
+                &scenes.join(format!("{name}.json")).to_string_lossy(),
+                &run.to_string_lossy(),
+            ])
+            .output()
+            .expect("the binary runs");
+        assert!(
+            ran.status.success(),
+            "{name}: the run refused: {}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        let shot = out.join(format!("{name}.solid.png"));
+        let drew = std::process::Command::new(&bin)
+            .args([
+                "view",
+                &run.to_string_lossy(),
+                "--snapshot",
+                &shot.to_string_lossy(),
+            ])
+            .output()
+            .expect("the binary runs");
+        let said = String::from_utf8_lossy(&drew.stdout).into_owned()
+            + &String::from_utf8_lossy(&drew.stderr);
+        if said.contains("no adapter") || said.contains("no GPU") {
+            println!("  skipped: this machine has no GPU adapter");
+            return;
+        }
+        assert!(drew.status.success(), "{name}: the viewer refused: {said}");
+        // From the `wrote` line and not from the whole output: the first `(` in it belongs to a
+        // title — `a small room ringing in its (1,1) mode` — and parsing that gave `1,1`.
+        let percent = said
+            .lines()
+            .find(|l| l.contains("wrote") && l.contains('%'))
+            .and_then(|l| l.split_once('('))
+            .and_then(|(_, rest)| rest.split('%').next())
+            .and_then(|n| n.trim().parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("{name}: no coverage in: {said}"));
+        assert!(
+            percent > 12.0,
+            "{name}: a field drawn as a solid covers the canvas; this covered {percent}%, \
+             which is the scatter the crosses gave"
+        );
+    }
+}

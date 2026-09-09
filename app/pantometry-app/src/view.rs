@@ -19,17 +19,24 @@
 //!
 //! This is the shell. Everything that could be got wrong twice — the colour scale across a run,
 //! the framing, the projection — is in `viewer-core`, which has no GPU dependency and is tested
-//! against real run files. What is left here is a surface, a line pipeline and an event loop.
+//! against real run files. What is left here is a surface, two pipelines and an event loop.
 //!
 //! That split is not tidiness. A renderer is the one place where a wrong answer looks like a
 //! picture, so the arithmetic lives where a test can reach it and this file only draws what it is
 //! handed.
 //!
-//! # It does not depend on `pantometry`
+//! # The geometry is the exporters', and that is why this links `pantometry`
 //!
-//! Deliberately. It reads the JSON a run wrote and nothing else, so "the wire format carries
-//! enough to draw a run" is demonstrated rather than asserted. If this needed to link the library
-//! for something the file did not have, the format would be the thing to fix.
+//! **This said "it does not depend on `pantometry`, deliberately", and the claim has moved.** What
+//! it bought was that a viewer written against the run file alone demonstrates the wire format
+//! carries enough to draw a run — and that property lives in `viewer-core`, which still links
+//! nothing, and is held by `one_run_format_two_crates` rather than by this file.
+//!
+//! What this file gained by giving it up is that a field is drawn as a **solid**. The triangles
+//! come from `editor_core::field_shell`, which is `pantometry_view::mesh` — the same function that
+//! writes the glTF and the USD and that the editor's viewport shades. The alternative was a second
+//! implementation of where a field's boundary is, and that arithmetic has already been wrong once
+//! here: a 40 mm cube exported 80 mm across. One picture, not three.
 
 use std::sync::Arc;
 
@@ -41,11 +48,15 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-/// One end of a line, as the shader wants it.
+/// One vertex, as the shader wants it: screen `x`, screen `y`, and depth for the buffer.
+///
+/// **Three components, because a solid needs a depth test.** The camera projects on the CPU — the
+/// same `viewer_core::Camera` a test can reach — so what reaches the GPU is already in clip space
+/// and the third component is `Projected::depth`, which the pass compares rather than sorts.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Vertex {
-    position: [f32; 2],
+    position: [f32; 3],
     colour: [f32; 3],
 }
 
@@ -241,7 +252,12 @@ struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// Triangles, for the solid a field is.
+    solid: wgpu::RenderPipeline,
+    /// Lines, for a `Paths` panel, a body's cross and the box.
     pipeline: wgpu::RenderPipeline,
+    /// Rebuilt whenever the surface is, because it has to match its size.
+    depth: wgpu::TextureView,
 }
 
 impl App {
@@ -277,28 +293,118 @@ impl App {
     }
 
     /// The line vertices for the current frame.
-    fn vertices(&self, aspect: f64) -> Vec<Vertex> {
+    /// The triangles and the lines for this frame, already projected.
+    ///
+    /// **A field is a solid and is drawn as one.** This shell drew every panel as line segments —
+    /// a body and a field sample each became a small cross — and a block of cells came out as a
+    /// cloud of `+` glyphs with no surface, no shading and no way to tell which way is up. That is
+    /// the same criticism `render.rs` was written to answer for the editor's viewport, and it
+    /// says so in its own first paragraph; the shell a person reaches by typing `pantometry view`
+    /// kept the old picture. Measured on `24-a-power-module-junction-to-ambient`, a stack of four
+    /// materials: 5 045 lit pixels **in eight shades**, and nothing in it said where the die was.
+    ///
+    /// The geometry is `editor_core::field_shell`, which is `pantometry_view::mesh` — the same
+    /// function that writes glTF and USD and that the editor shades. One picture, not three, and
+    /// a size that cannot disagree with an export.
+    fn vertices(&self, aspect: f64) -> (Vec<Vertex>, Vec<Vertex>) {
         let Some(panel) = self
             .run
             .frames
             .get(self.frame)
             .and_then(|f| f.panels.iter().find(|p| p.name() == self.panel))
         else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
-        let mut out = Vec::new();
-        for s in segments(panel, &self.camera, &self.framing, aspect, self.span) {
-            let colour = ramp(s.shade);
-            out.push(Vertex {
-                position: [s.from.x as f32, s.from.y as f32],
-                colour,
-            });
-            out.push(Vertex {
-                position: [s.to.x as f32, s.to.y as f32],
-                colour,
-            });
+
+        let mut tris = Vec::new();
+        if let viewer_core::Panel::Field {
+            nx,
+            ny,
+            nz,
+            unit,
+            lattice,
+            values,
+            ..
+        } = panel
+        {
+            // Two axes at least, or there is no surface: a row of samples along a line is a graph,
+            // and the cross pipeline below is the honest picture of it.
+            if [*nx, *ny, *nz].iter().filter(|&&n| n > 1).count() >= 2 {
+                if let Some(corners) = panel.placed_corners() {
+                    let shell = editor_core::field_shell(
+                        &corners,
+                        (*nx, *ny, *nz),
+                        *lattice,
+                        values,
+                        unit,
+                        Some(self.span),
+                        None,
+                    );
+                    // **Lambert on the CPU**, because the camera already projects here and the
+                    // shader takes a colour rather than a light. One key light down the eye and a
+                    // floor under it, which is what keeps a face turned away from being black and
+                    // a solid from reading as a silhouette.
+                    let key = [0.35f32, 0.45, 0.82];
+                    for i in &shell.indices {
+                        let i = *i as usize;
+                        let p = shell.positions[i];
+                        let c = self.camera.project(p, &self.framing, aspect);
+                        let n = shell.normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]);
+                        let lit = (n[0] * key[0] + n[1] * key[1] + n[2] * key[2])
+                            .abs()
+                            .mul_add(0.65, 0.35);
+                        let base = shell.colours.get(i).copied().unwrap_or([1.0, 1.0, 1.0]);
+                        tris.push(Vertex {
+                            position: [c.x as f32, c.y as f32, c.depth as f32],
+                            colour: [base[0] * lit, base[1] * lit, base[2] * lit],
+                        });
+                    }
+                }
+            }
         }
-        out
+
+        let mut out: Vec<Vertex> = Vec::new();
+        // The lines are what is left over: a `Paths` panel, and a point set, which has no surface
+        // to build. A field that got a solid above skips them, or every cell would carry a cross
+        // inside the block that is drawn over it.
+        if tris.is_empty() {
+            for s in segments(panel, &self.camera, &self.framing, aspect, self.span) {
+                let colour = ramp(s.shade);
+                out.push(Vertex {
+                    position: [s.from.x as f32, s.from.y as f32, s.from.depth as f32],
+                    colour,
+                });
+                out.push(Vertex {
+                    position: [s.to.x as f32, s.to.y as f32, s.to.depth as f32],
+                    colour,
+                });
+            }
+        }
+        // **`Projected::depth` is a distance from the eye, not a clip `z`.** wgpu keeps
+        // `0 <= z <= 1` and discards the rest, so handing it metres drew nothing at all — the
+        // first run of this rendered an empty frame and said so. Mapped over the range this frame
+        // actually spans, and over **both** sets together: two mappings would put every line
+        // either in front of or behind every triangle regardless of where it is.
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for v in tris.iter().chain(out.iter()) {
+            let z = v.position[2] as f64;
+            if z.is_finite() {
+                lo = lo.min(z);
+                hi = hi.max(z);
+            }
+        }
+        let span = if hi > lo { hi - lo } else { 1.0 };
+        // A hair inside the range at each end, so the nearest surface is not on the clip plane
+        // and the furthest is not lost to the `LessEqual` compare against the cleared 1.0.
+        for v in tris.iter_mut().chain(out.iter_mut()) {
+            let z = v.position[2] as f64;
+            v.position[2] = if z.is_finite() {
+                (0.01 + 0.98 * (z - lo) / span) as f32
+            } else {
+                0.99
+            };
+        }
+        (tris, out)
     }
 }
 
@@ -347,7 +453,13 @@ impl ApplicationHandler for App {
         };
         surface.configure(&device, &config);
 
-        let pipeline = line_pipeline(&device, config.format);
+        let solid = pipeline_for(
+            &device,
+            config.format,
+            wgpu::PrimitiveTopology::TriangleList,
+        );
+        let pipeline = pipeline_for(&device, config.format, wgpu::PrimitiveTopology::LineList);
+        let depth = depth_texture(&device, config.width, config.height);
 
         self.gpu = Some(Gpu {
             window,
@@ -355,7 +467,9 @@ impl ApplicationHandler for App {
             device,
             queue,
             config,
+            solid,
             pipeline,
+            depth,
         });
     }
 
@@ -369,6 +483,10 @@ impl ApplicationHandler for App {
                 gpu.config.width = size.width.max(1);
                 gpu.config.height = size.height.max(1);
                 gpu.surface.configure(&gpu.device, &gpu.config);
+                // The depth buffer is an attachment and has to match the colour one's size, or
+                // the pass is refused. A resize that rebuilt one and not the other would take the
+                // window down on the next frame.
+                gpu.depth = depth_texture(&gpu.device, gpu.config.width, gpu.config.height);
             }
             WindowEvent::MouseInput { state, .. } => {
                 self.dragging = matches!(state, ElementState::Pressed).then_some((0.0, 0.0));
@@ -423,7 +541,7 @@ impl App {
             return;
         };
         let aspect = gpu.config.width as f64 / gpu.config.height.max(1) as f64;
-        let verts = self.vertices(aspect);
+        let (tris, verts) = self.vertices(aspect);
 
         let Ok(surface_texture) = gpu.surface.get_current_texture() else {
             return;
@@ -431,6 +549,10 @@ impl App {
         let view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let solid_buffer = (!tris.is_empty()).then(|| {
+            gpu.device
+                .create_buffer_init_lite(bytemuck_lite::cast_slice(&tris))
+        });
         let buffer = if verts.is_empty() {
             None
         } else {
@@ -454,10 +576,24 @@ impl App {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &gpu.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // The solid first and the lines over it, both depth-tested, so a marker inside a
+            // block is hidden by it rather than drawn through it.
+            if let Some(b) = &solid_buffer {
+                pass.set_pipeline(&gpu.solid);
+                pass.set_vertex_buffer(0, b.slice(..));
+                pass.draw(0..tris.len() as u32, 0..1);
+            }
             if let Some(b) = &buffer {
                 pass.set_pipeline(&gpu.pipeline);
                 pass.set_vertex_buffer(0, b.slice(..));
@@ -514,9 +650,13 @@ impl App {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let pipeline = line_pipeline(&device, format);
+        let solid_pipeline = pipeline_for(&device, format, wgpu::PrimitiveTopology::TriangleList);
+        let pipeline = pipeline_for(&device, format, wgpu::PrimitiveTopology::LineList);
+        let depth = depth_texture(&device, width, height);
 
-        let verts = self.vertices(width as f64 / height as f64);
+        let (tris, verts) = self.vertices(width as f64 / height as f64);
+        let solid_buffer = (!tris.is_empty())
+            .then(|| device.create_buffer_init_lite(bytemuck_lite::cast_slice(&tris)));
         let buffer = (!verts.is_empty())
             .then(|| device.create_buffer_init_lite(bytemuck_lite::cast_slice(&verts)));
 
@@ -544,10 +684,24 @@ impl App {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // The same order the window draws in, so the picture a test reads is the picture a
+            // person sees.
+            if let Some(b) = &solid_buffer {
+                pass.set_pipeline(&solid_pipeline);
+                pass.set_vertex_buffer(0, b.slice(..));
+                pass.draw(0..tris.len() as u32, 0..1);
+            }
             if let Some(b) = &buffer {
                 pass.set_pipeline(&pipeline);
                 pass.set_vertex_buffer(0, b.slice(..));
@@ -761,8 +915,41 @@ const BACKGROUND: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
-/// The line pipeline, built once here so the window and the snapshot cannot drift apart.
-fn line_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+/// What the depth buffer is, in both paths.
+const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// A depth texture the size of what is being drawn into.
+fn depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The pipeline, built once here so the window and the snapshot cannot drift apart.
+///
+/// **Two topologies, one shader.** A field is a solid and is drawn as one — triangles from
+/// `pantometry_view::mesh`, the same geometry the glTF and USD exporters write and the editor's
+/// viewport shades — and the lines are what is left: a `Paths` panel, a body's cross, the box.
+/// Both are depth-tested, which is what a solid needs and what sorting on the CPU could only
+/// approximate.
+fn pipeline_for(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    topology: wgpu::PrimitiveTopology,
+) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lines"),
         source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -785,10 +972,10 @@ fn line_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Re
                     wgpu::VertexAttribute {
                         offset: 0,
                         shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x2,
+                        format: wgpu::VertexFormat::Float32x3,
                     },
                     wgpu::VertexAttribute {
-                        offset: 8,
+                        offset: 12,
                         shader_location: 1,
                         format: wgpu::VertexFormat::Float32x3,
                     },
@@ -803,10 +990,20 @@ fn line_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Re
             compilation_options: Default::default(),
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::LineList,
+            topology,
+            // **No culling.** A field's boundary is closed, so back faces are hidden by the depth
+            // test anyway; an isosurface's is not, and culling it would put holes in a level set
+            // depending on which way the camera happened to be.
+            cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
@@ -859,13 +1056,13 @@ fn ramp(t: f64) -> [f32; 3] {
 }
 
 const SHADER: &str = r#"
-struct In { @location(0) pos: vec2<f32>, @location(1) colour: vec3<f32> };
+struct In { @location(0) pos: vec3<f32>, @location(1) colour: vec3<f32> };
 struct Out { @builtin(position) clip: vec4<f32>, @location(0) colour: vec3<f32> };
 
 @vertex
 fn vs(v: In) -> Out {
     var out: Out;
-    out.clip = vec4<f32>(v.pos, 0.0, 1.0);
+    out.clip = vec4<f32>(v.pos, 1.0);
     out.colour = v.colour;
     return out;
 }

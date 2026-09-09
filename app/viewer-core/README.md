@@ -115,8 +115,17 @@ than 10,14,19 — and a fixed threshold called every pixel in the image a line a
 
 ## What is not here
 
-Only paths are drawn. Fields and point clouds are different pipelines and the viewer says so and
-exits rather than opening a blank window.
+**This said "only paths are drawn", and it was true twice over and then not at all.** The first
+version drew `Paths` and refused everything else — and `PanelData::paths` is built by no `Domain`,
+so the refusal was the only thing the shell ever said about a shipped scene. Then every panel
+became line segments, a body and a field sample each a small cross, which drew all thirty and read
+as a cloud of `+` glyphs: measured on a four-material power module, 5 045 lit pixels in **eight
+shades**, with nothing in it to say where the die was.
+
+A field is a solid now, meshed by `pantometry_view::mesh` — the same geometry the glTF and USD
+exporters write and the editor's viewport shades — and depth-tested. The same module renders 152 160
+pixels in 17 shades, and the layers are visible. Point sets are still crosses, which is what a set
+of bodies is.
 
 No RTX, no materials, no shadows, no editing, no USD. Those are a different product, and the
 recommendation on record is to **export into** the tools that already do them rather than rebuild
