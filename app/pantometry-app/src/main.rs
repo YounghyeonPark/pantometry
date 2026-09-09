@@ -34,6 +34,7 @@
 
 mod cli;
 mod edit;
+mod glyphs;
 mod render;
 mod start;
 mod view;

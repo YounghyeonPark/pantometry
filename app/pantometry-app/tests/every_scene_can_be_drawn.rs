@@ -253,3 +253,86 @@ fn a_field_is_drawn_as_a_solid() {
         );
     }
 }
+
+/// **The picture carries its own legend, and a tile does not.**
+///
+/// A shaded solid says where the hot end is and cannot say how hot. The snapshot is the only
+/// static figure this workspace produces and it had no colour bar, no scale and no units — a
+/// reader could not tell 119 °C from 1190, nor a 12 mm module from a 4 m room. `glyphs` is what
+/// makes numbers drawable by the pipeline that is already there.
+///
+/// What is measured is the **shade count**, which is the one thing a legend must add: a colour bar
+/// is a ramp, so it puts tens of colours on a canvas that a flat-shaded solid alone does not have.
+/// Measured on `24-a-power-module-junction-to-ambient` at 1100x720: 17 shades without, 114 with.
+///
+/// And **not on a tile**. At 240x156 the labels are a fifth of the size they are laid out for and
+/// read as speckle, and the bar spans the full width so `crop_to_content` crops to the legend
+/// rather than to the object. The chooser prints the title and the kinds beside the picture.
+#[test]
+fn a_snapshot_carries_a_legend_and_a_tile_does_not() {
+    let (bin, out) = tools();
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("pantometry-app has a parent")
+        .join("pantometry-world/scenes/24-a-power-module-junction-to-ambient.json");
+    let run = out.join("legend.json");
+    let ran = std::process::Command::new(&bin)
+        .args(["run", &scene.to_string_lossy(), &run.to_string_lossy()])
+        .output()
+        .expect("the binary runs");
+    assert!(
+        ran.status.success(),
+        "the run refused: {}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+
+    let shades = |extra: &[&str], name: &str| -> Option<usize> {
+        let shot = out.join(name);
+        let mut argv = vec![
+            "view".to_string(),
+            run.to_string_lossy().into_owned(),
+            "--snapshot".to_string(),
+            shot.to_string_lossy().into_owned(),
+        ];
+        argv.extend(extra.iter().map(|s| (*s).to_string()));
+        let drew = std::process::Command::new(&bin)
+            .args(&argv)
+            .output()
+            .expect("the binary runs");
+        let said = String::from_utf8_lossy(&drew.stdout).into_owned()
+            + &String::from_utf8_lossy(&drew.stderr);
+        if said.contains("no adapter") || said.contains("no GPU") {
+            println!("  skipped: this machine has no GPU adapter");
+            return None;
+        }
+        assert!(drew.status.success(), "the viewer refused: {said}");
+        said.lines()
+            .find(|l| l.contains("wrote") && l.contains("shades"))
+            .and_then(|l| l.rsplit_once(", in "))
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .or_else(|| panic!("no shade count in: {said}"))
+    };
+
+    let Some(full) = shades(&[], "legend-full.png") else {
+        return;
+    };
+    let Some(tile) = shades(&["--thumbnail"], "legend-tile.png") else {
+        return;
+    };
+    // A ramp is tens of colours. A flat-shaded solid on its own was 17.
+    assert!(
+        full > 60,
+        "a snapshot with a colour bar shows {full} shades, which is a solid with no ramp on it"
+    );
+    // And the tile stayed the solid it was — the legend is off, so no ramp joined it.
+    assert!(
+        tile < 60,
+        "a tile shows {tile} shades, so the legend is being drawn into it"
+    );
+    // Both drew the object rather than only the legend.
+    assert!(
+        tile > 3,
+        "a tile shows {tile} shades, which is not a shaded solid"
+    );
+}

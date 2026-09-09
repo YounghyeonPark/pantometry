@@ -166,6 +166,7 @@ pub fn run(args: &[String]) -> i32 {
         let tile = rest.contains(&"--thumbnail");
         let mut app = App::new(run, panel);
         app.frame = at;
+        app.legend = !tile;
         println!("  snapshot of frame {at} of {}", app.run.frames.len());
         // Rendered three times the tile and averaged down, because a marker one pixel wide
         // vanishes under nearest-neighbour and a tile is not where to discover that.
@@ -212,6 +213,12 @@ pub fn run(args: &[String]) -> i32 {
                     100.0 * lit as f64 / all as f64,
                     shades.len()
                 );
+                // **What is in the picture, in numbers.** A shaded solid says where the hot end is
+                // and cannot say whether it is 119 °C or 1190; the size of a thing on screen is
+                // whatever the camera chose; and a frame index is not a time. All three are known
+                // here and none of them was printed, so a person with the file still had to open
+                // the run to read its own picture.
+                app.describe();
                 if lit == 0 {
                     eprintln!("  nothing was drawn");
                     std::process::exit(1);
@@ -241,6 +248,14 @@ struct App {
     /// The run-wide range the shading is measured against.
     span: (f64, f64),
     frame: usize,
+    /// Whether a legend is drawn over the picture.
+    ///
+    /// **Off for a tile.** At 240x156 the labels are a fifth of the size they are laid out for and
+    /// read as speckle, and worse: the bar spans the full width, so `crop_to_content` can no
+    /// longer find the object and every tile is cropped to the legend instead. A tile's job is to
+    /// tell one scene from another at a glance, and the chooser prints the title and the kinds
+    /// beside it.
+    legend: bool,
     playing: bool,
     dragging: Option<(f64, f64)>,
     gpu: Option<Gpu>,
@@ -285,6 +300,7 @@ impl App {
             framing,
             span,
             camera,
+            legend: true,
             frame: 0,
             playing: true,
             dragging: None,
@@ -292,7 +308,198 @@ impl App {
         }
     }
 
-    /// The line vertices for the current frame.
+    /// The legend, drawn into the picture: a colour bar with its ends and unit, a scale bar in
+    /// metres, and the time.
+    ///
+    /// **A picture nobody can read a value off is a gradient.** The snapshot is the only static
+    /// figure this workspace makes, and it had no legend, no scale and no units — a reader could
+    /// see where the hot end was and not whether it was 119 °C or 1190, nor whether the thing was
+    /// 12 mm or 4 m across.
+    ///
+    /// In screen space at the near plane, so it sits over the solid whatever the camera does. The
+    /// colours are `editor_core::value_colour` over `bar_value`, which is the editor's own bar, so
+    /// the two legends cannot disagree about which colour a number is.
+    fn legend(&self, aspect: f64) -> (Vec<Vertex>, Vec<Vertex>) {
+        let Some(panel) = self
+            .run
+            .frames
+            .get(self.frame)
+            .and_then(|f| f.panels.iter().find(|p| p.name() == self.panel))
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        let (lo, hi) = self.span;
+        if !lo.is_finite() || !hi.is_finite() || hi <= lo {
+            return (Vec::new(), Vec::new());
+        }
+        let (mut tris, mut lines) = (Vec::new(), Vec::new());
+
+        // Everything here is normalised device coordinates: x and y run -1..1, and the depth is
+        // the near end so nothing in the scene can cover it.
+        const NEAR: f32 = 0.001;
+        let ink = [0.82f32, 0.85, 0.88];
+        // One lattice unit, sized so a label is legible at 1100 wide and still is at 240.
+        let em = 0.011f32;
+        // How tall one line of it is, from the font rather than from a number that clears it
+        // today. Every label below something is placed at `-= row + GAP`, so changing `HEIGHT`
+        // moves the layout instead of overlapping what the label is for.
+        let row = crate::glyphs::HEIGHT * em;
+        const GAP: f32 = 0.024;
+        let quad = |v: &mut Vec<Vertex>, x0: f32, y0: f32, x1: f32, y1: f32, c: [f32; 3]| {
+            for (x, y) in [(x0, y0), (x1, y0), (x1, y1), (x0, y0), (x1, y1), (x0, y1)] {
+                v.push(Vertex {
+                    position: [x, y, NEAR],
+                    colour: c,
+                });
+            }
+        };
+        let write = |v: &mut Vec<Vertex>, s: &str, x: f32, y: f32| {
+            for (ax, ay, bx, by) in crate::glyphs::text(s) {
+                v.push(Vertex {
+                    position: [x + ax * em / aspect as f32, y + ay * em, NEAR],
+                    colour: ink,
+                });
+                v.push(Vertex {
+                    position: [x + bx * em / aspect as f32, y + by * em, NEAR],
+                    colour: ink,
+                });
+            }
+        };
+
+        // **The colour bar**, bottom right, in the same steps the editor uses.
+        let scale = Some((lo, hi));
+        // Clear of the bottom edge: a label whose descender is off the canvas is a label
+        // a reader distrusts, and the first attempt put both rows there.
+        let (bx0, bx1, by0, by1) = (0.34f32, 0.94, -0.80, -0.755);
+        let steps = 96;
+        for i in 0..steps {
+            let u = i as f64 / (steps - 1) as f64;
+            let [r, g, b] = editor_core::value_colour(editor_core::bar_value(u, scale), scale);
+            let x0 = bx0 + (bx1 - bx0) * i as f32 / steps as f32;
+            let x1 = bx0 + (bx1 - bx0) * (i + 1) as f32 / steps as f32;
+            quad(
+                &mut tris,
+                x0,
+                by0,
+                x1,
+                by1,
+                [
+                    (r as f32 / 255.0).powf(2.2),
+                    (g as f32 / 255.0).powf(2.2),
+                    (b as f32 / 255.0).powf(2.2),
+                ],
+            );
+        }
+        let unit = panel.unit();
+        write(
+            &mut lines,
+            &editor_core::magnitude(lo),
+            bx0,
+            by0 - row - GAP,
+        );
+        let his = editor_core::magnitude(hi);
+        write(
+            &mut lines,
+            &his,
+            bx1 - crate::glyphs::width(&his) * em / aspect as f32,
+            by0 - row - GAP,
+        );
+        write(&mut lines, unit, (bx0 + bx1) * 0.5, by1 + 0.02);
+
+        // **The scale bar**, bottom left: a round number of metres across the object, so a reader
+        // knows whether they are looking at a die or a room.
+        let b = panel.world_bounds();
+        let widest = (b[3] - b[0]).max(b[4] - b[1]).max(b[5] - b[2]);
+        if widest > 0.0 {
+            // A round fraction of the object rather than of the screen: the camera's zoom is not
+            // in the file and the object's size is.
+            let raw = widest / 3.0;
+            let decade = 10f64.powf(raw.log10().floor());
+            let nice = [1.0, 2.0, 5.0, 10.0]
+                .into_iter()
+                .map(|m| m * decade)
+                .find(|n| *n >= raw)
+                .unwrap_or(decade);
+            // The framing puts the subject one unit across, so a length in metres is that fraction
+            // of the subject and the camera's own scale carries it to the screen.
+            let across = (nice / widest) as f32 * 0.5;
+            let (sx, sy) = (-0.94f32, -0.79);
+            quad(&mut tris, sx, sy, sx + across, sy + 0.008, ink);
+            for x in [sx, sx + across] {
+                quad(&mut tris, x, sy - 0.012, x + 0.004, sy + 0.02, ink);
+            }
+            // **Plain, not `magnitude`.** The length is a round number by construction — one, two
+            // or five times a decade — and the general formatter printed `5.0000 MM` for 5.
+            let round = |v: f64| {
+                let s = format!("{v:.3}");
+                let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+                if s.is_empty() {
+                    "0".to_string()
+                } else {
+                    s
+                }
+            };
+            let label = if nice < 1.0 {
+                format!("{} MM", round(nice * 1000.0))
+            } else {
+                format!("{} M", round(nice))
+            };
+            write(&mut lines, &label, sx, sy - row - GAP);
+        }
+
+        // The time, top left, because a frame index is not one.
+        let t = self.run.frames.get(self.frame).map_or(0.0, |f| f.t);
+        write(
+            &mut lines,
+            &format!("T {} S", editor_core::magnitude(t)),
+            -0.94,
+            1.0 - row - 0.02,
+        );
+        (tris, lines)
+    }
+
+    /// Print what is in the picture, in numbers.
+    ///
+    /// **A shaded solid says where the hot end is and cannot say how hot.** The snapshot reported
+    /// how many pixels it had lit and nothing else, so a reader with the file could not tell 119 °C
+    /// from 1190, could not tell a 12 mm module from a 4 m room, and had a frame index where a time
+    /// belongs. All three are known here.
+    ///
+    /// Printed rather than drawn, which is the cheap half of the answer: the colour bar and the
+    /// scale go **into** the picture beside this, and a line of text is what a person pastes into a
+    /// note.
+    fn describe(&self) {
+        let Some(panel) = self
+            .run
+            .frames
+            .get(self.frame)
+            .and_then(|f| f.panels.iter().find(|p| p.name() == self.panel))
+        else {
+            return;
+        };
+        let (lo, hi) = self.span;
+        println!(
+            "  {} spans {} to {} {} over the run",
+            panel.name(),
+            editor_core::magnitude(lo),
+            editor_core::magnitude(hi),
+            panel.unit()
+        );
+        // The box in metres, from the panel's own extent rather than from the camera — what is on
+        // screen is whatever the framing chose, and this is the thing itself.
+        let b = panel.world_bounds();
+        let (dx, dy, dz) = (b[3] - b[0], b[4] - b[1], b[5] - b[2]);
+        if dx.max(dy).max(dz) > 0.0 {
+            println!(
+                "  {} x {} x {} m, at t = {} s",
+                editor_core::magnitude(dx),
+                editor_core::magnitude(dy),
+                editor_core::magnitude(dz),
+                editor_core::magnitude(self.run.frames.get(self.frame).map_or(0.0, |f| f.t))
+            );
+        }
+    }
+
     /// The triangles and the lines for this frame, already projected.
     ///
     /// **A field is a solid and is drawn as one.** This shell drew every panel as line segments —
@@ -403,6 +610,12 @@ impl App {
             } else {
                 0.99
             };
+        }
+        // The legend last, at the near plane, so it is over whatever the camera is looking at.
+        if self.legend {
+            let (mut bar, mut labels) = self.legend(aspect);
+            tris.append(&mut bar);
+            out.append(&mut labels);
         }
         (tris, out)
     }
