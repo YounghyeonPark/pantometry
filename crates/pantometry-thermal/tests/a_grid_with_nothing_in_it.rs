@@ -224,3 +224,60 @@ fn a_block_of_nothing_is_not_a_division_by_zero() {
         .expect("a block of nothing steps");
     assert!(block.mean_temperature().to_si().is_nan());
 }
+
+/// **Filling a cell that held nothing puts something in it.**
+///
+/// `empty` was one-way. A caller who voided a box and then filled part of it back got a block with
+/// a hole in it and no complaint — and `pantometry-world`'s own comment beside the `void` region
+/// says the opposite in as many words: *"applied in the same order as any other region — later
+/// wins where they overlap — so a gap cut into a part reads the way a coating on a layer does."*
+///
+/// The seventh comment in this workspace to guarantee something the code did not do.
+///
+/// # How it surfaced
+///
+/// By writing a scene the readable way. Two busbars crossing at a clearance are most simply stated
+/// as "void the whole block, then put the two bars back", and that scene was refused for
+/// dissipating heat in cells it had just filled. That is the loud version of the defect. The quiet
+/// one is a part with a hole nobody put there: `void` cells conduct nothing, hold nothing and take
+/// no share of a face's cooling area, so the block runs, audits, renders and answers.
+#[test]
+fn filling_a_void_cell_puts_a_substance_back_in_it() {
+    let mut block = Solid3D::new(
+        "b",
+        Substance::copper(),
+        (4, 1, 1),
+        Length::mm(2.0),
+        Temperature::celsius(20.0),
+    )
+    .empty(|_, _, _| true);
+    assert_eq!(block.void_cells(), 4, "the whole bar was emptied");
+
+    block.fill(Substance::aluminium_6061(), |i, _, _| i >= 2);
+    assert_eq!(block.void_cells(), 2, "two cells were filled back");
+    assert!(!block.is_void(2, 0, 0) && !block.is_void(3, 0, 0));
+    assert!(block.is_void(0, 0, 0) && block.is_void(1, 0, 0));
+    assert_eq!(block.substance_at(3, 0, 0).name, "Al 6061");
+
+    // And the filled cells conduct, which is the thing a void cell does not do. A face between
+    // two voids carries zero whatever their conductivities.
+    let across = block
+        .face_conductance((2, 0, 0), (3, 0, 0))
+        .expect("neighbours")
+        .to_si();
+    let dead = block
+        .face_conductance((0, 0, 0), (1, 0, 0))
+        .expect("neighbours")
+        .to_si();
+    println!("  refilled face carries {across:.4} W/K, the face still void carries {dead:.4}");
+    assert!(across > 0.0, "a refilled cell does not conduct");
+    assert!(dead == 0.0, "a void face conducts {dead:.6e} W/K");
+
+    // The half-and-half face is a void against a solid, and the harmonic mean of anything with
+    // zero is zero — so the boundary of a refilled region is insulated, as it should be.
+    let edge = block
+        .face_conductance((1, 0, 0), (2, 0, 0))
+        .expect("neighbours")
+        .to_si();
+    assert!(edge == 0.0, "a solid facing void conducts {edge:.6e} W/K");
+}

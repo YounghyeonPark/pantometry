@@ -1,7 +1,7 @@
 {
   "title": "a designed bracket carrying a module's heat along its own shape to its bolts",
   "schedule": "multirate",
-  "duration_s": 900.0,
+  "duration_s": 200.0,
   "frames": 13,
   "conservation_tolerance": 1e-8,
   "domains": [
@@ -10,7 +10,7 @@
       "name": "bracket",
       "cells": [26, 26, 12],
       "cell_mm": 2.0,
-      "initial_c": 20.0,
+      "initial_c": 44.0,
       "parts": [
         { "stl": "parts/l-bracket.stl", "material": "aluminium" }
       ],

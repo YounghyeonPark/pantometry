@@ -967,22 +967,39 @@ face, so a tenth of the area is a tenth of the conductance **spread over the who
 right total in the wrong place, which is exactly the difference a shape is for.
 `Solid3D::losing_from_within` and `cooling`'s `from`/`to` name a box on a face instead. The
 bracket carries a module's 20 W from the tip of one arm, round the corner, into a six-by-four bolt
-pad at the tip of the other: **52.4879 °C at the module against 30.5647 at the bolts**, a 21.92 K
-spread on a 32.49 K rise.
+pad at the tip of the other: **52.4420 °C at the module against 30.5449 at the bolts**, a 21.90 K
+spread on a 32.44 K rise.
 
-**Four scenes are left**, and `pantometry verify` exits 1 on each. Three are melting, where the
-temperature is the melting point everywhere and the answer lives in a phase fraction the readings
-report only as a total — so the measurement cannot see their structure, and the finding says as
-much in its own words rather than being quietly suppressed for them.
+**The busbars could not see each other, and fixing that nearly silenced the measurement.**
+`30-two-phases-crossing-at-a-clearance` states two bars four millimetres apart, blackened,
+ε = 0.9. Two surfaces at 335.6 K and 319.0 K facing across that gap exchange **6.57 mW** over the
+8 by 8 mm patch where they cross — 7.64% of what the cooler bar dissipates — and two `Solid3D`
+domains exchange nothing but bus totals, which carry an amount and no location. The arrangement
+the scene is named for was not modelled.
 
-The last is `30-two-phases-crossing-at-a-clearance`. Its busbars are uniform copper with uniform
-dissipation and uniform cooling, so their field is a constant and always was. Separately — and
-this is the more interesting half — they cross at a 4 mm clearance and **cannot see each other at
-all**: two blackened surfaces at 335.6 K and 319.0 K would exchange **6.92 mW** across the 8 by
-8 mm patch where they cross, which is 8.05% of what the cooler bar dissipates. `Solid3D` already
-computes exactly that exchange for two surfaces facing across a void — `find_gaps` does it for
-`23-a-part-radiating-to-its-lid` — but only *within one block*, and these are two domains. Which
-is the right shape for that scene is a design question and not a defect to fix quietly.
+`Solid3D` already computes exactly that exchange, and has since `23-a-part-radiating-to-its-lid`:
+`find_gaps` walks each grid line and pairs the solid cells at either end of a run of void. It does
+it **within one block**, so the fix is to state the two bars as one assembly — which is also how
+this format says *two parts that interact* everywhere else.
+
+**And that would have made this finding stop firing.** A domain's `peak` and `coldest` are the
+extremes of everything in it, so one block holding two objects at different temperatures reads as
+a large spread — 15.77 K — with neither bar gaining a field. A measurement a refactor can silence
+is not measuring what it says, so it is **per connected body** now, six-connected over the cells a
+field panel reports as finite.
+
+Measuring per body found a scene it had been blind to. `23-a-part-radiating-to-its-lid` read 0.79
+as one domain and passed; its part and its lid are two isothermal objects trading radiation, and
+apart they read 0.052% and 0.049%.
+
+**Seven bodies across five scenes are left**, and `pantometry verify` exits 1 on each. Three are
+melting, where the temperature is the melting point everywhere and the answer lives in a phase
+fraction the readings report only as a total — so the measurement cannot see their structure, and
+the finding says as much in its own words rather than being quietly suppressed for them. Two are
+that part and that lid. Two are the busbars, and **that is the physics rather than a defect**:
+with every watt leaving at the ends, a 32 mm copper bar 8 mm square generating 0.344 W varies by
+`P·L/(8kA)` = **53.6 mK** along its length, 0.24% of its own rise. It measures 0.585 mK. No
+cooling arrangement makes that object have a field, and a report that says so is doing its job.
 
 ---
 

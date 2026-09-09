@@ -641,7 +641,17 @@ impl Solid3D {
             for j in 0..ny {
                 for i in 0..nx {
                     if which(i, j, k) {
-                        self.which[i + nx * (j + ny * k)] = id;
+                        let c = i + nx * (j + ny * k);
+                        self.which[c] = id;
+                        // **Filling a cell puts something in it**, which includes a cell that
+                        // held nothing. `empty` was one-way until this line, and `pantometry-
+                        // world`'s own comment beside the `void` region says the opposite in as
+                        // many words — "applied in the same order as any other region, later wins
+                        // where they overlap, so a gap cut into a part reads the way a coating on
+                        // a layer does". A scene written that way was refused for generating heat
+                        // in cells it had just filled, which is the loud version; the quiet one is
+                        // a part with a hole in it that nobody put there.
+                        self.void[c] = false;
                     }
                 }
             }

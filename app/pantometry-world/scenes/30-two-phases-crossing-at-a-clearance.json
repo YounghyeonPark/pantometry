@@ -17,44 +17,31 @@
     }
   },
   "poses": {
-    "phase_b": {
-      "at_m": [0.020, -0.012, 0.012],
-      "turn": { "axis": [0.0, 0.0, 1.0], "degrees": 90.0 }
+    "busbars": {
+      "at_m": [0.050, 0.020, 0.010],
+      "turn": { "axis": [0.0, 0.0, 1.0], "degrees": 30.0 }
     }
   },
   "domains": [
     {
       "kind": "block",
-      "name": "phase_a",
-      "cells": [8, 2, 2],
+      "name": "busbars",
+      "cells": [8, 8, 5],
       "cell_mm": 4.0,
       "initial_c": 40.0,
       "material": "blackened_copper",
+      "regions": [
+        { "material": "void", "from": [0, 0, 0], "to": [8, 8, 5] },
+        { "material": "blackened_copper", "from": [0, 3, 0], "to": [8, 5, 2] },
+        { "material": "blackened_copper", "from": [3, 0, 3], "to": [5, 8, 5] }
+      ],
       "dissipation": [
-        { "watts": 0.344, "from": [0, 0, 0], "to": [8, 2, 2] }
+        { "watts": 0.344, "from": [0, 3, 0], "to": [8, 5, 2] },
+        { "watts": 0.086, "from": [3, 0, 3], "to": [5, 8, 5] }
       ],
       "cooling": [
-        { "face": "y-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
-        { "face": "y-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
-        { "face": "z-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
-        { "face": "z-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 }
-      ]
-    },
-    {
-      "kind": "block",
-      "name": "phase_b",
-      "cells": [8, 2, 2],
-      "cell_mm": 4.0,
-      "initial_c": 40.0,
-      "material": "blackened_copper",
-      "dissipation": [
-        { "watts": 0.086, "from": [0, 0, 0], "to": [8, 2, 2] }
-      ],
-      "cooling": [
-        { "face": "y-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
-        { "face": "y-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
-        { "face": "z-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 },
-        { "face": "z-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 2.56 }
+        { "face": "z-min", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 10.24 },
+        { "face": "z-max", "ambient_c": 40.0, "convection_w_per_m2_k": 8.0, "area_cm2": 10.24 }
       ]
     }
   ]

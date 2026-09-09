@@ -2647,8 +2647,17 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // area is divided among the cells on the face and a tenth of the area is a tenth
                 // of the conductance spread over all of it.
                 //
-                // Measured at steady state: **52.4879 °C at the module, 30.5647 at the bolts**,
-                // a 21.92 K spread over a path the shape decides.
+                // Measured at steady state: **52.4420 °C at the module, 30.5449 at the bolts**,
+                // a 21.90 K spread over a path the shape decides.
+                //
+                // # It starts at 44 °C, and that is what a run length is for
+                //
+                // From 20 °C this needed **900 s** to settle, because most of that was spent
+                // charging the bracket's mass rather than establishing the gradient the scene is
+                // about — and nine test binaries walk every shipped scene, so the cost was
+                // multiplied by nine. Starting near the answer leaves only the shape to settle:
+                // 200 s, within 0.09% of the fully settled peak, and seven times cheaper. An
+                // initial condition is a statement about when you start looking.
                 const AMBIENT_K: f64 = 293.15;
                 let at = |f: &pantometry_world::Frame, pick: fn(f64, f64) -> f64, seed: f64| {
                     f.panels.first().map_or(f64::NAN, |p| {
@@ -2680,8 +2689,10 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     );
                 }
 
-                // **And it arrived.** The last two frames are 69 s apart and the peak must have
-                // stopped moving, or the spread below is a number the run length chose.
+                // **And it arrived.** The last two frames are 15 s apart and the peak must have
+                // stopped moving, or the spread below is a number the run length chose. It moves
+                // by 0.0093 K across that gap, against a fully settled 52.4879 — so what is left
+                // is 0.09% of the rise.
                 let end = hottest(frames.last().expect("frames"));
                 let earlier = hottest(&frames[frames.len() - 2]);
                 assert!(
@@ -2689,9 +2700,9 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: still climbing at the end, {earlier:.4} then {end:.4} K"
                 );
 
-                // **The spread is the claim.** A lump would hold one number; this holds 21.92 K
+                // **The spread is the claim.** A lump would hold one number; this holds 21.90 K
                 // between the module's corner and the bolt pad, which is `verify`'s flat-field
-                // threshold by a factor of fourteen. Asserted against the rise above air rather
+                // threshold by a factor of thirteen. Asserted against the rise above air rather
                 // than as a bare kelvin count, so it is the shape of the answer and not its size.
                 let spread = end - coldest(frames.last().expect("frames"));
                 let rise = end - AMBIENT_K;
@@ -2702,194 +2713,170 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 );
             }
             "30-two-phases-crossing-at-a-clearance.json" => {
-                // **The first shipped scene that states a `poses` entry.** Every other scene here
-                // sits at the origin, and under the identity a domain's own coordinates and the
-                // world's are the same thing — which is why three separate consumers dropped the
-                // placement in turn and all twenty-nine agreed with every one of them. glTF
-                // exported two blocks half a metre apart on top of each other, `.usda` did the
-                // same for a commit longer, and `viewer-core` still does. Nothing here could
-                // fail, so nothing here did.
+                // **Two busbars crossing at a clearance, in one block.**
                 //
-                // The arrangement is why this can be two domains that never touch: two phases
-                // crossing at a clearance **must not** conduct, so the format's inability to make
-                // placed parts interact is the right answer here rather than a limitation being
-                // worked around. `PoseSpec`'s own doc warns about the scene this is not.
-
-                // ---- the physics, against the steady-state balance ----
+                // It was two `block` domains with a `poses` entry on the second, and that was the
+                // first scene to state a pose at all — every other one sits at the origin, so
+                // three separate consumers dropped the placement in turn and all twenty-nine
+                // agreed with every one of them. The pose is still here, on the assembly.
                 //
-                // A conservation law, solved for T by bisection: what goes in leaves, and it
-                // leaves two ways.
+                // # What two domains could not do
                 //
-                //   P = h A (T − Ta) + ε σ A (T⁴ − Ta⁴)
+                // **See each other.** They are 4 mm apart and blackened, ε = 0.9, and two surfaces
+                // at 335.6 K and 319.0 K facing across that gap exchange real heat — measured at
+                // **6.5711 mW**, which is 7.64% of what the cooler bar dissipates. Two `Solid3D`
+                // domains exchange nothing but bus totals, and the bus carries an amount with no
+                // location, so the arrangement the scene is named for was not modelled at all.
                 //
-                // Not a second solver. This is one algebraic equation on a lumped bar where the
-                // run time-steps sixty-four cells, and the bar is isothermal to **3.4 mK** —
-                // uniform generation, 401 W/m·K, a 4 mm half-thickness — so the peak cell *is*
-                // the mean and the lumped balance is the exact answer rather than an
-                // approximation to it.
+                // In one block it is `find_gaps`, the same pairing `23-a-part-radiating-to-its-lid`
+                // is checked on: along each grid line, a run of void with solid at both ends is a
+                // gap and its ends see each other. The 8 × 8 mm patch where the bars cross is four
+                // such columns.
+                //
+                // The clearance is a `void` region over the whole block with the two bars filled
+                // back in, which is the readable way to say it and did not work until `fill`
+                // stopped leaving `void` set.
+                //
+                // # The closed form is now a pair
+                //
+                // Each bar sheds to still air, convectively and radiatively, **and** exchanges
+                // with the other:
+                //
+                //   P_a = hA(T_a − T∞) + εσA(T_a⁴ − T∞⁴) + Q      P_b + Q = (the same for b)
+                //   Q   = σ A_face (T_a⁴ − T_b⁴) / (1/ε + 1/ε − 1)
+                //
+                // Two equations, two unknowns, solved here by iteration from the constants. The
+                // single-bar balance this replaced is what the scene answered *without* the
+                // coupling, and the difference between them is the point: 22.4297 K against
+                // 22.0246, and 5.8120 against 6.2523.
                 const SIGMA: f64 = 5.670_374_419e-8;
                 const AMBIENT_C: f64 = 40.0;
                 const AMBIENT_K: f64 = AMBIENT_C + 273.15;
                 const H: f64 = 8.0;
                 const EPS: f64 = 0.9;
-                // 32 × 8 × 8 mm, cooled on the four long faces. The two x faces are the joints to
-                // the rest of the bus and the file does not cool them, which is also why there is
-                // no gradient along the bar to spoil the lump.
+                // Each bar is 32 × 8 × 8 mm and sheds from its four long faces. The two end faces
+                // are the joints to the rest of the bus and the file does not cool them.
                 let area = 4.0 * (0.032 * 0.008);
-                let settle = |watts: f64| {
+                // The patch where they cross: two cells by two, at 4 mm.
+                let facing = 0.008 * 0.008;
+                let shed = |t: f64| {
+                    H * area * (t - AMBIENT_K)
+                        + EPS * SIGMA * area * (t.powi(4) - AMBIENT_K.powi(4))
+                };
+                // The temperature at which a bar sheds exactly `watts`, by bisection.
+                let alone = |watts: f64| {
                     let (mut lo, mut hi) = (AMBIENT_K, AMBIENT_K + 1.0e4);
                     for _ in 0..200 {
                         let mid = 0.5 * (lo + hi);
-                        let out = H * area * (mid - AMBIENT_K)
-                            + EPS * SIGMA * area * (mid.powi(4) - AMBIENT_K.powi(4));
-                        if out < watts {
+                        if shed(mid) < watts {
                             lo = mid;
                         } else {
                             hi = mid;
                         }
                     }
-                    0.5 * (lo + hi) - AMBIENT_K
+                    0.5 * (lo + hi)
                 };
+                let (mut ta, mut tb) = (alone(0.344), alone(0.086));
+                let mut exchange = 0.0;
+                for _ in 0..20_000 {
+                    exchange = SIGMA * facing * (ta.powi(4) - tb.powi(4)) / (2.0 / EPS - 1.0);
+                    let (na, nb) = (alone(0.344 - exchange), alone(0.086 + exchange));
+                    ta += 0.2 * (na - ta);
+                    tb += 0.2 * (nb - tb);
+                }
+                let (want_a, want_b) = (ta - AMBIENT_K, tb - AMBIENT_K);
 
-                let peak_of = |f: &pantometry_world::Frame, domain: &str| {
-                    f.readings
-                        .iter()
-                        .find(|r| r.domain == domain && r.label == "peak")
-                        .unwrap_or_else(|| panic!("{name}: {domain} reports no peak"))
-                        .value
-                };
                 let last = frames.last().expect("frames");
-
-                // The run stops at 8.0 τ, so what is left of the exponential is e⁻⁸ = 3.3e-4 of
-                // the rise. That is where this tolerance comes from and it is the whole of it:
-                // the discretisation contributes 3.4 mK on 22 K, another 1.5e-4. Measured at
-                // 1.4e-4 — a third of the budget, and the budget is derived rather than chosen.
+                let block = world
+                    .simulation()
+                    .domain_as::<pantometry::thermal::Solid3D>("busbars")
+                    .expect("the busbars are a block");
+                // A cell of each bar, away from the crossing so neither is read at the one place
+                // the exchange lands. Each bar is isothermal anyway — see below.
+                let got_a = block.temperature_at(0, 3, 0).to_si() - AMBIENT_K;
+                let got_b = block.temperature_at(3, 0, 4).to_si() - AMBIENT_K;
+                println!(
+                    "  {name}: {got_a:.4} and {got_b:.4} K against the pair balance's {want_a:.4} \
+                     and {want_b:.4}, exchanging {:.4} mW",
+                    exchange * 1e3
+                );
+                // The run stops at 8.0 τ, so e⁻⁸ = 3.3e-4 of the rise is still to come. That is
+                // where this tolerance comes from and it is the whole of it.
                 const SHORT_OF_STEADY: f64 = 1e-3;
-                for (domain, watts) in [("phase_a", 0.344), ("phase_b", 0.086)] {
-                    let want = settle(watts);
-                    let got = peak_of(last, domain) - AMBIENT_C;
-                    println!(
-                        "  {name}: {domain} rises {got:.4} K against the balance's {want:.4} K \
-                         — off {:.2e}",
-                        (got - want).abs() / want
-                    );
+                for (which, got, want) in [("a", got_a, want_a), ("b", got_b, want_b)] {
                     assert!(
                         (got - want).abs() / want < SHORT_OF_STEADY,
-                        "{name}: {domain} rose {got:.4} K, the balance says {want:.4} K"
+                        "{name}: bar {which} rose {got:.4} K, the pair balance says {want:.4} K"
                     );
                 }
 
-                // **And it is steady**, or the agreement above is a coincidence of run length.
-                let earlier = &frames[frames.len() - 2];
-                for domain in ["phase_a", "phase_b"] {
-                    let moved = (peak_of(last, domain) - peak_of(earlier, domain)).abs();
-                    assert!(
-                        moved < 0.01,
-                        "{name}: {domain} is still climbing at the end, by {moved:.4} K \
-                         over the last frame"
-                    );
-                }
-
-                // ---- what the scene is *for* ----
-                //
-                // **Four times the heat is not four times the rise.** Both bars are the same bar
-                // and only their current differs, so under convection alone the rises would be in
-                // the ratio of the watts exactly — 4, with no material property left in it. They
-                // are not, because the hotter bar radiates as T⁴ and sheds disproportionately.
-                //
-                // This is the assertion that notices if radiation stops being applied: with ε
-                // dropped the ratio returns to exactly 4 and the gap below vanishes. Nothing else
-                // in this file would say so — both bars would still settle, and both would still
-                // be steady.
-                let rise = |d: &str| peak_of(last, d) - AMBIENT_C;
-                let ratio = rise("phase_a") / rise("phase_b");
-                let balance = settle(0.344) / settle(0.086);
+                // **And the coupling is doing something**, or the pair balance above is satisfied
+                // by a scene in which the bars still cannot see each other. Uncoupled, the same
+                // two bars settle at 22.4297 and 5.8120 K; the exchange moves each by about
+                // 0.4 K, which is forty times the tolerance the balance is asserted to.
+                let (solo_a, solo_b) = (alone(0.344) - AMBIENT_K, alone(0.086) - AMBIENT_K);
                 println!(
-                    "  {name}: rises are {ratio:.4} apart where the watts are 4.0 — \
-                     radiation carries the difference"
+                    "  {name}: without the exchange they would sit at {solo_a:.4} and {solo_b:.4} K"
                 );
                 assert!(
-                    ratio < 4.0,
-                    "{name}: the ratio is {ratio:.4}; radiation cannot make it 4 or more"
+                    solo_a - got_a > 0.3 && got_b - solo_b > 0.3,
+                    "{name}: the bars are not exchanging: {got_a:.4}/{got_b:.4} against \
+                     {solo_a:.4}/{solo_b:.4}"
                 );
+                // The hotter bar gives and the cooler receives, which is the only direction the
+                // second law allows and the one a sign error would reverse.
                 assert!(
-                    (ratio - balance).abs() / balance < SHORT_OF_STEADY,
-                    "{name}: the run says {ratio:.4}, the balance says {balance:.4}"
+                    got_a < solo_a && got_b > solo_b,
+                    "{name}: heat flowed uphill"
                 );
 
-                // **How much of the heat radiation actually carries**, by conservation rather than
-                // by a threshold somebody liked the look of. At steady state everything generated
-                // leaves through the boundary and it leaves two ways; the convective way is
-                // `h A ΔT` exactly, with ΔT the run's own answer, so the rest is the radiative
-                // one. It measures **46.6%** — blackening this bar nearly doubles what it can
-                // shed, which is why switchgear busbars are blackened and is the reason this
-                // scene has an emissivity worth stating.
-                //
-                // A third is the bound and the gap is the earned part: the split at ε = 0.9 is
-                // 46.6 / 53.4, so a third leaves 1.4× of room. The sensitivity is measured — the
-                // radiative share is 46.6% at ε = 0.9 and **4%** at copper's own 0.04 — so this
-                // fails long before radiation is merely reduced. The check it replaced asked for
-                // the ratio to sit more than 0.1 below 4, which is a number nothing derived: it
-                // tolerated ε all the way down to 0.35 and had 1.4× of room of its own.
-                let convected = H * area * rise("phase_a");
-                let radiated = 0.344 - convected;
+                // **Each bar is a lump, and that is the physics rather than a defect.** With every
+                // watt leaving at the two ends — which is more than this arrangement does — a
+                // 32 mm bar of copper 8 mm square generating 0.344 W has a peak-to-end difference
+                // of `P·L/(8kA)` = 53.6 mK, 0.24% of its own rise. `verify` names both bars for it
+                // and is right to; no cooling arrangement makes this object have a field.
+                let along_a: Vec<f64> = (0..8)
+                    .map(|i| block.temperature_at(i, 3, 0).to_si())
+                    .collect();
+                let ripple = along_a.iter().cloned().fold(f64::MIN, f64::max)
+                    - along_a.iter().cloned().fold(f64::MAX, f64::min);
+                let bound = 0.344 * 0.032 / (8.0 * 401.0 * 0.008 * 0.008);
                 println!(
-                    "  {name}: radiation carries {:.1}% of phase_a's 0.344 W",
-                    radiated / 0.344 * 100.0
+                    "  {name}: bar a varies {:.4} mK along its length, and cannot exceed {:.1}",
+                    ripple * 1e3,
+                    bound * 1e3
                 );
                 assert!(
-                    radiated / 0.344 > 1.0 / 3.0,
-                    "{name}: radiation carries {:.1}% of the heat, and this scene is about a \
-                     surface that radiates",
-                    radiated / 0.344 * 100.0
+                    ripple < bound,
+                    "{name}: {ripple:.6} K along a bar that cannot exceed {bound:.6}"
                 );
 
-                // ---- what the placement is *for* ----
-                //
-                // The run has to carry where each bar is, or every reader of it draws them in one
-                // place. This is the path that broke three times and could not fail here until a
-                // shipped scene stated a pose.
-                let panel = |domain: &str| {
-                    last.panels
-                        .iter()
-                        .find(|p| p.name == domain)
-                        .unwrap_or_else(|| panic!("{name}: no panel for {domain}"))
-                };
+                // **The clearance is 4 mm and the bars do not touch.** The one dimension a fault
+                // would close: the void layer between them carries no conductance at all, so a
+                // region that failed to apply would show as a face that conducts.
+                let across = block
+                    .face_conductance((4, 4, 1), (4, 4, 2))
+                    .expect("neighbours along z")
+                    .to_si();
                 assert!(
-                    panel("phase_a").place.is_here(),
-                    "{name}: phase_a was moved and the file does not place it"
+                    across == 0.0,
+                    "{name}: the clearance conducts {across:.6e} W/K"
                 );
-                let b = panel("phase_b").place;
-                assert!(!b.is_here(), "{name}: phase_b states a pose and lost it");
-                for (a, want) in [0.020, -0.012, 0.012].into_iter().enumerate() {
-                    assert!(
-                        (b.at_m[a] - want).abs() < 1e-12,
-                        "{name}: phase_b is at {:?}, not where the file puts it",
-                        b.at_m
-                    );
-                }
-                // A quarter turn about z is sin and cos of an eighth of a turn, in `[x, y, z, w]`.
-                let eighth = std::f64::consts::FRAC_PI_4;
-                for (a, want) in [0.0, 0.0, eighth.sin(), eighth.cos()]
-                    .into_iter()
-                    .enumerate()
-                {
-                    assert!(
-                        (b.turn[a] - want).abs() < 1e-12,
-                        "{name}: phase_b's turn is {:?}, not a quarter turn about z",
-                        b.turn
-                    );
-                }
+                assert!(
+                    block.is_void(4, 4, 2),
+                    "{name}: the clearance layer is not empty"
+                );
 
-                // **The assembly's envelope, composed the way an exporter composes it** — each
-                // panel's own extent, turned and moved by its own placement. Written out by hand
-                // below rather than read back from anything:
-                //
-                //   phase_a  x [0, 32]     y [0, 8]      z [0, 8]      mm
-                //   phase_b  x [12, 20]    y [−12, 20]   z [12, 20]    mm   (turned, then moved)
-                //   union    x [0, 32]     y [−12, 20]   z [0, 20]     mm
+                // **The pose reaches the drawing.** Under the identity a domain's own coordinates
+                // and the world's are the same thing, which is why this went unnoticed in three
+                // consumers at once. The assembly is turned 30° about z and moved, so its world
+                // box is neither its own extent nor that extent translated.
+                let panel = last.panels.first().expect("one field");
+                assert!(
+                    panel.place.at_m != [0.0, 0.0, 0.0],
+                    "{name}: the pose did not reach the panel"
+                );
                 let turn = |q: [f64; 4], v: [f64; 3]| {
-                    // v + 2 q⃗ × (q⃗ × v + w v), which is q v q* without building the matrix.
                     let (qx, qy, qz, qw) = (q[0], q[1], q[2], q[3]);
                     let t = [
                         qy * v[2] - qz * v[1] + qw * v[0],
@@ -2902,29 +2889,31 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                         v[2] + 2.0 * (qx * t[1] - qy * t[0]),
                     ]
                 };
+                let PanelData::Field { extent_m: e, .. } = &panel.data else {
+                    panic!("{name}: the busbars are a field");
+                };
                 let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
-                for p in &last.panels {
-                    let PanelData::Field { extent_m: e, .. } = &p.data else {
-                        panic!("{name}: both bars are fields");
-                    };
-                    for c in 0..8 {
-                        let local = [
-                            if c & 1 == 0 { e[0] } else { e[3] },
-                            if c & 2 == 0 { e[1] } else { e[4] },
-                            if c & 4 == 0 { e[2] } else { e[5] },
-                        ];
-                        let w = turn(p.place.turn, local);
-                        for a in 0..3 {
-                            lo[a] = lo[a].min(w[a] + p.place.at_m[a]);
-                            hi[a] = hi[a].max(w[a] + p.place.at_m[a]);
-                        }
+                for c in 0..8 {
+                    let local = [
+                        if c & 1 == 0 { e[0] } else { e[3] },
+                        if c & 2 == 0 { e[1] } else { e[4] },
+                        if c & 4 == 0 { e[2] } else { e[5] },
+                    ];
+                    let w = turn(panel.place.turn, local);
+                    for a in 0..3 {
+                        lo[a] = lo[a].min(w[a] + panel.place.at_m[a]);
+                        hi[a] = hi[a].max(w[a] + panel.place.at_m[a]);
                     }
                 }
-                let envelope = [0.0, -0.012, 0.0, 0.032, 0.020, 0.020];
+                // A 32 x 32 x 20 mm box turned 30° about z spans 43.71 mm in x and in y, and the
+                // corner it starts from is not the one it started from. Written out rather than
+                // recomputed from the pose, so a placement that silently became the identity
+                // cannot satisfy this by agreeing with itself.
+                let envelope = [0.034, 0.020, 0.010, 0.077_712_8, 0.063_712_8, 0.030];
                 for a in 0..3 {
                     assert!(
-                        (lo[a] - envelope[a]).abs() < 1e-9
-                            && (hi[a] - envelope[a + 3]).abs() < 1e-9,
+                        (lo[a] - envelope[a]).abs() < 1e-6
+                            && (hi[a] - envelope[a + 3]).abs() < 1e-6,
                         "{name}: axis {a} spans {} to {}, not {} to {}",
                         lo[a],
                         hi[a],
@@ -2932,33 +2921,20 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                         envelope[a + 3]
                     );
                 }
-
-                // **The clearance itself**, which is the one dimension a fault would close. The
-                // bars are 4 mm apart in z and a scene that lost the placement puts them in
-                // contact — which is exactly what every consumer of this run drew until the
-                // placement reached it.
-                let top_of_a = panel("phase_a").place.at_m[2]
-                    + match &panel("phase_a").data {
-                        PanelData::Field { extent_m, .. } => extent_m[5],
-                        _ => unreachable!(),
-                    };
-                let gap = b.at_m[2] - top_of_a;
-                assert!(
-                    (gap - 0.004).abs() < 1e-9,
-                    "{name}: the phases are {:.4} mm apart, not 4 mm",
-                    gap * 1e3
-                );
             }
             other => panic!("{other} ships but nothing checks it; add a claim for it"),
         }
 
         // **Which of these is a lump written as a grid.** Free here, because the run has already
-        // happened; `pantometry verify` computes the same number and raises it as a finding, and
+        // happened; `pantometry verify` computes the same numbers and raises them as findings, and
         // a finding sets that command's exit code. Without this pin a shipped scene could start
         // failing its own verification and nothing in the gate would say so.
         //
-        // Measured exactly as `verify` measures it: the last frame's `peak - coldest`, over the
-        // range that domain's readings of the same unit covered across the whole run.
+        // Measured exactly as `verify` measures it, **through the same function**: per connected
+        // body rather than per domain, because a domain's `peak` and `coldest` are the extremes of
+        // everything in it and two separate objects at different temperatures read as a large
+        // spread. `verify::connected_bodies` is public for this reason — a pin against a second
+        // copy of the walk would agree with itself while the two drifted apart.
         let mut span: std::collections::BTreeMap<(String, &str), (f64, f64)> =
             std::collections::BTreeMap::new();
         for frame in &frames {
@@ -2973,14 +2949,15 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 e.1 = e.1.max(r.value);
             }
         }
+        let bodies = pantometry_world::verify::connected_bodies(last);
         for peak in last.readings.iter().filter(|r| r.label == "peak") {
-            let Some(coldest) = last
+            if !last
                 .readings
                 .iter()
-                .find(|r| r.domain == peak.domain && r.label == "coldest" && r.unit == peak.unit)
-            else {
+                .any(|r| r.domain == peak.domain && r.label == "coldest" && r.unit == peak.unit)
+            {
                 continue;
-            };
+            }
             let Some((lo, hi)) = span.get(&(peak.domain.clone(), peak.unit)) else {
                 continue;
             };
@@ -2988,28 +2965,50 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             if travel <= 0.0 {
                 continue;
             }
-            if (peak.value - coldest.value) / travel < pantometry_world::verify::UNIFORM_FIELD {
-                flat.push(format!("{name}/{}", peak.domain));
+            let mine: Vec<&(String, usize, f64)> = bodies
+                .iter()
+                .filter(|(d, _, _)| *d == peak.domain)
+                .collect();
+            for (n, (_, cells, spread)) in mine.iter().enumerate() {
+                if *cells > 1 && spread / travel < pantometry_world::verify::UNIFORM_FIELD {
+                    let which = if mine.len() > 1 {
+                        format!("{name}/{} body {}", peak.domain, n + 1)
+                    } else {
+                        format!("{name}/{}", peak.domain)
+                    };
+                    flat.push(which);
+                }
             }
         }
     }
 
-    // **Pinned, both ways.** These five are lumps: three are melting, where the temperature is
-    // the melting point everywhere and the answer is in a phase fraction this cannot see, and two
-    // are busbars of thirty-two cells apiece whose spread is *exactly zero*.
+    // **Pinned, both ways.** Seven bodies across five scenes, and every one of them is a lump for
+    // a reason worth reading rather than a defect to clear.
     //
-    // A seventh arriving means a scene lost its gradient, and one leaving means a scene gained
-    // one — both worth a failure rather than a quieter list. `pantometry verify` exits 1 on every
-    // one of these, which is the state this pin makes visible rather than the state it approves.
+    // Three are **melting**: the temperature is the melting point everywhere that is mushy, and
+    // the answer lives in a phase fraction the readings report only as a total, so the measurement
+    // cannot see their structure and says as much in its own words.
     //
-    // **It was seven.** `19-a-coating-stops-the-heat` was flat to 0.134% because its pulse was a
-    // single cell at +60 K, which is 0.145 J spread over 1 458 cells; heating the whole face
-    // instead is eighty-one times the energy. And `29-a-designed-bracket-becomes-cells` was flat
-    // to 2.1% because it was a hot bracket cooling over its *whole footprint* — every cell shed
-    // where it stood, so there was no path along the shape at all. It carries a module's 20 W to
-    // a bolt pad now, and holds a 21.92 K spread.
+    // Two are the part and the lid of `23-a-part-radiating-to-its-lid`, each isothermal and
+    // exchanging radiation across a clearance. **This is what measuring per body found.** As one
+    // domain that scene read 0.79 and passed, because `peak - coldest` over a domain holding two
+    // separate objects is the difference between them and not a gradient in either.
     //
-    // Both left as a line removed rather than as a claim, which is what a pin is for.
+    // Two are the busbars, which is the other half of the same lesson in the other direction:
+    // merging them into one block — which is what gives them a radiative path across their
+    // clearance — would have made a per-domain measurement stop naming them, with neither bar
+    // gaining a field. A 32 mm copper bar 8 mm square generating 0.344 W cannot vary by more than
+    // `P·L/(8kA)` = 53.6 mK along its length even if every watt left at the ends. It measures
+    // 0.585 mK.
+    //
+    // An eighth arriving means a scene lost its gradient, and one leaving means a scene gained
+    // one — both worth a failure rather than a quieter list. `pantometry verify` exits 1 on all
+    // five, which is the state this pin makes visible rather than the state it approves.
+    //
+    // **It was seven and then six and then five scenes.** `19-a-coating-stops-the-heat` left when
+    // its pulse stopped being a single cell, and `29-a-designed-bracket-becomes-cells` when a face
+    // could be cooled only where it is bolted — each visible here as a line removed rather than as
+    // a claim, which is what a pin is for.
     flat.sort();
     assert_eq!(
         flat,
@@ -3017,8 +3016,10 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "20-melting-a-block-of-ice.json/ice",
             "21-a-wax-thermal-buffer.json/wax",
             "22-wax-in-an-aluminium-matrix.json/buffer",
-            "30-two-phases-crossing-at-a-clearance.json/phase_a",
-            "30-two-phases-crossing-at-a-clearance.json/phase_b",
+            "23-a-part-radiating-to-its-lid.json/housing body 1",
+            "23-a-part-radiating-to-its-lid.json/housing body 2",
+            "30-two-phases-crossing-at-a-clearance.json/busbars body 1",
+            "30-two-phases-crossing-at-a-clearance.json/busbars body 2",
         ],
         "the set of scenes whose grid is not carrying the answer has changed"
     );

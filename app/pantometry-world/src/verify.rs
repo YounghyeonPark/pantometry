@@ -103,6 +103,18 @@ pub struct Measured {
     /// converged. Measured against the true answer, that scene is 14% out at its shipped frame
     /// count.
     pub span: BTreeMap<(String, &'static str), f64>,
+    /// Each **connected body** in the last frame, as `(domain, cells, peak - coldest)`.
+    ///
+    /// **Per body, not per domain, and that distinction is load-bearing.** A domain's `peak` and
+    /// `coldest` are the extremes of everything in it, so two separate objects at different
+    /// temperatures read as a large spread and a flat field reads as a small one — and the two
+    /// are indistinguishable from the readings. `30-two-phases-crossing-at-a-clearance` states two
+    /// busbars, each of which is a lump; written as two domains the flatness measurement names
+    /// them, and merging them into one block to give them a radiative path would have made it stop
+    /// firing without either bar gaining a field.
+    ///
+    /// Six-connected over the cells a field panel reports as finite, which is what void is not.
+    pub bodies: Vec<(String, usize, f64)>,
     /// FNV-1a digest over the frames' JSON. Two runs of one scene must agree on this exactly,
     /// on every platform, at every optimisation level.
     pub digest: u64,
@@ -297,6 +309,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
         }
     }
     Ok(Measured {
+        bodies: frames.last().map(connected_bodies).unwrap_or_default(),
         readings,
         span: span.into_iter().map(|(k, (lo, hi))| (k, hi - lo)).collect(),
         digest: fnv1a(json.as_bytes()),
@@ -364,6 +377,77 @@ fn representation_scale(unit: &str, magnitude: f64) -> f64 {
     }
 }
 
+/// Public because  pins the set of shipped scenes this names, and a pin against a second
+/// copy of the walk would agree with itself while the two drifted apart.
+///
+/// Each connected body in a frame's field panels, as `(domain, cells, peak - coldest)`.
+///
+/// Six-connected over the cells whose value is finite — a void cell has no temperature and a
+/// panel reports it as `NaN`, so the mask is the object and the walk is the object's shape. An
+/// iterative flood fill rather than recursion: a 128³ block is two million cells and a stack that
+/// deep is not a stack.
+pub fn connected_bodies(frame: &pantometry::scene::Frame) -> Vec<(String, usize, f64)> {
+    let mut out = Vec::new();
+    for panel in &frame.panels {
+        let Some((nx, ny, nz)) = panel.grid() else {
+            continue;
+        };
+        let v = panel.values();
+        if v.len() != nx * ny * nz {
+            continue;
+        }
+        let mut seen = vec![false; v.len()];
+        let at = |i: usize, j: usize, k: usize| i + nx * (j + ny * k);
+        for k0 in 0..nz {
+            for j0 in 0..ny {
+                for i0 in 0..nx {
+                    let start = at(i0, j0, k0);
+                    if seen[start] || !v[start].is_finite() {
+                        continue;
+                    }
+                    let (mut lo, mut hi) = (v[start], v[start]);
+                    let mut cells = 0usize;
+                    let mut stack = vec![(i0, j0, k0)];
+                    seen[start] = true;
+                    while let Some((i, j, k)) = stack.pop() {
+                        cells += 1;
+                        let x = v[at(i, j, k)];
+                        lo = lo.min(x);
+                        hi = hi.max(x);
+                        let mut push = |i: usize, j: usize, k: usize, stack: &mut Vec<_>| {
+                            let c = at(i, j, k);
+                            if !seen[c] && v[c].is_finite() {
+                                seen[c] = true;
+                                stack.push((i, j, k));
+                            }
+                        };
+                        if i > 0 {
+                            push(i - 1, j, k, &mut stack);
+                        }
+                        if i + 1 < nx {
+                            push(i + 1, j, k, &mut stack);
+                        }
+                        if j > 0 {
+                            push(i, j - 1, k, &mut stack);
+                        }
+                        if j + 1 < ny {
+                            push(i, j + 1, k, &mut stack);
+                        }
+                        if k > 0 {
+                            push(i, j, k - 1, &mut stack);
+                        }
+                        if k + 1 < nz {
+                            push(i, j, k + 1, &mut stack);
+                        }
+                    }
+                    out.push((panel.name.clone(), cells, hi - lo));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// How much a halved coupling window may move a reading before it is a finding.
 ///
 /// **A chosen number, and the corpus it was chosen against is written down** — the same standing
@@ -417,11 +501,14 @@ const WINDOW_SHIFT: f64 = 0.005;
 /// within the discretisation error of most of these scenes, so the structure it holds is not a
 /// structure it has earned the right to report.
 ///
-/// **The table is the corpus this was chosen against, not the state of the tree.** The coating
-/// scene has been fixed since it was taken — its pulse was one cell at +60 K, so the whole
-/// block held a 0.08 K range, and heating the face instead is eighty-one times the energy. It
-/// reads 0.1062 now. `scene.rs` pins what is currently named; this records why the line is
-/// it is.
+/// **The table is the corpus this was chosen against, not the state of the tree**, and it was
+/// taken per *domain* before this was measured per body. Three of its rows have moved since. The
+/// coating scene reads 0.1062: its pulse was one cell at +60 K and is the whole heated face now.
+/// The bracket reads well clear of the line: it carries a module's watts to a bolt pad instead of
+/// shedding over its whole footprint. And the lid scene's 0.79 was two bodies rather than a
+/// gradient — measured apart, both of them are flat, which is what per-body measurement found and
+/// per-domain could not. `scene.rs` pins what is currently named; this records why the line sits
+/// where it does.
 ///
 /// # What it is not evidence of
 ///
@@ -809,13 +896,19 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
     // **A grid that is not carrying the answer.** Every finding above this one is about
     // arithmetic; this one is about whether the scene needed the arithmetic. A block whose cells
     // all hold the same number has been solved as a field and answered as a lump, and nothing in
-    // the report said so — `30-two-phases-crossing-at-a-clearance` states two eight-cell busbars
-    // whose temperature spread is **exactly zero**, and `29-a-designed-bracket-becomes-cells`
-    // rasterises 4 100 cells to hold a 0.067 K range.
+    // the report said so.
     //
-    // Read from the same `span` the sweeps divide by, so a flatness and a sensitivity are
-    // measured against the same denominator, and guarded by `representation_scale` so a run that
-    // barely moved cannot make its own flatness look meaningful.
+    // **Per connected body, not per domain.** A domain's `peak` and `coldest` are the extremes of
+    // everything in it, so two separate objects at different temperatures read as a large spread
+    // and are indistinguishable from one object with a gradient. That is not a nicety: the two
+    // busbars of `30-two-phases-crossing-at-a-clearance` are each a lump, and merging them into
+    // one block — which is what gives them a radiative path across their clearance — would have
+    // made this stop firing with neither bar gaining a field. A measurement that a refactor can
+    // silence is not measuring what it says.
+    //
+    // The denominator is the same `span` the sweeps divide by, so a flatness and a sensitivity
+    // are judged against one scale, and `representation_scale` guards a run that barely moved
+    // from making its own flatness look meaningful.
     for reading in &base.readings {
         if reading.label != "peak" {
             continue;
@@ -827,26 +920,49 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
         else {
             continue;
         };
-        let spread = reading.value - coldest.value;
         let Some(travel) = base.span.get(&(reading.domain.clone(), reading.unit)) else {
             continue;
         };
-        // A run that did nothing has no scale to judge a flatness against, and the same
-        // representation floor the sweeps use is what says whether it did anything.
-        if !spread.is_finite()
-            || *travel <= representation_scale(reading.unit, reading.value.abs()) * 1e-9
-        {
+        if *travel <= representation_scale(reading.unit, reading.value.abs()) * 1e-9 {
             continue;
         }
-        let flatness = spread / travel;
-        if flatness < UNIFORM_FIELD {
+        // Bodies where the domain drew a field, and the domain's own extremes where it did not —
+        // a network reports a peak and a coldest and has no grid under them.
+        let bodies: Vec<(usize, f64)> = base
+            .bodies
+            .iter()
+            .filter(|(name, _, _)| *name == reading.domain)
+            .map(|(_, cells, spread)| (*cells, *spread))
+            .collect();
+        let measured: Vec<(usize, f64)> = if bodies.is_empty() {
+            vec![(0, reading.value - coldest.value)]
+        } else {
+            bodies
+        };
+        for (n, (cells, spread)) in measured.iter().enumerate() {
+            if !spread.is_finite() || spread / travel >= UNIFORM_FIELD {
+                continue;
+            }
+            // A body of one cell has no field to have, and saying so of it is noise.
+            if *cells == 1 {
+                continue;
+            }
+            let which = if measured.len() > 1 {
+                format!("{} body {} of {}", reading.domain, n + 1, measured.len())
+            } else {
+                reading.domain.clone()
+            };
+            let size = if *cells > 0 {
+                format!(" across its {cells} cells")
+            } else {
+                String::new()
+            };
             findings.push(format!(
-                "{}: the field is flat to {:.3}% of the {:.4} {} this run covered — every cell \
-                 holds within {:.2e} {} of every other, so a single lumped node answers this \
-                 scene and the grid is not carrying the answer. If the structure is in a phase \
-                 fraction rather than in the temperature, this cannot see it and says so",
-                reading.domain,
-                flatness * 100.0,
+                "{which}: the field is flat to {:.3}% of the {:.4} {} this run covered{size} \
+                 — every cell holds within {:.2e} {} of every other, so a single lumped node \
+                 answers it and the grid is not carrying the answer. If the structure is in a \
+                 phase fraction rather than in the temperature, this cannot see it and says so",
+                spread / travel * 100.0,
                 travel,
                 reading.unit,
                 spread.abs(),

@@ -30,6 +30,38 @@ pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
 
+- **Two busbars four millimetres apart could not see each other.**
+  `30-two-phases-crossing-at-a-clearance` states two blackened bars, ε = 0.9, crossing at a
+  clearance. Two surfaces at 335.6 K and 319.0 K facing across that gap exchange **6.5711 mW** over
+  the 8 × 8 mm patch where they cross — 7.64% of what the cooler bar dissipates — and two `Solid3D`
+  domains exchange nothing but bus totals, which carry an amount and no location. The arrangement
+  the scene is named for was not modelled.
+
+  As one block it is `find_gaps`, the pairing `23-a-part-radiating-to-its-lid` is already checked
+  on. Its closed form is a **pair** now — each bar sheds convectively and radiatively *and* trades
+  with the other — giving 22.0246 and 6.2523 K against a measured 22.0218 and 6.2493. Uncoupled
+  they sit at 22.4333 and 5.8139, so the exchange is forty times the tolerance the balance is
+  asserted to. The `poses` entry it was written for is on the assembly.
+
+- **A `void` region could not be filled back in, and the comment beside it said otherwise.**
+  `Solid3D::empty` was one-way: `fill` set a cell's material and left it empty. The scene format's
+  own words are *"applied in the same order as any other region — later wins where they overlap —
+  so a gap cut into a part reads the way a coating on a layer does"*, and that is the seventh
+  comment in this workspace to guarantee something the code did not do.
+
+  It surfaced by writing a scene the readable way: two crossing bars are most simply stated as
+  "void the block, then put the bars back", and that was refused for dissipating heat in cells it
+  had just filled. The loud version. The quiet one is a part with a hole nobody put there.
+
+- **The flat-field measurement could be silenced by merging two domains.** A domain's `peak` and
+  `coldest` are the extremes of everything in it, so one block holding two objects at different
+  temperatures reads as a large spread. Giving the busbars their radiative path would have made the
+  finding stop naming them with neither bar gaining a field.
+
+  It is **per connected body** now, six-connected over the cells a field panel reports as finite.
+  That found a scene it had been blind to: `23-a-part-radiating-to-its-lid` read 0.79 as one domain
+  and passed, and its part and lid are two isothermal objects at 0.052% and 0.049%.
+
 - **A bracket rasterised from a shape had no route along it.** `29-a-designed-bracket-becomes-cells`
   is the one scene whose geometry comes from a file, and the route heat takes along that geometry
   is the only reason the shape is in it. It was a uniformly hot bracket shedding over its whole
@@ -37,9 +69,14 @@ pharmacokinetics, and the count of commits above does not include it.
   8.6e-4` and a field spanning **0.067 K**.
 
   It carries a module's 20 W from the tip of one arm into a bolt pad at the tip of the other now —
-  **52.4879 °C at the module against 30.5647 at the bolts**, 21.92 K across a 32.49 K rise. Its
-  `conservation_tolerance` moves 1e-9 → 1e-8: the run is 900 s with 18 000 J through it rather than
-  120 s with none, and the refined sweep needs 2.038e-9 where the base needs 2.010e-10.
+  **52.4420 °C at the module against 30.5449 at the bolts**, 21.90 K across a 32.44 K rise. Its
+  `conservation_tolerance` moves 1e-9 → 1e-8: it has 4 000 J passing through it rather than none,
+  and the refined sweep needs more of the budget than the base does.
+
+  It starts at **44 °C** rather than 20. From cold it took 900 s to settle, nearly all of it
+  charging the bracket’s mass rather than establishing the gradient the scene is about — and nine
+  test binaries walk every shipped scene, so that cost was multiplied by nine. 200 s from near the
+  answer is within 0.09% of the settled peak and seven times cheaper.
 
 - **Three true claims about eight hundredths of a kelvin.** `19-a-coating-stops-the-heat` asserted
   that the metal levels, that the largest step along z lands on the interface, and that the glass
