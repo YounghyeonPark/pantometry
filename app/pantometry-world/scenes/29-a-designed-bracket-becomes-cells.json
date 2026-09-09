@@ -1,21 +1,27 @@
 {
-  "title": "an aluminium bracket, designed as a mesh and solved as cells, cooling to still air",
+  "title": "a designed bracket carrying a module's heat along its own shape to its bolts",
   "schedule": "multirate",
-  "duration_s": 120.0,
+  "duration_s": 900.0,
   "frames": 13,
-  "conservation_tolerance": 1e-9,
+  "conservation_tolerance": 1e-8,
   "domains": [
     {
       "kind": "block",
       "name": "bracket",
       "cells": [26, 26, 12],
       "cell_mm": 2.0,
-      "initial_c": 120.0,
+      "initial_c": 20.0,
       "parts": [
         { "stl": "parts/l-bracket.stl", "material": "aluminium" }
       ],
+      "dissipation": [
+        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 12] }
+      ],
       "cooling": [
         { "face": "z-min", "ambient_c": 20.0,
+          "convection_w_per_m2_k": 20000.0, "area_cm2": 0.96,
+          "from": [2, 21], "to": [8, 25] },
+        { "face": "z-max", "ambient_c": 20.0,
           "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }
       ]
     }

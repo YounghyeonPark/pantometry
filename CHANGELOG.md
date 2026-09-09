@@ -30,6 +30,32 @@ pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
 
+- **A bracket rasterised from a shape had no route along it.** `29-a-designed-bracket-becomes-cells`
+  is the one scene whose geometry comes from a file, and the route heat takes along that geometry
+  is the only reason the shape is in it. It was a uniformly hot bracket shedding over its whole
+  footprint, so every cell shed where it stood: 4 100 cells, all holding the same number, `Bi =
+  8.6e-4` and a field spanning **0.067 K**.
+
+  It carries a module's 20 W from the tip of one arm into a bolt pad at the tip of the other now —
+  **52.4879 °C at the module against 30.5647 at the bolts**, 21.92 K across a 32.49 K rise. Its
+  `conservation_tolerance` moves 1e-9 → 1e-8: the run is 900 s with 18 000 J through it rather than
+  120 s with none, and the refined sweep needs 2.038e-9 where the base needs 2.010e-10.
+
+- **Three true claims about eight hundredths of a kelvin.** `19-a-coating-stops-the-heat` asserted
+  that the metal levels, that the largest step along z lands on the interface, and that the glass
+  stopped it — all true, and all about a 0.08 K range, because the pulse was one cell at +60 K
+  spread over 1 458 cells. It is the whole heated face now: the interface step is **9.4656 K of a
+  19.1152 K rise**, half the profile on one face.
+
+  As a `regions` entry rather than a `hot_spot` it can also be refined — `verify` refuses to halve
+  a one-cell feature and says to state the initial condition as a region instead — so the scene has
+  a resolution measurement for the first time, at 0.106% on the peak.
+
+- **The resolution sweep did not double a cooled patch.** A patch is stated in cells, so at twice
+  the grid the bracket's bolt pad came out a quarter of its own area, and the sweep reported
+  **5.593%** on the peak: a changed boundary condition reading as discretisation. It is 1.409% now,
+  which is the STL rasterising differently at 1 mm.
+
 - **`verify` could not say that a scene's grid was doing nothing.** Every finding the battery
   raised was about arithmetic — determinism, a sweep, a drift, a rasterisation loss — and none of
   them asked whether the scene needed the arithmetic. A block whose cells all hold the same number
@@ -168,6 +194,22 @@ pharmacokinetics, and the count of commits above does not include it.
   argument on it. The real limit is written down instead.
 
 ### Added
+
+- **A face can be cooled only where it is bolted.** `Solid3D::losing_from_within` exposes a box on
+  a face rather than the whole of it, and a scene spells it as `cooling`'s `from`/`to` — the
+  face's two axes in x-y-z order, the reading `contact` already gives its own.
+
+  A part is bolted at **pads**, and a face could only be cooled entire. Stating a smaller
+  `area_cm2` does not stand in for it: the area is divided among the cells on the face, so a tenth
+  of the area is a tenth of the conductance spread over all of it. Measured one step from uniform,
+  a whole face and a 3×3 pad of the same stated area lost `0.043328955 J` each — the same joules to
+  the bit — and left a block with `0.000000 K` corner-to-centre against one with `0.248756 K`.
+
+  Checked against the two closed forms a bar has: bolted at one end, `345.9747 K` against
+  `P·((n−½)·dx/(kA) + 1/(hA))` of `345.9747`; the same conductance spread along its length,
+  `263.3732 K` against the fin equation's `263.2563`, agreeing to 0.044%. That second one corrects
+  the claim it was written to make — spreading the conductance does not give a lump, it gives a
+  fin, and the lumped balance is 222.22 K.
 
 - **A face can carry a stated contact resistance.** `Solid3D::joined` puts a conductance on an
   interior face, in series with the two half cells already there — `1/k_face = 1/k_series +

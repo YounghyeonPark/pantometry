@@ -1,5 +1,5 @@
 size=1500x950
-texts=63
+texts=66
 elided=1
 cut=0
 overlap=0
@@ -23,23 +23,24 @@ viewport=698,52 474x870
      537    26    22  play
      575    26     7  >
      598    26    10  >|
-     268    46   397  an aluminium bracket, designed as a mesh and solved as cells, cooling to still air: 1 domain(s), 120.000 s in 13 frames
+     268    46   387  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 900.000 s in 13 frames
        8    48    47  Outliner
      230    48    22  solo
     1188    48    52  Inspector
-    1017    60   147  bracket peak 116.87 C
-    1017    74   147  bracket mean 116.85 C
+    1010    60   154  bracket peak 52.4879 C
+    1010    74   154  bracket mean 43.7854 C
     1188    76   297  nothing selected — pick a row in the outliner, or click something in the viewport
      268    77   381  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
-      54    78   159  an aluminium bracket, designed as a mesh and solved as cells, cooling to still air: 1 domain(s), 120.000 s in 13 frames
+      54    78   157  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 900.000 s in 13 frames
      222    79    30  Scene
-     996    88   168  bracket coldest 116.81 C
+     989    88   175  bracket coldest 30.5648 C
       66    99    81  Placed extents
      222   100    30  Group
     1024   102   140  bracket absorbed 0 J
+     968   116   196  bracket generated 18000.00 J
       70   120    42  bracket
      216   121    36  Extent
-     272   133   406  {\n  "title": "an aluminium bracket, designed as a mesh and solved as cells, cooling to still air",\n  "schedule": "multirate",\n  "duration_s": 120.0,\n  "frames": 13,\n  "conservation_tolerance": 1e-9,\n  "domains": [\n    {\n      "kind": "block",\n      "name": "bracket",\n      "cells": [26, 26, 12],\n      "cell_mm": 2.0,\n      "initial_c": 120.0,\n      "parts": [\n        { "stl": "parts/l-bracket.stl", "material": "aluminium" }\n      ],\n      "cooling": [\n        { "face": "z-min", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }\n      ]\n    }\n  ]\n}
+     272   133   406  {\n  "title": "a designed bracket carrying a module's heat along its own shape to its bolts",\n  "schedule": "multirate",\n  "duration_s": 900.0,\n  "frames": 13,\n  "conservation_tolerance": 1e-8,\n  "domains": [\n    {\n      "kind": "block",\n      "name": "bracket",\n      "cells": [26, 26, 12],\n      "cell_mm": 2.0,\n      "initial_c": 20.0,\n      "parts": [\n        { "stl": "parts/l-bracket.stl", "material": "aluminium" }\n      ],\n      "dissipation": [\n        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 12] }\n      ],\n      "cooling": [\n        { "face": "z-min", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 20000.0, "area_cm2": 0.96,\n          "from": [2, 21], "to": [8, 25] },\n        { "face": "z-max", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }\n      ]\n    }\n  ]\n}
       66   141    22  Run
      222   142    30  Group
       70   162    42  bracket
@@ -56,15 +57,17 @@ viewport=698,52 474x870
      216   268    36  Scalar
       82   288    51  absorbed
      216   289    36  Scalar
+      82   309    58  generated
+     216   310    36  Scalar
      830   592    38  bracket
      830   606   249  field: false colour — nothing here is hot enough to glow
      706   780   180  0 triangles, 0 lines, 0 paints
      949   808    66  bracket / K
-    1023   821    36  389.96
-    1072   821    36  391.55
-    1120   821    36  393.15
+    1023   821    36  293.15
+    1072   821    36  309.39
+    1120   821    36  325.64
      740   838    30  20 mm
-     706   879    64  t = 120.00 s
+     706   879    64  t = 900.00 s
      827   898    14  13
      862   898    34  frame
        8   932    80  ran: 14 frames

@@ -189,6 +189,19 @@ impl Face {
         Face::ZMax,
     ];
 
+    /// The two axis indices that lie *in* this face, in x-y-z order.
+    ///
+    /// A patch on `ZMin` is bounded in `[i, j]`, on `YMax` in `[i, k]`, on `XMin` in `[j, k]` —
+    /// the same reading `ContactSpec` gives its own `from`/`to`, so a caller who has learned one
+    /// has learned both.
+    pub fn axes(&self) -> [usize; 2] {
+        match self {
+            Face::XMin | Face::XMax => [1, 2],
+            Face::YMin | Face::YMax => [0, 2],
+            Face::ZMin | Face::ZMax => [0, 1],
+        }
+    }
+
     /// Whether the cell at `(i, j, k)` of a `counts`-shaped block lies on this face.
     fn holds(&self, (i, j, k): (usize, usize, usize), counts: (usize, usize, usize)) -> bool {
         let (nx, ny, nz) = counts;
@@ -311,6 +324,12 @@ pub struct Solid3D {
     /// literal in nineteen places across this workspace and a joint is a property of the
     /// mounting rather than of the air.
     mounted: BTreeMap<Face, f64>,
+    /// The box on a face that is actually exposed, `[lo0, lo1, hi0, hi1]` in that face's two axes
+    /// — see [`Solid3D::losing_from_within`]. Absent is the whole face.
+    ///
+    /// Half-open, like every other pair of bounds in this workspace: a single cell is
+    /// `hi = lo + 1`.
+    patch: BTreeMap<Face, [usize; 4]>,
     /// Joules given up to those environments over the run, and the reason the books still
     /// balance: the ledger is `stored + lost`, so what leaves the cells arrives in this
     /// counter and the total moves only by what crossed the bus. `LumpedMass` keeps the same
@@ -497,6 +516,7 @@ impl Solid3D {
             face_sum: Vec::new(),
             exposed: BTreeMap::new(),
             mounted: BTreeMap::new(),
+            patch: BTreeMap::new(),
             lost: 0.0,
             saved_lost: 0.0,
             two_phase: false,
@@ -1344,6 +1364,44 @@ impl Solid3D {
         self
     }
 
+    /// Expose a **box on a face** rather than the whole face, in that face's two axes.
+    ///
+    /// `within` is `[lo0, lo1, hi0, hi1]` over [`Face::axes`], half-open, so a single cell is
+    /// `hi = lo + 1`. Everything outside it stays insulated.
+    ///
+    /// # Why a face entire was not enough
+    ///
+    /// **A part is bolted at pads.** A bracket carries heat from whatever is mounted on it down
+    /// through two or three bolt bosses into a chassis, and that path — along the bracket to the
+    /// pads — is the whole thermal question its shape answers. Cooled over its entire footprint
+    /// there is no path: every cell sheds where it stands, the part falls together, and the field
+    /// is a constant. Measured on `29-a-designed-bracket-becomes-cells`, which rasterises 4 100
+    /// cells from an STL and holds a range of **0.067 K**.
+    ///
+    /// Stating a smaller `area` does not do it. The area is divided among the cells on the face,
+    /// so a tenth of the area is a tenth of the conductance **spread over the whole face** — the
+    /// right total and the wrong place, which is exactly the difference a shape is for.
+    ///
+    /// The environment's `area` is the **patch's** area under this, not the face's, for the same
+    /// reason it is the face's under [`losing_from`](Solid3D::losing_from): a caller states what
+    /// the part exposes and the grid divides it, so refining the mesh does not change the problem.
+    pub fn losing_from_within(
+        mut self,
+        face: Face,
+        within: [usize; 4],
+        environment: Environment,
+    ) -> Solid3D {
+        self.patch.insert(face, within);
+        self.exposed.insert(face, environment);
+        self.resolve();
+        self
+    }
+
+    /// The box on a face that is exposed, if it is not the whole face.
+    pub fn patch_on(&self, face: Face) -> Option<[usize; 4]> {
+        self.patch.get(&face).copied()
+    }
+
     /// A **contact resistance** between an outer face and whatever cools it, W·m⁻²·K⁻¹.
     ///
     /// The boundary's half of [`joined`](Solid3D::joined), and the same physics on the one face
@@ -1559,7 +1617,7 @@ impl Solid3D {
         let here = Temperature::from_si(old[c]);
         let mut out = 0.0;
         for (face, env) in &self.exposed {
-            if !face.holds(cell, self.counts) {
+            if !self.exposed_at(*face, cell) {
                 continue;
             }
             let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
@@ -1603,6 +1661,46 @@ impl Solid3D {
     /// which is where the cache is filled.
     fn cells_on(&self, face: Face) -> usize {
         self.solid_on[Solid3D::face_index(face)]
+    }
+
+    /// How many **solid** cells of a face are inside its patch, which is the number the stated
+    /// area is divided among.
+    ///
+    /// Counted rather than cached, because a patch is stated once and this is read per cell per
+    /// step only through `cells_on`, which is cached — see `count_faces`, where the patch is
+    /// applied.
+    fn count_patched(&self, face: Face) -> usize {
+        let (nx, ny, nz) = self.counts;
+        let mut n = 0;
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    if !self.void[i + nx * (j + ny * k)] && self.exposed_at(face, (i, j, k)) {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
+    }
+
+    /// Whether this cell is on `face` **and** inside whatever patch that face states.
+    ///
+    /// The single place that answers it. `holds` alone was consulted from three: the flux, the
+    /// stability limit and the count that divides the area — and a patch that reached two of the
+    /// three would shed heat from cells it had excluded, or divide by a count it did not use.
+    fn exposed_at(&self, face: Face, cell: (usize, usize, usize)) -> bool {
+        if !face.holds(cell, self.counts) {
+            return false;
+        }
+        match self.patch.get(&face) {
+            None => true,
+            Some([lo0, lo1, hi0, hi1]) => {
+                let p = [cell.0, cell.1, cell.2];
+                let [a, b] = face.axes();
+                p[a] >= *lo0 && p[a] < *hi0 && p[b] >= *lo1 && p[b] < *hi1
+            }
+        }
     }
 
     /// Where a face's count sits in `solid_on`.
@@ -1649,6 +1747,15 @@ impl Solid3D {
                 }
             }
         }
+        // **A patch changes the divisor, not only the set.** The stated area is spread over the
+        // cells on a face, so a face with a patch on it must divide by the cells in the *patch* —
+        // otherwise a bolt pad of nine cells on a face of six hundred carries a sixty-seventh of
+        // the conductance the caller stated, and the run completes reporting four figures.
+        for face in Face::ALL {
+            if self.patch.contains_key(&face) {
+                out[Solid3D::face_index(face)] = self.count_patched(face);
+            }
+        }
         self.solid_on = out;
     }
 
@@ -1693,7 +1800,7 @@ impl Solid3D {
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
         self.exposed
             .iter()
-            .filter(|(face, _)| face.holds(cell, self.counts))
+            .filter(|(face, _)| self.exposed_at(**face, cell))
             .map(|(face, env)| {
                 let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
                 let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;

@@ -957,18 +957,32 @@ physical size when the grid doubles, and it says in as many words to state the i
 as a region instead; as a region the bounds double with the counts. The resolution sweep runs now
 and measures **0.106%** on the peak. This scene had no resolution measurement at all.
 
-**Five scenes are left**, and `pantometry verify` exits 1 on each. Three are melting, where the
+**The bracket is fixed, and it needed a capability that was missing.** A bracket is bolted at
+*pads*, and both `CoolingSpec` and `Solid3D::losing_from` took a face entire — so the only way to
+state a mounting was to cool the whole footprint, and then every cell sheds where it stands and
+there is no route along the shape at all. The route is the only reason the shape is in the file.
+
+Stating a smaller `area_cm2` does not stand in for it. The area is divided among the cells on the
+face, so a tenth of the area is a tenth of the conductance **spread over the whole face** — the
+right total in the wrong place, which is exactly the difference a shape is for.
+`Solid3D::losing_from_within` and `cooling`'s `from`/`to` name a box on a face instead. The
+bracket carries a module's 20 W from the tip of one arm, round the corner, into a six-by-four bolt
+pad at the tip of the other: **52.4879 °C at the module against 30.5647 at the bolts**, a 21.92 K
+spread on a 32.49 K rise.
+
+**Four scenes are left**, and `pantometry verify` exits 1 on each. Three are melting, where the
 temperature is the melting point everywhere and the answer lives in a phase fraction the readings
 report only as a total — so the measurement cannot see their structure, and the finding says as
 much in its own words rather than being quietly suppressed for them.
 
-The other two claim to be designs. The **bracket** cannot be made one until a *patch* of a face
-can be cooled rather than the whole face: a bracket is bolted at pads, and both `CoolingSpec` and
-`Solid3D::losing_from` take a face entire, so the heat has nowhere to travel from. The **busbars**
-are uniform copper with uniform dissipation and uniform cooling, so their field is a constant and
-always was — and, separately, they cross at a 4 mm clearance and cannot see each other at all:
-two blackened surfaces at 335.6 K and 319.0 K would exchange **6.92 mW**, which is 8.05% of what
-the cooler bar dissipates.
+The last is `30-two-phases-crossing-at-a-clearance`. Its busbars are uniform copper with uniform
+dissipation and uniform cooling, so their field is a constant and always was. Separately — and
+this is the more interesting half — they cross at a 4 mm clearance and **cannot see each other at
+all**: two blackened surfaces at 335.6 K and 319.0 K would exchange **6.92 mW** across the 8 by
+8 mm patch where they cross, which is 8.05% of what the cooler bar dissipates. `Solid3D` already
+computes exactly that exchange for two surfaces facing across a void — `find_gaps` does it for
+`23-a-part-radiating-to-its-lid` — but only *within one block*, and these are two domains. Which
+is the right shape for that scene is a design question and not a defect to fix quietly.
 
 ---
 

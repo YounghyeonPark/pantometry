@@ -2629,35 +2629,47 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     part.loss.ambiguous_rows
                 );
 
-                // The physics, and the bound is one no cooling body may cross. There is no
-                // source in this scene, so the hottest cell may only fall, and nothing may end
-                // below the air it is losing heat to. A scheme that overshoots — too large a
-                // step against the convection coefficient — breaks the second and looks
-                // perfectly plausible doing it.
+                // **The physics is the path, which is what rasterising a shape is for.**
+                //
+                // It was a uniformly hot bracket cooling over its whole footprint, and the three
+                // bounds here were a cooling body's: the peak may only fall, nothing may end
+                // below the air, and it must have moved. All true, and the field they described
+                // held a range of **0.067 K** — a Biot number of 8.6e-4, so 4 100 cells rasterised
+                // from an STL all carried the same number and a single lumped node answered the
+                // scene. `verify` names that now, and named this scene.
+                //
+                // A bracket does not sit there being hot. It carries what is mounted on it into
+                // the chassis it is bolted to, and the route — along one arm, round the corner,
+                // down the other — is the only reason its shape is in the file. So: 20 W into the
+                // far end of one arm, a bolt pad on six by four cells at the tip of the other,
+                // and the whole footprint no longer a heatsink. That needed `cooling` to be able
+                // to name a *box* on a face; stating a smaller area does not do it, because the
+                // area is divided among the cells on the face and a tenth of the area is a tenth
+                // of the conductance spread over all of it.
+                //
+                // Measured at steady state: **52.4879 °C at the module, 30.5647 at the bolts**,
+                // a 21.92 K spread over a path the shape decides.
                 const AMBIENT_K: f64 = 293.15;
-                let hottest = |f: &pantometry_world::Frame| {
+                let at = |f: &pantometry_world::Frame, pick: fn(f64, f64) -> f64, seed: f64| {
                     f.panels.first().map_or(f64::NAN, |p| {
                         p.values()
                             .iter()
                             .copied()
                             .filter(|v| v.is_finite())
-                            .fold(f64::MIN, f64::max)
+                            .fold(seed, pick)
                     })
                 };
-                let coldest = |f: &pantometry_world::Frame| {
-                    f.panels.first().map_or(f64::NAN, |p| {
-                        p.values()
-                            .iter()
-                            .copied()
-                            .filter(|v| v.is_finite())
-                            .fold(f64::MAX, f64::min)
-                    })
-                };
+                let hottest = |f: &pantometry_world::Frame| at(f, f64::max, f64::MIN);
+                let coldest = |f: &pantometry_world::Frame| at(f, f64::min, f64::MAX);
+
+                // Warming towards a steady state, monotonically: a source that never stops and a
+                // sink that grows with temperature can do nothing else, and a scheme overshooting
+                // its own limit would break it while conserving perfectly.
                 for pair in frames.windows(2) {
                     let (before, after) = (hottest(&pair[0]), hottest(&pair[1]));
                     assert!(
-                        after <= before + 1e-9,
-                        "{name}: the peak rose from {before} to {after} with no source"
+                        after >= before - 1e-9,
+                        "{name}: the peak fell from {before} to {after} under a steady 20 W"
                     );
                 }
                 for f in &frames {
@@ -2668,12 +2680,25 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     );
                 }
 
-                // And it actually cooled, or the three bounds above are satisfied by a scene
-                // that did nothing for two minutes.
-                let (start, end) = (hottest(&frames[0]), hottest(frames.last().unwrap()));
+                // **And it arrived.** The last two frames are 69 s apart and the peak must have
+                // stopped moving, or the spread below is a number the run length chose.
+                let end = hottest(frames.last().expect("frames"));
+                let earlier = hottest(&frames[frames.len() - 2]);
                 assert!(
-                    start - end > 1.0,
-                    "{name}: 120 s of convection moved the peak from {start} to {end}"
+                    (end - earlier).abs() < 0.01,
+                    "{name}: still climbing at the end, {earlier:.4} then {end:.4} K"
+                );
+
+                // **The spread is the claim.** A lump would hold one number; this holds 21.92 K
+                // between the module's corner and the bolt pad, which is `verify`'s flat-field
+                // threshold by a factor of fourteen. Asserted against the rise above air rather
+                // than as a bare kelvin count, so it is the shape of the answer and not its size.
+                let spread = end - coldest(frames.last().expect("frames"));
+                let rise = end - AMBIENT_K;
+                println!("  {name}: {spread:.4} K across the bracket on a {rise:.4} K rise");
+                assert!(
+                    spread / rise > 0.5,
+                    "{name}: {spread:.4} K of a {rise:.4} K rise is a lump, not a path"
                 );
             }
             "30-two-phases-crossing-at-a-clearance.json" => {
@@ -2969,19 +2994,22 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         }
     }
 
-    // **Pinned, both ways.** These six are lumps: three are melting, where the temperature is
-    // the melting point everywhere and the answer is in a phase fraction this cannot see; two are
-    // busbars of thirty-two cells apiece whose spread is *exactly zero*; and one is a bracket at
-    // `Bi = 8.6e-4` rasterised to 4 100 cells to hold 0.067 K.
+    // **Pinned, both ways.** These five are lumps: three are melting, where the temperature is
+    // the melting point everywhere and the answer is in a phase fraction this cannot see, and two
+    // are busbars of thirty-two cells apiece whose spread is *exactly zero*.
     //
     // A seventh arriving means a scene lost its gradient, and one leaving means a scene gained
     // one — both worth a failure rather than a quieter list. `pantometry verify` exits 1 on every
     // one of these, which is the state this pin makes visible rather than the state it approves.
     //
     // **It was seven.** `19-a-coating-stops-the-heat` was flat to 0.134% because its pulse was a
-    // single cell at +60 K, which is 0.145 J spread over 1 458 cells. Heating the whole face
-    // instead is eighty-one times the energy, and it left this list the day that changed — which
-    // is what a pin is for: the fix is visible as a line removed rather than as a claim.
+    // single cell at +60 K, which is 0.145 J spread over 1 458 cells; heating the whole face
+    // instead is eighty-one times the energy. And `29-a-designed-bracket-becomes-cells` was flat
+    // to 2.1% because it was a hot bracket cooling over its *whole footprint* — every cell shed
+    // where it stood, so there was no path along the shape at all. It carries a module's 20 W to
+    // a bolt pad now, and holds a 21.92 K spread.
+    //
+    // Both left as a line removed rather than as a claim, which is what a pin is for.
     flat.sort();
     assert_eq!(
         flat,
@@ -2989,7 +3017,6 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "20-melting-a-block-of-ice.json/ice",
             "21-a-wax-thermal-buffer.json/wax",
             "22-wax-in-an-aluminium-matrix.json/buffer",
-            "29-a-designed-bracket-becomes-cells.json/bracket",
             "30-two-phases-crossing-at-a-clearance.json/phase_a",
             "30-two-phases-crossing-at-a-clearance.json/phase_b",
         ],

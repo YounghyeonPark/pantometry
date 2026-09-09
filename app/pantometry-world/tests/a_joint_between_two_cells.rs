@@ -20,6 +20,7 @@
 //! that is really a boundary. The physics is `pantometry-thermal`'s
 //! `a_joint_with_a_contact_resistance`, which checks the series against a closed form.
 
+use pantometry::prelude::{Domain, Exchange};
 use pantometry_world::{Scene, World};
 
 /// A one-material block with whatever extra keys the case needs.
@@ -242,5 +243,115 @@ fn a_joint_across_a_clearance_is_refused_and_a_partial_one_is_noted() {
     assert!(
         note.contains("16 faces") && note.contains("8 of them"),
         "{note}"
+    );
+}
+
+/// **A cooled face may name the box on it that is bolted down.**
+///
+/// The other half of `contact`: a joint between two cells is `contact`, and a joint between a face
+/// and whatever cools it is `cooling`'s `contact_w_per_m2_k` — but neither could say that only
+/// *part* of a face touches anything. A bracket is bolted at pads, and cooled over its whole
+/// footprint it has no route along its own shape: every cell sheds where it stands. Measured on
+/// `29-a-designed-bracket-becomes-cells`, which rasterised 4 100 cells from an STL to hold a range
+/// of 0.067 K.
+///
+/// Stating a smaller `area_cm2` is not the same thing, and that is what the second half checks:
+/// the area is divided among the cells on the face, so a tenth of the area is a tenth of the
+/// conductance **spread over all of it**.
+#[test]
+fn a_cooled_face_can_name_the_box_on_it_that_is_bolted() {
+    // **Hot, or this measures nothing.** The first version left the block at the ambient it was
+    // losing to, so both sides lost 0.000000000 J and the equality below was satisfied by two
+    // zeroes. A check whose subject is a difference needs the difference to exist.
+    let cooled = |extra: &str| {
+        block(&format!(
+            r#", "cooling": [{{ "face": "z-min", "ambient_c": 20.0,
+                 "convection_w_per_m2_k": 3000.0, "area_cm2": 0.04{extra} }}]"#
+        ))
+        .replace("\"initial_c\": 20.0", "\"initial_c\": 200.0")
+    };
+    let whole = built(&cooled(""));
+    assert_eq!(whole.patch_on(pantometry::thermal::Face::ZMin), None);
+    let pad = built(&cooled(r#", "from": [1, 1], "to": [3, 3]"#));
+    assert_eq!(
+        pad.patch_on(pantometry::thermal::Face::ZMin),
+        Some([1, 1, 3, 3]),
+        "the patch did not reach the domain"
+    );
+
+    // The stated area is the same, so at a uniform temperature the same joules leave; what the
+    // patch decides is which cells carry them.
+    let (mut whole, mut pad) = (whole, pad);
+    let dt = pantometry::units::Time::from_si(
+        pad.max_stable_dt(pantometry::units::Time::ZERO).to_si() * 0.5,
+    );
+    let mut bus = Exchange::new();
+    whole
+        .step(pantometry::units::Time::ZERO, dt, &mut bus)
+        .expect("stable");
+    pad.step(pantometry::units::Time::ZERO, dt, &mut bus)
+        .expect("stable");
+    let (a, b) = (whole.lost_energy().to_si(), pad.lost_energy().to_si());
+    println!("  one step: the whole face lost {a:.9} J, the pad lost {b:.9} J");
+    assert!(
+        a > 0.0,
+        "nothing was lost, so nothing was compared: {a:.12} J"
+    );
+    assert!(
+        (a - b).abs() < 1e-12 * a.abs().max(1.0),
+        "a patch changed the total: {a:.12} against {b:.12}"
+    );
+}
+
+/// **A patch that cannot be meant is refused, and one that names no solid cell most of all.**
+///
+/// A part rasterised from an STL is mostly *not there*, so a pad placed by eye can miss it
+/// entirely — and a scene whose cooling names only void runs insulated, warms for as long as it
+/// runs and answers a different question in silence. That is the same failure `area_cm2 = 0` is
+/// already refused for, arriving by a different door.
+#[test]
+fn a_cooled_patch_that_cannot_be_meant_is_refused() {
+    for (why, spec, says) in [
+        (
+            "a box that runs backwards",
+            r#", "from": [3, 3], "to": [1, 1]"#,
+            "selects no cells",
+        ),
+        (
+            "a box outside the face",
+            r#", "from": [0, 0], "to": [9, 9]"#,
+            "selects no cells",
+        ),
+        ("half a box", r#", "from": [0, 0]"#, "both from and to"),
+    ] {
+        let json = block(&format!(
+            r#", "cooling": [{{ "face": "z-min", "ambient_c": 20.0,
+                 "convection_w_per_m2_k": 3000.0, "area_cm2": 0.04{spec} }}]"#
+        ));
+        let scene: Scene = serde_json::from_str(&json).expect("it parses; the check is later");
+        let Err(err) = World::build(scene) else {
+            panic!("{why} must be refused");
+        };
+        println!("  {why}: {err}");
+        assert!(err.contains("b/cooling[0]"), "{why}: which entry: {err}");
+        assert!(err.contains(says), "{why}: should say {says:?}: {err}");
+    }
+
+    // A pad on a corner of the face that has been voided away: it selects cells, and none of them
+    // are there.
+    let json = block(
+        r#", "regions": [{ "material": "void", "from": [0, 0, 0], "to": [2, 2, 1] }],
+             "cooling": [{ "face": "z-min", "ambient_c": 20.0,
+               "convection_w_per_m2_k": 3000.0, "area_cm2": 0.04,
+               "from": [0, 0], "to": [2, 2] }]"#,
+    );
+    let scene: Scene = serde_json::from_str(&json).expect("parses");
+    let Err(err) = World::build(scene) else {
+        panic!("a pad on nothing must be refused");
+    };
+    println!("  a pad on void: {err}");
+    assert!(
+        err.contains("names no solid cell"),
+        "the message should say why: {err}"
     );
 }

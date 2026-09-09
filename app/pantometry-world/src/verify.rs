@@ -67,7 +67,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{DissipationSpec, DomainSpec, OnDisk, Parts, Rasterised, Scene, World};
+use crate::{CoolingSpec, DissipationSpec, DomainSpec, OnDisk, Parts, Rasterised, Scene, World};
 use pantometry::core::{Margin, Reading};
 use pantometry::prelude::*;
 
@@ -1279,11 +1279,25 @@ impl DomainSpec {
                     // reporting that as discretisation error is correct: it *is* the error,
                     // and it is the kind with no other symptom.
                     parts: parts.clone(),
-                    // Carried through unchanged, and that is the point of stating a face's
-                    // **whole** area rather than a cell's: the same part, exposed the same
-                    // way, on a finer grid. A per-cell area would have to be halved here and
-                    // the sweep would be comparing two different problems.
-                    cooling: cooling.clone(),
+                    // The **area** is carried through unchanged, and that is the point of
+                    // stating a face's whole area rather than a cell's: the same part, exposed
+                    // the same way, on a finer grid. A per-cell area would have to be halved here
+                    // and the sweep would be comparing two different problems.
+                    //
+                    // A **patch** is stated in cells, so it doubles like a region's bounds. The
+                    // first version of this cloned the whole entry, and the bracket's bolt pad
+                    // came out a quarter of its own area at twice the grid: the sweep reported
+                    // **5.593%** on the peak, which reads as a discretisation error and was a
+                    // changed boundary condition. The same mistake the dissipation box below is
+                    // commented against, in the key next to it.
+                    cooling: cooling
+                        .iter()
+                        .map(|c| CoolingSpec {
+                            from: c.from.map(|f| [f[0] * 2, f[1] * 2]),
+                            to: c.to.map(|t| [t[0] * 2, t[1] * 2]),
+                            ..*c
+                        })
+                        .collect(),
                     // The box doubles with the grid and the **watts do not**: a die dissipating
                     // 45 W dissipates 45 W at any resolution. Getting this backwards is the
                     // mistake the resolution sweep exists to catch, and it would have looked like

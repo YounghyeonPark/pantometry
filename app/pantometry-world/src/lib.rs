@@ -2493,7 +2493,7 @@ impl DomainSpec {
                 let mut seen = std::collections::BTreeSet::new();
                 for (n, cool) in cooling.iter().enumerate() {
                     let site = format!("{name}/cooling[{n}]");
-                    cool.check(&site)?;
+                    cool.check(&site, *cells)?;
                     if !seen.insert(cool.face) {
                         return Err(format!(
                             "{site}: {:?} is already cooled by an earlier entry, and a face \
@@ -2502,16 +2502,57 @@ impl DomainSpec {
                             cool.face
                         ));
                     }
-                    block = block.losing_from(
-                        cool.face.to_face(),
-                        Environment {
-                            ambient: Temperature::celsius(cool.ambient_c),
-                            convection_w_per_m2_k: cool.convection_w_per_m2_k,
-                            area: Area::from_si(cool.area_cm2 * 1e-4),
-                        },
-                    );
+                    let air = Environment {
+                        ambient: Temperature::celsius(cool.ambient_c),
+                        convection_w_per_m2_k: cool.convection_w_per_m2_k,
+                        area: Area::from_si(cool.area_cm2 * 1e-4),
+                    };
+                    block = match cool.within() {
+                        Some(within) => block.losing_from_within(cool.face.to_face(), within, air),
+                        None => block.losing_from(cool.face.to_face(), air),
+                    };
                     if let Some(h) = cool.contact_w_per_m2_k {
                         block = block.mounted_on(cool.face.to_face(), h);
+                    }
+                    // **A patch that names only void loses nothing**, and an insulated block
+                    // answering a different question in silence is what every other refusal in
+                    // this key exists to stop. A part rasterised from an STL is mostly not there,
+                    // so a pad placed by eye can miss it entirely.
+                    if let (Some(lo), Some(hi)) = (cool.from, cool.to) {
+                        let axes = cool.face.axes();
+                        let on_face = |p: [usize; 3]| match cool.face {
+                            FaceSpec::XMin => p[0] == 0,
+                            FaceSpec::XMax => p[0] + 1 == cells[0],
+                            FaceSpec::YMin => p[1] == 0,
+                            FaceSpec::YMax => p[1] + 1 == cells[1],
+                            FaceSpec::ZMin => p[2] == 0,
+                            FaceSpec::ZMax => p[2] + 1 == cells[2],
+                        };
+                        let mut live = 0usize;
+                        for k in 0..cells[2] {
+                            for j in 0..cells[1] {
+                                for i in 0..cells[0] {
+                                    let p = [i, j, k];
+                                    if on_face(p)
+                                        && p[axes[0]] >= lo[0]
+                                        && p[axes[0]] < hi[0]
+                                        && p[axes[1]] >= lo[1]
+                                        && p[axes[1]] < hi[1]
+                                        && !block.is_void(i, j, k)
+                                    {
+                                        live += 1;
+                                    }
+                                }
+                            }
+                        }
+                        if live == 0 {
+                            return Err(format!(
+                                "{site}: {lo:?}..{hi:?} names no solid cell of {:?}, so the \
+                                 film it states would cool nothing and the block would run \
+                                 insulated",
+                                cool.face
+                            ));
+                        }
                     }
                 }
                 if let Some(spot) = hot_spot {
@@ -2995,6 +3036,30 @@ pub struct CoolingSpec {
     /// interface material. See `Solid3D::mounted_on` for what that costs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_w_per_m2_k: Option<f64>,
+    /// The first cell of the **box on this face** that is exposed, in the face's two axes.
+    /// Absent is the whole face.
+    ///
+    /// The two axes are the ones that lie *in* the face, in x-y-z order: for `z-min` and `z-max`
+    /// they are `[i, j]`, for `y-*` they are `[i, k]`, for `x-*` they are `[j, k]` — the same
+    /// reading [`ContactSpec`] gives its own `from`/`to`.
+    ///
+    /// **A part is bolted at pads.** A bracket carries heat from whatever is mounted on it, along
+    /// its own shape, into two or three bolt bosses; that path is the thermal question its shape
+    /// answers. Cooled over its whole footprint there is no path — every cell sheds where it
+    /// stands, the part falls together, and the field is a constant. Measured on
+    /// `29-a-designed-bracket-becomes-cells`, which rasterises 4 100 cells from an STL to hold a
+    /// range of 0.067 K.
+    ///
+    /// Stating a smaller `area_cm2` is not the same thing: the area is divided among the cells on
+    /// the face, so a tenth of the area is a tenth of the conductance **spread over the whole
+    /// face** — the right total in the wrong place, which is exactly the difference a shape is
+    /// for. Under a patch the area is the **patch's**, and the grid divides it among the patch's
+    /// cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<[usize; 2]>,
+    /// One past the last cell of the box, in the face's two axes. Absent is the whole face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<[usize; 2]>,
 }
 
 /// Which outer face of a block a [`CoolingSpec`] is about.
@@ -3019,6 +3084,15 @@ pub enum FaceSpec {
 }
 
 impl FaceSpec {
+    /// Which of a block's three counts lie *in* this face, in x-y-z order.
+    fn axes(self) -> [usize; 2] {
+        match self {
+            FaceSpec::XMin | FaceSpec::XMax => [1, 2],
+            FaceSpec::YMin | FaceSpec::YMax => [0, 2],
+            FaceSpec::ZMin | FaceSpec::ZMax => [0, 1],
+        }
+    }
+
     /// The domain's own face.
     fn to_face(self) -> pantometry::thermal::Face {
         use pantometry::thermal::Face;
@@ -3035,7 +3109,7 @@ impl FaceSpec {
 
 impl CoolingSpec {
     /// Refuse a face that does not describe a surface losing heat.
-    fn check(&self, site: &str) -> Result<(), String> {
+    fn check(&self, site: &str, cells: [usize; 3]) -> Result<(), String> {
         //  first, so the comparison that follows is between two numbers and the
         // NaN case is not being caught by a negated inequality — which is what clippy asks
         // for and is also the clearer reading.
@@ -3065,7 +3139,36 @@ impl CoolingSpec {
                 ));
             }
         }
-        Ok(())
+        // A patch has to be a box, and it has to be inside the face. Refused rather than clamped:
+        // a patch silently trimmed to nothing is an insulated block answering a different
+        // question in silence, which is the same failure `area_cm2 = 0` is refused for above.
+        let axes = self.face.axes();
+        match (self.from, self.to) {
+            (Some(lo), Some(hi)) => {
+                for a in 0..2 {
+                    if hi[a] <= lo[a] || hi[a] > cells[axes[a]] {
+                        return Err(format!(
+                            "{site}: {lo:?}..{hi:?} selects no cells of a {}x{} face; `to` is one \
+                             past the last cell, so a single cell is `to = from + 1`",
+                            cells[axes[0]], cells[axes[1]]
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            (None, None) => Ok(()),
+            _ => Err(format!(
+                "{site}: a patch needs both from and to, or neither for the whole face"
+            )),
+        }
+    }
+
+    /// The patch as the domain wants it, `[lo0, lo1, hi0, hi1]`.
+    fn within(&self) -> Option<[usize; 4]> {
+        match (self.from, self.to) {
+            (Some(lo), Some(hi)) => Some([lo[0], lo[1], hi[0], hi[1]]),
+            _ => None,
+        }
     }
 }
 

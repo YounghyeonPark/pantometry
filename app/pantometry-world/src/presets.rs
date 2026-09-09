@@ -382,7 +382,7 @@ pub const PRESETS: [Preset; 30] = [
     Preset {
         file: "29-a-designed-bracket-becomes-cells.json",
         area: "heat",
-        title: "an aluminium bracket, designed as a mesh and solved as cells, cooling to still air",
+        title: "a designed bracket carrying a module's heat along its own shape to its bolts",
         kinds: &["block"],
         needs_a_part: true,
         json: include_str!("../scenes/29-a-designed-bracket-becomes-cells.json"),
