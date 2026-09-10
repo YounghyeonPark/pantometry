@@ -172,7 +172,13 @@ pub struct Measured {
 /// The loop is `World::run`'s — advance, close the feedback, capture — with the ledger read
 /// before and after each advance and the stability limits read before each. A violation aborts
 /// with the kernel's own message, because a run the audit refused has no margins to report.
-fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
+/// `arrival` says whether to solve each block's steady state afterwards.
+///
+/// **Only the run under test needs it.** A sweep runs the scene again with a knob moved, to see
+/// what the knob was hiding; how far *that* run stopped from its own balance is not a question
+/// anyone asked, and solving it costs a full relaxation per block per run. Four runs a battery,
+/// so leaving it on cost four times what it bought.
+fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measured, String> {
     let mut world = World::build_with(scene.clone(), files)?;
     // **The steps `World::run` would take, not one per frame.** This computed its own
     // `duration / frames`, which was the same number until `window_s` existed and is not now —
@@ -320,7 +326,11 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
         }
     }
     Ok(Measured {
-        arrival: how_far_from_settled(&mut world, &span),
+        arrival: if arrival {
+            how_far_from_settled(&mut world, &span)
+        } else {
+            Vec::new()
+        },
         bodies: frames.last().map(connected_bodies).unwrap_or_default(),
         readings,
         span: span.into_iter().map(|(k, (lo, hi))| (k, hi - lo)).collect(),
@@ -907,7 +917,7 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
     // there is nothing to seed the findings with.
     let mut findings: Vec<String> = Vec::new();
 
-    let base = match run_measured(scene, files) {
+    let base = match run_measured(scene, files, true) {
         Ok(b) => b,
         Err(e) => {
             let mut context = String::new();
@@ -928,7 +938,7 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
         }
     };
     findings.extend(rasterisation_loss(&before.rasterised));
-    let again = run_measured(scene, files)?;
+    let again = run_measured(scene, files, false)?;
     let deterministic = base.digest == again.digest;
 
     if !deterministic {
@@ -1140,7 +1150,7 @@ fn window_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Parts) -
         }
         finer
     };
-    let half = match run_measured(&halve(scene, 2), files) {
+    let half = match run_measured(&halve(scene, 2), files, false) {
         Ok(m) => m,
         Err(e) => return SweepOutcome::Failed(format!("with the window halved, {e}")),
     };
@@ -1149,7 +1159,7 @@ fn window_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Parts) -
         sweep.broken.push(format!("in the halved-window run: {a}"));
     }
     if deep {
-        match run_measured(&halve(scene, 4), files) {
+        match run_measured(&halve(scene, 4), files, false) {
             Ok(quarter) => deepen(&mut sweep, base, &half, &quarter),
             Err(e) => return SweepOutcome::Failed(format!("with the window quartered, {e}")),
         }
@@ -1162,7 +1172,7 @@ fn resolution_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Part
         Ok(s) => s,
         Err(why) => return SweepOutcome::Skipped(why),
     };
-    let fine = match run_measured(&twice, files) {
+    let fine = match run_measured(&twice, files, false) {
         Ok(m) => m,
         Err(e) => return SweepOutcome::Failed(format!("refined 2x, {e}")),
     };
@@ -1177,7 +1187,7 @@ fn resolution_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Part
             Ok(s) => s,
             Err(why) => return SweepOutcome::Skipped(why),
         };
-        match run_measured(&four, files) {
+        match run_measured(&four, files, false) {
             Ok(finer) => deepen(&mut sweep, base, &fine, &finer),
             Err(e) => return SweepOutcome::Failed(format!("refined 4x, {e}")),
         }

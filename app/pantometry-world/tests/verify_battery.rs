@@ -702,32 +702,37 @@ fn the_battery_says_how_far_a_run_stopped_from_its_balance() {
       "initial_c": 20.0, "material": "copper",
       "dissipation": [{{ "watts": 8.0, "from": [0, 0, 0], "to": [10, 2, 2] }}],
       "cooling": [{{ "face": "x-max", "ambient_c": 20.0,
-        "convection_w_per_m2_k": 200.0, "area_cm2": 0.36 }}] }}
+        "convection_w_per_m2_k": 2000.0, "area_cm2": 0.36 }}] }}
   ]
 }}"#
         ))
     };
 
-    let arrived = verify(&bar(4000.0), false).expect("it runs");
+    // **Ten time constants, and the time constant is short on purpose.** The bar's capacity
+    // is 3.73 J/K against 0.072 W/K of film, so tau is 52 s and 500 s is 9.6 of them, leaving
+    // `e^-9.6` of the approach. A gentler film made tau 518 s and this test 4000 s of marching,
+    // four times over inside the battery — which is the cost this whole capability exists to
+    // avoid, paid by the test for it.
+    let arrived = verify(&bar(500.0), false).expect("it runs");
     let (_, moved, travel) = arrived
         .base
         .arrival
         .first()
         .unwrap_or_else(|| panic!("nothing was measured: {:?}", arrived.base.arrival));
-    println!("  4000 s: {moved:.6} K still to come of {travel:.4} C covered");
+    println!("  500 s: {moved:.6} K still to come of {travel:.4} C covered");
     assert!(*travel > 1.0, "the run did nothing: {travel:.6}");
     assert!(
         moved / travel < 1e-3,
         "a run of ten time constants should have arrived: {moved:.6} K of {travel:.4}"
     );
 
-    let cut_short = verify(&bar(40.0), false).expect("it runs");
+    let cut_short = verify(&bar(5.0), false).expect("it runs");
     let (_, short_moved, short_travel) = cut_short
         .base
         .arrival
         .first()
         .expect("the short run is measured too");
-    println!("  40 s:   {short_moved:.6} K still to come of {short_travel:.4} C covered");
+    println!("  5 s:    {short_moved:.6} K still to come of {short_travel:.4} C covered");
     assert!(
         short_moved / short_travel > 0.05,
         "a run of a tenth of a time constant has not arrived: {short_moved:.6} K of \
