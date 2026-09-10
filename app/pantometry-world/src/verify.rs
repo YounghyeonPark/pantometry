@@ -103,6 +103,13 @@ pub struct Measured {
     /// converged. Measured against the true answer, that scene is 14% out at its shipped frame
     /// count.
     pub span: BTreeMap<(String, &'static str), f64>,
+    /// How far past its own yield strain each structure was driven, as `(domain, ratio, element)`.
+    ///
+    /// **One is a physical boundary, not a chosen threshold.** `pantometry-elastic` has no
+    /// plasticity and says so: past yield it "returns a displacement that is arithmetically
+    /// correct and physically meaningless, and nothing in the answer says which". This is what
+    /// says which.
+    pub past_yield: Vec<(String, f64, [usize; 3])>,
     /// How far short of its own steady state each thermal block stopped, as `(domain, kelvin,
     /// the range its readings covered)`.
     ///
@@ -326,6 +333,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
         }
     }
     Ok(Measured {
+        past_yield: world.past_yield(),
         arrival: if arrival {
             how_far_from_settled(&mut world, &span)
         } else {
@@ -951,6 +959,27 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
 
     findings.extend(base.anomalies.iter().cloned());
 
+    // **A body asked to go where the model cannot follow.** Unlike every other threshold in this
+    // battery, one is not a number anybody chose: `pantometry-elastic` is a linear model with no
+    // plasticity, and it documents in its own words that a solve past yield "returns a
+    // displacement that is arithmetically correct and physically meaningless, and nothing in the
+    // answer says which". The crate knew its limit; nothing checked a scene against it.
+    //
+    // The free strain is an **upper bound** on what an element carries — fully constrained it
+    // takes all of it, free it takes none — so under one is a body certainly inside the model, and
+    // over it is a body that may not be. That asymmetry is the useful direction for a warning, and
+    // it is why the finding says "up to".
+    for (domain, ratio, at) in &base.past_yield {
+        if *ratio > 1.0 {
+            findings.push(format!(
+                "{domain}: an element at {at:?} is asked for up to {ratio:.2}x the strain its own \
+                 material comes back from — `pantometry-elastic` is linear with no plasticity, so \
+                 past yield it returns a displacement that is arithmetically correct and \
+                 physically meaningless, and nothing else in this report would say which this is"
+            ));
+        }
+    }
+
     // **A grid that is not carrying the answer.** Every finding above this one is about
     // arithmetic; this one is about whether the scene needed the arithmetic. A block whose cells
     // all hold the same number has been solved as a field and answered as a lump, and nothing in
@@ -1242,12 +1271,32 @@ impl DomainSpec {
     /// lot.
     pub fn refined(&self) -> Result<Option<DomainSpec>, String> {
         let spec = match self {
-            // **A structure is not refined here, and refusing is the honest answer.** Halving the
-            // element size doubles the node count in every direction, so an elliptic vector solve
-            // costs eight times as much and converges more slowly with it; and a structure that
-            // `follows` a block would then have to be refined *in step with it*, which is a
-            // coupled statement this per-domain method cannot make. Reported as unswept rather
-            // than swept wrongly.
+            // **A structure is not refined here.** Halving the element size doubles the node
+            // count in every direction, so an elliptic vector solve costs eight times as much and
+            // converges more slowly with it.
+            //
+            // # "Reported as unswept" is what this said, and it was not what happened
+            //
+            // Passing a structure through unchanged is right only while nothing else in the scene
+            // moves with it. One that `follows` a block does: the block doubles, the structure
+            // does not, and `World::build` refuses the pair because an element and a cell have to
+            // be the same box. So the sweep did not report the structure as unswept — it reported
+            // the whole refined scene as **refused**, and `25-what-140-kelvin-does-to-the-solder`
+            // has been failing its own resolution sweep since it shipped.
+            //
+            // Refusing here says why, once, instead of building a scene that cannot stand. What
+            // it costs is a real measurement: a coupled scene is exactly where discretisation
+            // error is worth knowing, and refining the two in step is a statement this per-domain
+            // method cannot make — `Scene::refined` sees every domain and could.
+            DomainSpec::Structure {
+                name,
+                follows: Some(block),
+                ..
+            } => {
+                return Err(format!(
+                    "{name}: follows {block:?}, and a structure's elements have to be that block's                      cells — so refining one without the other is not the same problem. Refining                      them together is a statement about two domains at once, which this is not"
+                ))
+            }
             DomainSpec::Structure { .. } => return Ok(None),
             // **A well refines and its eigenstate number does not.** `n` names which standing
             // shape, not a wavelength in cells, so doubling the grid keeps the same state and the
@@ -1749,6 +1798,20 @@ the other two refusals (worst step; not comparable to each other — the first i
             &self.resolution,
             false,
         );
+
+        // **How far each body was asked past the linear model.** Printed whenever a structure
+        // follows a block, clean or not, so a body inside the model is visibly measured rather
+        // than merely unmentioned.
+        if !self.base.past_yield.is_empty() {
+            let _ = writeln!(
+                out,
+                "\nyield (the free strain against what each element comes back from; over 1 is \
+                 outside the linear model)"
+            );
+            for (domain, ratio, at) in &self.base.past_yield {
+                let _ = writeln!(out, "  {domain:<14} up to {ratio:>8.3}x at element {at:?}");
+            }
+        }
 
         // **How far each block stopped from its own balance.** Printed whenever there is one to
         // print, clean or not, so "it arrived" is visibly a measurement rather than a section that

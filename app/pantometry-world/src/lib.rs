@@ -6,7 +6,7 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Thirty-two of the thirty-eight are
+//! Findings are collected in `FRICTION.md` beside this crate. Thirty-three of the thirty-nine are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
 //! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
 //! written and this line is one of them. It had been stale for two releases before it was.
@@ -3472,6 +3472,20 @@ pub struct World {
     /// would be a domain that knew about temperature, and rule 4 says it may not. The coupling is
     /// the application's to make, and this is the application.
     expansion: BTreeMap<String, Vec<f64>>,
+    /// The strain at which each element of each structure **stops coming back**, per element:
+    /// `yield_strength / E`.
+    ///
+    /// `Elastic::from_substance` drops the yield strength — an elastic type with no plasticity
+    /// cannot represent it and does not pretend to — so it lives here, beside the expansion
+    /// coefficients, for the same reason those do.
+    yield_strain: BTreeMap<String, Vec<f64>>,
+    /// The worst `|free strain| / yield strain` any element of each structure reached over the
+    /// run, and where.
+    ///
+    /// **The linear model's own documentation is what makes this worth keeping.** `Elastic` says a
+    /// solve past yield "returns a displacement that is arithmetically correct and physically
+    /// meaningless, and nothing in the answer says which". This is what says which.
+    past_yield: BTreeMap<String, (f64, [usize; 3])>,
 }
 
 impl World {
@@ -3630,6 +3644,7 @@ impl World {
         let mut palette = Palette::with_composites(&scene.materials, &scene.composites)?;
         let mut log = BuildLog::default();
         let mut expansion: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+        let mut yield_strain: BTreeMap<String, Vec<f64>> = BTreeMap::new();
         for spec in &scene.domains {
             let built = spec.build(&mut palette, scene.environment.as_ref(), files, &mut log)?;
             // **Where the scene said, or an error naming why not.** The library has no device and
@@ -3722,6 +3737,16 @@ impl World {
                 base.thermal.map_or(0.0, |t| t.expansion.to_si());
                 counts.0 * counts.1 * counts.2
             ];
+            // And the strain at which each element **stops coming back**, resolved the same way.
+            // `f64::INFINITY` for a material that does not say what its yield is, which is a
+            // material this can make no claim about rather than one that never yields.
+            let yields = |s: &Substance| {
+                s.mechanical
+                    .map(|m| m.yield_strength.to_si() / m.youngs_modulus.to_si())
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .unwrap_or(f64::INFINITY)
+            };
+            let mut limit = vec![yields(&base); counts.0 * counts.1 * counts.2];
             for (n, r) in regions.iter().enumerate() {
                 let site = format!("{name}/regions[{n}]");
                 let substance = palette.get(&site, &r.material)?;
@@ -3732,12 +3757,14 @@ impl World {
                             let p = [i, j, k];
                             if (0..3).all(|a| p[a] >= r.from[a] && p[a] < r.to[a]) {
                                 alpha[i + counts.0 * (j + counts.1 * k)] = e;
+                                limit[i + counts.0 * (j + counts.1 * k)] = yields(&substance);
                             }
                         }
                     }
                 }
             }
             expansion.insert(name.clone(), alpha);
+            yield_strain.insert(name.clone(), limit);
         }
 
         // And after, because "used" means a domain asked for it, which is only known once they all
@@ -3795,6 +3822,8 @@ impl World {
             notes: log.notes,
             rasterised: log.rasterised,
             expansion,
+            yield_strain,
+            past_yield: BTreeMap::new(),
         };
         // **Once before anything runs**, so the first captured frame already carries the strain the
         // starting temperature implies. Not a formality: a power module is assembled at its
@@ -4107,6 +4136,24 @@ impl World {
                         let t = source.temperature_at(i, j, k).to_si();
                         if t.is_finite() {
                             strain[at] = alpha[at] * (t - reference);
+                            // **How far past the linear model this element is being asked to go.**
+                            // The free strain is what an element would take if nothing held it, so
+                            // this is an upper bound on the strain it actually carries — fully
+                            // constrained it takes all of it, free it takes none. An upper bound
+                            // is the right shape for a warning about a model that has no
+                            // plasticity: under one, the answer is certainly inside the model.
+                            if let Some(limit) = self.yield_strain.get(&structure) {
+                                let ratio = strain[at].abs() / limit[at];
+                                if ratio.is_finite() {
+                                    let worst = self
+                                        .past_yield
+                                        .entry(structure.clone())
+                                        .or_insert((0.0, [i, j, k]));
+                                    if ratio > worst.0 {
+                                        *worst = (ratio, [i, j, k]);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -4120,6 +4167,28 @@ impl World {
                 });
             }
         }
+    }
+
+    /// How far past its own yield strain each structure was driven, and where.
+    ///
+    /// `(name, ratio, element)`, the ratio being the worst `|free strain| / (yield_strength / E)`
+    /// any element reached over the whole run. **One or less is a body the linear model describes;
+    /// more is one it does not.** `pantometry-elastic` says so in its own words: it "has no yield
+    /// and no plasticity, so it cannot represent that and does not pretend to. A solve past yield
+    /// returns a displacement that is arithmetically correct and physically meaningless, and
+    /// nothing in the answer says which."
+    ///
+    /// The free strain is an **upper bound** on what an element carries — fully constrained it
+    /// takes all of it, free it takes none — so a ratio under one is a body certainly inside the
+    /// model, and one over it is a body that may not be. That asymmetry is the useful direction
+    /// for a warning.
+    ///
+    /// Empty until the run has stepped, and for a structure that follows no block.
+    pub fn past_yield(&self) -> Vec<(String, f64, [usize; 3])> {
+        self.past_yield
+            .iter()
+            .map(|(name, (ratio, at))| (name.clone(), *ratio, *at))
+            .collect()
     }
 
     /// Where each domain sits, keyed by the name the simulation knows it under.

@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found thirty-eight places it is awkward, thirty-two of which have been changed — see
+has already found thirty-nine places it is awkward, thirty-three of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,33 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
+
+- **The elastic model knew where it stops applying, and nothing checked a scene against it.**
+  `pantometry-elastic` is linear, has no plasticity, and documents what that costs: past yield it
+  "returns a displacement that is arithmetically correct and physically meaningless, and nothing in
+  the answer says which". `Elastic::from_substance` drops the yield strength on the way in, so by
+  the time a body is solved the number that would say has gone.
+
+  `25-what-140-kelvin-does-to-the-solder` ships **5.201×** past it — SAC305 assembled at its 217 °C
+  reflow and sitting at 40 takes a free strain of 0.3806% against a yield strain of 0.0732%, worst
+  in the solder layer at `z = 5`.
+
+  `World` keeps each element's yield strain beside the expansion coefficients it already kept for
+  the same reason, tracks the worst `|free strain| / yield strain` over the run, and `verify`
+  reports it and raises it above one. **One is a physical boundary and not a chosen threshold**,
+  which is what separates it from the arrival measurement above: there is no corpus to calibrate
+  against and none is needed, because the model says where it stops.
+
+  The scene is kept — the coupling is what it demonstrates and the coupling is right — and it now
+  says what range it is in.
+
+- **A structure that follows a block was passed through the resolution sweep unrefined**, with a
+  comment saying it was "reported as unswept". It was not: the block doubled, the structure did
+  not, and `World::build` refused the pair because an element and a cell have to be the same box —
+  so the sweep reported the whole refined scene as **refused**, and
+  `25-what-140-kelvin-does-to-the-solder` had been failing its own resolution sweep since it
+  shipped. It skips with a reason now. Refining the two in step is a statement about two domains at
+  once, which `DomainSpec::refined` cannot make; left undone rather than done wrongly.
 
 - **A part inside a housing could not lose heat to the air in it.** `cooling` reaches a block's six
   outer faces, so a part rasterised inside one, or a bar with a clearance beside it, had surfaces

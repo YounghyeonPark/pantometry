@@ -2232,6 +2232,45 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // fatigued by silicon at 2.6e-6 per kelvin sitting on solder at 2.15e-5 through
                 // every power cycle. The platform could compute the temperature to four figures
                 // and could say nothing about that until a structure could follow a block.
+                //
+                // # And this scene is outside the model it is solved with
+                //
+                // `pantometry-elastic` is linear and has no plasticity. It says so, and says what
+                // that costs: past yield it "returns a displacement that is arithmetically correct
+                // and physically meaningless, and nothing in the answer says which".
+                //
+                // SAC305 yields at 30 MPa against 41 GPa, a strain of **0.0732%**, and this scene
+                // asks for **0.3806%** — `5.20x`. So the strain energy below is arithmetic on a
+                // constitutive law the solder left long before, and a real joint would have
+                // yielded and crept instead. The scene is kept because the *coupling* is what it
+                // demonstrates and the coupling is right; what was missing is anything saying so.
+                // `verify` names it now, and this asserts the number rather than the adjective.
+                {
+                    let mut probe = World::build_with(
+                        serde_json::from_str::<Scene>(&text).expect("it parses again"),
+                        &pantometry_world::Beside::of(dir.join(name)),
+                    )
+                    .expect("it builds again");
+                    probe.run().expect("it runs again");
+                    let (which, ratio, at) = probe
+                        .past_yield()
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| panic!("{name}: nothing measured its yield"));
+                    println!(
+                        "  {name}: {which} is asked for {ratio:.3}x its yield strain, worst at {at:?}"
+                    );
+                    // 0.3806% against 0.0732%, from the declared coefficient and the declared
+                    // yield — both in the scene, neither read back from the solve.
+                    assert!(
+                        (ratio - 5.201).abs() < 0.01,
+                        "{name}: {ratio:.4}x, and the scene's own numbers say 5.201"
+                    );
+                    assert_eq!(
+                        at[2], 5,
+                        "{name}: the worst element is the solder layer at z = 5"
+                    );
+                }
                 let reading = |f: &pantometry_world::Frame, label: &str| {
                     f.readings
                         .iter()

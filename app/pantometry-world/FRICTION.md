@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-two of the thirty-eight are fixed**, and six are recorded rather than actioned. The reasons
+**Thirty-three of the thirty-nine are fixed**, and six are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
@@ -597,7 +597,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Thirty-eight findings, and the source has shifted seven times.
+Thirty-nine findings, and the source has shifted seven times.
 
 | how many | where they came from |
 | --- | --- |
@@ -1103,6 +1103,48 @@ reaches the glass, and running it to steady state moves the steepest step off th
 breaks it. No threshold separates those from a run cut short, because what separates them is the
 question the scene is asking and this format does not carry one. So `verify` reports the number and
 leaves the judgement to a person.
+
+---
+
+## 39. The elastic model knew where it stops applying, and nothing checked a scene against it
+
+`pantometry-elastic` is linear. It has no plasticity, it says so, and it says what that costs, in
+its own words:
+
+> `Substance` says where a material **stops coming back**; this type has no yield and no
+> plasticity, so it cannot represent that and does not pretend to. A solve past yield returns a
+> displacement that is arithmetically correct and physically meaningless, and nothing in the
+> answer says which.
+
+`Elastic::from_substance` drops the yield strength on the way in, so by the time a body is being
+solved the number that would say has already gone. Nothing above it looked.
+
+`25-what-140-kelvin-does-to-the-solder` ships **5.201×** past it. SAC305 is assembled at its 217 °C
+reflow and sits at 40, so its free strain is `2.15e-5 × (40 − 217)` = **0.3806%** against a yield
+strain of `30 MPa / 41 GPa` = **0.0732%**. The scene reports 0.2314 J of strain energy relaxing to
+0.0274, which is arithmetic on a constitutive law the solder left long before — a real joint would
+have yielded and crept.
+
+**Fixed, as a measurement and a finding.** `World` keeps each element's yield strain beside the
+expansion coefficients it already kept for the same reason, tracks the worst
+`|free strain| / yield strain` any element reaches over the run, and `verify` reports it and raises
+it above one.
+
+**One is a physical boundary and not a chosen threshold**, which is what separates this from the
+arrival measurement two findings up. There is no corpus to calibrate against and none is needed:
+the model says where it stops.
+
+The free strain is an **upper bound** on what an element carries — fully constrained it takes all of
+it, free it takes none — so under one is a body certainly inside the model and over it is a body
+that may not be. That asymmetry is the useful direction for a warning, and the finding says "up to".
+
+**And a second thing fell out of it.** `DomainSpec::refined` passed a structure through unchanged,
+with a comment saying it was "reported as unswept". It was not. A structure that `follows` a block
+moves with it, so the block doubled, the structure did not, and `World::build` refused the pair —
+the sweep reported the whole refined scene as **refused**, and this scene had been failing its own
+resolution sweep since it shipped. It skips with a reason now. Refining the two in step is a
+statement about two domains at once, which `DomainSpec::refined` cannot make and `Scene::refined`
+could; that is left undone rather than done wrongly.
 
 ---
 

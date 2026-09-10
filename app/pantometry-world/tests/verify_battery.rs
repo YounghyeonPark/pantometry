@@ -782,3 +782,120 @@ fn a_domain_with_no_balance_is_left_out_of_the_arrival() {
         b.render()
     );
 }
+
+/// **A body asked past the strain its material comes back from is a finding.**
+///
+/// One is a **physical boundary and not a chosen threshold**, which is what makes this different
+/// from every other number in this battery. `pantometry-elastic` is linear and has no plasticity,
+/// and it documents its own limit in as many words: past yield it "returns a displacement that is
+/// arithmetically correct and physically meaningless, and nothing in the answer says which".
+///
+/// The crate knew. Nothing checked a scene against it, and
+/// `25-what-140-kelvin-does-to-the-solder` ships at **5.20×** — SAC305 assembled at its 217 °C
+/// reflow and cooled to 40 takes a free strain of 0.3806% against a yield strain of 0.0732%.
+///
+/// Both directions: the same body with a reference temperature it is already at goes nowhere, and
+/// is not named.
+#[test]
+fn a_body_strained_past_its_yield_is_a_finding() {
+    // A copper bar bonded to a block that cools a long way from where it was assembled.
+    let assembly = |reference_c: f64| {
+        scene(&format!(
+            r#"{{
+  "title": "a bonded bar",
+  "duration_s": 1.0,
+  "frames": 3,
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    {{ "kind": "block", "name": "hot", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "initial_c": 20.0, "material": "copper" }},
+    {{ "kind": "structure", "name": "body", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "material": "copper", "follows": "hot", "reference_c": {reference_c},
+      "held": [{{ "face": "x-min", "as": "clamp" }}] }}
+  ]
+}}"#
+        ))
+    };
+
+    // Copper yields at 0.060% strain and expands at 1.65e-5 per kelvin, so 200 K from its
+    // reference is 0.33% — five and a half times over.
+    let strained = verify(&assembly(220.0), false).expect("it runs");
+    let (name, ratio, at) = strained
+        .base
+        .past_yield
+        .first()
+        .unwrap_or_else(|| panic!("nothing was measured: {:?}", strained.base.past_yield));
+    println!("  reference 220 C: {name} reaches {ratio:.3}x at {at:?}");
+    assert!(*ratio > 1.0, "200 K of copper is past yield: {ratio:.3}x");
+    let named = strained
+        .findings
+        .iter()
+        .find(|f| f.contains("comes back from"))
+        .unwrap_or_else(|| panic!("it was measured and not raised: {:?}", strained.findings));
+    assert!(named.starts_with("body:"), "which domain: {named}");
+    assert!(
+        strained.render().contains("outside the linear model"),
+        "{}",
+        strained.render()
+    );
+
+    // The same body assembled where it sits takes no free strain at all.
+    let easy = verify(&assembly(20.0), false).expect("it runs");
+    let (_, easy_ratio, _) = easy.base.past_yield.first().expect("it is measured too");
+    println!("  reference 20 C:  {easy_ratio:.6}x");
+    assert!(
+        *easy_ratio < 1.0,
+        "a body at its own reference is inside the model: {easy_ratio:.6}x"
+    );
+    assert!(
+        !easy.findings.iter().any(|f| f.contains("comes back from")),
+        "a body inside the model was named: {:?}",
+        easy.findings
+    );
+}
+
+/// **A structure that follows a block cannot be refined alone, and the sweep says so rather than
+/// building a scene that cannot stand.**
+///
+/// `DomainSpec::refined` passed a structure through unchanged and its comment said it was
+/// "reported as unswept". It was not: the block it follows doubled, the structure did not, and
+/// `World::build` refused the pair because an element and a cell have to be the same box — so the
+/// sweep reported the whole refined scene as **refused**, and `25-what-140-kelvin-does-to-the-solder`
+/// had been failing its own resolution sweep since it shipped.
+#[test]
+fn a_coupled_structure_skips_the_resolution_sweep_and_names_why() {
+    let s = scene(
+        r#"{
+  "title": "a bonded bar",
+  "duration_s": 1.0,
+  "frames": 3,
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    { "kind": "block", "name": "hot", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "initial_c": 20.0, "material": "copper" },
+    { "kind": "structure", "name": "body", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "material": "copper", "follows": "hot", "reference_c": 40.0,
+      "held": [{ "face": "x-min", "as": "clamp" }] }
+  ]
+}"#,
+    );
+    let b = verify(&s, false).expect("it runs");
+    match &b.resolution {
+        SweepOutcome::Skipped(why) => {
+            println!("  skipped: {why}");
+            assert!(
+                why.contains("the same problem"),
+                "the skip should say why: {why}"
+            );
+        }
+        other => panic!("a coupled structure should skip, not {other:?}"),
+    }
+    // A refusal would have carried the exit code; a skip that says why does not.
+    assert!(
+        !b.findings
+            .iter()
+            .any(|f| f.contains("sweep's run was refused")),
+        "it was refused rather than skipped: {:?}",
+        b.findings
+    );
+}
