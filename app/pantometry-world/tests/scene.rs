@@ -1983,12 +1983,21 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 }
             }
             "23-a-part-radiating-to-its-lid.json" => {
-                // A hot part sitting in a sealed housing, surrounded on five sides by **nothing**
-                // and facing a cooled lid across a clearance. The geometry is what makes this
-                // checkable: the part has no conducting face to anywhere, so the only path its
-                // heat has is the parallel-plate exchange across the gap, and the lid's only exit
-                // is the film on `z-max`. That is a two-body lumped system whose closed form is a
-                // pair of ODEs in nothing but constants.
+                // A hot part sitting in a housing, surrounded on five sides by **nothing** and
+                // facing a cooled lid across a clearance. The geometry is what makes this
+                // checkable: the part has no conducting face to anywhere, so its heat leaves by
+                // the parallel-plate exchange across the gap and by the air around it, and the
+                // lid's only exit is the film on `z-max`. That is a two-body lumped system whose
+                // closed form is a pair of ODEs in nothing but constants.
+                //
+                // # It was a vacuum, and called itself a housing
+                //
+                // Until `air` existed, `losing_from` reached the block's six **outer** faces and
+                // nothing else — so a part rasterised inside a block had no convective path at
+                // all, and this scene modelled a part in an evacuated enclosure. It was honest
+                // about being radiation-only, in the title and in this comment, and it was 65 K
+                // wrong for anyone reading it as a housing: the part settles at **471.22 K** with
+                // still air in the cavity against **536.22** without, over the same 600 s.
                 const SIGMA: f64 = 5.670_374_419e-8;
                 let cell = 8e-3_f64; // metres, from the scene
                 let (rho, c, emissivity) = (2700.0_f64, 896.0_f64, 0.85_f64);
@@ -1997,6 +2006,14 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let face = cell * cell;
                 let gap_area = 16.0 * face; // the 4x4 part looking up at the lid
                 let top_area = 36.0 * face; // the whole 6x6 lid looking at the room
+                                            // The faces each body turns to the air, counted from the scene's own geometry: the
+                                            // part's four 4x3 sides and its 4x4 top, and the lid's 6x6 underside. Its sides
+                                            // and its top are the block's own boundary and touch no void. Derived here and
+                                            // checked against the library's count below, because a closed form built on the
+                                            // wrong number of faces agrees with a solver built on the same wrong number.
+                let part_wetted = (4.0 * 4.0 * 3.0 + 16.0) * face;
+                let lid_wetted = 36.0 * face;
+                let h_air = 8.0_f64;
                 let part_capacity = 48.0 * cell.powi(3) * rho * c; // 4 x 4 x 3 cells
                 let lid_capacity = 72.0 * cell.powi(3) * rho * c; // 6 x 6 x 2 cells
                 let series = 2.0 / emissivity - 1.0;
@@ -2032,9 +2049,13 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let rates = |t_part: f64, t_lid: f64| {
                     let radiated = SIGMA * gap_area * (t_part.powi(4) - t_lid.powi(4)) / series;
                     let filmed = h * top_area * (t_lid - ambient);
+                    // The air, which is convection only: a transparent gas does not radiate, and
+                    // what the two surfaces exchange with each other is the term above.
+                    let part_air = h_air * part_wetted * (t_part - ambient);
+                    let lid_air = h_air * lid_wetted * (t_lid - ambient);
                     (
-                        -radiated / part_capacity,
-                        (radiated - filmed) / lid_capacity,
+                        -(radiated + part_air) / part_capacity,
+                        (radiated - filmed - lid_air) / lid_capacity,
                     )
                 };
                 let (mut t_part, mut t_lid) = (573.15_f64, 293.15_f64);
@@ -2059,6 +2080,20 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // Measured at **0.20%**, and the bound is 1% rather than the 5% the lag argument
                 // alone would buy, because a tolerance twenty-five times the residual is one that
                 // would sit still through a real change to the exchange.
+                // The library counted the same faces this closed form did, or the agreement
+                // below is two arithmetics sharing a mistake.
+                let counted = world
+                    .simulation()
+                    .domain_as::<pantometry::thermal::Solid3D>("housing")
+                    .expect("the housing is a block")
+                    .faces_touching_void();
+                assert_eq!(
+                    counted,
+                    ((part_wetted + lid_wetted) / face).round() as usize,
+                    "{name}: the closed form wets {} faces and the block has {counted}",
+                    ((part_wetted + lid_wetted) / face).round() as usize
+                );
+
                 let cooled = start - end;
                 let closed = 573.15 - t_part;
                 println!(

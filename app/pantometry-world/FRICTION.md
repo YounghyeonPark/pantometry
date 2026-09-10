@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty of the thirty-six are fixed**, and six are recorded rather than actioned. The reasons
+**Thirty-one of the thirty-seven are fixed**, and six are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
@@ -597,7 +597,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Thirty-six findings, and the source has shifted seven times.
+Thirty-seven findings, and the source has shifted seven times.
 
 | how many | where they came from |
 | --- | --- |
@@ -1000,6 +1000,47 @@ that part and that lid. Two are the busbars, and **that is the physics rather th
 with every watt leaving at the ends, a 32 mm copper bar 8 mm square generating 0.344 W varies by
 `P·L/(8kA)` = **53.6 mK** along its length, 0.24% of its own rise. It measures 0.585 mK. No
 cooling arrangement makes that object have a field, and a report that says so is doing its job.
+
+---
+
+## 37. A part inside a housing could not lose heat to the air in it
+
+`losing_from` reaches a block's six **outer** faces. A part rasterised inside a block, or a bar
+with a clearance beside it, has surfaces that are interior to the grid — and nothing could reach
+them. Such a part shed heat by radiating to whatever faced it across the gap, and by nothing else.
+
+So a scene describing a housing was describing an **evacuated** one, and it failed by producing
+nothing: state a film on a face made of void and `cells_on` counts no solid cell there, so the film
+is charged to nobody. Measured — a copper bar walled in by void, with a film stated on the face its
+neighbours occupy, sat at its initial 200 °C for the whole run, and the run completed and reported
+four figures.
+
+`23-a-part-radiating-to-its-lid` is that scene. Its part settles at **536.22 K** as shipped and at
+**471.22 K** with still air in the cavity, over the same 600 s: **65 K**, on a scene whose title
+says housing.
+
+**Fixed.** `Solid3D::air_in` fills a block's void with air at a stated temperature and film, and
+every solid face touching a void cell sheds `h · dx² · (T − T∞)` to it. A scene spells it `air`.
+The area is the **grid's** rather than the caller's: a `cooling` entry states what an outer face
+exposes because a rasterised part covers less of it than the grid does, and the faces touching an
+internal void are exactly the ones the grid has.
+
+**Convection only.** A transparent gas does not radiate, and what a surface facing a clearance
+exchanges with the surface across it is the pairing `find_gaps` already computes; the two run
+beside each other because both paths are real and in parallel. Scene 23's closed form is that pair
+of ODEs with one term added to each body, and it agrees to **0.12%** where it agreed to 0.20%
+before.
+
+**What it does not model** is air with a state of its own: it does not warm, it does not move, and
+two cavities in one block share it. That is the same model `cooling` uses for the air outside, and
+it is wrong for a sealed cavity small enough that the part heats its own air.
+
+**And it is not a replacement for a stated area.** `30-two-phases-crossing-at-a-clearance` was
+tried this way and is **worse** for it: its bars are in open room air, and attaching their side
+area to the block faces they touch carries convection *and* radiation over that area, where air
+carries only convection. The bars came out 33.0 K against 22.0. Air models a closed cavity; a
+stated area models a surface open to the room, and the Biot number of 8e-5 across a copper bar is
+what makes attaching it to any subset of that bar's cells exact.
 
 ---
 

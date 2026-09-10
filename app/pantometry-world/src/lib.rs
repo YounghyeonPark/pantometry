@@ -6,7 +6,7 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Thirty of the thirty-six are
+//! Findings are collected in `FRICTION.md` beside this crate. Thirty-one of the thirty-seven are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
 //! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
 //! written and this line is one of them. It had been stale for two releases before it was.
@@ -863,6 +863,15 @@ pub enum DomainSpec {
         /// real junction-to-ambient path, could not be written at all.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         contact: Vec<ContactSpec>,
+        /// What fills this block's **void**: air at a stated temperature, with a film. See
+        /// [`AirSpec`].
+        ///
+        /// **Absent is a vacuum**, which is what every void in this format was. A part rasterised
+        /// inside a block, or a bar with a clearance beside it, has surfaces interior to the grid,
+        /// and `cooling` reaches only the block's six outer faces — so such a part shed heat by
+        /// radiating across the gap and by nothing else.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        air: Option<AirSpec>,
     },
     /// A solid body under load, solved for its displacement — `pantometry-elastic`'s `Block`.
     ///
@@ -2352,6 +2361,7 @@ impl DomainSpec {
                 cooling,
                 dissipation,
                 contact,
+                air,
                 // The device is the application's to honour, not the builder's: this workspace
                 // cannot carry a GPU stack. `World::build` refuses `Gpu` below, by name.
                 device: _,
@@ -2675,6 +2685,33 @@ impl DomainSpec {
                         (a == axis_of && [i, j, k][axis] == spec.at && spec.covers([i, j, k]))
                             .then_some(h)
                     });
+                }
+
+                // **Air last**, because every key above it decides which cells are void: a
+                // region, a part, or nothing at all. It is also refused if there is no void for it
+                // to be in, which is a scene stating a cooling path that reaches nothing — the
+                // failure every other key here is refused for.
+                if let Some(a) = air {
+                    let site = format!("{name}/air");
+                    if !a.ambient_c.is_finite() {
+                        return Err(format!("{site}: ambient_c is {}", a.ambient_c));
+                    }
+                    if !a.convection_w_per_m2_k.is_finite() || a.convection_w_per_m2_k < 0.0 {
+                        return Err(format!(
+                            "{site}: convection_w_per_m2_k is {}, and a negative film would carry \
+                             heat uphill",
+                            a.convection_w_per_m2_k
+                        ));
+                    }
+                    if block.faces_touching_void() == 0 {
+                        return Err(format!(
+                            "{site}: no face of this block touches void, so the air it states \
+                             would cool nothing — a `void` region or a `parts` entry is what puts \
+                             a cavity in a block"
+                        ));
+                    }
+                    block =
+                        block.air_in(Temperature::celsius(a.ambient_c), a.convection_w_per_m2_k);
                 }
 
                 for patch in block.gap_patches() {
@@ -3170,6 +3207,40 @@ impl CoolingSpec {
             _ => None,
         }
     }
+}
+
+/// The air filling a [`DomainSpec::Block`]'s void.
+///
+/// ```json
+/// "air": { "ambient_c": 40.0, "convection_w_per_m2_k": 8.0 }
+/// ```
+///
+/// Every solid face touching a void cell sheds `h · dx² · (T − T∞)` to it. The area is the
+/// **grid's**: a `cooling` entry states what an outer face exposes because a rasterised part covers
+/// less of it than the grid does, and the faces touching an internal void are exactly the ones the
+/// grid has — so there is nothing to state and nothing to state wrongly.
+///
+/// # Convection only
+///
+/// A transparent gas does not radiate. What a surface facing a clearance exchanges with the surface
+/// across it is the parallel-plate pairing this format already computes for a `"void"` region, and
+/// the two run beside each other because both paths are real and they are in parallel.
+///
+/// # What it models and what it does not
+///
+/// **Well-mixed air at a fixed temperature.** The gas has no state: it does not warm, it does not
+/// move, and two cavities in one block share it. That is the same model `cooling` uses for the air
+/// outside, and it is exact for a housing whose air is vented or whose walls are the heat sink; it
+/// is wrong for a sealed cavity small enough that the part heats its own air, which is a fluid
+/// problem.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AirSpec {
+    /// The temperature the air sits at, in celsius.
+    pub ambient_c: f64,
+    /// Convective coefficient, W·m⁻²·K⁻¹. Still air in a housing is about 5 to 10; a fan
+    /// moving through it, tens. There is no right default, so there is none.
+    pub convection_w_per_m2_k: f64,
 }
 
 /// One sheet of interior faces in a [`DomainSpec::Block`] carrying a contact resistance.

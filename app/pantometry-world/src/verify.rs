@@ -1358,6 +1358,7 @@ impl DomainSpec {
                 cooling,
                 dissipation,
                 contact,
+                air,
                 device,
             } => {
                 if hot_spot.is_some() {
@@ -1443,6 +1444,10 @@ impl DomainSpec {
                             to: c.to.map(|t| [t[0] * 2, t[1] * 2]),
                         })
                         .collect(),
+                    // The film and the temperature are properties of the air, not of the grid it
+                    // fills, so a refinement carries them through as they are — the same reason a
+                    // `cooling` entry's `area_cm2` is carried and its patch is doubled.
+                    air: *air,
                 })
             }
             DomainSpec::Conductor {

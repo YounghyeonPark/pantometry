@@ -316,7 +316,7 @@ pub const PRESETS: [Preset; 30] = [
     Preset {
         file: "23-a-part-radiating-to-its-lid.json",
         area: "heat",
-        title: "a hot part radiating across its clearance to a cooled lid",
+        title: "a hot part in a housing, radiating and convecting to a cooled lid",
         kinds: &["block"],
         needs_a_part: false,
         json: include_str!("../scenes/23-a-part-radiating-to-its-lid.json"),

@@ -1,5 +1,5 @@
 {
-  "title": "a hot part radiating across its clearance to a cooled lid",
+  "title": "a hot part in a housing, radiating and convecting to a cooled lid",
   "schedule": "multirate",
   "duration_s": 600.0,
   "frames": 20,
@@ -32,6 +32,7 @@
         { "material": "void", "from": [1, 5, 0], "to": [5, 6, 3] },
         { "material": "void", "from": [0, 0, 3], "to": [6, 6, 5] }
       ],
+      "air": { "ambient_c": 20.0, "convection_w_per_m2_k": 8.0 },
       "cooling": [
         { "face": "z-max", "ambient_c": 20.0, "convection_w_per_m2_k": 12.0, "area_cm2": 23.04 }
       ]

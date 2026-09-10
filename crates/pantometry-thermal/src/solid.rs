@@ -330,6 +330,11 @@ pub struct Solid3D {
     /// Half-open, like every other pair of bounds in this workspace: a single cell is
     /// `hi = lo + 1`.
     patch: BTreeMap<Face, [usize; 4]>,
+    /// The air filling this block's void, if it has any: `(ambient in kelvin, W·m⁻²·K⁻¹)`.
+    ///
+    /// Absent is a **vacuum**, which is what every void in this crate was until this existed — see
+    /// [`Solid3D::air_in`] for what that cost.
+    air: Option<(f64, f64)>,
     /// Joules given up to those environments over the run, and the reason the books still
     /// balance: the ledger is `stored + lost`, so what leaves the cells arrives in this
     /// counter and the total moves only by what crossed the bus. `LumpedMass` keeps the same
@@ -517,6 +522,7 @@ impl Solid3D {
             exposed: BTreeMap::new(),
             mounted: BTreeMap::new(),
             patch: BTreeMap::new(),
+            air: None,
             lost: 0.0,
             saved_lost: 0.0,
             two_phase: false,
@@ -709,6 +715,9 @@ impl Solid3D {
         let mut why = Vec::new();
         if !self.exposed.is_empty() {
             why.push("a surface film: `losing_from` is a boundary flux with no device pass yet");
+        }
+        if self.air.is_some() {
+            why.push("air in the void: a per-cell boundary flux with no device pass yet");
         }
         if !self.gaps.is_empty() {
             why.push("radiation across a gap: a pair exchange, which is not a stencil");
@@ -1412,6 +1421,94 @@ impl Solid3D {
         self.patch.get(&face).copied()
     }
 
+    /// Fill this block's **void with air**, so the surfaces inside it convect.
+    ///
+    /// # A part in a housing could not lose heat to the air around it
+    ///
+    /// [`losing_from`](Solid3D::losing_from) works on the block's six **outer** faces. A part
+    /// rasterised inside a block, or a bar with a clearance beside it, has surfaces that are
+    /// interior to the grid — and until this existed nothing could reach them, so a part
+    /// surrounded by void shed heat only by [radiating](Solid3D::empty) to whatever faced it
+    /// across the gap. Measured: a copper bar voided in on both sides, with a film stated on the
+    /// face its neighbours occupy, sat at its initial 200 °C for the whole run and the run
+    /// completed and reported four figures.
+    ///
+    /// # Convection only, and the area is the grid's
+    ///
+    /// A transparent gas does not radiate. What a surface facing a clearance exchanges with the
+    /// surface across it is the parallel-plate pairing `find_gaps` already computes, and that runs
+    /// beside this rather than instead of it — both paths are real and they are in parallel.
+    ///
+    /// The area is `dx²` per touching face, counted from the grid. A caller states what an outer
+    /// face exposes because a rasterised part covers less of it than the grid does; the faces
+    /// touching an internal void are exactly the ones the grid has, so there is nothing to state
+    /// and nothing to state wrongly.
+    ///
+    /// # What it models and what it does not
+    ///
+    /// **Well-mixed air at a fixed temperature.** The gas has no state of its own: it does not
+    /// warm, it does not move, and two cavities in one block share it. That is the same model
+    /// `losing_from` uses for the air outside, and it is exact for a housing whose air is vented
+    /// or whose walls are the heat sink; it is wrong for a sealed cavity small enough that the
+    /// part heats its own air, which is a fluid problem and belongs to `pantometry-fluid`.
+    ///
+    /// **Absent is a vacuum**, which is what every void in this crate was, so no block changes
+    /// unless it asks.
+    ///
+    /// Filling the void tightens the stability limit for every cell touching it, exactly as
+    /// exposing a face does.
+    pub fn air_in(mut self, ambient: Temperature, w_per_m2_k: f64) -> Solid3D {
+        self.air = Some((ambient.to_si(), w_per_m2_k));
+        self.resolve();
+        self
+    }
+
+    /// The air in this block's void, as `(ambient, W·m⁻²·K⁻¹)`, if it has any.
+    pub fn air(&self) -> Option<(Temperature, f64)> {
+        self.air.map(|(t, h)| (Temperature::from_si(t), h))
+    }
+
+    /// How many faces of the solid touch void, which is the area the air acts on.
+    ///
+    /// Zero for a block with no void, and for one whose void is all on the outside of it.
+    pub fn faces_touching_void(&self) -> usize {
+        let (nx, ny, nz) = self.counts;
+        let mut n = 0;
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    if self.void[i + nx * (j + ny * k)] {
+                        continue;
+                    }
+                    let mut touching = |i: usize, j: usize, k: usize| {
+                        if self.void[i + nx * (j + ny * k)] {
+                            n += 1;
+                        }
+                    };
+                    if i > 0 {
+                        touching(i - 1, j, k);
+                    }
+                    if i + 1 < nx {
+                        touching(i + 1, j, k);
+                    }
+                    if j > 0 {
+                        touching(i, j - 1, k);
+                    }
+                    if j + 1 < ny {
+                        touching(i, j + 1, k);
+                    }
+                    if k > 0 {
+                        touching(i, j, k - 1);
+                    }
+                    if k + 1 < nz {
+                        touching(i, j, k + 1);
+                    }
+                }
+            }
+        }
+        n
+    }
+
     /// A **contact resistance** between an outer face and whatever cools it, W·m⁻²·K⁻¹.
     ///
     /// The boundary's half of [`joined`](Solid3D::joined), and the same physics on the one face
@@ -1561,7 +1658,9 @@ impl Solid3D {
         // conducting face at all, so the radiative exchange is the *only* thing setting their
         // step. Returning early on `exposed` alone handed such a pair an infinite limit, and a
         // march at infinity is a NaN block reported as a substance with no diffusivity.
-        if (self.exposed.is_empty() && self.gaps.is_empty()) || self.worst_rate.is_nan() {
+        if (self.exposed.is_empty() && self.gaps.is_empty() && self.air.is_none())
+            || self.worst_rate.is_nan()
+        {
             return self.worst_rate;
         }
         let (nx, ny, nz) = self.counts;
@@ -1619,6 +1718,50 @@ impl Solid3D {
         }
     }
 
+    /// The conductance from one solid cell to the air in the void touching it, in W/K.
+    ///
+    /// **One function, two callers**, for the reason `outward` above is: the boundary loss is
+    /// computed once for the stability limit and once for the heat that actually moves, and a term
+    /// that reaches one and not the other is a defect with no symptom on either side alone.
+    ///
+    /// Counted from the grid rather than from a stated area. A caller states what an *outer* face
+    /// exposes because a rasterised part covers less of it than the grid does; the faces touching
+    /// an internal void are exactly the ones the grid has, so there is nothing to state and
+    /// nothing to state wrongly.
+    fn air_conductance(&self, cell: (usize, usize, usize)) -> f64 {
+        let Some((_, h)) = self.air else {
+            return 0.0;
+        };
+        let (nx, ny, nz) = self.counts;
+        let (i, j, k) = cell;
+        let dx = self.dx.to_si();
+        let mut faces = 0usize;
+        let mut touching = |i: usize, j: usize, k: usize| {
+            if self.void[i + nx * (j + ny * k)] {
+                faces += 1;
+            }
+        };
+        if i > 0 {
+            touching(i - 1, j, k);
+        }
+        if i + 1 < nx {
+            touching(i + 1, j, k);
+        }
+        if j > 0 {
+            touching(i, j - 1, k);
+        }
+        if j + 1 < ny {
+            touching(i, j + 1, k);
+        }
+        if k > 0 {
+            touching(i, j, k - 1);
+        }
+        if k + 1 < nz {
+            touching(i, j, k + 1);
+        }
+        h * dx * dx * faces as f64
+    }
+
     fn film_flux(&self, old: &[f64], cell: (usize, usize, usize), c: usize) -> f64 {
         let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
         let emissivity = thermal.map_or(0.0, |t| t.emissivity);
@@ -1649,6 +1792,15 @@ impl Solid3D {
                 dx,
             );
             out += g * gap / dx;
+        }
+        // The air in the void, if this block has any. **Convection only**: a transparent gas does
+        // not radiate, and what a surface facing a clearance exchanges with the surface across it
+        // is `find_gaps`' pairing, which runs beside this rather than instead of it.
+        if let Some((ambient, _)) = self.air {
+            let g = self.air_conductance(cell);
+            if g > 0.0 {
+                out += g * (old[c] - ambient) / dx;
+            }
         }
         out
     }
@@ -1808,27 +1960,29 @@ impl Solid3D {
     /// them one operator, and `tests/the_cooled_boundary_order.rs` measures four per doubling at
     /// `Bi = 1.7` and at `Bi = 17`.
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
-        self.exposed
-            .iter()
-            .filter(|(face, _)| self.exposed_at(**face, cell))
-            .map(|(face, env)| {
-                let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
-                let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
-                let emissivity = thermal.map_or(0.0, |t| t.emissivity);
-                let hot = at.to_si().max(env.ambient.to_si());
-                let h = env.convection_w_per_m2_k
-                    + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * hot.powi(3);
-                // The mounting, between the film and the half cell — through `outward`, which
-                // `film_flux` also calls, because the limit and the flux disagreeing about a
-                // boundary is a defect with no symptom on either side alone.
-                series_with_half_cell(
-                    self.outward(face, h * share, share),
-                    thermal.map_or(f64::INFINITY, |t| t.conductivity.to_si()),
-                    share,
-                    self.dx.to_si(),
-                )
-            })
-            .sum()
+        self.air_conductance(cell)
+            + self
+                .exposed
+                .iter()
+                .filter(|(face, _)| self.exposed_at(**face, cell))
+                .map(|(face, env)| {
+                    let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
+                    let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
+                    let emissivity = thermal.map_or(0.0, |t| t.emissivity);
+                    let hot = at.to_si().max(env.ambient.to_si());
+                    let h = env.convection_w_per_m2_k
+                        + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * hot.powi(3);
+                    // The mounting, between the film and the half cell — through `outward`, which
+                    // `film_flux` also calls, because the limit and the flux disagreeing about a
+                    // boundary is a defect with no symptom on either side alone.
+                    series_with_half_cell(
+                        self.outward(face, h * share, share),
+                        thermal.map_or(f64::INFINITY, |t| t.conductivity.to_si()),
+                        share,
+                        self.dx.to_si(),
+                    )
+                })
+                .sum::<f64>()
     }
 
     /// How many cells along each axis.
@@ -2210,7 +2364,7 @@ impl Solid3D {
         if k + 1 < nz {
             flux += self.kz[c + nx * ny] * (old[c + nx * ny] - t);
         }
-        if self.exposed.is_empty() {
+        if self.exposed.is_empty() && self.air.is_none() {
             flux
         } else {
             flux - self.film_flux(old, cell, c)
@@ -2393,11 +2547,23 @@ impl Domain for Solid3D {
         // index order over the cells that can shed, which is a *surface* — at 96³ that is 6% of
         // the volume. Read off `old` and before anything is applied, so it is the same number the
         // sweep subtracts.
-        if !self.exposed.is_empty() {
+        if !self.exposed.is_empty() || self.air.is_some() {
+            // **A block with air sheds from the inside**, so the shortcut below — skip anything
+            // that is not on the block's own boundary — is only sound without it. A surface is 6%
+            // of the volume at 96³ and that is worth keeping; a cavity's walls are interior cells
+            // and skipping them would leave the ledger short by everything the air took.
+            let inside_too = self.air.is_some();
             for k in 0..nz {
                 for j in 0..ny {
                     for i in 0..nx {
-                        if i > 0 && i + 1 < nx && j > 0 && j + 1 < ny && k > 0 && k + 1 < nz {
+                        if !inside_too
+                            && i > 0
+                            && i + 1 < nx
+                            && j > 0
+                            && j + 1 < ny
+                            && k > 0
+                            && k + 1 < nz
+                        {
                             continue;
                         }
                         let c = i + nx * (j + ny * k);

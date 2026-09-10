@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found thirty-six places it is awkward, thirty of which have been changed — see
+has already found thirty-seven places it is awkward, thirty-one of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,26 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
+
+- **A part inside a housing could not lose heat to the air in it.** `cooling` reaches a block's six
+  outer faces, so a part rasterised inside one, or a bar with a clearance beside it, had surfaces
+  no film could reach — it shed heat by radiating across the gap and by nothing else, and a scene
+  describing a housing was describing an evacuated one.
+
+  It failed by producing nothing: state a film on a face made of void and `cells_on` counts no
+  solid cell there, so the film is charged to nobody. A copper bar walled in that way sat at its
+  initial 200 °C for a whole run, and the run completed and reported four figures.
+
+  `23-a-part-radiating-to-its-lid` is that scene. Its part settles at **536.22 K** as shipped and
+  **471.22 K** with still air in the cavity, over the same 600 s — **65 K**, on a scene whose title
+  says housing. Its closed form is the same pair of ODEs with one term added to each body, and it
+  agrees to **0.12%** where it agreed to 0.20%.
+
+  Air is not a replacement for a stated area, and the busbars are the counter-example:
+  `30-two-phases-crossing-at-a-clearance` was tried this way and came out 33.0 K against 22.0,
+  because attaching a bar's side area to a block face carries convection *and* radiation over it
+  while air carries only convection. Air models a closed cavity; a stated area models a surface
+  open to the room. FRICTION.md finding 37.
 
 - **Two busbars four millimetres apart could not see each other.**
   `30-two-phases-crossing-at-a-clearance` states two blackened bars, ε = 0.9, crossing at a
@@ -231,6 +251,21 @@ pharmacokinetics, and the count of commits above does not include it.
   argument on it. The real limit is written down instead.
 
 ### Added
+
+- **A block's void can be air.** `Solid3D::air_in` fills it at a stated temperature with a film,
+  and every solid face touching a void cell sheds `h · dx² · (T − T∞)` to it. A scene spells it
+  `air`. The area is the **grid's** rather than the caller's: a `cooling` entry states what an
+  outer face exposes because a rasterised part covers less of it than the grid does, and the faces
+  touching an internal void are exactly the ones the grid has.
+
+  **Convection only.** A transparent gas does not radiate; what a surface facing a clearance
+  exchanges with the surface across it is the pairing `find_gaps` already computes, and the two run
+  beside each other because both paths are real and in parallel.
+
+  Checked against the lumped exponential to the step's own first order, with the ledger agreeing to
+  the bit — `201.105948 J` shed and `201.105948` counted — and against two conductances in parallel
+  at steady state, `36.07013 K` against `36.07013`. Absent is a vacuum, so no scene changes unless
+  it asks.
 
 - **A face can be cooled only where it is bolted.** `Solid3D::losing_from_within` exposes a box on
   a face rather than the whole of it, and a scene spells it as `cooling`'s `from`/`to` — the

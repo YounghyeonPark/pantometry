@@ -355,3 +355,65 @@ fn a_cooled_patch_that_cannot_be_meant_is_refused() {
         "the message should say why: {err}"
     );
 }
+
+/// **A block may say what fills its void, and a vacuum is what it was.**
+///
+/// `cooling` reaches the block's six outer faces. A part rasterised inside a block, or a bar with
+/// a clearance beside it, has surfaces interior to the grid — so until `air` existed such a part
+/// shed heat by radiating across the gap and by nothing else, and a scene describing a housing
+/// was describing an evacuated one.
+///
+/// Measured on `23-a-part-radiating-to-its-lid`: its part settles 65 K hotter without air than
+/// with it, over the same 600 s.
+#[test]
+fn a_block_can_say_what_fills_its_void() {
+    let cavity = |extra: &str| {
+        block(&format!(
+            r#", "regions": [{{ "material": "void", "from": [0, 0, 0], "to": [4, 1, 8] }}]{extra}"#
+        ))
+    };
+    let dry = built(&cavity(""));
+    assert_eq!(dry.air(), None, "a void is a vacuum unless the scene says");
+
+    let aired = built(&cavity(
+        r#", "air": { "ambient_c": 20.0, "convection_w_per_m2_k": 8.0 }"#,
+    ));
+    let (t, h) = aired.air().expect("the air reached the domain");
+    assert_eq!((t.to_si(), h), (293.15, 8.0));
+    // The faces the air acts on are the grid's: the 4x8 sheet of solid facing the voided slab.
+    assert_eq!(
+        aired.faces_touching_void(),
+        32,
+        "the air should wet the 4x8 face the void leaves"
+    );
+    assert_eq!(dry.faces_touching_void(), 32, "the geometry is the same");
+}
+
+/// **Air with nothing to be in is refused**, which is the same failure every other key here is
+/// refused for: a scene that states a cooling path reaching no cell runs, audits, renders and
+/// answers.
+#[test]
+fn air_in_a_block_with_no_void_is_refused() {
+    for (why, spec, says) in [
+        (
+            "no void at all",
+            r#", "air": { "ambient_c": 20.0, "convection_w_per_m2_k": 8.0 }"#,
+            "touches void",
+        ),
+        (
+            "a negative film",
+            r#", "regions": [{ "material": "void", "from": [0, 0, 0], "to": [4, 1, 8] }],
+                 "air": { "ambient_c": 20.0, "convection_w_per_m2_k": -8.0 }"#,
+            "uphill",
+        ),
+    ] {
+        let scene: Scene =
+            serde_json::from_str(&block(spec)).expect("it parses; the check is later");
+        let Err(err) = World::build(scene) else {
+            panic!("{why} must be refused");
+        };
+        println!("  {why}: {err}");
+        assert!(err.contains("b/air"), "{why}: which key: {err}");
+        assert!(err.contains(says), "{why}: should say {says:?}: {err}");
+    }
+}
