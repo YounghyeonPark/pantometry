@@ -56,14 +56,17 @@
 //!
 //! # What is refused rather than measured
 //!
-//! A refinement must state the **same physical problem** on a finer grid, and three things in
-//! this format cannot: a [`HotSpot`](crate::HotSpot) is one cell, so refining halves its
-//! physical size and divides its energy by eight; a [`DomainSpec::Conductor`]'s blocked cells
-//! are one cell each, so a notch shrinks; and a channelled [`DomainSpec::Puck`]'s ring is one
-//! cell wide by construction. Refining any of those would compare two different problems and
-//! call the difference discretisation error, so the sweep is skipped and the report says which
-//! domain and why — loudly, because a check that silently skipped is this workspace's oldest
-//! failure shape.
+//! A refinement must state the **same physical problem** on a finer grid, and two things in this
+//! format cannot: a [`HotSpot`](crate::HotSpot) is one cell, so refining halves its physical size
+//! and divides its energy by eight, and a channelled [`DomainSpec::Puck`]'s ring is one cell wide
+//! by construction. Refining either would compare two different problems and call the difference
+//! discretisation error, so the sweep is skipped and the report says which domain and why —
+//! loudly, because a check that silently skipped is this workspace's oldest failure shape.
+//!
+//! **It was three, and a [`DomainSpec::Conductor`]'s blocked cells did not belong.** A blocked
+//! cell is a **box**: each becomes its eight children, and the notch keeps its millimetres. What
+//! the refusal cost was the measurement — `17-a-busbar-with-a-notch` turns out to be 4.65% above
+//! the answer its shape has, converging at `h^(4/3)` because a re-entrant corner sets the rate.
 
 use std::collections::BTreeMap;
 
@@ -369,6 +372,10 @@ pub struct Shift {
     /// A reading sitting near zero exaggerates this ratio; the absolute pair is beside it in
     /// the report for exactly that case.
     pub relative: f64,
+    /// A statement about the solve rather than about the world — see [`DIAGNOSTICS`]. Its
+    /// `relative` is not a discretisation and is left out of [`Sweep::worst`]; the report prints
+    /// the two values instead of a percentage.
+    pub diagnostic: bool,
 }
 
 /// A measured convergence order, or the honest reason there is none.
@@ -586,6 +593,55 @@ const WINDOW_SHIFT: f64 = 0.005;
 /// second copy of the number would agree with itself while the two drifted apart.
 pub const UNIFORM_FIELD: f64 = 0.05;
 
+/// Readings that describe the **solve** rather than the world, by label.
+///
+/// # Why a list, and why it is not a threshold
+///
+/// The resolution sweep's header says "what moved is discretisation", and for a solver residual
+/// that is false in a way no denominator repairs. `17-a-busbar-with-a-notch` printed
+///
+/// ```text
+///   busbar   residual   0.000000 -> 0.000000  (281492.026%)
+/// ```
+///
+/// The residual went from 7.793e-13 to 6.644e-13 — both converged, both meaningless to compare —
+/// and the denominator was the **4.08e-17 it happened to wobble by** between the first and second
+/// frame of the base run, which is conjugate gradients stopping at a different iterate and not a
+/// span. Every part of that row is a lie: two values printed as zero, a percentage of noise, and
+/// a header attributing it to the grid.
+///
+/// The obvious repair — floor the denominator — does not work here, and measuring says why. The
+/// wobble is 5.2e-5 of the residual's own magnitude, which is far above any rounding floor: it is
+/// real variation in a real quantity. The quantity is just not one that converges to anything.
+/// Refining the grid changes the iteration count, and the residual is wherever the iteration
+/// happened to cross the tolerance.
+///
+/// So the discriminator is not numerical, it is what the number *means*, and a list is the honest
+/// shape for that. It is short because these are rare: a residual, a divergence a projection is
+/// meant to have removed, a norm a unitary scheme is meant to preserve, a cell Péclet or Reynolds
+/// number that reports whether the scheme is in its regime. What they share is a target the
+/// solver holds them at, so the value carries no information about the answer.
+///
+/// # What holds it
+///
+/// `every_scene_that_ships_runs_and_says_something_true` collects every `(label, unit)` the thirty
+/// scenes emit as it walks them, and pins all 47 against [`is_diagnostic`] — so a domain that adds
+/// a reading cannot leave this list quietly stale, it has to be decided about. That is the
+/// weakness of a list, and the test is the only thing that makes one safe here.
+///
+/// [`Reading`] cannot carry this itself: its fields are public, so a flag is
+/// a breaking change to a published crate. FRICTION.md finding 40.
+pub const DIAGNOSTICS: &[&str] = &["residual", "divergence", "div B", "norm", "cell Reynolds"];
+
+/// Is this reading a statement about the solve rather than about the world?
+///
+/// Public because `every_scene_that_ships_runs_and_says_something_true` walks the shipped scenes
+/// and pins the classification of all 47 labels they emit against this — a second copy of the
+/// list would agree with itself while the two drifted apart.
+pub fn is_diagnostic(label: &str) -> bool {
+    DIAGNOSTICS.contains(&label)
+}
+
 /// One sweep: the scene rerun with one knob moved, and what each reading did.
 #[derive(Debug)]
 pub struct Sweep {
@@ -704,6 +760,7 @@ fn compare(
                     base: r.value,
                     other: o.value,
                     relative,
+                    diagnostic: is_diagnostic(&r.label),
                 });
             }
             None => unmatched.push(format!("{}/{}", r.domain, r.label)),
@@ -717,7 +774,15 @@ fn compare(
             unmatched.push(format!("{}/{}", o.domain, o.label));
         }
     }
-    let worst = shifts.iter().fold(0.0f64, |m, s| m.max(s.relative));
+    // **Diagnostics are left out of the summary, not merely out of the print.** `worst` is what
+    // the window sweep raises a finding on, and a residual that moved between two runs would fire
+    // it with a message about the scene's answer depending on `frames`. It has not yet, because
+    // the window sweep re-solves the same system and gets the same residual to the bit; the
+    // resolution sweep is where it moves, and that one raises nothing. One knob away.
+    let worst = shifts
+        .iter()
+        .filter(|s| !s.diagnostic)
+        .fold(0.0f64, |m, s| m.max(s.relative));
     Sweep {
         shifts,
         worst,
@@ -746,6 +811,12 @@ fn compare(
 fn orders_of(f1: &[Reading], f2: &[Reading], f4: &[Reading]) -> Vec<(String, String, Order)> {
     let mut out = Vec::new();
     for r1 in f1 {
+        // A diagnostic has no order because it is not converging to anything: the notch's
+        // residual measured **-0.77**, a rate at which nothing happens, printed in a column of
+        // real ones. See [`DIAGNOSTICS`].
+        if is_diagnostic(&r1.label) {
+            continue;
+        }
         let find = |rs: &[Reading]| {
             rs.iter()
                 .find(|o| o.domain == r1.domain && o.label == r1.label)
@@ -1264,8 +1335,10 @@ impl DomainSpec {
     ///
     /// The rule for what refuses: any feature whose physical size is *defined* in cells. A
     /// [`HotSpot`](crate::HotSpot) is one cell of excess temperature, so at half the cell it
-    /// holds an eighth of the joules; a conductor's blocked cell is a notch that shrinks; a
-    /// puck's channel ring is one cell wide by construction. Each is a different problem at a
+    /// holds an eighth of the joules, and a puck's channel ring is one cell wide by
+    /// construction. A conductor's blocked cell was on this list and is not one: a blocked cell
+    /// is a **box**, so it refines into its eight children and the notch keeps its millimetres.
+    /// Each is a different problem at a
     /// different resolution, and a comparison across them would report the difference as
     /// discretisation error — a number that means nothing wearing the name of one that means a
     /// lot.
@@ -1565,19 +1638,35 @@ impl DomainSpec {
                 volts,
                 blocked,
             } => {
-                if !blocked.is_empty() {
-                    return Err(format!(
-                        "{name}: a blocked cell is a one-cell notch, so refining shrinks it — \
-                         a different geometry, not a finer one"
-                    ));
-                }
+                // **A blocked cell is a box, and a box keeps its bounds.** This refused, on the
+                // reasoning that "a blocked cell is a one-cell notch, so refining shrinks it — a
+                // different geometry, not a finer one". That is true only of a refinement that
+                // keeps the *indices*: a cell at `(6, 0, 0)` of a 1 mm grid occupies
+                // `x ∈ [6, 7] mm`, and at 0.5 mm the same millimetres are indices 12 and 13. Each
+                // blocked cell becomes its **eight children** and the notch is the same notch.
+                //
+                // What it cost was the measurement: `17-a-busbar-with-a-notch` has a ligament two
+                // cells wide, current crowds at a notch root the way stress does, and nobody could
+                // ask whether two cells resolve it because the sweep would not run.
+                let finer: Vec<[usize; 3]> = blocked
+                    .iter()
+                    .flat_map(|c| {
+                        (0..8).map(move |n| {
+                            [
+                                c[0] * 2 + (n & 1),
+                                c[1] * 2 + ((n >> 1) & 1),
+                                c[2] * 2 + ((n >> 2) & 1),
+                            ]
+                        })
+                    })
+                    .collect();
                 Some(DomainSpec::Conductor {
                     name: name.clone(),
                     cells: [cells[0] * 2, cells[1] * 2, cells[2] * 2],
                     cell_mm: cell_mm / 2.0,
                     resistivity_ohm_m: *resistivity_ohm_m,
                     volts: *volts,
-                    blocked: Vec::new(),
+                    blocked: finer,
                 })
             }
             DomainSpec::Puck {
@@ -1736,6 +1825,18 @@ the other two refusals (worst step; not comparable to each other — the first i
                         let _ = writeln!(out, "  nothing was compared — see findings");
                     }
                     for shift in &s.shifts {
+                        // A diagnostic gets its values and no percentage. Printed in exponent
+                        // form because that is the only form they are readable in: `{:.6}` on a
+                        // residual is `0.000000`, which is how one of these rows managed to show
+                        // two zeros and a five-digit percentage between them.
+                        if shift.diagnostic {
+                            let _ = writeln!(
+                                out,
+                                "  {:<14} {:<14} {:.3e} -> {:.3e} {} (a solver diagnostic, not a discretisation)",
+                                shift.domain, shift.label, shift.base, shift.other, shift.unit
+                            );
+                            continue;
+                        }
                         let _ = writeln!(
                             out,
                             "  {:<14} {:<14} {:.6} -> {:.6} {} ({:.3}%)",
@@ -1969,6 +2070,37 @@ mod tests {
         // (~2.7e-10) and stay refused rather than becoming an order of zero.
         let o = orders_of(&[c(0.0)], &[c(6e-14)], &[c(1.2e-13)]);
         assert!(matches!(o[0].2, Order::BelowFloor));
+    }
+
+    /// **A residual must not be able to set the summary.** [`Sweep::worst`] is the one number a
+    /// finding is raised on, and a diagnostic's `relative` is a percentage of noise — the notch's
+    /// read **281492%**. The filter that keeps them out was measured to be unreachable: removing it
+    /// entirely left every test in both workspaces green, because only the *window* sweep's `worst`
+    /// is read and only the *resolution* sweep moves a residual. A guard aimed at a path no input
+    /// reaches is a guard nothing holds, so this reaches it directly.
+    #[test]
+    fn a_diagnostic_cannot_set_the_worst_shift() {
+        let r = |l: &str, v: f64, u: &'static str| Reading::new("d", l, v, u);
+        // The notch's own numbers: a residual that halved, beside a reading that moved 0.1%.
+        let s = compare(
+            &[r("residual", 7.793e-13, ""), r("peak", 1.0, "C")],
+            &[r("residual", 6.644e-13, ""), r("peak", 1.001, "C")],
+            &BTreeMap::new(),
+        );
+        assert!(
+            s.shifts.iter().any(|x| x.diagnostic),
+            "the residual was not recognised as a diagnostic"
+        );
+        assert!(
+            s.shifts.iter().any(|x| !x.diagnostic),
+            "the temperature was miscounted as a diagnostic"
+        );
+        // Without the filter this is the residual's own ratio against its magnitude, ~0.15.
+        assert!(
+            s.worst < 0.01,
+            "a solver residual set the summary at {:.4}",
+            s.worst
+        );
     }
 
     /// The broken channel: a NaN and a duplicated key must each surface as a broken row

@@ -181,27 +181,36 @@ jobs:
       # `cargo doc` is here and not in the library's `lint` job's span because this workspace went
       # unchecked for as long as it existed and had a broken intra-doc link in it from day one —
       # `Pose::point_to_world`, with no `Pose` in scope. That is what an unlinted workspace costs.
+      # **`--locked` where the flag exists, because the gate has it and this job did not.**
+      # Four of this job's six steps take it — `fmt` and `deny check` have no such flag — and
+      # `CLAUDE.md`'s app block passes it to all four while this job passed it to none. The
+      # seventh step below has it, so this was an omission rather than a policy. The divergence
+      # points the wrong way: with a lockfile present `--locked` *errors* when the manifests
+      # would change it and the bare form silently regenerates one, so a stale `app/Cargo.lock`
+      # would stop the local gate and pass here. The tenth failure in `CLAUDE.md`'s list is a
+      # gate reporting about a different repository than CI; this is the same shape with the
+      # roles swapped.
       - name: fmt, clippy, docs
         working-directory: app
         run: |
           cargo fmt --all --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-      # The whole suite, which includes the twenty-eight scenes and their closed-form checks. Those
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+      # The whole suite, which includes the **thirty** scenes and their closed-form checks. Those
       # used to run in the library's `test` job; they moved with `pantometry-world` and this is
-      # where they are held now.
+      # where they are held now. That count said twenty-eight through two more scenes.
       #
       # The device tests need a real adapter and a runner has none. Every one of them skips with a
       # printed reason rather than quietly, and a software rasteriser is deliberately not used: it
       # would be checking a different implementation than anyone runs.
       - name: the suite, and the device tests say why they skipped
         working-directory: app
-        run: cargo test --workspace -- --nocapture
+        run: cargo test --locked --workspace -- --nocapture
       # The browser shell shares `editor-core` rather than carrying a copy, so this is the check
       # that the shared half stays free of anything native.
       - name: the browser shell compiles too
         working-directory: app
-        run: cargo build -p editor-wasm --target wasm32-unknown-unknown
+        run: cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
       # Its own `deny.toml`, written because the merge took `pantometry-world` out of the library's.
       # Its first run found four advisories, all through `eframe` and none fixable from here; they
       # are in the ignore list with a reachability argument each rather than as bare ids.

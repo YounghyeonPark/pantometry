@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found thirty-nine places it is awkward, thirty-three of which have been changed — see
+has already found forty-two places it is awkward, thirty-five of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,78 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Fixed
+
+- **A scene named for an espresso shot pulled a quarter of one.** `18-an-espresso-shot` ran for
+  eight seconds and delivered 3.28 g from a 4.29 g dose — **4.81% extraction**, where a shot is
+  pulled to 18–22%. Nothing failed, and the reason is the shape of every check it had: all of them
+  compare the two baskets, and Darcy at a fixed pressure through a fixed bed gives a constant flow,
+  so every one holds at any length. It is 25 s now: **19.90%** at 8.31% TDS, 10.26 g from 4.29 g, a
+  2.4:1 ratio. The comparison is unchanged — the flow ratio measures 1.786775 either way — and the
+  channelling reads harder for it, the gapped basket pouring nearly twice the liquid at 58% of the
+  strength. The check asserts the yield lands in 18–22% as a band, because what makes it a shot is
+  that it is in the range a barista pulls to.
+
+  The editor's **New project** chooser offered the same quarter-shot, and the gate caught it: a
+  `puck` template suggesting 8 s in 9 frames "which no scene that uses it runs". It is 25 s now.
+  `the_schedule_a_template_suggests_is_one_a_scene_uses` holds every template's duration against a
+  scene that runs it, so a table maintained by hand cannot sit wrong between the change and the
+  noticing.
+
+- **A notch's resolution sweep refused to run, and the reason was true of the wrong refinement.**
+  `DomainSpec::refined` would not double a conductor with blocked cells, on the grounds that "a
+  blocked cell is a one-cell notch, so refining shrinks it — a different geometry, not a finer
+  one". That holds only for a refinement that keeps the *indices*: a cell at `(6, 0, 0)` on a 1 mm
+  grid occupies `x ∈ [6, 7] mm`, and at 0.5 mm those millimetres are indices 12 and 13. Each
+  blocked cell becomes its eight children and the notch is the same notch, which a test now asserts
+  in millimetres rather than in indices — a count of eight is not the claim, and the sabotage that
+  showed why was one that passed.
+
+  What the refusal cost was the measurement. `17-a-busbar-with-a-notch` is titled "the resistance
+  the shape actually has" and every check it had was an inequality or an identity, all of which
+  hold at any grid. It is **4.65% above** the `h → 0` answer, and not because the grid is coarse:
+  current crowds into a re-entrant corner, the conducting wedge there subtends `3π/2`, so
+  `λ = π/ω = 2/3` and a quadratic functional of the field converges as `h^(2λ) = h^(4/3)`.
+  Measured 1.33534, 1.33296, 1.33318 and 1.33367 across six grids, bracketing a closed-form
+  **1.33333**. Refining is cheap once `R·t` is seen to be exactly thickness-independent — twelve
+  digits at `nz` = 1, 2, 3, 5, 8 — but the scene *refuses* 0.0156 mm on its own 1e-9 drift budget,
+  which reads 1.094e-9 over 246 k cells, so the finest thing it can say about itself still has
+  0.046% in it. The scene keeps its 1 mm cells and gains a check against the Richardson limit, so
+  the error it ships with is stated rather than discovered.
+
+  **The reason first written for this was a theorem about a different method.** "A resistance is an
+  energy-norm quantity" is the conforming-Galerkin identity, and by Dirichlet's principle it makes a
+  voltage-driven resistor read *low* — every grid measured reads high. `Conductor` is a cell-centred
+  conductance network with harmonic-mean faces and `Σ g Δφ²`, whose face currents are conservative
+  per cell, so the argument is the dual one and Thomson's principle makes every grid an *upper*
+  bound. The rate, the exponent, the limit and every percentage survived the check; the sentence
+  explaining them predicted the opposite sign from the one every measurement showed.
+
+- **The resolution sweep compared a solver residual as though it converged to something**, and on
+  the notch printed `residual 0.000000 -> 0.000000 (281492.026%)` under a heading that says "what
+  moved is discretisation". The values are 7.793e-13 and 6.644e-13, both converged and both printed
+  as zero by a format chosen for temperatures; the denominator is the **4.08e-17** the residual
+  wobbled by between two frames of the base run, which is conjugate gradients stopping at a
+  different iterate. It also measured the residual "converging at order **-0.77**" beside four real
+  ones.
+
+  Flooring the denominator does not fix it: the wobble is 5.2e-5 of the residual's own magnitude,
+  far above any rounding floor, because it is real variation in a quantity that converges to
+  nothing. `verify::DIAGNOSTICS` names the five labels the scenes emit that describe the solve
+  rather than the world — a residual, a divergence, a `div B`, a norm, a cell Reynolds number — and
+  they now print their values with no percentage and stay out of `Sweep::worst`, which the window
+  sweep raises a finding on. The scene walk pins all **47** labels the thirty scenes emit against
+  the classification, so a domain that gains a residual cannot leave the list quietly stale.
+  `Reading` cannot carry this itself: its fields are public, so a flag is a breaking change to a
+  published crate. FRICTION.md finding 40.
+
+- **CI's `the app` job ran none of the gate's `--locked`.** Four of its six steps take the flag —
+  `fmt` and `deny check` have none — and `CLAUDE.md`'s app block passes it to all four while that
+  job passed it to none. Not a policy: the seventh step in the job, added later, has it. The
+  divergence points the wrong way: with a lockfile present `--locked`
+  *errors* when the manifests would change it and the bare form silently regenerates one, so a stale
+  `app/Cargo.lock` stops the local gate and passes CI. That is the tenth failure in `CLAUDE.md`'s
+  list with the roles swapped. Its comment also said the suite covers "the twenty-eight scenes";
+  there are thirty.
 
 - **The elastic model knew where it stops applying, and nothing checked a scene against it.**
   `pantometry-elastic` is linear, has no plasticity, and documents what that costs: past yield it

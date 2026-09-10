@@ -205,8 +205,14 @@ pub const TEMPLATES: [Template; 19] = [
     },
     Template {
         kind: "puck",
+        // **Eight seconds was a quarter of a shot**, and this suggested it because
+        // `18-an-espresso-shot` ran it, which is what these numbers are taken from. That scene is
+        // 25 s now — 19.90% extraction, the middle of what a barista pulls to — and a starting
+        // point should open on a shot. `the_schedule_a_template_suggests_is_one_a_scene_uses`
+        // caught this: the template stayed at 8 s after the scene moved, which is exactly the
+        // silence that test exists for.
         about: "A basket of packed grounds with liquid driven through it",
-        duration_s: 8.0,
+        duration_s: 25.0,
         frames: 9,
         json: r#"{ "kind": "puck", "name": "puck", "cells": [19, 10, 19], "cell_mm": 2.0,
           "radius_mm": 15.0, "grind_um": 250.0, "porosity": 0.45, "bar": 9.0, "brew_c": 93.0 }"#,

@@ -327,7 +327,10 @@ fn a_room_refines_by_intervals() {
 /// **What cannot be refined honestly refuses, naming the feature.** A hot spot is one cell of
 /// excess temperature: at half the cell it holds an eighth of the joules, so a "refined" scene
 /// would be a different experiment whose difference the sweep would report as discretisation
-/// error. The same for a conductor's one-cell notch and a puck's one-cell channel ring.
+/// error. The same for a puck's one-cell channel ring.
+///
+/// A conductor's blocked cells were on this list for the same stated reason and did not belong:
+/// see [`a_notch_keeps_its_millimetres`], which is the measurement that reason was costing.
 #[test]
 fn one_cell_features_refuse_to_refine() {
     let hot = scene(
@@ -347,20 +350,6 @@ fn one_cell_features_refuse_to_refine() {
         "the refusal does not say why: {why}"
     );
 
-    let notched = scene(
-        r#"{
-  "title": "a notched conductor",
-  "duration_s": 1.0,
-  "frames": 2,
-  "domains": [
-    { "kind": "conductor", "name": "busbar", "cells": [8, 2, 2], "cell_mm": 1.0,
-      "resistivity_ohm_m": 1.724e-8, "volts": 0.01, "blocked": [[4, 0, 0]] }
-  ]
-}"#,
-    );
-    let why = notched.refined().expect_err("a blocked cell must refuse");
-    assert!(why.contains("notch"), "{why}");
-
     let channelled = scene(
         r#"{
   "title": "a channelled puck",
@@ -377,6 +366,195 @@ fn one_cell_features_refuse_to_refine() {
         .refined()
         .expect_err("a channel ring must refuse");
     assert!(why.contains("channel"), "{why}");
+}
+
+/// **A blocked cell is a box, and a box refines by keeping its bounds.**
+///
+/// This refused, and the refusal was reasoned: "a blocked cell is a one-cell notch, so refining
+/// shrinks it — a different geometry, not a finer one". That is true of a refinement that keeps
+/// the *indices* and of no other. A cell at `(4, 0, 0)` on a 1 mm grid occupies `x ∈ [4, 5] mm`;
+/// at 0.5 mm those same millimetres are indices 8 and 9. Each blocked cell becomes its **eight
+/// children**, and the notch is the same notch.
+///
+/// What is asserted here is the millimetres, not the indices: a count of eight is not the claim,
+/// and the sabotage that showed why was one that *passed*. Permuting which bit of `n` feeds which
+/// axis looks like doubling the wrong corner and is a no-op — `0..8` enumerates all three bits
+/// either way, so the same eight children come out in a different order. What does break it is a
+/// box that lands half a cell off, an axis left undoubled, or a child count of four; all three
+/// fail on the bounds and would pass a count.
+#[test]
+fn a_notch_keeps_its_millimetres() {
+    let notched = scene(
+        r#"{
+  "title": "a notched conductor",
+  "duration_s": 1.0,
+  "frames": 2,
+  "domains": [
+    { "kind": "conductor", "name": "busbar", "cells": [8, 4, 2], "cell_mm": 1.0,
+      "resistivity_ohm_m": 1.724e-8, "volts": 0.01, "blocked": [[4, 0, 0], [4, 1, 0]] }
+  ]
+}"#,
+    );
+
+    // The hole the coarse scene cuts, in millimetres: two cells stacked in y, one deep in z.
+    let bounds = |spec: &DomainSpec| match spec {
+        DomainSpec::Conductor {
+            cells,
+            cell_mm,
+            blocked,
+            ..
+        } => {
+            let lo = |axis: usize| blocked.iter().map(|c| c[axis]).min().unwrap() as f64 * cell_mm;
+            let hi =
+                |axis: usize| (blocked.iter().map(|c| c[axis]).max().unwrap() + 1) as f64 * cell_mm;
+            (
+                [lo(0), lo(1), lo(2)],
+                [hi(0), hi(1), hi(2)],
+                [
+                    cells[0] as f64 * cell_mm,
+                    cells[1] as f64 * cell_mm,
+                    cells[2] as f64 * cell_mm,
+                ],
+                blocked.len(),
+            )
+        }
+        other => panic!("an unexpected domain appeared: {other:?}"),
+    };
+
+    let (lo, hi, bar, count) = bounds(&notched.domains[0]);
+    assert_eq!(lo, [4.0, 0.0, 0.0]);
+    assert_eq!(hi, [5.0, 2.0, 1.0]);
+    assert_eq!(bar, [8.0, 4.0, 2.0]);
+    assert_eq!(count, 2);
+
+    let fine = notched.refined().expect("a blocked cell refines");
+    let (flo, fhi, fbar, fcount) = bounds(&fine.domains[0]);
+    assert_eq!(flo, lo, "the notch moved");
+    assert_eq!(fhi, hi, "the notch changed size");
+    assert_eq!(fbar, bar, "the bar changed size");
+    assert_eq!(fcount, count * 8, "a box has eight children");
+
+    // And the ligament — the metal the current has to squeeze through — is the same metal.
+    // This is the number the whole scene is about, so it is asserted from the far side of the
+    // hole rather than inferred from the two above.
+    let ligament = |spec: &DomainSpec| match spec {
+        DomainSpec::Conductor {
+            cells,
+            cell_mm,
+            blocked,
+            ..
+        } => (cells[1] - (blocked.iter().map(|c| c[1]).max().unwrap() + 1)) as f64 * cell_mm,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(ligament(&notched.domains[0]), 2.0);
+    assert_eq!(ligament(&fine.domains[0]), 2.0);
+}
+
+/// **A notch converges at the corner's own exponent, and it is not two.**
+///
+/// The sweep would not run on `17-a-busbar-with-a-notch` at all, so nobody could ask how much of
+/// its resistance was grid. It is **4.65%** at the shipped 1 mm, and the reason is not resolution
+/// but the shape.
+///
+/// Current crowds into a re-entrant corner the way stress does. The conducting wedge at a notch
+/// root has an interior angle of `3π/2`, so the potential goes as `r^λ` with `λ = π/ω = 2/3`
+/// and the flux as `r^(λ-1)` — unbounded, at every grid. A resistance is a **quadratic**
+/// functional of that field, so its error goes as `h^(2λ) = h^(4/3)` and not as the `h²` a smooth
+/// field gives.
+///
+/// ```text
+///      h        in-plane     R at t = 5 mm     above the limit    three-point order
+///    1 mm        12 x 5      1.2391920e-05        +4.6525%
+///    0.5         24 x 10     1.2059472e-05        +1.8449%           1.33534
+///    0.25        48 x 20     1.1927724e-05        +0.7323%           1.33296
+///    0.125       96 x 40     1.1875426e-05        +0.2906%           1.33318
+///    0.0625     192 x 80     1.1854670e-05        +0.1153%           1.33367
+///    0.03125    384 x 160    1.1846434e-05        +0.0458%
+/// ```
+///
+/// Read from the ten-digit CSV, not the seven-digit JSON: by `0.0625` the successive differences
+/// are 1e-5 of the value and seven digits stop resolving an order.
+///
+/// **One cell through the thickness**, because `R·t` is exactly independent of it —
+/// `6.195960000000e-08` at `nz` = 1, 2, 3, 5 and 8, to twelve digits, the slot spanning the full
+/// `z` and the geometry being prismatic. That is what makes the table affordable: `0.0625 mm`
+/// costs **1.1 s** this way against the **201 s** the same plane took at `nz = 5`.
+///
+/// **Which way the error points is the part that was wrong here.** This said "a resistance is an
+/// energy-norm quantity", which is the conforming-Galerkin identity `E_h - E = ||u-u_h||²_E` —
+/// and by Dirichlet's principle that identity makes a voltage-driven resistor read **low**. Every
+/// row above reads high. The crate is not a Galerkin method: it is a cell-centred conductance
+/// network with harmonic-mean faces and `Σ g Δφ²`, whose face currents are exactly conservative
+/// per cell. So the argument is the **dual** one — a conservative current field is admissible for
+/// Thomson's principle, which makes every grid an *upper* bound on the resistance, and the lumped
+/// `Σ g Δφ²` sits above the reconstruction's own quadrature by
+/// `(a²+b²)/2 - (a²+ab+b²)/3 = (a-b)²/6 ≥ 0`, cell by cell. What is *measured* is the sign, at
+/// all six grids; the dual argument is why it has to be that sign.
+///
+/// **The four orders bracket 4/3 rather than descend to it.** 1.33534, 1.33296, 1.33318, 1.33367
+/// against 1.33333: the widest is 0.15% out and the other three are inside 0.03%, but the sequence
+/// is **not monotone**, and quoting the first three as a converging one reads tighter than it is.
+/// The spread is the subleading term, which at these grids is comparable to what is being
+/// measured; it is not uncertainty in the exponent. A free three-parameter fit `R₀ + C·h^p` over
+/// the finest five rows puts `p` in **[1.3323, 1.3339]** — 4/3 to within 0.08% — taking the
+/// interval where the residual stays inside ten times its minimum. At fixed `p` over all six, 4/3
+/// fits **186x** better than 1.25, **335x** better than 1.5, **803x** better than 1.0 and **1131x**
+/// better than 2.0. The same fit puts the limit at `1.1841011e-05`, against `1.1841016e-05` from
+/// Richardson on the finest pair: seven digits, as the pin says.
+///
+/// The slot is **one cell wide** at the shipped grid — 1 mm, `x ∈ [6, 7] mm` — so at 1x the two
+/// notch roots are exactly `h` apart and the corner is not resolved at all. That is where the
+/// 4.65% is.
+///
+/// The percentages are against the Richardson limit at `p = 4/3`. The finest three pairs give
+/// 1.1841016, 1.1841012 and 1.1841016e-05 ohm, so **1.184101e-05** is what is earned and the
+/// eighth digit is not. `1.1841016e-05` is the value the pin uses, from the finest pair.
+///
+/// **And the grid runs out before the answer does, on the audit rather than the clock.** At
+/// `0.015625 mm` the scene is *refused*: its own drift budget of `1e-9` reads `1.094e-9` after
+/// 95 s, floating-point noise over 246 k cells crossing a tolerance written for a scene a
+/// thousandth the size. So the finest statement this scene can make about itself still has
+/// **0.046%** in it, and that is the useful thing to know about a notch — the error is not
+/// waiting for a finer grid, it is the corner, and `h^(4/3)` is how slowly it goes.
+///
+/// The tolerance is 1%. The order asserted is the coarsest triplet's, 1.33534, which is 0.15%
+/// out — so 1% is six times the deviation and it excludes 1.25 (6.3% away), 1.5 (12.5%), 1.0 (a
+/// crack, 25%) and 2.0 (50%). It was 4%, which excluded the same four and said less.
+///
+/// **The scene is the shipped file, not a copy of it.** This was written as inlined JSON that
+/// restated all fifteen blocked cells, and nothing compared the two — so the sentence "17
+/// converges at `h^(4/3)`", which four documents now carry, was held by a test measuring a
+/// different `Scene` value. `include_str!` cannot drift. It also makes this the only test that
+/// puts a *shipped* scene through [`verify`]; the walk in `scene.rs` builds and runs them, and
+/// the refinement path this exercises is reached by nothing else.
+#[test]
+fn a_notch_converges_at_the_corner_exponent() {
+    let notched = scene(include_str!("../scenes/17-a-busbar-with-a-notch.json"));
+    let b = verify(&notched, true).expect("the notched scene runs at three grids");
+    let order = order_of(&b, "resolution", "busbar", "resistance");
+    let corner = 4.0 / 3.0;
+    assert!(
+        (order / corner - 1.0).abs() < 0.01,
+        "a re-entrant corner gives 2*lambda = {corner:.4}; the sweep measured {order:.4}"
+    );
+
+    // **And the row that started all this says what it is.** The defect was
+    // `residual 0.000000 -> 0.000000 (281492.026%)`: two converged residuals printed as zero with
+    // a percentage of noise between them. The branch that replaced it was reached by one
+    // unrelated test and asserted by nothing, so the text and the format — which are the whole
+    // change — were held by nothing either. The negative is the one that would have caught the
+    // original row.
+    let report = b.render();
+    assert!(
+        report.contains("a solver diagnostic, not a discretisation"),
+        "the residual row does not say what it is:\n{report}"
+    );
+    assert!(
+        !report
+            .lines()
+            .any(|l| l.contains("residual") && l.contains('%')),
+        "a residual is still being given a percentage:\n{report}"
+    );
 }
 
 /// **A scene of pure systems has no finer statement, and says so instead of "verifying" a

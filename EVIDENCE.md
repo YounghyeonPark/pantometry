@@ -389,6 +389,116 @@ with no thickness, checked against `1/(A·h)` exactly and against the marched st
 figures — and the scene now states three terms it previously could not. The closed-form check
 still agrees to `1.1e-4`, on a stack that is the module.
 
+## A rate that a corner sets, and the sweep that would not run to measure it
+
+`17-a-busbar-with-a-notch` is titled "the resistance the shape actually has". Every check it had
+was an inequality or an identity — more than `ρL/A`, more than a series estimate, Tellegen, the
+books closing — and every one of them holds at any grid. The one thing that would have asked how
+much of the answer was grid was the resolution sweep, and it **refused to run**, on the grounds
+that a blocked cell is a one-cell notch and refining shrinks it.
+
+That is true of a refinement that keeps the *indices* and of no other. A cell at `(6, 0, 0)` on a
+1 mm grid occupies `x ∈ [6, 7] mm`; at 0.5 mm those millimetres are indices 12 and 13. Each
+blocked cell becomes its eight children and the notch is the same notch — held in millimetres by
+`a_notch_keeps_its_millimetres`, not in indices, because a count of eight is not the claim.
+
+```text
+      h        in-plane     R at t = 5 mm     above the limit    three-point order
+    1 mm        12 x 5      1.2391920e-05        +4.6525%
+    0.5         24 x 10     1.2059472e-05        +1.8449%           1.33534
+    0.25        48 x 20     1.1927724e-05        +0.7323%           1.33296
+    0.125       96 x 40     1.1875426e-05        +0.2906%           1.33318
+    0.0625     192 x 80     1.1854670e-05        +0.1153%           1.33367
+    0.03125    384 x 160    1.1846434e-05        +0.0458%
+```
+
+One cell through the thickness, because `R·t` is exactly independent of it — `6.195960000000e-08`
+at `nz` = 1, 2, 3, 5 and 8, to twelve digits. That is what makes the table affordable: 0.0625 mm
+costs **1.1 s** that way against the **201 s** the same plane took at the shipped `nz = 5`. Read
+from the ten-digit CSV, because by 0.0625 mm the successive differences are 1e-5 of the value and
+seven digits stop resolving an order.
+
+**The rate is the closed form, and it is not two.** Current crowds into a re-entrant corner the way
+stress does. The conducting wedge at the notch root subtends `3π/2`, so the potential goes as
+`r^λ` with `λ = π/ω = 2/3` and the flux as `r^(-1/3)` — unbounded, at every grid. A resistance is a
+**quadratic** functional of that field, so its error goes as `h^(2λ) = h^(4/3)`. That is
+**1.33333**, against four measured orders that **bracket** it: 1.33534, 1.33296, 1.33318, 1.33367.
+The widest is 0.15% out and the other three are inside 0.03%, but the sequence is not monotone, and
+quoting the first three as a converging one would read tighter than it is — the spread is the
+subleading term, comparable at these grids to what is being measured.
+
+**And the reason first written here was a theorem about a different method.** It said "a resistance
+is an energy-norm quantity", which is the conforming-Galerkin identity `E_h − E = ‖u−u_h‖²_E`. By
+Dirichlet's principle that identity makes a voltage-driven resistor read **low**; every row above
+reads high. `Conductor` is not a Galerkin method — it is a cell-centred conductance network with
+harmonic-mean faces and `Σ g Δφ²` — and its face currents are exactly conservative per cell, so
+the argument is the **dual** one: a conservative current field is admissible for Thomson's
+principle, which makes every grid an *upper* bound, and the lumped `Σ g Δφ²` sits above the
+reconstruction's own quadrature by `(a²+b²)/2 − (a²+ab+b²)/3 = (a−b)²/6 ≥ 0`, cell by cell. The
+sign is *measured*, at all six grids; the dual argument is why it has to be that sign.
+
+This is worth more than the correction itself. The numbers were right, the exponent was right, the
+check passed, and the sentence explaining it predicted the **opposite sign** from the one every
+measurement showed. A justification is not tested by the thing it justifies agreeing.
+
+Every other convergence rate checked in this workspace is an **integer** — first order, second
+order, or an integrator's own, and the test names say which. This is the first that is not, and the
+first on a **singular** problem, and that is what makes the rate say something a value cannot.
+Every other quantity here
+converges: run a finer grid and the error goes away. Here it does not. The scene ships at 1 mm and
+is 4.65% from the limit, and the grid runs out before the answer does — not on the clock but on the
+**audit**: at 0.015625 mm the run is refused, its own 1e-9 drift budget reading 1.094e-9 after 95 s,
+floating-point noise over 246 k cells crossing a tolerance written for a scene a thousandth the
+size. The finest statement this scene can make about itself still has 0.046% in it. The useful
+thing about a notch is not its resistance, it is that no grid you can reach gives you the
+resistance and the rate tells you how far you are.
+
+So the scene keeps its 1 mm cells and states the error instead of spending a grid on it, checked
+against the Richardson limit at the measured `p = 4/3` — `1.184101e-05 ohm`, which is seven digits
+and all that the finest three pairs (1.1841016, 1.1841012, 1.1841016e-05) earn. **The limit is not
+a second implementation.**
+It is this solver's own answer extrapolated along a rate a closed form predicts and a separate test
+measures — which is the distinction the section above this one is about, from the other side.
+
+## A percentage of 4.08e-17, printed as a discretisation
+
+Making that sweep run produced this, under a heading that says "what moved is discretisation":
+
+```text
+  busbar   residual   0.000000 -> 0.000000  (281492.026%)
+```
+
+The values are 7.793e-13 and 6.644e-13 — two converged conjugate-gradient residuals, printed as
+zero by a `{:.6}` chosen for temperatures. The denominator is the **4.08e-17** the residual wobbled
+by between the first and second frame of the *base* run, which is the solver stopping at a
+different iterate on two solves of the same system. The header says the grid did it. The same sweep
+reported the residual "converging at order **-0.77**" in a column beside four real ones.
+
+**Flooring the denominator does not repair it, and that is the interesting part.** The wobble is
+5.2e-5 of the residual's own magnitude — orders of magnitude above any rounding floor — because it
+is real variation in a real quantity. The quantity converges to nothing: refine the grid and the
+iteration count changes, and the residual is wherever the iteration crossed its tolerance. No
+numerical rule separates this row from the others, because what separates it is what the number
+*means*.
+
+`verify::DIAGNOSTICS` names the five labels the thirty scenes emit that describe the solve rather
+than the world — a residual, a divergence a projection removes, a `div B` a Yee grid preserves, a
+wavefunction norm, a cell Reynolds number. They print their values with no percentage, get no
+order, and stay out of `Sweep::worst`, which the window sweep raises a finding on — held by a unit
+test that calls `compare` directly, because the filter was measured to be unreachable from any
+scene: deleting it left both workspaces green.
+
+A list goes stale in silence, and one pin was not enough. The scene walk pins all **47** labels
+against the classification, the **length** of the list itself (the first pin constrains only the
+intersection, so two invented labels passed), and the **six** domain/label pairs that carry a
+diagnostic today (`is_diagnostic` keys on the label alone, so a new domain reporting `norm` as its
+answer would vanish from the sweep in silence).
+
+The near misses are the argument for a list rather than a heuristic: `invariant` is the energy an
+FDTD scheme conserves — a physical quantity that converges — and `unevenness` and `ring over core`
+are what `18-an-espresso-shot` is asking, not how well it was solved. All three are dimensionless,
+all three sit at a value the physics holds them near, and all three are answers.
+
 ## What the audit tolerance is really measuring
 
 A conservation audit needs a tolerance, and the right one is a property of the

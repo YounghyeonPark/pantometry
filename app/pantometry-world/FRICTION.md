@@ -11,9 +11,10 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-three of the thirty-nine are fixed**, and six are recorded rather than actioned. The reasons
+**Thirty-five of the forty-two are fixed**, and seven are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
-one because it is documented rather than changed, and the rest on scope. The entries are
+one because it is documented rather than changed, one because the flag it wants is a breaking
+change to a published crate for five readings in forty-seven, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
 to see that the answer to "this is awkward" was to change the library rather than to work
 around it. Each fixed entry says what was done.
@@ -597,7 +598,8 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Thirty-nine findings, and the source has shifted seven times.
+Forty-two findings, and the source has shifted ten times — the table below has eleven rows and
+that sentence said "seven" through four of them.
 
 | how many | where they came from |
 | --- | --- |
@@ -611,13 +613,25 @@ Thirty-nine findings, and the source has shifted seven times.
 | 30, 31 | **making an unreachable domain reachable**, which is where the layers above it show what they assumed |
 | 33 | **the audit refusing three correct runs in one sitting**, all with the same shape |
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
+| 35–42 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
 
-The last two rows are the ones a reader should take away, because neither is "use the API and see
-what hurts". Building the next domain and pulling out a layer are both cheap, and each finds a
+**Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
+should take away, because neither is "use the API and see what hurts". Building the next domain and
+pulling out a layer are both cheap, and each finds a
 class of thing the other cannot: a domain finds what the layers above it assumed, and a layer
 finds what one crate doing everything had hidden.
 
-Twenty-eight are fixed. That line said "ten" until a test counted them, which is the failure
+**The last row is a third, and it is the cheapest of all.** Eight findings came from reading the
+shipped scenes and asking, one at a time, whether each poses a question somebody would recognise.
+Every one of those scenes ran, conserved to 1e-9, and passed a closed-form check. A power module
+whose junction temperature was 32.5% wrong, a housing that was a vacuum, a shot that was a quarter
+of one, a notch nobody could measure the grid of: none of them was a bug, and all of them were
+wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
+whether the file describes anything.
+
+Thirty-five are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+seven findings after that — the test counts the *summary* at the top of the file, and this sentence
+is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
 count is now checked by `friction_counts.rs` against the headings, because the author evidently
 cannot do it reliably and a reader cannot do it at a glance.
@@ -1145,6 +1159,150 @@ the sweep reported the whole refined scene as **refused**, and this scene had be
 resolution sweep since it shipped. It skips with a reason now. Refining the two in step is a
 statement about two domains at once, which `DomainSpec::refined` cannot make and `Scene::refined`
 could; that is left undone rather than done wrongly.
+
+---
+
+## 40. A reading cannot say whether it is an answer or a statement about the solve
+
+`Reading` carries a domain, a label, a value and a unit. Nothing in it separates *what the
+simulation computed* from *how well it computed it*, and both come back in the same `Vec` from the
+same method. A consumer that compares readings between two runs — which is exactly what a
+convergence study is — has no way to tell them apart, and will compare them all.
+
+Mine did. `pantometry verify --deep` reruns a scene at twice the grid under a heading that says
+"what moved is discretisation", and on `17-a-busbar-with-a-notch` it printed:
+
+```text
+  busbar   residual   0.000000 -> 0.000000  (281492.026%)
+```
+
+Every part of that row is wrong. The two values are 7.793e-13 and 6.644e-13 — both converged,
+printed as zero by a `{:.6}` that was chosen for temperatures. The denominator is the **4.08e-17**
+the residual wobbled by between the first and second frame of the base run, which is conjugate
+gradients stopping at a different iterate. And the header attributes the result to the grid. The
+same sweep also measured the residual "converging at order **-0.77**", in a column beside four real
+ones.
+
+**Flooring the denominator does not fix it, and measuring says why.** The wobble is 5.2e-5 of the
+residual's own magnitude — far above any rounding floor, because it is real variation in a real
+quantity. The quantity is simply not one that converges to anything: refining the grid changes the
+iteration count, and the residual is wherever the iteration crossed its tolerance. The
+discriminator is not numerical, it is what the number *means*.
+
+`Conductor`'s own documentation is clear about which it is, and is right to keep it:
+
+> **The residual is a reading**, not merely an internal number, and that is the point of having it
+> here: an iterative solve that quietly stopped early produces a field shaped like an answer, and
+> the only thing that would ever say otherwise is a column somebody can look at.
+
+**Worked around, in the consumer, with the cost written down.** `verify::DIAGNOSTICS` names the
+five labels the shipped scenes emit that describe the solve — a residual, a `divergence` a
+projection removes, a `div B` a Yee grid preserves, a wavefunction norm, and a cell Reynolds
+number. They print their two values and no percentage, and they are kept out of `Sweep::worst`,
+which the window sweep raises a finding on: a residual that moved would otherwise have fired it
+with a message about the scene's answer depending on `frames`.
+
+A list is a shape that goes stale in silence, and it took three pins to make one safe. The scene
+walk collects every `(label, unit)` the thirty scenes emit and pins all **47** against
+`is_diagnostic`; it pins the length of `DIAGNOSTICS` itself, because that first pin constrains only
+the *intersection* — adding `"flux"` and `"peak "`, the second a trailing-space near-miss of a live
+answer label, left the whole walk green; and it pins the **six** domain/label pairs that carry a
+diagnostic, because `is_diagnostic` keys on the label alone and a new domain reporting `norm` as its
+*answer* would otherwise be dropped from the sweep with nothing to say so.
+
+**Not fixed in the library, and the reason is the field list.** `Reading`'s fields are public, so
+adding one is a breaking change to a published crate for a flag that five readings in forty-seven
+need. The right shape is probably a constructor — `Reading::diagnostic(...)` beside
+`Reading::new(...)` — with the flag behind a method, which is additive; it is worth doing at the
+next break rather than on its own.
+
+---
+
+## 41. A scene named for an espresso shot pulled a quarter of one
+
+`18-an-espresso-shot` ran for **eight seconds** and delivered 3.28 g from a 4.29 g dose: **4.81%
+extraction**, where a shot is pulled to 18–22%. Under that the cup is sour and thin; 4.81% is not
+a weak shot, it is the first fifth of one.
+
+**Nothing failed, and the reason is the shape of every check it had.** All of them are about the
+*comparison* between two baskets — a flow ratio, a strength ordering, a ring against a core — and
+Darcy at a fixed pressure through a fixed bed gives a constant flow, so every one of them holds at
+any length. A scene can be internally consistent, conserve to 1e-9, agree with a closed form to six
+digits, and describe something nobody would recognise.
+
+**Fixed**: 25 s, which is a shot. 10.26 g from 4.29 g is **19.90%** at 8.31% TDS, a 2.4:1 ratio. The
+comparison it was built for is unchanged — the flow ratio measures 1.786775 either way — and the
+channelling reads harder for it: the gapped basket pours **18.34 g at 4.82% TDS against 10.26 g at
+8.31%**, nearly twice the liquid at 58% of the strength.
+
+The check now asserts the yield lands in 18–22%, as a band rather than a number, because what makes
+this a shot is that it is in the range a barista pulls to and a drift out of it either way is worth
+knowing about.
+
+---
+
+## 42. A notch's sweep refused to run, for a reason that was true of the wrong refinement
+
+`DomainSpec::refined` doubles every grid in a scene so `verify` can say how much of an answer is
+discretisation. On a conductor with blocked cells it refused, and the refusal was reasoned:
+
+> a blocked cell is a one-cell notch, so refining shrinks it — a different geometry, not a finer
+> one
+
+That is true of a refinement that keeps the **indices** and of no other. A cell at `(6, 0, 0)` on a
+1 mm grid occupies `x ∈ [6, 7] mm`; at 0.5 mm those same millimetres are indices 12 and 13. Each
+blocked cell becomes its **eight children** and the notch is the same notch — which a test now
+asserts in millimetres, not in indices, because a count of eight is not the claim.
+
+**What the refusal cost was the measurement.** `17-a-busbar-with-a-notch` is titled "the resistance
+the shape actually has", and every check it had was an inequality or an identity: more than
+`ρL/A`, more than a series estimate, Tellegen, the books closing. All hold at any grid. Nobody
+could ask how much of the resistance was grid, because the one thing that would have asked refused
+to run.
+
+It is **4.65%**, and it is not waiting for a finer grid:
+
+```text
+      h        in-plane     R at t = 5 mm     above the limit    three-point order
+    1 mm        12 x 5      1.2391920e-05        +4.6525%
+    0.5         24 x 10     1.2059472e-05        +1.8449%           1.33534
+    0.25        48 x 20     1.1927724e-05        +0.7323%           1.33296
+    0.125       96 x 40     1.1875426e-05        +0.2906%           1.33318
+    0.0625     192 x 80     1.1854670e-05        +0.1153%           1.33367
+    0.03125    384 x 160    1.1846434e-05        +0.0458%
+```
+
+Current crowds into a re-entrant corner the way stress does. The conducting wedge at the notch root
+has an interior angle of `3π/2`, so the potential goes as `r^λ` with `λ = π/ω = 2/3` and the flux
+as `r^(-1/3)`, unbounded. A resistance is a **quadratic** functional of that field, so it converges
+as `h^(2λ) = h^(4/3)` — **1.33333**, against four measured orders that bracket it rather than
+descend to it.
+
+The slot is one cell wide at the shipped grid, so the two notch roots are `h` apart there and the
+corner is not resolved at all. That is where the 4.65% is.
+
+**Fixed as a measurement, not as a grid**, and the grid runs out first anyway. `R·t` is exactly
+independent of the thickness — `6.195960000000e-08` at `nz` = 1, 2, 3, 5 and 8, to twelve digits —
+so the plane can be refined cheaply: 0.0625 mm costs 1.1 s that way against the 201 s the same
+plane took at the shipped `nz = 5`. But 0.015625 mm is **refused**, on the audit rather than the
+clock: the scene's own 1e-9
+drift budget reads 1.094e-9 after 95 s, floating-point noise over 246 k cells crossing a tolerance
+written for a scene a thousandth the size.
+
+So the scene keeps its 1 mm cells and gains a check against the Richardson limit at the measured
+`p = 4/3` — `1.184101e-05 ohm`, seven digits being what the finest three pairs earn — and the
+discretisation error it ships with is stated rather than discovered. A separate test holds the
+`4/3` itself, which is a **rate** and so the one kind of check a second copy of the same arithmetic
+cannot satisfy.
+
+**And the reason first written for it was a theorem about a different method.** `physics-checker`
+confirmed `λ = 2/3`, the rate, the limit and every percentage — and found that "a resistance is an
+energy-norm quantity" is the conforming-Galerkin identity, which by Dirichlet's principle makes a
+voltage-driven resistor read **low** while every grid above reads high. `Conductor` is a cell-centred
+conductance network, not a Galerkin method; its face currents are conservative per cell, so the
+argument is the dual one and Thomson's principle makes every grid an *upper* bound. The numbers were
+right, the check passed, and the sentence explaining it predicted the opposite sign from the one
+every measurement showed.
 
 ---
 

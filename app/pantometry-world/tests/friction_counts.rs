@@ -13,7 +13,7 @@
 
 /// Words for the numbers the summary is likely to use. Written out because the file is prose and
 /// prose does not say "15".
-const WORDS: [&str; 41] = [
+const WORDS: [&str; 46] = [
     "zero",
     "one",
     "two",
@@ -55,6 +55,11 @@ const WORDS: [&str; 41] = [
     "thirty-eight",
     "thirty-nine",
     "forty",
+    "forty-one",
+    "forty-two",
+    "forty-three",
+    "forty-four",
+    "forty-five",
 ];
 
 fn friction() -> Option<String> {

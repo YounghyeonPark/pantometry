@@ -853,6 +853,11 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // Which shipped scenes solve a field on a grid and answer it as a lump, collected as the
     // walk goes and pinned below. See `verify::UNIFORM_FIELD` for the measurement and the corpus.
     let mut flat: Vec<String> = Vec::new();
+    // Every `(label, unit)` any shipped scene reports, collected as the walk goes and pinned
+    // below. See `verify::DIAGNOSTICS` for what the pin is holding and why it has to be a list.
+    let mut emitted: Vec<(String, &'static str)> = Vec::new();
+    // And *who* emits a diagnostic label, which the pair above cannot see. See the pin below.
+    let mut diagnosed: Vec<(String, String)> = Vec::new();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
         .expect("the scenes directory is there")
@@ -879,6 +884,21 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         let frames = world
             .run()
             .unwrap_or_else(|v| panic!("{name} ({title}) stopped conserving: {v}"));
+
+        for frame in &frames {
+            for r in &frame.readings {
+                let pair = (r.label.clone(), r.unit);
+                if !emitted.contains(&pair) {
+                    emitted.push(pair);
+                }
+                if pantometry_world::verify::is_diagnostic(&r.label) {
+                    let who = (r.domain.clone(), r.label.clone());
+                    if !diagnosed.contains(&who) {
+                        diagnosed.push(who);
+                    }
+                }
+            }
+        }
 
         let last = frames.last().expect("a run produces frames");
         // The crate's only guard against a scene that checks nothing. It used to be an
@@ -1622,6 +1642,30 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             // Measured 12.392 uohm, against 8.275 for the full section and 9.310 for the naive
             // series. A bound rather than the measurement, because the measurement is what the
             // code produced and a test that asserts it checks nothing.
+            // **"The resistance the shape actually has"** — and until now nothing said what that
+            // was. Every check below is an inequality or an identity: more than `rho L/A`, more
+            // than a series estimate, Tellegen, the books closing. All of them hold at any grid,
+            // and the sweep that would have asked about the grid **refused to run** — on the
+            // reasoning that a blocked cell is one cell, so refining shrinks it. A blocked cell is
+            // a box; it refines into its eight children and the notch keeps its millimetres. See
+            // `a_notch_keeps_its_millimetres` in the battery's own tests.
+            //
+            // With the sweep running, the answer is that this grid is **4.65% high**, and that the
+            // error is not waiting for a finer grid. Current crowds into a re-entrant corner the
+            // way stress does: the conducting wedge at the notch root has an interior angle of
+            // `3*pi/2`, so the potential goes as `r^lambda` with `lambda = pi/omega = 2/3` and the
+            // flux as `r^(-1/3)`, unbounded. A resistance is a *quadratic* functional of that
+            // field, so it converges as `h^(2*lambda) = h^(4/3)` and not as `h^2`. Measured
+            // 1.33534, 1.33296, 1.33318, 1.33367 across six grids, which bracket 4/3 rather than
+            // descend to it; `a_notch_converges_at_the_corner_exponent` holds it and says why.
+            //
+            // The slot is **one cell wide** here, so at this grid the two notch roots are exactly
+            // `h` apart and the corner is not resolved at all. The ligament is two cells and stays
+            // two cells in millimetres at every refinement; what two cells do not resolve is the
+            // corner. Refining the plane is cheap — `R*t` is exactly independent of the thickness,
+            // so 0.0625 mm costs 1.1 s — but the scene *refuses* 0.015625 mm, its own 1e-9 drift
+            // budget reading 1.094e-9 over 246 k cells. The finest thing it can say about itself
+            // still has 0.046% in it.
             "17-a-busbar-with-a-notch.json" => {
                 let bar = world
                     .simulation()
@@ -1640,6 +1684,35 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 assert!(
                     got > naive,
                     "{name}: spreading costs more than a series estimate:                      {got:.4e} against {naive:.4e}"
+                );
+
+                // **And how far this grid is from the shape's own answer.** Richardson at the
+                // measured `p = 4/3` over the 8x and 16x runs puts the `h -> 0` resistance at
+                // 1.1841011e-05 ohm. That number is not a second implementation of this one — it
+                // is this one's own limit, extrapolated along a rate that a closed form predicts
+                // and a separate test measures — so the comparison is against the shape rather
+                // than against a copy of the arithmetic.
+                //
+                // **Bracketed rather than bounded**, and the reason is what a one-sided band
+                // turned out to admit. `(0.0..5.0)` left 0.33% of headroom upward and **4.45%**
+                // downward, so a resistivity typed as 1.672e-8 instead of 1.724e-8 — a 3% slip in
+                // a copper value — passed, and the two checks above cannot see a resistivity
+                // change at all because they restate `rho` from the same file. It also pinned
+                // nothing: any figure in `[0, 5)` passed, while four documents state **4.65%**.
+                //
+                // Nothing here is random and nothing consults a clock, so this number is exact
+                // and a band around it is a statement rather than a hedge. The width is for the
+                // last digit of the extrapolation, not for the run.
+                // The finest three pairs give 1.1841016, 1.1841012 and 1.1841016e-05, so
+                // 1.184101e-05 is what is earned and the eighth digit is not. This was
+                // 1.1841011e-05, from the 8x/16x pair alone, which the 16x/32x pair puts 4e-7 low.
+                let limit = 1.1841016e-5;
+                let excess = (got / limit - 1.0) * 100.0;
+                println!("  {name}: {excess:.4}% above the h -> 0 resistance of the shape");
+                assert!(
+                    (4.5..4.8).contains(&excess),
+                    "{name}: {got:.7e} against the extrapolated {limit:.7e} — {excess:.4}%, and \
+                     four documents say 4.65%"
                 );
 
                 // Tellegen, through the scene format: the power from the field equals the power
@@ -1689,6 +1762,16 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             // ambiguous -- a bed that is simply coarser all through would give the first and not
             // the second.
             "18-an-espresso-shot.json" => {
+                // **It ran for eight seconds and called itself a shot.** Every claim below is
+                // about the *comparison* between two baskets — a flow ratio, a strength ordering,
+                // a ring against a core — and all of them held at any length, because Darcy at a
+                // fixed pressure through a fixed bed gives a constant flow. So nothing failed, and
+                // the scene delivered 3.28 g at **4.81% extraction** where a shot is 18–22%: a
+                // quarter of one, on a scene named for it.
+                //
+                // Twenty-five seconds is a shot. The comparison is unchanged — the flow ratio
+                // measures 1.786775 either way — and the channelling reads harder for it: the
+                // gapped basket pours nearly twice the liquid at 58% of the strength.
                 let read = |domain: &str, label: &str| {
                     last.readings
                         .iter()
@@ -1741,6 +1824,22 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 assert!(
                     bad_tds < even_tds,
                     "{name}: and carry less coffee in it: {bad_tds:.3}% against {even_tds:.3}%"
+                );
+
+                // **And it is a shot**, which is the claim the scene's name makes and nothing
+                // checked. Extraction yield is the mass dissolved over the mass of dry coffee, and
+                // 18–22% is where a shot is pulled — under it the cup is sour and thin, over it
+                // bitter. The even basket measures 19.90%, and its 10.26 g from a 4.29 g dose is a
+                // 2.4:1 ratio, a normal shot.
+                //
+                // Asserted as a band rather than a number: what makes this a shot is that it lands
+                // in the range a barista pulls to, and a scene that drifted out of it either way
+                // would be worth knowing about.
+                let yield_pct = read("even", "yield");
+                println!("  {name}: the even basket extracts {yield_pct:.4}% of its dose");
+                assert!(
+                    (18.0..22.0).contains(&yield_pct),
+                    "{name}: a shot is pulled to 18-22% extraction; this is {yield_pct:.4}%"
                 );
 
                 // The diagnosis, which is the reading that separates the two hypotheses.
@@ -3083,6 +3182,136 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // its pulse stopped being a single cell, and `29-a-designed-bracket-becomes-cells` when a face
     // could be cooled only where it is bolted — each visible here as a line removed rather than as
     // a claim, which is what a pin is for.
+    // **A reading is an answer or a statement about the solve, and the sweep has to know which.**
+    //
+    // `verify::DIAGNOSTICS` is a list of labels, which is a shape that goes stale in silence: a
+    // domain that gains a residual would be compared across grids as though it converged to
+    // something, and nothing would say. This is what stops that. It pins all **47** labels the
+    // thirty scenes emit, so a new one fails here and has to be decided about.
+    //
+    // What the sweep did without it, on `17-a-busbar-with-a-notch`:
+    //
+    // ```text
+    //   busbar   residual   0.000000 -> 0.000000  (281492.026%)
+    // ```
+    //
+    // Two converged residuals, 7.793e-13 and 6.644e-13, divided by the 4.08e-17 the first one
+    // wobbled by between two frames of the same run — conjugate gradients stopping at a different
+    // iterate — under a heading that says "what moved is discretisation". It also measured the
+    // residual "converging" at order **-0.77**, in a column beside four real ones.
+    //
+    // The five are a residual (17, 25), a divergence a projection removes (26), a `div B` a Yee
+    // grid preserves (27), a wavefunction norm (28), and a cell Reynolds number (26). Each has a
+    // value the solver holds it at, so what it reads says nothing about the answer. The near
+    // misses are worth naming: `invariant` (27) is the *energy* an FDTD scheme conserves — a
+    // physical quantity that converges — and `unevenness` and `ring over core` (18) are what
+    // scene 18 is asking, not how well it was solved.
+    // **The list itself, which the pin below cannot reach.** That pin constrains the
+    // *intersection* of what the scenes emit with `DIAGNOSTICS`, so a label in `DIAGNOSTICS` that
+    // no scene emits changes nothing. Measured: adding `"flux"` and `"peak "` — the second a
+    // trailing-space near-miss of a live answer label, which reads in the source as though the
+    // list covered `peak` — left the whole thirty-scene walk green. Every entry has to be one a
+    // scene actually reports.
+    assert_eq!(
+        pantometry_world::verify::DIAGNOSTICS.len(),
+        5,
+        "the classification changed size; the lists below and the prose that quotes them have to \
+         change with it"
+    );
+
+    // **And who emits one**, which `(label, unit)` cannot see: `is_diagnostic` keys on the label
+    // alone, so a *new* domain reporting `norm` as its answer — a displacement norm, say — would
+    // be silently dropped from the sweep while `norm []` stayed in the list below unchanged.
+    // Six domains across five scenes, and a seventh is a decision, not a detail.
+    diagnosed.sort();
+    assert_eq!(
+        diagnosed
+            .iter()
+            .map(|(d, l)| format!("{d}/{l}"))
+            .collect::<Vec<_>>(),
+        [
+            "busbar/residual",
+            "coolant/cell Reynolds",
+            "coolant/divergence",
+            "particle/norm",
+            "resonator/div B",
+            "stress/residual",
+        ],
+        "a domain started or stopped reporting a solver diagnostic"
+    );
+
+    emitted.sort();
+    let (diagnostics, answers): (Vec<_>, Vec<_>) = emitted
+        .iter()
+        .partition(|(label, _)| pantometry_world::verify::is_diagnostic(label));
+    let named = |v: &[&(String, &'static str)]| -> Vec<String> {
+        v.iter().map(|(l, u)| format!("{l} [{u}]")).collect()
+    };
+    assert_eq!(
+        diagnostics.len(),
+        pantometry_world::verify::DIAGNOSTICS.len(),
+        "a label in DIAGNOSTICS that no shipped scene emits is a classification nothing checks"
+    );
+    assert_eq!(
+        named(&diagnostics),
+        [
+            "cell Reynolds []",
+            "div B []",
+            "divergence [m/s]",
+            "norm []",
+            "residual []",
+        ],
+        "the set of readings that describe the solve rather than the world has changed"
+    );
+    assert_eq!(
+        named(&answers),
+        [
+            "<E> [J]",
+            "<x> [m]",
+            "TDS [%]",
+            "absorbed [J]",
+            "bed temperature [C]",
+            "coldest [C]",
+            "current [A]",
+            "delivered [g]",
+            "dissipated [J]",
+            "dissipating [W]",
+            "electric [J]",
+            "field energy [J]",
+            "flow [g/s]",
+            "free strain []",
+            "generated [J]",
+            "housing [C]",
+            "invariant [J]",
+            "kinetic energy [J]",
+            "magnetic [J]",
+            "mean [C]",
+            "mean speed [m/s]",
+            "melted [mm3]",
+            "outlet temperature [C]",
+            "peak [C]",
+            "peak [Pa]",
+            "peak speed [m/s]",
+            "reserve [J]",
+            "resistance [ohm]",
+            "ring over core []",
+            "spent [J]",
+            "stator [C]",
+            "strain energy [J]",
+            "strain x []",
+            "strain y []",
+            "strain z []",
+            "temperature [C]",
+            "unevenness []",
+            "volume change []",
+            "winding [C]",
+            "work driven in [J]",
+            "work in [J]",
+            "yield [%]",
+        ],
+        "a scene reports something new, and the sweep has to be told whether it is an answer"
+    );
+
     flat.sort();
     assert_eq!(
         flat,

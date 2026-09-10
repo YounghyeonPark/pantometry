@@ -1,7 +1,7 @@
 {
   "title": "an espresso shot, and the same basket with a gap at its wall",
   "schedule": "multirate",
-  "duration_s": 8.0,
+  "duration_s": 25.0,
   "frames": 9,
   "conservation_tolerance": 1e-09,
   "domains": [
