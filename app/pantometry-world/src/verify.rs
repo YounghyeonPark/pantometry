@@ -103,6 +103,17 @@ pub struct Measured {
     /// converged. Measured against the true answer, that scene is 14% out at its shipped frame
     /// count.
     pub span: BTreeMap<(String, &'static str), f64>,
+    /// How far short of its own steady state each thermal block stopped, as `(domain, kelvin,
+    /// the range its readings covered)`.
+    ///
+    /// **"Did it arrive" was a judgement and this makes it a measurement.** A design answer is a
+    /// steady-state answer, and the only way to know a run had reached one was to look at the last
+    /// two frames and decide. `Solid3D::steady_state` solves the balance the march converges to —
+    /// the same operator, not a second one — so the distance between them is a number.
+    ///
+    /// Empty for a domain that has no steady state to be short of: one that melts, or one with
+    /// heat coming in and nowhere for it to go.
+    pub arrival: Vec<(String, f64, f64)>,
     /// Each **connected body** in the last frame, as `(domain, cells, peak - coldest)`.
     ///
     /// **Per body, not per domain, and that distinction is load-bearing.** A domain's `peak` and
@@ -309,6 +320,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts) -> Result<Measured, String> {
         }
     }
     Ok(Measured {
+        arrival: how_far_from_settled(&mut world, &span),
         bodies: frames.last().map(connected_bodies).unwrap_or_default(),
         readings,
         span: span.into_iter().map(|(k, (lo, hi))| (k, hi - lo)).collect(),
@@ -380,6 +392,42 @@ fn representation_scale(unit: &str, magnitude: f64) -> f64 {
 /// Public because  pins the set of shipped scenes this names, and a pin against a second
 /// copy of the walk would agree with itself while the two drifted apart.
 ///
+/// How far short of its own steady state each thermal block stopped, in kelvin.
+///
+/// Solves each block where it stands and reports how far the solve had to move it. A block that
+/// arrived moves by nothing; one stopped halfway moves by what is left. Domains with no steady
+/// state — melting, or heat with nowhere to go — are left out rather than reported as zero, which
+/// is the difference between "it arrived" and "the question does not apply".
+///
+/// Called after the run, on the world the run left behind, so the block is at the last frame.
+fn how_far_from_settled(
+    world: &mut World,
+    span: &BTreeMap<(String, &'static str), (f64, f64)>,
+) -> Vec<(String, f64, f64)> {
+    let names: Vec<String> = world
+        .simulation()
+        .domains()
+        .map(|d| d.name().to_string())
+        .collect();
+    let mut out = Vec::new();
+    for name in names {
+        let travel = span
+            .get(&(name.clone(), "C"))
+            .map(|(lo, hi)| hi - lo)
+            .unwrap_or(0.0);
+        let Some(block) = world
+            .simulation_mut()
+            .domain_as_mut::<pantometry::thermal::Solid3D>(&name)
+        else {
+            continue;
+        };
+        if let Ok(moved) = block.settle() {
+            out.push((name, moved, travel));
+        }
+    }
+    out
+}
+
 /// Each connected body in a frame's field panels, as `(domain, cells, peak - coldest)`.
 ///
 /// Six-connected over the cells whose value is finite — a void cell has no temperature and a
@@ -1691,6 +1739,54 @@ the other two refusals (worst step; not comparable to each other — the first i
             &self.resolution,
             false,
         );
+
+        // **How far each block stopped from its own balance.** Printed whenever there is one to
+        // print, clean or not, so "it arrived" is visibly a measurement rather than a section that
+        // never ran.
+        //
+        // # Why this is not a finding, which it was for an afternoon
+        //
+        // Every reading a *design* asks for is a steady-state one — a junction temperature, a
+        // margin, a rise above ambient — so a run that stopped on the way there is quoting a
+        // number its own length chose, and that reads like a finding. It was written as one, at a
+        // percent, and then measured against the shipped scenes:
+        //
+        // ```text
+        //    0.000%  24-a-power-module              0.000041 K
+        //    0.020%  30-two-phases-crossing         0.004503 K
+        //    0.211%  29-a-designed-bracket          0.046502 K
+        //    0.540%  25-what-140-kelvin-does        0.757912 K
+        //   10.385%  19-a-coating-stops-the-heat   18.693843 K
+        //   13.256%  15-a-hot-spot-in-a-block       7.953824 K
+        //   63.596%  23-a-part-radiating-to-its-lid 178.069152 K
+        // ```
+        //
+        // The last three are transient **on purpose**. `19`'s whole claim is the interface step
+        // before the front reaches the glass, and running it to steady state moves the steepest
+        // step off the interface and breaks it; `15` is a spot spreading; `23` is a part cooling
+        // from 300 °C, and the number it reports is how much it shed. There is no threshold that
+        // separates those from a run that stopped early, because what separates them is the
+        // *question the scene is asking*, and this format does not carry one.
+        //
+        // So it reports the number and leaves the judgement to a person, which is what a battery
+        // that measures rather than asserts should do when it cannot tell.
+        if !self.base.arrival.is_empty() {
+            let _ = writeln!(
+                out,
+                "\narrival (the balance solved where the run stopped; what moved was still to come)"
+            );
+            for (domain, moved, travel) in &self.base.arrival {
+                let share = if *travel > 0.0 {
+                    format!("{:.3}%", moved / travel * 100.0)
+                } else {
+                    "—".to_string()
+                };
+                let _ = writeln!(
+                    out,
+                    "  {domain:<14} {moved:>12.6} K still to come, {share} of the {travel:.4} C it covered"
+                );
+            }
+        }
 
         // Only for a scene that states `parts`. A heading over an empty list would be this
         // report claiming to have checked geometry a scene does not have; a scene that *does*

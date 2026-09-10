@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found thirty-seven places it is awkward, thirty-one of which have been changed — see
+has already found thirty-eight places it is awkward, thirty-two of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -251,6 +251,34 @@ pharmacokinetics, and the count of commits above does not include it.
   argument on it. The real limit is written down instead.
 
 ### Added
+
+- **A block's steady state, solved rather than marched to.** `Solid3D::steady_state` finds the
+  field at which every cell balances and `settle` puts a block at it. The residual is `flux_at` —
+  the function the sweep itself marches with — plus the source and the clearance pairs the sweep
+  applies beside it, so it finds the march's own fixed point rather than a second opinion about
+  where it is.
+
+  Successive over-relaxation with Newton on the diagonal, matrix-free.
+  `ThermalNetwork::steady_state` builds a dense Jacobian and factors it, which is right for a
+  handful of nodes and impossible for eight thousand cells.
+
+  Checked against the closed forms and against the march: a driven bar at `293.579509 K` solved
+  against `293.579508` from the series and `293.579507` marched; a radiating lump at `588.520214`
+  against the root of its own quartic to six decimals; and a pair across a clearance at
+  `388.5512/310.7172` against a march that needed **32 686 s** of simulated time to get there.
+
+  On the shipped bracket the solve moves the marched answer `0.0465 K` further, in **1.15 s**
+  against the 470 s that march cost each of nine test binaries.
+
+- **`verify` reports how far short of its own steady state a run stopped.** "Did it arrive" was a
+  judgement — look at the last two frames and decide — and it is a number now.
+
+  It is a **measurement rather than a finding**, and that took measuring. Written as a finding at
+  a percent, it named `19-a-coating-stops-the-heat`, `15-a-hot-spot-in-a-block` and
+  `23-a-part-radiating-to-its-lid`, all three of which are transient on purpose: `19`'s claim is
+  the interface step before the front reaches the glass, and running it to steady state moves the
+  steepest step off the interface and breaks it. What separates a deliberate transient from a run
+  cut short is the question the scene is asking, and this format does not carry one.
 
 - **A block's void can be air.** `Solid3D::air_in` fills it at a stated temperature with a film,
   and every solid face touching a void cell sheds `h · dx² · (T − T∞)` to it. A scene spells it

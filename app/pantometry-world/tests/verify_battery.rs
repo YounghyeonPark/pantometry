@@ -677,3 +677,103 @@ fn a_run_that_did_nothing_is_not_reported_as_flat() {
         "a block that never moved was reported as flat: {flat:?}"
     );
 }
+
+/// **How far a run stopped from its own steady state is a measurement, not a judgement.**
+///
+/// Every reading a design asks for is a steady-state one — a junction temperature, a margin, a rise
+/// above ambient — and the only way to know a run had reached one was to look at the last two
+/// frames and decide. `Solid3D::steady_state` solves the balance the march converges to, using the
+/// same operator, so the distance between them is a number.
+///
+/// Both directions, in one scene each: a bar run to ten time constants has arrived, and the same
+/// bar run to a tenth of one has not. What is asserted is the *ordering* and the scale, not a
+/// threshold — the report carries the number and this carries that the number means something.
+#[test]
+fn the_battery_says_how_far_a_run_stopped_from_its_balance() {
+    let bar = |seconds: f64| {
+        scene(&format!(
+            r#"{{
+  "title": "a bar warming",
+  "duration_s": {seconds},
+  "frames": 6,
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    {{ "kind": "block", "name": "bar", "cells": [10, 2, 2], "cell_mm": 3.0,
+      "initial_c": 20.0, "material": "copper",
+      "dissipation": [{{ "watts": 8.0, "from": [0, 0, 0], "to": [10, 2, 2] }}],
+      "cooling": [{{ "face": "x-max", "ambient_c": 20.0,
+        "convection_w_per_m2_k": 200.0, "area_cm2": 0.36 }}] }}
+  ]
+}}"#
+        ))
+    };
+
+    let arrived = verify(&bar(4000.0), false).expect("it runs");
+    let (_, moved, travel) = arrived
+        .base
+        .arrival
+        .first()
+        .unwrap_or_else(|| panic!("nothing was measured: {:?}", arrived.base.arrival));
+    println!("  4000 s: {moved:.6} K still to come of {travel:.4} C covered");
+    assert!(*travel > 1.0, "the run did nothing: {travel:.6}");
+    assert!(
+        moved / travel < 1e-3,
+        "a run of ten time constants should have arrived: {moved:.6} K of {travel:.4}"
+    );
+
+    let cut_short = verify(&bar(40.0), false).expect("it runs");
+    let (_, short_moved, short_travel) = cut_short
+        .base
+        .arrival
+        .first()
+        .expect("the short run is measured too");
+    println!("  40 s:   {short_moved:.6} K still to come of {short_travel:.4} C covered");
+    assert!(
+        short_moved / short_travel > 0.05,
+        "a run of a tenth of a time constant has not arrived: {short_moved:.6} K of \
+         {short_travel:.4}"
+    );
+    // The short run's answer really is the smaller one, which is what "still to come" means.
+    assert!(
+        short_moved > moved,
+        "the shorter run should have further to go: {short_moved:.6} against {moved:.6}"
+    );
+
+    // And it reaches the report a person reads.
+    let report = cut_short.render();
+    assert!(report.contains("still to come"), "{report}");
+}
+
+/// **A domain with no steady state to be short of is left out, not reported as arrived.**
+///
+/// The difference between "it arrived" and "the question does not apply". A block generating heat
+/// with every face insulated warms without limit; reporting it as zero kelvin from its balance
+/// would be a claim that it had one.
+#[test]
+fn a_domain_with_no_balance_is_left_out_of_the_arrival() {
+    let s = scene(
+        r#"{
+  "title": "a sealed bar",
+  "duration_s": 10.0,
+  "frames": 3,
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    { "kind": "block", "name": "sealed", "cells": [4, 2, 2], "cell_mm": 3.0,
+      "initial_c": 20.0, "material": "copper",
+      "dissipation": [{ "watts": 2.0, "from": [0, 0, 0], "to": [4, 2, 2] }] }
+  ]
+}"#,
+    );
+    let b = verify(&s, false).expect("it runs; it just never settles");
+    println!("  arrival: {:?}", b.base.arrival);
+    assert!(
+        b.base.arrival.is_empty(),
+        "a block that warms without limit has no balance to be short of: {:?}",
+        b.base.arrival
+    );
+    assert!(
+        !b.render().contains("still to come"),
+        "the report should not claim an arrival it did not measure:\n{}",
+        b.render()
+    );
+}

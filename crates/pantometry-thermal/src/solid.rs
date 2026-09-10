@@ -122,6 +122,15 @@ fn series_with_half_cell(film: f64, conductivity: f64, area: f64, dx: f64) -> f6
     1.0 / (1.0 / film + 1.0 / half)
 }
 
+/// How many Gauss-Seidel sweeps [`Solid3D::steady_state`] will take before reporting that it did
+/// not converge.
+///
+/// A **bound, not a budget**: the linear cases here converge in tens and the radiative ones in
+/// hundreds, and a block that has not settled in two thousand sweeps has something wrong with it
+/// that a longer wait will not fix. Bounded so a pathological input reports rather than spins,
+/// which is the same reason `ThermalNetwork::steady_state` bounds its Newton at eight.
+const STEADY_SWEEPS: usize = 2000;
+
 /// One outer face of a block.
 ///
 /// Named rather than indexed because a caller says which side of a part is exposed, and
@@ -1466,6 +1475,318 @@ impl Solid3D {
     /// The air in this block's void, as `(ambient, W·m⁻²·K⁻¹)`, if it has any.
     pub fn air(&self) -> Option<(Temperature, f64)> {
         self.air.map(|(t, h)| (Temperature::from_si(t), h))
+    }
+
+    /// The temperature field at which every cell balances, found without marching to it.
+    ///
+    /// # Why a march is not enough
+    ///
+    /// A design answer is a steady-state answer — a junction temperature, a margin, a rise above
+    /// ambient — and the only way to get one here was to run for several time constants and check
+    /// that it had stopped moving. That is expensive and it is easy to get wrong in the direction
+    /// that looks like success: `29-a-designed-bracket-becomes-cells` needed **900 s** from a cold
+    /// start, nine test binaries walk every shipped scene, and the app gate stopped fitting inside
+    /// ten minutes. The run was shortened by starting it near the answer, which is a way of
+    /// avoiding the question rather than answering it.
+    ///
+    /// # The same operator, not a second one
+    ///
+    /// The residual is `flux_at` — the function the sweep itself marches with — in watts, plus the
+    /// source and the radiative pairs the sweep applies beside it. So this solves the balance the
+    /// march converges to rather than a restatement of it, and the two agreeing is a statement
+    /// about the arithmetic rather than about two people writing the same formula twice.
+    ///
+    /// **Successive over-relaxation with Newton on the diagonal**, matrix-free.
+    /// `ThermalNetwork::steady_state` builds a dense Jacobian and factors it, which is right for a
+    /// handful of nodes and impossible here: the bracket is 8 112 cells and its Jacobian would be
+    /// 66 million entries. The discrete operator is diagonally dominant — a cell's diagonal is the
+    /// sum of its face conductances plus whatever it loses to an environment, and its off-diagonals
+    /// are those same face conductances — so sweeping in place converges, and the non-linear terms
+    /// (a film's `T⁴`, a clearance's pair exchange) are taken at their slope, which is Newton.
+    ///
+    /// **Plain Gauss-Seidel is far too slow and it was measured being so.** Its spectral radius on
+    /// an `n`-cell chain is `cos²(π/2n)`, so the sweeps needed grow as `n²`: a sixteen-cell bar
+    /// took **over two thousand** and hit the bound. Over-relaxing by `ω = 2/(1 + sin(π/n))` — the
+    /// optimal factor for a Poisson operator on that grid, with `n` the longest axis — makes it
+    /// grow as `n` instead. The operator here is not pure Poisson, so that `ω` is an estimate
+    /// rather than the optimum; it is clamped below 1.95 because over-relaxing past the true
+    /// optimum diverges where under-relaxing only costs sweeps.
+    ///
+    /// # What it refuses
+    ///
+    /// **A block with heat coming in and nowhere for it to go.** There is no steady state; it
+    /// warms without limit, and returning the last iterate would be a plausible temperature for a
+    /// balance that was never struck.
+    ///
+    /// **A block that melts.** The state of a mushy cell is its enthalpy and not its temperature,
+    /// so "the field at which every cell balances" is not a statement about temperature alone.
+    ///
+    /// **Not converging**, which is a real answer and is not this one.
+    pub fn steady_state(&self) -> Result<Vec<f64>, Violation> {
+        let (nx, ny, nz) = self.counts;
+        let dx = self.dx.to_si();
+        if self.latent_anywhere {
+            return Err(Violation::at(
+                &self.name,
+                "a block that melts has no steady temperature field: a mushy cell's state is its \
+                 enthalpy, and this solves for temperature",
+                f64::INFINITY,
+            ));
+        }
+        let supplied: f64 = self.source.iter().sum();
+        if supplied != 0.0 && self.exposed.is_empty() && self.air.is_none() && self.gaps.is_empty()
+        {
+            return Err(Violation::at(
+                &self.name,
+                "heat is generated and no face, void or clearance carries it away, so there is no \
+                 steady state — it warms without limit",
+                supplied,
+            ));
+        }
+        if self.worst_rate.is_nan() {
+            return Err(Violation::at(
+                &self.name,
+                "this block cannot be stepped, so it has no balance to solve",
+                f64::INFINITY,
+            ));
+        }
+
+        // From where the block is. For a linear problem the start does not matter; for a radiative
+        // one it is a better guess than ambient whenever the caller has already stepped, and no
+        // worse when they have not — the same reasoning `ThermalNetwork::steady_state` gives.
+        let mut t = self.cells.clone();
+
+        // The over-relaxation factor, from the longest axis.
+        let longest = nx.max(ny).max(nz).max(2) as f64;
+        let omega = (2.0 / (1.0 + (std::f64::consts::PI / longest).sin())).clamp(1.0, 1.95);
+
+        // Which connected body each cell belongs to, six-connected over the solid. A block with a
+        // clearance in it holds two objects that conduct to nothing of each other's, and each has
+        // a uniform mode of its own — see the correction below.
+        let body = self.bodies();
+        let count = body.iter().filter_map(|b| *b).max().map_or(0, |m| m + 1);
+
+        // The net watts a clearance's pairs bring to each cell, and their slope. Held per sweep
+        // rather than per cell: a pair is symmetric, so walking the list once fills both ends.
+        let mut gain = vec![0.0; t.len()];
+        let mut slope = vec![0.0; t.len()];
+
+        for round in 0..STEADY_SWEEPS {
+            for (a, b, coefficient) in &self.gaps {
+                let watts = coefficient * (t[*a].powi(4) - t[*b].powi(4));
+                gain[*a] -= watts;
+                gain[*b] += watts;
+                slope[*a] += 4.0 * coefficient * t[*a].powi(3);
+                slope[*b] += 4.0 * coefficient * t[*b].powi(3);
+            }
+
+            let mut moved: f64 = 0.0;
+            for k in 0..nz {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let c = i + nx * (j + ny * k);
+                        if self.void[c] {
+                            continue;
+                        }
+                        // The residual in watts: the sweep's own operator, plus what the sweep
+                        // applies beside it.
+                        let r = self.flux_at(&t, (i, j, k), c) * dx + self.source[c] + gain[c];
+                        // The diagonal: the face conductances this cell has, plus the slope of
+                        // everything that leaves it. `face_sum` is conductivities, so it is the
+                        // conductance divided by `dx`.
+                        let d = self.face_sum[c] * dx
+                            + self.loss_conductance_at(Temperature::from_si(t[c]), (i, j, k))
+                            + slope[c];
+                        // A cell with no conductance anywhere has no equation to solve, and a
+                        // `NaN` one has no answer. Written out rather than as a negated
+                        // comparison, which clippy asks for and is the clearer reading.
+                        if d.is_nan() || d <= 0.0 {
+                            continue;
+                        }
+                        let step = omega * r / d;
+                        t[c] += step;
+                        moved = moved.max(step.abs());
+                    }
+                }
+            }
+
+            for v in gain.iter_mut().chain(slope.iter_mut()) {
+                *v = 0.0;
+            }
+            // Converged when a whole sweep moves the field by less than a microkelvin. Absolute
+            // rather than relative to the span: a block settling *at* ambient has no span to be
+            // relative to, and a microkelvin is four orders below anything any scene here asserts.
+            // **The slow mode is a uniform shift, and it is one scalar equation.** Relaxation
+            // converges at a rate set by the *smallest* eigenvalue, and for a block whose
+            // conduction dwarfs what it loses that eigenvalue belongs to moving the whole field
+            // together: a 4x4x4 aluminium block losing through one face has 0.0128 W/K to its air
+            // against 0.668 W/K a face inside it, so the uniform mode decays by one part in a
+            // thousand a sweep. Measured, the step fell from 0.104 K to 0.031 K over eighteen
+            // hundred sweeps and the solve reported not converging.
+            //
+            // Face terms cancel under a uniform shift — every `T_j − T_i` is unchanged — so what
+            // resists one is exactly what leaves the block. `Σr / Σ(loss slope)` is that balance,
+            // and applying it kills the mode in a step. At the solution the residual is zero and
+            // so is the shift, so this cannot move a converged field.
+            let mut total = vec![0.0; count];
+            let mut resist = vec![0.0; count];
+            for k in 0..nz {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let c = i + nx * (j + ny * k);
+                        let Some(b) = body[c] else { continue };
+                        total[b] += self.flux_at(&t, (i, j, k), c) * dx + self.source[c];
+                        resist[b] +=
+                            self.loss_conductance_at(Temperature::from_si(t[c]), (i, j, k));
+                    }
+                }
+            }
+            // **A clearance's pair is a body's balance, not only its stiffness.** `flux_at` carries
+            // conduction and the films; the pair exchange the sweep applies beside it has to be
+            // added here too, or a body whose only path out is a clearance has a residual that
+            // never falls. Measured: a bar radiating 0.02 W across a gap climbed to 1205 K and sat
+            // there, its shift stuck at 2 K a sweep, because `total` said it was still holding all
+            // 0.02 W however hot it got.
+            //
+            // A pair resists a shift only when its two ends are in *different* bodies: move one
+            // object and the exchange changes, move both together and it does not. A pair inside
+            // one body cancels, exactly as a conducting face does.
+            for (a, b, coefficient) in &self.gaps {
+                let (Some(ba), Some(bb)) = (body[*a], body[*b]) else {
+                    continue;
+                };
+                let watts = coefficient * (t[*a].powi(4) - t[*b].powi(4));
+                total[ba] -= watts;
+                total[bb] += watts;
+                if ba == bb {
+                    continue;
+                }
+                resist[ba] += 4.0 * coefficient * t[*a].powi(3);
+                resist[bb] += 4.0 * coefficient * t[*b].powi(3);
+            }
+            for (b, r) in resist.iter().enumerate() {
+                if *r <= 0.0 {
+                    continue;
+                }
+                // **Damped, because the slope of a `T⁴` term is a bad guide far from the answer.**
+                // A body whose only path out is a clearance has a resistance of microwatts per
+                // kelvin near ambient, so the first Newton step from a cold start asks for tens of
+                // thousands of kelvin and the fourth power takes it to infinity. Measured: a bar
+                // radiating 0.4 W through a pair asked for 93 000 K and the solve reported
+                // diverging. Holding each step to a quarter of the body's own level makes the
+                // approach geometric — a factor of 1.25 a sweep, so any starting point is tens of
+                // sweeps away — and cannot pass through zero.
+                let mut mean = 0.0;
+                let mut cells = 0.0_f64;
+                for (c, v) in t.iter().enumerate() {
+                    if body[c] == Some(b) {
+                        mean += v;
+                        cells += 1.0;
+                    }
+                }
+                let cap = 0.25 * (mean / cells.max(1.0)).abs();
+                let shift = (total[b] / r).clamp(-cap, cap);
+                for (c, v) in t.iter_mut().enumerate() {
+                    if body[c] == Some(b) {
+                        *v += shift;
+                    }
+                }
+                moved = moved.max(shift.abs());
+            }
+
+            if round > 0 && moved < 1e-6 {
+                return Ok(t);
+            }
+            if t.iter().any(|v| !v.is_finite()) {
+                return Err(Violation::at(
+                    &self.name,
+                    "the steady-state balance diverged",
+                    f64::INFINITY,
+                ));
+            }
+        }
+
+        Err(Violation::at(
+            &self.name,
+            "the steady-state balance did not converge in the sweeps allowed",
+            supplied,
+        ))
+    }
+
+    /// Which connected body each cell belongs to, or `None` for a void cell.
+    ///
+    /// Six-connected over the solid. A block with a clearance in it holds two objects that conduct
+    /// to nothing of each other's, and [`steady_state`](Solid3D::steady_state) needs to know which
+    /// is which: a relaxation's slowest mode is moving a body as a whole, and there is one such
+    /// mode per body.
+    fn bodies(&self) -> Vec<Option<usize>> {
+        let (nx, ny, nz) = self.counts;
+        let mut label: Vec<Option<usize>> = vec![None; self.cells.len()];
+        let mut next = 0;
+        let at = |i: usize, j: usize, k: usize| i + nx * (j + ny * k);
+        for k0 in 0..nz {
+            for j0 in 0..ny {
+                for i0 in 0..nx {
+                    let start = at(i0, j0, k0);
+                    if self.void[start] || label[start].is_some() {
+                        continue;
+                    }
+                    label[start] = Some(next);
+                    // Iterative, because a 128³ block is two million cells and a stack that deep
+                    // is not a stack.
+                    let mut stack = vec![(i0, j0, k0)];
+                    while let Some((i, j, k)) = stack.pop() {
+                        let push = |i: usize,
+                                    j: usize,
+                                    k: usize,
+                                    s: &mut Vec<_>,
+                                    l: &mut Vec<Option<usize>>| {
+                            let c = at(i, j, k);
+                            if !self.void[c] && l[c].is_none() {
+                                l[c] = Some(next);
+                                s.push((i, j, k));
+                            }
+                        };
+                        if i > 0 {
+                            push(i - 1, j, k, &mut stack, &mut label);
+                        }
+                        if i + 1 < nx {
+                            push(i + 1, j, k, &mut stack, &mut label);
+                        }
+                        if j > 0 {
+                            push(i, j - 1, k, &mut stack, &mut label);
+                        }
+                        if j + 1 < ny {
+                            push(i, j + 1, k, &mut stack, &mut label);
+                        }
+                        if k > 0 {
+                            push(i, j, k - 1, &mut stack, &mut label);
+                        }
+                        if k + 1 < nz {
+                            push(i, j, k + 1, &mut stack, &mut label);
+                        }
+                    }
+                    next += 1;
+                }
+            }
+        }
+        label
+    }
+
+    /// Put this block **at** its steady state, and say how far it had to move.
+    ///
+    /// The answer in kelvin, as the largest change any cell took. A caller who wants to know
+    /// whether a run has arrived can march it and then read this: a run that settled moves by
+    /// nothing.
+    pub fn settle(&mut self) -> Result<f64, Violation> {
+        let field = self.steady_state()?;
+        let mut moved: f64 = 0.0;
+        for (c, v) in field.iter().enumerate() {
+            moved = moved.max((v - self.cells[c]).abs());
+            self.cells[c] = *v;
+        }
+        self.resolve();
+        Ok(moved)
     }
 
     /// How many faces of the solid touch void, which is the area the air acts on.

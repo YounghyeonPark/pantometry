@@ -93,7 +93,7 @@ thick ones are what a lumped model cannot tell you: the peak is well above it.*
 There is one consumer, `pantometry-world`, and its first job was not to be a good application but
 to use the SDK the way a stranger would.
 [`app/pantometry-world/FRICTION.md`](app/pantometry-world/FRICTION.md) is what it came back with:
-**thirty-seven findings, thirty-one fixed and six argued down in writing.** Not one of the
+**thirty-eight findings, thirty-two fixed and six argued down in writing.** Not one of the
 library's own tests could have found any of them — a test is written by somebody who already knows
 the shape.
 

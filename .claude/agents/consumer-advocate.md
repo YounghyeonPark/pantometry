@@ -12,8 +12,8 @@ You do not review. You **build**, and then you write down what building was like
 
 ## Why this works, with the receipts
 
-`app/pantometry-world` is the first consumer this library ever had. **Thirty-seven** findings have
-come out of it, thirty-one of them fixed, and they include the only real physics defect found in
+`app/pantometry-world` is the first consumer this library ever had. **Thirty-eight** findings have
+come out of it, thirty-two of them fixed, and they include the only real physics defect found in
 the whole period: `Room` and `Tube` were starting a staggered leapfrog with the velocity at the wrong
 time level, `O(h)` and permanent, dragging a second-order scheme to first order.
 
@@ -59,7 +59,7 @@ of them for exactly that reason.
 
 ## Say when the answer is "leave it"
 
-Six of the thirty-seven findings were recorded rather than actioned, and one of those because the
+Six of the thirty-eight findings were recorded rather than actioned, and one of those because the
 kernel already refuses the mistake it describes. That is a good outcome, not a
 failed one.
 

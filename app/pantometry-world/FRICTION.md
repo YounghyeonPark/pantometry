@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-one of the thirty-seven are fixed**, and six are recorded rather than actioned. The reasons
+**Thirty-two of the thirty-eight are fixed**, and six are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, and the rest on scope. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
@@ -597,7 +597,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Thirty-seven findings, and the source has shifted seven times.
+Thirty-eight findings, and the source has shifted seven times.
 
 | how many | where they came from |
 | --- | --- |
@@ -1041,6 +1041,68 @@ area to the block faces they touch carries convection *and* radiation over that 
 carries only convection. The bars came out 33.0 K against 22.0. Air models a closed cavity; a
 stated area models a surface open to the room, and the Biot number of 8e-5 across a copper bar is
 what makes attaching it to any subset of that bar's cells exact.
+
+---
+
+## 38. A design answer is a steady-state answer, and the only way to get one was to march
+
+Every reading a designer asks for is a number a part **settles at**: a junction temperature, a
+margin, a rise above ambient. There was one way to get one — run for several time constants and
+look at the last two frames to decide whether it had stopped moving.
+
+That is expensive, and it is easy to get wrong in the direction that looks like success.
+`29-a-designed-bracket-becomes-cells` needed **900 s** from a cold start; nine test binaries walk
+every shipped scene, so the scene walk went from 65 s to 534 s and the app gate stopped fitting
+inside ten minutes. It was shortened by starting the run near the answer — which avoids the
+question rather than answering it.
+
+**Fixed.** `Solid3D::steady_state` solves the balance the march converges to, and `settle` puts a
+block at it. The residual is `flux_at`, the function the sweep itself marches with, plus the source
+and the clearance pairs the sweep applies beside it — so it finds the march's own fixed point
+rather than a second opinion about where it is.
+
+On the bracket: the marched answer is 52.4420 °C and the solve moves it **0.0465 K** further, in
+**1.15 s** against the 470 s that march cost each of nine test binaries.
+
+**Successive over-relaxation with Newton on the diagonal**, matrix-free.
+`ThermalNetwork::steady_state` builds a dense Jacobian and factors it, which is right for a handful
+of nodes and impossible here — the bracket's would be 66 million entries.
+
+Three things it needed that plain relaxation does not, each measured failing first:
+
+**Over-relaxation.** Gauss-Seidel's spectral radius on an `n`-cell chain is `cos²(π/2n)`, so its
+sweeps grow as `n²`: a sixteen-cell bar took over two thousand and hit the bound.
+
+**A uniform correction per body.** Relaxation converges at the rate of the *smallest* eigenvalue,
+and for a block whose conduction dwarfs what it loses that eigenvalue belongs to moving the whole
+field together. A 4×4×4 aluminium block losing through one face has 0.0128 W/K against 0.668 W/K a
+face inside it, and its step fell from 0.104 K to 0.031 K over eighteen hundred sweeps. Face terms
+cancel under a uniform shift, so what resists one is exactly what leaves the block — one scalar
+equation — and a block with a clearance in it has one such mode **per connected body**.
+
+**Damping.** The slope of a `T⁴` term is a bad guide far from the answer: a bar whose only path out
+is a clearance asked for a first step of 93 000 K and the solve reported diverging. Each step is
+held to a quarter of its body's own level.
+
+**And the arrival is a measurement rather than a finding**, which took measuring to establish. A
+run that stopped on the way to its answer is quoting a number its own length chose, and that reads
+like a finding — it was written as one, at a percent, and then measured across the shipped scenes:
+
+```text
+   0.000%  24-a-power-module              0.000041 K
+   0.020%  30-two-phases-crossing         0.004503 K
+   0.211%  29-a-designed-bracket          0.046502 K
+   0.540%  25-what-140-kelvin-does        0.757912 K
+  10.385%  19-a-coating-stops-the-heat   18.693843 K
+  13.256%  15-a-hot-spot-in-a-block       7.953824 K
+  63.596%  23-a-part-radiating-to-its-lid 178.069152 K
+```
+
+The last three are transient **on purpose** — `19`'s claim is the interface step before the front
+reaches the glass, and running it to steady state moves the steepest step off the interface and
+breaks it. No threshold separates those from a run cut short, because what separates them is the
+question the scene is asking and this format does not carry one. So `verify` reports the number and
+leaves the judgement to a person.
 
 ---
 
