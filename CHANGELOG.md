@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-two places it is awkward, thirty-five of which have been changed — see
+has already found forty-three places it is awkward, thirty-six of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -27,6 +27,47 @@ of this section exists.
 
 The exception is the twelfth domain, which is not about the editor at all: compartmental
 pharmacokinetics, and the count of commits above does not include it.
+
+### Added
+
+- **A scene could say what its drive is and not when it changes.** Every scene in this repository
+  ran at a constant one, and the questions a design actually asks are not constant: the junction
+  temperature of a module under a duty cycle, a motor at start-up, an espresso pulled with a
+  pre-infusion. `Scene::stages` is a load profile, keyed by the domain it drives:
+
+  ```json
+  "stages": { "losses": [ { "at_s": 300.0, "watts": 12.0 } ] }
+  ```
+
+  It reaches the three kinds that have a drive and can be reached today — a `heater`'s `watts`, a
+  `conductor`'s `volts`, a `puck`'s `bar`. A stage naming a domain that has no drive, spelling one
+  its kind does not take, setting two at once, repeating a time, going backwards, or landing past
+  the end is **refused at build** with the domain named; a misspelled drive does not parse.
+
+  **The rule that could have been wrong quietly is step alignment.** A run advances in whole steps,
+  so a stage asked for at 10.5 s on a 1 s step lands at 11: the scene heats for half a second
+  longer than it says, the conservation audit closes because the joules that were paid were taken,
+  and every reading is a correct run of a different experiment. Refused, with a `window_s` that
+  lands every stage — **searched rather than derived**, because the first version derived
+  `duration / ceil(duration / at_s)` = 10 s and `steps` is raised to `frames`, so the step stayed
+  1 s and 10.5 still landed nowhere. A refusal naming a number that does not work is worse than one
+  naming none.
+
+  **It hangs off `advance`, not off `run`.** Written the other way first, which would have given
+  the batch path one experiment and the editor's streaming path another — the divergence
+  `a_streamed_run_reads_back` already exists for, one level up. `World` carries the clock now and
+  every path goes through one applier. `World::steps` also stopped keeping its own copy of the step
+  count and calls `Scene::steps`, because the check needs that number before a world exists and two
+  copies of it would drift into exactly the failure the check is for.
+
+- **`11-motor-thermal-network` starts under load, and shows an overshoot the steady run could not.**
+  It ran at a constant 12 W and climbed monotonically to 55.04 °C, because a first-order network
+  under a constant source has no other shape. A motor's losses go as `I²R` and its starting current
+  is several times its running current, so the winding sees its worst temperature in the first few
+  minutes. At 36 W for 300 s and 12 W after it peaks at **72.82 °C** and settles to 59.64 — the
+  number the scene used to report is **17.8 K low** for choosing an insulation class. The peak being
+  above the end is asserted as a shape rather than a value, because under a constant drive that
+  difference is exactly zero.
 
 ### Fixed
 

@@ -174,6 +174,19 @@ impl Conductor {
         Voltage::from_si(self.drive)
     }
 
+    /// Put a different potential across them.
+    ///
+    /// The field is quasi-static — charge relaxes in `ε/σ`, 1.5e-19 s for copper — so there is no
+    /// state to carry across the change and the next [`solve`](Conductor::solve) answers the new
+    /// drive completely. That is what makes a switched load expressible: a busbar at 1 mV and then
+    /// at 0 is two solves, not a transient.
+    ///
+    /// The dissipation ledger is untouched. What it has already paid out stays paid, which is what
+    /// lets the books close across a switch.
+    pub fn set_drive(&mut self, drive: Voltage) {
+        self.drive = drive.to_si();
+    }
+
     /// Give one cell a different material.
     ///
     /// The point of the whole domain: a block that is not one material has no `ρL/A`, and this is

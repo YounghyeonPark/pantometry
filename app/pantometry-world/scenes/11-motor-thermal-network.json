@@ -1,28 +1,68 @@
 {
-  "title": "a winding, the steel around it and the housing outside that",
+  "title": "a motor that starts under load, and the winding overshoot a steady run cannot show",
   "schedule": "multirate",
   "duration_s": 1800.0,
-  "frames": 7,
-  "conservation_tolerance": 1e-9,
+  "frames": 12,
+  "window_s": 150.0,
+  "conservation_tolerance": 1e-09,
   "domains": [
-    { "kind": "heater", "name": "losses", "watts": 12.0, "reserve_j": 21600.0 },
+    {
+      "kind": "heater",
+      "name": "losses",
+      "watts": 36.0,
+      "reserve_j": 28800.0
+    },
     {
       "kind": "network",
       "name": "motor",
       "absorbing": "winding",
       "nodes": [
-        { "name": "winding", "material": "copper", "volume_cm3": 18.0,
-          "thickness_mm": 2.0, "initial_c": 25.0 },
-        { "name": "stator", "material": "electrical_steel", "volume_cm3": 140.0,
-          "thickness_mm": 8.0, "initial_c": 25.0 },
-        { "name": "housing", "material": "aluminium", "volume_cm3": 220.0,
-          "thickness_mm": 4.0, "initial_c": 25.0,
-          "loses_to": { "ambient_c": 25.0, "area_cm2": 420.0 } }
+        {
+          "name": "winding",
+          "material": "copper",
+          "volume_cm3": 18.0,
+          "thickness_mm": 2.0,
+          "initial_c": 25.0
+        },
+        {
+          "name": "stator",
+          "material": "electrical_steel",
+          "volume_cm3": 140.0,
+          "thickness_mm": 8.0,
+          "initial_c": 25.0
+        },
+        {
+          "name": "housing",
+          "material": "aluminium",
+          "volume_cm3": 220.0,
+          "thickness_mm": 4.0,
+          "initial_c": 25.0,
+          "loses_to": {
+            "ambient_c": 25.0,
+            "area_cm2": 420.0
+          }
+        }
       ],
       "links": [
-        { "from": "winding", "to": "stator", "w_per_k": 0.9 },
-        { "from": "stator", "to": "housing", "w_per_k": 2.4 }
+        {
+          "from": "winding",
+          "to": "stator",
+          "w_per_k": 0.9
+        },
+        {
+          "from": "stator",
+          "to": "housing",
+          "w_per_k": 2.4
+        }
       ]
     }
-  ]
+  ],
+  "stages": {
+    "losses": [
+      {
+        "at_s": 300.0,
+        "watts": 12.0
+      }
+    ]
+  }
 }

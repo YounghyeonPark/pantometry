@@ -1167,6 +1167,62 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: the winding is only {:.2} K above the housing",
                     hot - cold
                 );
+
+                // **The winding overshoots, and a steady run cannot show that.**
+                //
+                // This scene ran at a constant 12 W and climbed to 55.04 °C, monotonically,
+                // because a first-order network under a constant source has no other shape. The
+                // number a designer needs is not that one: a motor's losses go as `I²R` and its
+                // starting current is several times its running current, so the winding sees its
+                // worst temperature in the first few minutes and the steady state is the *cool*
+                // part of the run.
+                //
+                // 36 W for 300 s and 12 W after — three times the loss, which is 1.73 times the
+                // current — puts the winding at **72.82 °C** and it settles back to 59.64. The
+                // steady scene reported 55.04, which is **17.8 K low** for choosing an insulation
+                // class.
+                //
+                // The winding's own time constant is what makes the shape: 18 cm³ of copper is
+                // 62 J/K across 0.9 W/K to the stator, so 69 s — it tracks the load, while the
+                // 140 cm³ stator at 216 s and the housing behind it are still climbing when the
+                // load drops. That is the overshoot.
+                //
+                // Asserted as a *shape* rather than a value: the peak is above the end. Under a
+                // constant drive that difference is exactly zero and no tolerance makes it
+                // otherwise, so this is a claim `stages` is required for.
+                let winding: Vec<f64> = frames
+                    .iter()
+                    .filter_map(|f| {
+                        f.readings
+                            .iter()
+                            .find(|r| r.domain == "motor" && r.label == "winding")
+                            .map(|r| r.value)
+                    })
+                    .collect();
+                assert_eq!(
+                    winding.len(),
+                    frames.len(),
+                    "{name}: the winding is not reported in every frame"
+                );
+                let top = winding.iter().fold(f64::MIN, |m, v| m.max(*v));
+                let end = *winding.last().expect("frames");
+                println!("  {name}: the winding peaks {top:.4} C and ends {end:.4} C");
+                assert!(
+                    top - end > 10.0,
+                    "{name}: the winding peaked {top:.4} C and ended {end:.4} C, an overshoot of \
+                     {:.4} K — a start-up transient this scene exists to show",
+                    top - end
+                );
+                // And the peak is in the loaded part, not at the end of a slow climb.
+                let at = winding
+                    .iter()
+                    .position(|v| *v == top)
+                    .expect("the peak is one of the frames");
+                assert!(
+                    at * 150 <= 300,
+                    "{name}: the winding peaked at frame {at} ({} s), and the load drops at 300 s",
+                    at * 150
+                );
             }
             // A standing mode keeps its shape and rides |cos|, so it can never exceed the
             // amplitude it was released at. A scheme going unstable shows up here first.

@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-five of the forty-two are fixed**, and seven are recorded rather than actioned. The reasons
+**Thirty-six of the forty-three are fixed**, and seven are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, one because the flag it wants is a breaking
 change to a published crate for five readings in forty-seven, and the rest on scope. The entries are
@@ -598,7 +598,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-two findings, and the source has shifted ten times — the table below has eleven rows and
+Forty-three findings, and the source has shifted ten times — the table below has eleven rows and
 that sentence said "seven" through four of them.
 
 | how many | where they came from |
@@ -613,7 +613,7 @@ that sentence said "seven" through four of them.
 | 30, 31 | **making an unreachable domain reachable**, which is where the layers above it show what they assumed |
 | 33 | **the audit refusing three correct runs in one sitting**, all with the same shape |
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
-| 35–42 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
+| 35–43 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
 
 **Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
 should take away, because neither is "use the API and see what hurts". Building the next domain and
@@ -629,7 +629,7 @@ of one, a notch nobody could measure the grid of: none of them was a bug, and al
 wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
 whether the file describes anything.
 
-Thirty-five are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+Thirty-six are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
 seven findings after that — the test counts the *summary* at the top of the file, and this sentence
 is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
@@ -1303,6 +1303,60 @@ conductance network, not a Galerkin method; its face currents are conservative p
 argument is the dual one and Thomson's principle makes every grid an *upper* bound. The numbers were
 right, the check passed, and the sentence explaining it predicted the opposite sign from the one
 every measurement showed.
+
+---
+
+## 43. Every scene ran at a constant drive, and no design question is constant
+
+Thirty scenes, and every one of them turns its source on at `t = 0` and leaves it there. The
+questions a design actually asks are not that shape: the junction temperature of a module under a
+duty cycle, a motor at start-up, an espresso pulled with a pre-infusion. Averaging the power answers
+a different question, and the difference is not small — a part that survives 50 W forever can fail
+at 100 W half the time, because the peak is set by the thermal mass near the source and not by the
+average.
+
+Measured, on a heater into a bar. The same thousand joules, at two rates:
+
+```text
+  100 W for 10 s   peak 677.6442 C   final mean 350.6878 C   spent 1000 J
+   50 W for 20 s   peak 521.4072 C   final mean 350.6878 C   spent 1000 J
+```
+
+The means agree to nine digits, because energy is energy. The peak is **30.0% higher**.
+
+**Fixed**: `Scene::stages`, a load profile keyed by the domain it drives, reaching the three kinds
+that have a drive and can be reached today — a `heater`'s `watts`, a `conductor`'s `volts`, a
+`puck`'s `bar`. `11-motor-thermal-network` uses it, and stopped being a scene that could only
+climb: at 36 W for 300 s and 12 W after, its winding peaks at **72.82 °C** and settles to 59.64,
+where the constant run reported 55.04 — **17.8 K low** for choosing an insulation class. A
+first-order network under a constant source cannot overshoot at all, so the peak being above the
+end is a claim the key is required for.
+
+### Three things it cost, and the one that would have been silent
+
+**A stage between two steps.** A run advances in whole steps, so a stage asked for at 10.5 s on a
+1 s step lands at 11 — half a second of extra heating, an audit that closes because the joules that
+were paid were taken, and every reading a correct run of a different experiment. Refused at build.
+
+**The refusal named a window that did not work.** It derived one as
+`duration / ceil(duration / at_s)` = 10 s, and `World::steps` raises the step count to `frames`, so
+the step stayed 1 s and 10.5 still landed nowhere. Searched now, and a test feeds the suggestion
+back in. A refusal naming a number that does not help is worse than one naming none.
+
+**The profile hung off `run` and not off `advance`**, which would have given the batch path one
+experiment and the editor's streaming path another — the divergence `a_streamed_run_reads_back`
+already exists for, one level up. Its doc comment claimed a step-by-step caller "therefore drives
+the profile too", which was false when written. `World` carries the clock now.
+
+`World::steps` also kept its own copy of the step count, and the check needs that number before a
+world exists. Two copies would have drifted into exactly the failure the check is for, so there is
+one and `World::steps` calls it.
+
+### What it does not reach
+
+`beam` and `light` have a `watts` and no `as_any_mut`, so a profile cannot reach them without an
+additive change to `pantometry-optics`; `winding` has an `amps`. Each is a line of library and a
+line here, left until a scene wants one rather than added on speculation.
 
 ---
 

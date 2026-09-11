@@ -6,7 +6,7 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Thirty-five of the forty-two are
+//! Findings are collected in `FRICTION.md` beside this crate. Thirty-six of the forty-three are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
 //! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
 //! written and this line is one of them. It had been stale for two releases before it was.
@@ -206,6 +206,30 @@ pub struct Scene {
     /// keeps every type strict and reads the way those do.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub poses: BTreeMap<String, PoseSpec>,
+    /// What each drive does over time, by the name of the domain it drives. See [`StageSpec`].
+    ///
+    /// **Every scene in this repository runs at a constant drive**, and the questions a design
+    /// actually asks are not constant ones: the junction temperature of a module under a duty
+    /// cycle, a motor at start-up, an espresso pulled with a pre-infusion. Averaging the power
+    /// answers a different question — a part that survives 50 W forever can fail at 100 W half
+    /// the time, because the peak is set by the thermal mass close to the source and not by the
+    /// average.
+    ///
+    /// ```json
+    /// "stages": {
+    ///   "pump": [ { "at_s": 0.0, "bar": 3.0 }, { "at_s": 5.0, "bar": 9.0 } ]
+    /// }
+    /// ```
+    ///
+    /// A name-keyed map beside [`poses`](Scene::poses), for the reason stated there: serde's
+    /// `flatten` is the only way to put an optional field on fifteen variants and it **silently
+    /// disables `deny_unknown_fields`**, which is this format's whole defence against a typo.
+    ///
+    /// Absent means what every scene written before this key existed means — the drive each
+    /// domain declares, for the whole run — so no existing file changes meaning and this needs
+    /// no format bump.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stages: BTreeMap<String, Vec<StageSpec>>,
     /// The stage the experiment stands on. See [`EnvironmentSpec`].
     ///
     /// **Absent means what every scene written before this key existed means**: each domain's
@@ -214,6 +238,63 @@ pub struct Scene {
     /// bump: no existing file changes meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSpec>,
+}
+
+/// One change to one domain's drive, at one instant.
+///
+/// ```json
+/// { "at_s": 5.0, "bar": 9.0 }
+/// ```
+///
+/// Exactly **one** of the drive fields is set, and it has to be the one that domain's kind takes:
+/// `watts` for a heater, `volts` for a conductor, `bar` for a puck. A `volts` on a heater is
+/// refused naming `watts` rather than ignored, because a stage that silently did nothing is a
+/// load profile that reads as applied and is not — which is this format's oldest failure shape.
+///
+/// The drive the domain declares runs until the first stage. A stage at `0.0` therefore overrides
+/// it immediately, and one at `5.0` leaves the declared value in force for five seconds.
+///
+/// # Every `at_s` lands on a step
+///
+/// A run advances in whole steps of `duration_s / steps`, so a change asked for at 10 s on a
+/// 0.3 s step would happen at 10.2 — the scene would heat for 0.2 s longer than it says, the
+/// books would still close, and nothing would say. That is refused at build, with the step and a
+/// [`window_s`](Scene::window_s) that divides every stage the scene asks for.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StageSpec {
+    /// When this drive takes effect, in seconds from the start of the run.
+    pub at_s: f64,
+    /// Element, beam or lamp power, for a `heater`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watts: Option<f64>,
+    /// Terminal voltage, for a `conductor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volts: Option<f64>,
+    /// Brew pressure, for a `puck`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar: Option<f64>,
+}
+
+impl StageSpec {
+    /// The one drive this stage sets, and the field it was spelled with.
+    ///
+    /// `None` when no field is set or more than one is; the caller turns that into a refusal that
+    /// can name the domain, because this type does not know which one it belongs to.
+    pub fn drive(&self) -> Option<(&'static str, f64)> {
+        let set: Vec<(&'static str, f64)> = [
+            ("watts", self.watts),
+            ("volts", self.volts),
+            ("bar", self.bar),
+        ]
+        .into_iter()
+        .filter_map(|(n, v)| v.map(|v| (n, v)))
+        .collect();
+        match set.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
 }
 
 /// Where one domain sits in the world: a translation, and optionally a turn.
@@ -394,6 +475,13 @@ fn default_tolerance() -> f64 {
 /// The revision this build writes, and the highest it can read.
 ///
 /// One, still. It goes to two the first time a change would make an existing file mean something
+/// How many step counts [`Scene::check_stages`] tries before it says none of them lands.
+///
+/// A hundred thousand, which is a search only a refusal ever runs and is far past any step count
+/// a scene in this repository takes. Bounded on purpose: a search that ran until it found one
+/// would hang on times that are not commensurate with the run at all.
+const STEP_SEARCH: usize = 100_000;
+
 /// different — not when a key is added, which an old file simply does not have.
 pub const FORMAT: u32 = 1;
 
@@ -452,6 +540,178 @@ impl Scene {
             ));
         }
         Ok(())
+    }
+
+    /// What each kind's drive is called, for a [`stages`](Scene::stages) entry to match.
+    ///
+    /// `None` for a domain with no drive — a bar has a temperature and a room has a mode, and
+    /// neither is something a load profile turns up or down.
+    fn drive_of(spec: &DomainSpec) -> Option<&'static str> {
+        match spec {
+            DomainSpec::Heater { .. } => Some("watts"),
+            DomainSpec::Conductor { .. } => Some("volts"),
+            DomainSpec::Puck { .. } => Some("bar"),
+            _ => None,
+        }
+    }
+
+    /// Every [`stages`](Scene::stages) entry names a domain that has a drive, spells that drive
+    /// the way its kind does, and changes on a step the run actually takes.
+    ///
+    /// # The last one is the only one that could be wrong quietly
+    ///
+    /// A run advances in whole steps of `duration_s / steps`. A stage asked for at 10.5 s on a
+    /// 1 s step lands at 11: the scene heats for half a second longer than it says, the
+    /// conservation audit still closes — the joules that were paid were taken — and every reading
+    /// looks exactly like a correct run of a slightly different experiment. So it is refused,
+    /// with the step it would have landed on and a [`window_s`](Scene::window_s) that lands every
+    /// stage the scene asks for.
+    ///
+    /// **The suggested window is searched for, not derived**, and the first version of this
+    /// message derived one: for a stage at 10.5 s in a 20 s run it said `window_s: 10`, which
+    /// gives `ceil(20/10) = 2` steps — raised to `frames` = 20 by [`World::steps`], so the step
+    /// stays 1 s and 10.5 still lands nowhere. A refusal that names a number which does not work
+    /// is worse than one that names none, so this searches the step counts a run could actually
+    /// take and reports the first that lands them all, or says plainly that none under the cap
+    /// does.
+    ///
+    /// The tolerance is `1e-9` of the run, which is the float noise in `duration_s / steps`
+    /// multiplied back up, and not a licence to be a little bit off: a stage half a step out
+    /// fails by half a step.
+    pub fn check_stages(&self) -> Result<(), String> {
+        if self.stages.is_empty() {
+            return Ok(());
+        }
+        let steps = self.steps();
+        let dt = self.duration_s / steps as f64;
+
+        for (who, profile) in &self.stages {
+            let Some(spec) = self.domains.iter().find(|d| d.name() == who) else {
+                let known: Vec<&str> = self.domains.iter().map(|d| d.name()).collect();
+                return Err(format!(
+                    "stages names {who:?}, which this scene does not define; it has {}",
+                    known.join(", ")
+                ));
+            };
+            let Some(field) = Scene::drive_of(spec) else {
+                return Err(format!(
+                    "stages names {who:?}, which has no drive to change. A load profile applies \
+                     to a heater (watts), a conductor (volts) or a puck (bar)"
+                ));
+            };
+            if profile.is_empty() {
+                return Err(format!(
+                    "{who}: a stages entry with nothing in it is a profile that says nothing; \
+                     remove it or give it a stage"
+                ));
+            }
+
+            let mut last: Option<f64> = None;
+            for stage in profile {
+                let Some((spelled, value)) = stage.drive() else {
+                    return Err(format!(
+                        "{who}: a stage sets none of watts, volts or bar, or more than one of \
+                         them. Each sets exactly one, and this kind takes {field:?}"
+                    ));
+                };
+                if spelled != field {
+                    return Err(format!(
+                        "{who}: a stage sets {spelled:?}, and this kind's drive is {field:?}"
+                    ));
+                }
+                if !value.is_finite() {
+                    return Err(format!("{who}: a stage sets {field} to {value}"));
+                }
+                if !stage.at_s.is_finite() || stage.at_s < 0.0 {
+                    return Err(format!("{who}: a stage is at {} s", stage.at_s));
+                }
+                // A stage at or past the end never fires. Refused rather than dropped, because a
+                // profile whose last entry is silently unreachable reads as applied.
+                if stage.at_s >= self.duration_s {
+                    return Err(format!(
+                        "{who}: a stage at {} s, and the run is {} s long — it would never happen",
+                        stage.at_s, self.duration_s
+                    ));
+                }
+                if let Some(previous) = last {
+                    if stage.at_s <= previous {
+                        return Err(format!(
+                            "{who}: stages are at {previous} s and then {} s. They are applied in \
+                             the order written, so an out-of-order or repeated time would make \
+                             the profile depend on how two equal keys happen to sort",
+                            stage.at_s
+                        ));
+                    }
+                }
+                last = Some(stage.at_s);
+            }
+
+            // **The one that could be wrong quietly**, measured over the whole profile so the
+            // suggested window lands all of it rather than only the stage that failed first.
+            if let Some(off) = profile.iter().find(|s| !self.lands(s.at_s, dt)) {
+                let landed = (off.at_s / dt).ceil() * dt;
+                let advice = match self.steps_that_land(profile) {
+                    Some(n) => format!(
+                        "a window_s of {} takes {n} steps and lands every stage here",
+                        self.duration_s / n as f64
+                    ),
+                    None => format!(
+                        "no step count up to {} lands every stage here; the times are not \
+                         commensurate with the run",
+                        self.frames.max(1) + STEP_SEARCH
+                    ),
+                };
+                return Err(format!(
+                    "{who}: a stage at {} s, and this run steps by {dt} s — it would happen at \
+                     {landed} s instead, which is a different experiment that conserves just as \
+                     well. Steps are {steps}; {advice}",
+                    off.at_s
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Does `at` begin a step of length `dt`?
+    fn lands(&self, at: f64, dt: f64) -> bool {
+        let k = at / dt;
+        (k - k.round()).abs() * dt <= 1e-9 * self.duration_s
+    }
+
+    /// The smallest step count this run could take that begins a step at every stage in `profile`.
+    ///
+    /// Searched rather than solved, because the times are floats and the exact statement — that
+    /// `at_s * n / duration_s` is an integer for every stage — is a rational-arithmetic question
+    /// this format does not have the types for. Bounded, and the caller says so when nothing under
+    /// the bound works, because a search that quietly gave up would be the third way this refusal
+    /// could name a number that does not help.
+    fn steps_that_land(&self, profile: &[StageSpec]) -> Option<usize> {
+        let from = self.frames.max(1);
+        (from..from + STEP_SEARCH).find(|&n| {
+            let dt = self.duration_s / n as f64;
+            profile.iter().all(|s| self.lands(s.at_s, dt))
+        })
+    }
+
+    /// How many coupling windows a run of this scene takes.
+    ///
+    /// `ceil(duration_s / window_s)` when the scene states one, so the window it actually uses is
+    /// no longer than what it asked for; `frames` when it does not, which is what a scene written
+    /// before that key meant. Never zero.
+    ///
+    /// **On `Scene` rather than on `World`, and there is one of it.**
+    /// [`check_stages`](Scene::check_stages) needs this before a world exists, and writing it
+    /// twice was the obvious thing to do — which would have been a second copy of a number, and a
+    /// drift between them would let a stage pass the check and land off a step at run time: the
+    /// exact failure the check is for, reintroduced by the check itself.
+    /// [`World::steps`](crate::World::steps) calls this.
+    pub fn steps(&self) -> usize {
+        match self.window_s {
+            Some(w) if w > 0.0 => ((self.duration_s / w).ceil() as usize)
+                .max(self.frames)
+                .max(1),
+            _ => self.frames.max(1),
+        }
     }
 }
 
@@ -3459,6 +3719,19 @@ pub struct HotSpot {
 /// A scene that has been checked and turned into a runnable simulation.
 pub struct World {
     scene: Scene,
+    /// How far the run has advanced, in seconds.
+    ///
+    /// Kept because [`Scene::stages`] names instants and [`World::advance`] takes only a `dt`. A
+    /// world driven step by step — which is what the editor's streaming path and `verify`'s
+    /// instrumented loop both do — has to arrive at the same drive as one driven by
+    /// [`World::run`], or the two paths are two experiments. They have diverged before, which is
+    /// why `a_streamed_run_reads_back` exists.
+    elapsed: f64,
+    /// How many stages of each domain's profile have been applied.
+    ///
+    /// An index rather than a re-scan, so a `Puck` — whose `set_drive` re-solves the bed — is
+    /// asked once per stage and not once per step.
+    staged: BTreeMap<String, usize>,
     // `pub(crate)` for the `verify` module, whose instrumented loop reads the ledger and the
     // stability limits between the advances `World::run` makes without measuring.
     pub(crate) sim: Simulation,
@@ -3584,6 +3857,10 @@ impl World {
                 ));
             }
         }
+
+        // A load profile the run cannot follow is refused here rather than applied late; see
+        // `Scene::check_stages`, whose last rule is the one that could be wrong quietly.
+        scene.check_stages()?;
 
         let mut sim = Simulation::new(match scene.schedule {
             ScheduleSpec::OneWay => Schedule::OneWay,
@@ -3818,6 +4095,8 @@ impl World {
 
         let mut world = World {
             scene,
+            elapsed: 0.0,
+            staged: BTreeMap::new(),
             sim,
             notes: log.notes,
             rasterised: log.rasterised,
@@ -3825,6 +4104,10 @@ impl World {
             yield_strain,
             past_yield: BTreeMap::new(),
         };
+        // **Before the first capture**, so a stage at `0 s` is in the picture the run opens on
+        // rather than one frame into it, which would read as a transient the scene never asked
+        // for. Idempotent, so the first `advance` finding nothing left to do is the intent.
+        world.apply_stages_due();
         // **Once before anything runs**, so the first captured frame already carries the strain the
         // starting temperature implies. Not a formality: a power module is assembled at its
         // solder's reflow temperature and sits at room temperature before it is switched on, so it
@@ -4030,18 +4313,10 @@ impl World {
         Ok(frames)
     }
 
-    /// How many coupling windows the run takes.
-    ///
-    /// `ceil(duration_s / window_s)` when the scene states one, so the window it actually uses is
-    /// no longer than what it asked for; `frames` when it does not, which is what a scene written
-    /// before the key meant. Never zero.
+    /// How many coupling windows the run takes — see [`Scene::steps`], which is where the
+    /// arithmetic lives and where the reason for that is written down.
     pub fn steps(&self) -> usize {
-        match self.scene.window_s {
-            Some(w) if w > 0.0 => ((self.scene.duration_s / w).ceil() as usize)
-                .max(self.scene.frames)
-                .max(1),
-            _ => self.scene.frames.max(1),
-        }
+        self.scene.steps()
     }
 
     /// Advance the clock by `dt` and close the between-frames feedback — exactly one
@@ -4055,7 +4330,13 @@ impl World {
     /// left to the caller, because a caller who forgets it gets a winding whose resistance
     /// never moves — a run that is wrong in exactly the way nothing reports.
     pub fn advance(&mut self, dt: Time) -> Result<pantometry::core::Report, Violation> {
+        // **The drive first, then the step it drives.** A stage names the instant its value takes
+        // effect, so the step that begins there is the first one run at it;
+        // [`Scene::check_stages`] has already refused any stage that does not begin a step of this
+        // scene's own window.
+        self.apply_stages_due();
         let report = self.sim.advance(dt)?;
+        self.elapsed += dt.to_si();
         self.close_feedback();
         // **After the advance, and then solved again.** The capture that follows shows the block's
         // new temperature, so the body beside it has to answer *that* temperature and not the one
@@ -4083,6 +4364,87 @@ impl World {
     /// strain and not yet asked — which reported the strain energy of a fully constrained body,
     /// strains of zero and an infinite residual: three readings disagreeing about one instant.
     /// And after every advance, so a frame's body is the answer to that frame's temperature.
+    /// Set every drive to the last stage the clock has reached.
+    ///
+    /// **Called from [`World::advance`]**, which is the only place every path goes through:
+    /// [`World::run`] advances, the editor's streaming loop advances, and `verify`'s instrumented
+    /// sweep advances. Hanging the profile off `run` alone would have given the batch path one
+    /// experiment and the streaming path another — the divergence `a_streamed_run_reads_back`
+    /// already exists for, one level up.
+    ///
+    /// **Idempotent and index-kept.** Calling it twice at one instant changes nothing, and a
+    /// stage is applied once rather than re-set every step: a `Puck`'s `set_drive` re-solves the
+    /// bed, so a per-step re-set would be a solve per step for a pressure that did not move.
+    ///
+    /// A `dt` coarser than a stage still arrives at the right drive, because what is applied is
+    /// every stage the clock has passed and not only the one it landed on. A caller stepping past
+    /// three stages at once gets the third, which is the only defensible answer.
+    fn apply_stages_due(&mut self) {
+        if self.scene.stages.is_empty() {
+            return;
+        }
+        // The same slack `Scene::check_stages` uses, and for the same reason: `elapsed` is
+        // accumulated in floating point and a stage at exactly `10.0` must not miss by an ulp.
+        let slack = 1e-9 * self.scene.duration_s.max(1.0);
+        let now = self.elapsed + slack;
+        // Collected because applying reaches `self.sim` mutably while `self.scene` is borrowed.
+        let mut profile: Vec<(String, f64, &'static str)> = Vec::new();
+        for (who, stages) in &self.scene.stages {
+            let done = self.staged.get(who).copied().unwrap_or(0);
+            let mut next = done;
+            while next < stages.len() && stages[next].at_s <= now {
+                next += 1;
+            }
+            if next == done {
+                continue;
+            }
+            // Only the last one reached: the drives here are levels, not increments, so passing
+            // three stages in one step means the third, and setting all three in order would put
+            // the same value there after two wasted solves.
+            if let Some((field, value)) = stages[next - 1].drive() {
+                profile.push((who.clone(), value, field));
+            }
+            self.staged.insert(who.clone(), next);
+        }
+        for (who, value, field) in profile {
+            match field {
+                "watts" => {
+                    if let Some(h) = self.sim.domain_as_mut::<crate::heater::Heater>(&who) {
+                        h.set_watts(value);
+                    }
+                }
+                "volts" => {
+                    if let Some(c) = self
+                        .sim
+                        .domain_as_mut::<pantometry::electrical::Conductor>(&who)
+                    {
+                        c.set_drive(pantometry::units::Voltage::v(value));
+                    }
+                }
+                "bar" => {
+                    if let Some(p) = self.sim.domain_as_mut::<pantometry::porous::Puck>(&who) {
+                        p.set_drive(pantometry::units::Pressure::from_si(value * 1e5));
+                    }
+                }
+                // Unreachable: `check_stages` refuses any other spelling, and refuses a stage on
+                // a kind that does not take the one it uses. A silent `_` here would be the way a
+                // future drive arrives and does nothing, so it is loud instead.
+                other => {
+                    unreachable!("a stage set {other:?}, which check_stages should have refused")
+                }
+            }
+        }
+    }
+
+    /// How far this world has advanced, in seconds.
+    ///
+    /// Public because a caller driving [`World::advance`] itself — the editor's streaming loop,
+    /// `verify`'s sweep — has no other way to say where in a [`stages`](Scene::stages) profile it
+    /// is, and "which stage am I in" is the first question a progress bar asks.
+    pub fn elapsed(&self) -> Time {
+        Time::from_si(self.elapsed)
+    }
+
     pub(crate) fn resolve_structures(&mut self) {
         let names: Vec<String> = self
             .scene

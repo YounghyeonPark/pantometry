@@ -38,6 +38,19 @@ impl Heater {
     pub fn reserve(&self) -> Energy {
         Energy::from_si(self.reserve)
     }
+
+    /// What it pays per second, from now on.
+    ///
+    /// The **reserve is untouched**, which is what makes a load profile closable: turning an
+    /// element down does not create or destroy the joules it has left, it only changes how fast
+    /// they leave. A profile that reset the tank would be a scene that manufactures energy at
+    /// every stage boundary, and the audit would be right to refuse it.
+    ///
+    /// Negative is clamped to zero, as in [`Heater::new`]: an element that absorbed would be a
+    /// sink wearing a source's name, and the ledger it publishes has one sign.
+    pub fn set_watts(&mut self, watts: f64) {
+        self.watts = watts.max(0.0);
+    }
 }
 
 impl Domain for Heater {

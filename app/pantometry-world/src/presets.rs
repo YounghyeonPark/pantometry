@@ -202,7 +202,7 @@ pub const PRESETS: [Preset; 30] = [
     Preset {
         file: "11-motor-thermal-network.json",
         area: "motors",
-        title: "a winding, the steel around it and the housing outside that",
+        title: "a motor that starts under load, and the winding overshoot a steady run cannot show",
         kinds: &["heater", "network"],
         needs_a_part: false,
         json: include_str!("../scenes/11-motor-thermal-network.json"),

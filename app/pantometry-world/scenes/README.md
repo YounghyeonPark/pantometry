@@ -199,7 +199,7 @@ it, or that used the wrong spacing on one axis, fails there and passes everythin
 
 | Scene | What it shows |
 | --- | --- |
-| `11-motor-thermal-network` | 12 W into a copper winding, out through electrical steel and an aluminium housing. Three materials, two joints, and the drop across each |
+| `11-motor-thermal-network` | A copper winding, electrical steel around it and an aluminium housing: three materials, two joints, and the drop across each. **It starts under load** — 36 W for 300 s and 12 W after, three times the loss, which is 1.73 times the current — and that is the whole point of it. The winding peaks at **72.82 °C** and settles back to 59.64; the same scene at a constant 12 W climbed monotonically to 55.04 and reported that, which is **17.8 K low** for choosing an insulation class. A first-order network under a constant source cannot overshoot at all, so the peak being above the end is a claim `stages` is required for. The shape is the winding’s own time constant: 62 J/K across 0.9 W/K is 69 s, against 216 s for the stator, so the winding tracks the load while everything behind it is still climbing |
 
 The first of three scenes with **nothing to draw** -- `11`, `12` and `13`, which is the list
 `tests/scene.rs` holds as `NOTHING_TO_DRAW`. A network's nodes have capacities, not positions, so
