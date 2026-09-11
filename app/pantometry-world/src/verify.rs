@@ -225,7 +225,23 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
             }
 
             let before = world.sim.ledger();
-            let report = world.sim.advance(dt).map_err(|v| {
+            // **`World::advance`, not `Simulation::advance`.** This reached past the world to the
+            // simulation inside it, which does one of the five things an advance is: it steps the
+            // domains. It does not apply a [`stages`](crate::Scene::stages) profile, hand each
+            // structure the strain its block's temperature implies, or solve the structure
+            // afterwards — so the battery marched a scene with no load profile and a body frozen
+            // at the strain it was built with.
+            //
+            // Measured on `11-motor-thermal-network`, which states a profile: the battery reported
+            // its winding at **44.80 °C** where the run the CLI performs ends at **59.64**. The
+            // element ran at its start-up 36 W for the whole run, emptied its tank at 800 s and
+            // cooled from there — an entirely self-consistent run of a scene nobody wrote.
+            //
+            // This is the third time this loop has drifted from `World::run`: it computed its own
+            // `duration / frames` until `window_s` existed, and its doc has said "the loop is
+            // `World::run`'s" throughout. A loop that *is* the other one is the only version of
+            // that sentence which cannot go stale.
+            let report = world.advance(dt).map_err(|v| {
                 format!(
                     "the audit stopped the run at t = {:.4} s: {v}",
                     world.sim.time().to_si()
@@ -298,8 +314,6 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
                 let entry = drift.entry(name.to_string()).or_insert((0.0, tol));
                 entry.0 = entry.0.max(rel);
             }
-
-            world.close_feedback();
         }
         taken = want;
         frames.push(pantometry::scene::capture(&world.sim, &placed));

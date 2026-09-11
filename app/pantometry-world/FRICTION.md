@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-six of the forty-three are fixed**, and seven are recorded rather than actioned. The reasons
+**Thirty-eight of the forty-five are fixed**, and seven are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, one because the flag it wants is a breaking
 change to a published crate for five readings in forty-seven, and the rest on scope. The entries are
@@ -598,7 +598,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-three findings, and the source has shifted ten times — the table below has eleven rows and
+Forty-five findings, and the source has shifted ten times — the table below has eleven rows and
 that sentence said "seven" through four of them.
 
 | how many | where they came from |
@@ -613,7 +613,7 @@ that sentence said "seven" through four of them.
 | 30, 31 | **making an unreachable domain reachable**, which is where the layers above it show what they assumed |
 | 33 | **the audit refusing three correct runs in one sitting**, all with the same shape |
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
-| 35–43 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
+| 35–45 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
 
 **Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
 should take away, because neither is "use the API and see what hurts". Building the next domain and
@@ -629,7 +629,7 @@ of one, a notch nobody could measure the grid of: none of them was a bug, and al
 wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
 whether the file describes anything.
 
-Thirty-six are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+Thirty-eight are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
 seven findings after that — the test counts the *summary* at the top of the file, and this sentence
 is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
@@ -1357,6 +1357,93 @@ one and `World::steps` calls it.
 `beam` and `light` have a `watts` and no `as_any_mut`, so a profile cannot reach them without an
 additive change to `pantometry-optics`; `winding` has an `amps`. Each is a line of library and a
 line here, left until a scene wants one rather than added on speculation.
+
+---
+
+## 44. The editor ran a different experiment from the CLI, and its own doc said it did not
+
+`editor_core::run_streaming` is what the editor drives so a run can be watched while it happens.
+Its documentation says:
+
+> the last payload is **byte-identical** to what `run` returns for the same text, which the tests
+> pin
+
+Nothing pinned it. The only test on that path checked that its JSON *reads back* — a different
+claim, and the one `a_streamed_run_reads_back` exists for.
+
+What the gap hid is one line: the streaming path took `duration_s / frames` as its step, which
+ignores `window_s` — **the key that exists so the step can be shorter than a frame**. Measured on a
+scene whose window is a quarter of its frame:
+
+```text
+  batch     15459 bytes
+  streamed  15463 bytes
+  first frame  106.555400 C either way, and 106.555400 C with no window at all
+```
+
+The third line is the proof: the streaming path's answer was identical to the *unwindowed* scene,
+so the step had never been shortened at all.
+
+**No shipped scene could show it.** All thirty have `steps == frames`, measured, which is why
+thirty scenes through this path in CI on every commit said nothing. A scene using `window_s` for
+what it is for was one file away.
+
+**Fixed** by giving the streaming loop `World::run`'s schedule step for step — `steps` whole steps
+of `duration_s / steps`, photographed at `ceil(i * steps / frames)` by the same integer arithmetic.
+`the_two_run_paths_are_one_run` compares the bytes on three scenes.
+
+**The third of those was added because a sabotage passed.** Swapping `div_ceil` for plain integer
+division left the first two green: 80 steps over 20 frames is an exact four, so the two roundings
+agree there. A scene with 20 steps over 7 frames tells them apart — 3, 6, 9, 12, 15, 18, 20 against
+2, 5, 8, 11, 14, 17, 20, every picture one step early and the last one right. A test that pins the
+*step* is not a test that pins the *schedule*.
+
+This is the second time this session that a load-bearing claim about these two paths was written in
+a doc comment and held by nothing; `stages` was the first, and it was caught while being written
+rather than after. The pattern is not the paths, it is that a sentence in a doc comment costs
+nothing to write and reads exactly like a guarantee.
+
+---
+
+## 45. The verification battery verified a run nobody wrote
+
+`run_measured` is the instrumented loop `pantometry verify` marches a scene through, reading the
+ledger and the stability limits between advances. Its documentation says:
+
+> The loop is `World::run`'s — advance, close the feedback, capture
+
+It advanced `world.sim`, the `Simulation` inside the world. That does **one** of the five things
+`World::advance` is: it steps the domains. It does not apply a `stages` profile, hand each
+structure the stress-free strain its block's temperature implies, or solve the structure
+afterwards.
+
+Measured on a motor with a start-up load:
+
+```text
+  the battery      winding 44.801909 C
+  the run          winding 59.637440 C
+```
+
+**33% apart, and the battery's number is self-consistent.** With no profile the element ran at its
+start-up 36 W for the whole run, emptied its 28800 J tank at 800 s and cooled from there — every
+audit margin healthy, the determinism digest stable, no finding raised. A verification battery
+reporting a clean bill on a scene nobody wrote is the worst shape this repository has, because it
+is the one thing that is supposed to catch the others.
+
+**Fixed** by calling `World::advance`. A loop that *is* `World::run`'s is the only version of that
+sentence which cannot go stale, and `the_battery_measures_the_run_the_world_performs` now compares
+the two reading by reading.
+
+### The third time this loop drifted
+
+It computed its own `duration / frames` until `window_s` existed — recorded in its own comment —
+and now this. The pattern across findings 43, 44 and 45 is one thing said three ways in one
+session: **a sentence in a doc comment costs nothing to write and reads exactly like a
+guarantee.** `stages` claimed a step-by-step caller drove the profile and was caught while being
+written; `run_streaming` claimed byte-identity "which the tests pin" and nothing pinned it; this
+claimed to be `World::run`'s loop while being a third of it.
+
+What separates the three is only when they were caught, and that was luck rather than method.
 
 ---
 

@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-three places it is awkward, thirty-six of which have been changed — see
+has already found forty-five places it is awkward, thirty-eight of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -70,6 +70,34 @@ pharmacokinetics, and the count of commits above does not include it.
   difference is exactly zero.
 
 ### Fixed
+
+- **The verification battery verified a run nobody wrote.** `run_measured`'s loop advanced
+  `world.sim`, the simulation inside the world, which does **one** of the five things
+  `World::advance` is: it steps the domains. It does not apply a `stages` profile, hand a structure
+  the strain its block's temperature implies, or re-solve it. On a motor with a start-up load the
+  battery reported its winding at **44.80 °C** where the run ends at **59.64** — 33% apart, and the
+  battery's number entirely self-consistent: with no profile the element ran at 36 W throughout,
+  emptied its tank at 800 s and cooled, with every audit margin healthy and no finding raised.
+
+  Its doc has said "the loop is `World::run`'s" throughout, and this is the third time it drifted —
+  it computed its own `duration / frames` until `window_s` existed. A loop that *is* the other one
+  is the only version of that sentence which cannot go stale, so it calls `World::advance` now and
+  `the_battery_measures_the_run_the_world_performs` compares the two reading by reading.
+
+- **The editor ran a different experiment from the CLI, and its own doc said it did not.**
+  `editor_core::run_streaming` promised "the last payload is byte-identical to what `run` returns
+  for the same text, which the tests pin", and nothing pinned it — the only test on that path
+  checked that its JSON *reads back*. It took `duration_s / frames` as its step, which ignores
+  `window_s`, the key that exists so the step can be shorter than a frame. On a scene whose window
+  is a quarter of its frame the two paths produced **15459 bytes against 15463**, and the streaming
+  answer was identical to the same scene with no window at all — the step had never been shortened.
+
+  No shipped scene could show it: all thirty have `steps == frames`, measured, so thirty scenes
+  through that path in CI on every commit said nothing. The streaming loop takes `World::run`'s
+  schedule step for step now. `the_two_run_paths_are_one_run` compares the bytes on three scenes,
+  and the third was added because a sabotage passed: 80 steps over 20 frames is an exact four, so
+  swapping `div_ceil` for plain division changed nothing there. A test that pins the step is not a
+  test that pins the schedule.
 
 - **A scene named for an espresso shot pulled a quarter of one.** `18-an-espresso-shot` ran for
   eight seconds and delivered 3.28 g from a 4.29 g dose — **4.81% extraction**, where a shot is

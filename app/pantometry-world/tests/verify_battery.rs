@@ -368,6 +368,88 @@ fn one_cell_features_refuse_to_refine() {
     assert!(why.contains("channel"), "{why}");
 }
 
+/// **The battery measures the run the CLI performs**, which its loop's documentation has claimed
+/// since it was written and nothing held.
+///
+/// `run_measured`'s doc says "the loop is `World::run`'s". It has drifted from that twice: it
+/// computed its own `duration / frames` until `window_s` existed, and it reached past
+/// [`World::advance`] to the `Simulation` inside — which steps the domains and does none of the
+/// other four things an advance is. A [`stages`](pantometry_world::Scene::stages) profile was
+/// never applied, and a structure was never handed its thermal strain or re-solved.
+///
+/// Measured on a motor with a start-up load: the battery reported its winding at **44.80 °C**
+/// where the run ends at **59.64**. The element had run at its start-up 36 W for the whole run,
+/// emptied its tank at 800 s and cooled from there — an entirely self-consistent run of a scene
+/// nobody wrote, with every audit margin healthy and no finding raised.
+///
+/// So this compares the two, reading by reading. It is the pin that makes the sentence in that doc
+/// comment cost something.
+#[test]
+fn the_battery_measures_the_run_the_world_performs() {
+    let text = r#"{
+  "title": "a motor that starts under load",
+  "schedule": "multirate",
+  "duration_s": 1800.0,
+  "frames": 12,
+  "window_s": 150.0,
+  "conservation_tolerance": 1e-9,
+  "stages": { "losses": [ { "at_s": 300.0, "watts": 12.0 } ] },
+  "domains": [
+    { "kind": "heater", "name": "losses", "watts": 36.0, "reserve_j": 28800.0 },
+    { "kind": "network", "name": "motor", "absorbing": "winding",
+      "nodes": [
+        { "name": "winding", "material": "copper", "volume_cm3": 18.0,
+          "thickness_mm": 2.0, "initial_c": 25.0 },
+        { "name": "stator", "material": "electrical_steel", "volume_cm3": 140.0,
+          "thickness_mm": 8.0, "initial_c": 25.0 },
+        { "name": "housing", "material": "aluminium", "volume_cm3": 220.0,
+          "thickness_mm": 4.0, "initial_c": 25.0,
+          "loses_to": { "ambient_c": 25.0, "area_cm2": 420.0 } }
+      ],
+      "links": [
+        { "from": "winding", "to": "stator", "w_per_k": 0.9 },
+        { "from": "stator", "to": "housing", "w_per_k": 2.4 }
+      ] }
+  ]
+}"#;
+    let s = scene(text);
+    let mut world = pantometry_world::World::build(s.clone()).expect("it builds");
+    let frames = world.run().expect("it conserves");
+    let ran = &frames.last().expect("frames").readings;
+
+    let b = verify(&s, false).expect("the battery runs");
+    assert!(!b.base.readings.is_empty(), "the battery measured nothing");
+    assert_eq!(
+        b.base.readings.len(),
+        ran.len(),
+        "the battery and the run report different readings"
+    );
+    for measured in &b.base.readings {
+        let same = ran
+            .iter()
+            .find(|r| r.domain == measured.domain && r.label == measured.label)
+            .unwrap_or_else(|| panic!("the run has no {}/{}", measured.domain, measured.label));
+        assert_eq!(
+            measured.value, same.value,
+            "{}/{}: the battery measured {} and the run gives {}",
+            measured.domain, measured.label, measured.value, same.value
+        );
+    }
+
+    // And the number that made it visible, so a reader sees what was at stake rather than only
+    // that two vectors matched.
+    let winding = ran
+        .iter()
+        .find(|r| r.domain == "motor" && r.label == "winding")
+        .expect("the motor reports its winding");
+    println!("  the winding ends at {:.4} C, in both", winding.value);
+    assert!(
+        (winding.value - 59.6374).abs() < 1e-3,
+        "the profile was not followed: {:.4} C",
+        winding.value
+    );
+}
+
 /// **A blocked cell is a box, and a box refines by keeping its bounds.**
 ///
 /// This refused, and the refusal was reasoned: "a blocked cell is a one-cell notch, so refining

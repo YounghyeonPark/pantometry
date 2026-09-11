@@ -400,7 +400,8 @@ pub enum RunEnd {
 /// This is what makes a run **watchable while it happens**: each `emit` payload is a complete,
 /// readable run — `viewer-core` parses every one — containing the frames captured so far, and
 /// the last payload is byte-identical to what [`run`] returns for the same text, which the
-/// tests pin. Intermediate payloads are the run *unsettled*: `settle_framing` runs once at the
+/// tests pin — `the_two_run_paths_are_one_run`, which measured them at 15459 bytes against 15463
+/// before this path learned to read `window_s`. Intermediate payloads are the run *unsettled*: `settle_framing` runs once at the
 /// end, exactly as [`World::run`] does, so a shell scrubbing mid-run sees each frame's own
 /// framing and the picture settles when the run does — the honest rendering of a run that is
 /// not finished yet.
@@ -421,21 +422,39 @@ pub fn run_streaming(
         serde_json::from_str(text).map_err(|e| format!("{}:{}: {e}", e.line(), e.column()))?;
     let title = scene.title.clone();
     let mut world = World::build_with(scene.clone(), files)?;
-    let dt = pantometry::units::Time::from_si(scene.duration_s / scene.frames as f64);
+    // **Steps are physics and frames are pictures**, and this took `duration_s / frames` as its
+    // step — which ignores [`Scene::window_s`](pantometry_world::Scene::window_s), the key that
+    // exists so the step can be shorter than a frame. Any scene using it for what it is for ran
+    // one experiment here and a different one in [`run`]. The paragraph above claimed the last
+    // payload was byte-identical to `run`'s "which the tests pin", and nothing pinned it: the only
+    // test on this path checked that the JSON *reads back*. Measured at 15459 bytes against 15463
+    // on a scene whose window is a quarter of its frame, and the first frame identical to the same
+    // scene with no window at all — the step was never shortened.
+    //
+    // The schedule below is `World::run`'s, step for step: `steps` whole steps of
+    // `duration_s / steps`, photographed at `round(i * steps / frames)` by the same integer
+    // arithmetic, so two runs of one scene take the same path whichever call made them.
+    let steps = world.steps();
+    let dt = pantometry::units::Time::from_si(scene.duration_s / steps as f64);
     let placed = world.placements();
 
     let mut frames = vec![pantometry::scene::capture(world.simulation(), &placed)];
     emit(pantometry::view::to_json(&title, &frames));
-    for _ in 0..scene.frames {
+    let mut taken = 0usize;
+    for i in 1..=scene.frames {
         if stop.load(Ordering::Relaxed) {
             return Ok(RunEnd::Stopped);
         }
-        world.advance(dt).map_err(|v| {
-            format!(
-                "the audit stopped the run at t = {:.4} s: {v}",
-                world.time().to_si()
-            )
-        })?;
+        let want = (i * steps).div_ceil(scene.frames);
+        for _ in taken..want {
+            world.advance(dt).map_err(|v| {
+                format!(
+                    "the audit stopped the run at t = {:.4} s: {v}",
+                    world.time().to_si()
+                )
+            })?;
+        }
+        taken = want;
         frames.push(pantometry::scene::capture(world.simulation(), &placed));
         emit(pantometry::view::to_json(&title, &frames));
     }
