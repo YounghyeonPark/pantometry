@@ -41,7 +41,7 @@
 use std::path::{Path, PathBuf};
 
 /// Words for the numbers these documents use. Prose does not say "21".
-const WORDS: [&str; 46] = [
+const WORDS: [&str; 51] = [
     "zero",
     "one",
     "two",
@@ -88,6 +88,11 @@ const WORDS: [&str; 46] = [
     "forty-three",
     "forty-four",
     "forty-five",
+    "forty-six",
+    "forty-seven",
+    "forty-eight",
+    "forty-nine",
+    "fifty",
 ];
 
 fn root() -> PathBuf {

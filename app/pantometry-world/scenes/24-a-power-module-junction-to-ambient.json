@@ -3,7 +3,7 @@
   "schedule": "multirate",
   "duration_s": 300.0,
   "frames": 20,
-  "conservation_tolerance": 1e-6,
+  "conservation_tolerance": 1e-06,
   "materials": {
     "silicon": {
       "name": "Si (die)",
@@ -11,7 +11,7 @@
       "thermal": {
         "conductivity": 148.0,
         "specific_heat": 705.0,
-        "expansion": 2.6e-6,
+        "expansion": 2.6e-06,
         "emissivity": 0.6
       }
     }
@@ -20,19 +20,55 @@
     {
       "kind": "block",
       "name": "module",
-      "cells": [8, 8, 8],
+      "cells": [
+        8,
+        8,
+        8
+      ],
       "cell_mm": 1.5,
       "initial_c": 40.0,
       "material": "copper",
       "regions": [
-        { "material": "silicon", "from": [0, 0, 6], "to": [8, 8, 8] }
+        {
+          "material": "silicon",
+          "from": [
+            0,
+            0,
+            6
+          ],
+          "to": [
+            8,
+            8,
+            8
+          ]
+        }
       ],
       "contact": [
-        { "axis": "z", "at": 4, "w_per_m2_k": 38095.238095238095 },
-        { "axis": "z", "at": 6, "w_per_m2_k": 580000.0 }
+        {
+          "axis": "z",
+          "at": 4,
+          "w_per_m2_k": 38095.23809523809
+        },
+        {
+          "axis": "z",
+          "at": 6,
+          "w_per_m2_k": 580000.0
+        }
       ],
       "dissipation": [
-        { "watts": 45.0, "from": [0, 0, 7], "to": [8, 8, 8] }
+        {
+          "watts": 45.0,
+          "from": [
+            0,
+            0,
+            7
+          ],
+          "to": [
+            8,
+            8,
+            8
+          ]
+        }
       ],
       "cooling": [
         {
@@ -44,5 +80,23 @@
         }
       ]
     }
-  ]
+  ],
+  "probes": {
+    "junction": {
+      "in": "module",
+      "at_mm": [
+        6.0,
+        6.0,
+        12.0
+      ]
+    },
+    "baseplate": {
+      "in": "module",
+      "at_mm": [
+        6.0,
+        6.0,
+        0.0
+      ]
+    }
+  }
 }

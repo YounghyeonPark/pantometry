@@ -2331,14 +2331,39 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 resistance += 1.0 / (3000.0 * area);
 
                 let junction = ambient + watts * resistance;
-                let peak = frames
-                    .last()
-                    .expect("frames")
-                    .readings
-                    .iter()
-                    .find(|r| r.label == "peak")
-                    .expect("a block reports its peak")
-                    .value;
+                // **The place, by name.** This read the block's `peak` — the hottest cell
+                // *anywhere* — which is the junction here by a coincidence of the geometry: the
+                // die spans the whole cross-section, so the problem is one-dimensional in `z` and
+                // the top face is the hottest place in the part. It would not be for a module with
+                // two dies at different powers, and there would have been no way to ask for the
+                // cooler one.
+                //
+                // The scene states `probes` now. The two agree to the bit, which is worth having
+                // on its own: `peak` comes from the cells the domain holds and a probe comes from
+                // `ScalarField::at`, which interpolates — two different paths to one number, and
+                // this repository has already found a case where two such paths disagreed.
+                let at = |label: &str| {
+                    frames
+                        .last()
+                        .expect("frames")
+                        .readings
+                        .iter()
+                        .find(|r| r.domain == "module" && r.label == label)
+                        .unwrap_or_else(|| panic!("the module reports {label}"))
+                        .value
+                };
+                let peak = at("junction");
+                assert!(
+                    (peak - at("peak")).abs() < 1e-9,
+                    "{name}: the junction probe reads {peak} and the peak is {}",
+                    at("peak")
+                );
+                assert!(
+                    (at("baseplate") - at("coldest")).abs() < 1e-9,
+                    "{name}: the baseplate probe reads {} and the coldest is {}",
+                    at("baseplate"),
+                    at("coldest")
+                );
                 println!(
                     "  {name}: junction {peak:.2} C against a {resistance:.4} K/W stack giving                      {junction:.2} C — off {:.2e}",
                     (peak - junction).abs() / (junction - ambient)
@@ -3242,7 +3267,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     //
     // `verify::DIAGNOSTICS` is a list of labels, which is a shape that goes stale in silence: a
     // domain that gains a residual would be compared across grids as though it converged to
-    // something, and nothing would say. This is what stops that. It pins all **47** labels the
+    // something, and nothing would say. This is what stops that. It pins all **49** labels the
     // thirty scenes emit, so a new one fails here and has to be decided about.
     //
     // What the sweep did without it, on `17-a-busbar-with-a-notch`:
@@ -3326,6 +3351,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "<x> [m]",
             "TDS [%]",
             "absorbed [J]",
+            "baseplate [C]",
             "bed temperature [C]",
             "coldest [C]",
             "current [A]",
@@ -3339,6 +3365,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "generated [J]",
             "housing [C]",
             "invariant [J]",
+            "junction [C]",
             "kinetic energy [J]",
             "magnetic [J]",
             "mean [C]",

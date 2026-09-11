@@ -6,7 +6,7 @@
 //! that turns out to be awkward. A library with no consumers is a library whose ergonomics
 //! nobody has measured.
 //!
-//! Findings are collected in `FRICTION.md` beside this crate. Thirty-eight of the forty-five are
+//! Findings are collected in `FRICTION.md` beside this crate. Thirty-nine of the forty-six are
 //! fixed — this crate is the record of what the API was like before, and the reason it changed.
 //! Both counts are under test now — `counts_in_prose.rs` walks seven places this number is
 //! written and this line is one of them. It had been stale for two releases before it was.
@@ -230,6 +230,29 @@ pub struct Scene {
     /// no format bump.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stages: BTreeMap<String, Vec<StageSpec>>,
+    /// Points a field is reported at by name, in every frame. See [`ProbeSpec`].
+    ///
+    /// **A field could be asked for its `mean`, its `peak` and its `coldest`, and not for a
+    /// place.** A design number is almost always at a place: the junction, the sensor, the point
+    /// under the baseplate. `24-a-power-module-junction-to-ambient` reads its junction as the
+    /// block's `peak` — the hottest cell *anywhere* — which is right for a single die by
+    /// coincidence of that geometry and has no second answer for a module with two.
+    ///
+    /// ```json
+    /// "probes": { "junction": { "in": "module", "at_mm": [3.0, 4.5, 5.0] } }
+    /// ```
+    ///
+    /// **In millimetres, not in cells**, and that is the decision this key turns on. A point
+    /// stated in cells moves when the grid is refined, so `verify`'s resolution sweep would
+    /// compare two different places and call the difference discretisation — the same error a
+    /// notch's blocked cells made until they learned to refine into their eight children. A point
+    /// in millimetres is the same point at every grid, which is the only way a *design* number's
+    /// convergence can be measured at all.
+    ///
+    /// Absent means what every scene written before this key existed means — no probes — so no
+    /// existing file changes meaning and this needs no format bump.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub probes: BTreeMap<String, ProbeSpec>,
     /// The stage the experiment stands on. See [`EnvironmentSpec`].
     ///
     /// **Absent means what every scene written before this key existed means**: each domain's
@@ -238,6 +261,33 @@ pub struct Scene {
     /// bump: no existing file changes meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSpec>,
+}
+
+/// One place a field is reported at, by name.
+///
+/// ```json
+/// { "in": "module", "at_mm": [3.0, 4.5, 5.0] }
+/// ```
+///
+/// `in` names a domain that has a field; a `heater` or a `network` has readings and no places, and
+/// naming one is refused with the list of what can be probed. `at_mm` is a point in that domain's
+/// own coordinates — the same coordinates its extent is stated in — and a point outside that box
+/// is refused with the box, because [`ScalarField::at`] answers
+/// anywhere it is asked and a probe reading a place the domain does not have would look exactly
+/// like a probe reading one it does.
+///
+/// The value is the field **interpolated** at that point, which is what "the temperature there"
+/// means for a field held as cell averages. It is not a cell value and does not become one when
+/// the point happens to sit at a cell centre: refining moves the centres, and a probe that snapped
+/// to the nearest cell would move with them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeSpec {
+    /// The domain to read, by the name it answers to.
+    #[serde(rename = "in")]
+    pub domain: String,
+    /// Where, in the domain's own coordinates, in millimetres.
+    pub at_mm: [f64; 3],
 }
 
 /// One change to one domain's drive, at one instant.
@@ -667,6 +717,81 @@ impl Scene {
                      well. Steps are {steps}; {advice}",
                     off.at_s
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Every [`probes`](Scene::probes) entry names a domain with a field and a point inside it.
+    ///
+    /// # Why the bounds matter more than they look
+    ///
+    /// [`ScalarField::at`] answers **anywhere** it is asked —
+    /// it is a function of a position, not a lookup in an array — so a point a millimetre outside
+    /// the part comes back as a number in the right units with nothing to say it is extrapolated.
+    /// A probe named `junction` reading 2 mm past the die would appear in every frame, in the CSV,
+    /// in the report and in the resolution sweep, and would converge nicely.
+    ///
+    /// The extent is read from the same [`Placement`] the panel is drawn at, so a probe is inside
+    /// exactly the box the picture shows.
+    pub fn check_probes(&self) -> Result<(), String> {
+        if self.probes.is_empty() {
+            return Ok(());
+        }
+        let placed = self.placements();
+        for (name, probe) in &self.probes {
+            let Some(placement) = placed.get(&probe.domain) else {
+                let known: Vec<&str> = self.domains.iter().map(|d| d.name()).collect();
+                return Err(format!(
+                    "probe {name:?} reads {:?}, which this scene does not define; it has {}",
+                    probe.domain,
+                    known.join(", ")
+                ));
+            };
+            let Some(extent) = placement.extent else {
+                let fields: Vec<&str> = self
+                    .domains
+                    .iter()
+                    .filter(|d| d.placement().extent.is_some())
+                    .map(|d| d.name())
+                    .collect();
+                let can = if fields.is_empty() {
+                    "no domain in this scene has one".to_string()
+                } else {
+                    format!("these do: {}", fields.join(", "))
+                };
+                return Err(format!(
+                    "probe {name:?} reads {:?}, which has no field to read at a place — {can}",
+                    probe.domain
+                ));
+            };
+            let p = probe.at_mm;
+            if p.iter().any(|v| !v.is_finite()) {
+                return Err(format!("probe {name:?} is at {p:?} mm"));
+            }
+            let (lo, hi) = (extent.min, extent.max);
+            let lo_mm = [
+                lo.x().to_si() * 1e3,
+                lo.y().to_si() * 1e3,
+                lo.z().to_si() * 1e3,
+            ];
+            let hi_mm = [
+                hi.x().to_si() * 1e3,
+                hi.y().to_si() * 1e3,
+                hi.z().to_si() * 1e3,
+            ];
+            // A tolerance of a nanometre, so a probe written at the face of a part is inside it
+            // rather than a rounding away from being refused.
+            let slack = 1e-6;
+            for axis in 0..3 {
+                if p[axis] < lo_mm[axis] - slack || p[axis] > hi_mm[axis] + slack {
+                    return Err(format!(
+                        "probe {name:?} is at {p:?} mm and {:?} spans {lo_mm:?} to {hi_mm:?} — \
+                         a field answers anywhere it is asked, so a point outside would read as a \
+                         measurement rather than as an extrapolation",
+                        probe.domain
+                    ));
+                }
             }
         }
         Ok(())
@@ -3719,6 +3844,9 @@ pub struct HotSpot {
 /// A scene that has been checked and turned into a runnable simulation.
 pub struct World {
     scene: Scene,
+    /// Where each domain is drawn, built once because a pose is a property of the scene and the
+    /// scene does not change while a run does. See [`World::capture`].
+    placed: BTreeMap<String, Placement>,
     /// How far the run has advanced, in seconds.
     ///
     /// Kept because [`Scene::stages`] names instants and [`World::advance`] takes only a `dt`. A
@@ -3861,6 +3989,9 @@ impl World {
         // A load profile the run cannot follow is refused here rather than applied late; see
         // `Scene::check_stages`, whose last rule is the one that could be wrong quietly.
         scene.check_stages()?;
+        // A probe outside the part it names would read a number in the right units from a place
+        // that is not there; see `Scene::check_probes`.
+        scene.check_probes()?;
 
         let mut sim = Simulation::new(match scene.schedule {
             ScheduleSpec::OneWay => Schedule::OneWay,
@@ -4093,8 +4224,10 @@ impl World {
             }
         }
 
+        let placed = scene.placements();
         let mut world = World {
             scene,
+            placed,
             elapsed: 0.0,
             staged: BTreeMap::new(),
             sim,
@@ -4283,6 +4416,77 @@ impl World {
         self.sim.time()
     }
 
+    /// Photograph the run where it stands.
+    ///
+    /// **One place, because there were six**, and the divergences that cost are this session's
+    /// recurring finding. `World::run`, the editor's streaming loop and `verify`'s instrumented
+    /// sweep each called [`pantometry::scene::capture`] themselves, so anything a frame should
+    /// carry beyond the kernel's own panels and readings had to be added in three files or be
+    /// quietly missing from two of them. A caller that cannot forget is better than three that
+    /// have to remember.
+    ///
+    /// The placement each domain is drawn at is a property of the scene, which does not change
+    /// while a run is running, so it is built once at [`World::build`] rather than per frame.
+    pub fn capture(&self) -> Frame {
+        let mut frame = pantometry::scene::capture(&self.sim, &self.placed);
+        self.probe_into(&mut frame);
+        frame
+    }
+
+    /// Add one reading per [`probes`](Scene::probes) entry to a frame.
+    ///
+    /// **Inside [`World::capture`] and nowhere else**, which is the reason that function exists.
+    /// Three loops photographed a run before it did, and a probe added to one of them would have
+    /// been missing from the report, the CSV or the resolution sweep depending on which caller a
+    /// reader went through — which is this session's recurring finding, one level down.
+    ///
+    /// The reading carries the *domain's* name and the probe's as its label, so it sorts and
+    /// renders beside that domain's own scalars and `verify` compares it across a sweep exactly
+    /// as it compares a `peak`. The unit is the field's.
+    fn probe_into(&self, frame: &mut Frame) {
+        if self.scene.probes.is_empty() {
+            return;
+        }
+        let t = self.sim.time();
+        for (name, probe) in &self.scene.probes {
+            let Some(field) = self
+                .sim
+                .domains()
+                .find(|d| d.name() == probe.domain)
+                .and_then(|d| d.as_field())
+            else {
+                // Unreachable: `check_probes` refuses a probe whose domain has no extent, and a
+                // domain with an extent is one with a field. Loud rather than a silent skip,
+                // because a probe that quietly reported nothing is a column that vanishes.
+                unreachable!("probe {name:?} has no field; check_probes should have refused it")
+            };
+            let at = pantometry::units::LengthVec::new(
+                pantometry::units::Length::m(probe.at_mm[0] * 1e-3),
+                pantometry::units::Length::m(probe.at_mm[1] * 1e-3),
+                pantometry::units::Length::m(probe.at_mm[2] * 1e-3),
+            );
+            // **Celsius, because a reading is celsius.** `Reading::value` states the one
+            // exception this workspace makes to SI — "temperatures are celsius, because that is
+            // the unit a column of them is read in" — and `peak`, `mean` and `coldest` all
+            // follow it. A field's `at` answers in the SI base unit, so a probe reporting what it
+            // returns put **500.3026 K beside a peak of 227.1526 C** in one table: the same
+            // number twice, in two units, in the column a reader compares down.
+            //
+            // The panel is a separate matter and stays in kelvin: it is a picture with its own
+            // labelled scale rather than a row beside those three.
+            let (value, unit) = match field.unit() {
+                "K" => (field.at(at, t) - 273.15, "C"),
+                other => (field.at(at, t), other),
+            };
+            frame.readings.push(pantometry::core::Reading::new(
+                probe.domain.clone(),
+                name.clone(),
+                value,
+                unit,
+            ));
+        }
+    }
+
     /// Run to the end, capturing frames.
     ///
     /// Returns the frames, or the first [`Violation`] the audit raised — which stops the run,
@@ -4294,9 +4498,8 @@ impl World {
         // what every scene written before the key meant. See [`Scene::window_s`].
         let steps = self.steps();
         let dt = Time::from_si(self.scene.duration_s / steps as f64);
-        let placed = self.placements();
         let mut frames = Vec::with_capacity(self.scene.frames + 1);
-        frames.push(pantometry::scene::capture(&self.sim, &placed));
+        frames.push(self.capture());
         // Which step each frame lands on, by integer arithmetic so two runs of one scene take the
         // same path: frame `i` is captured after step `round(i * steps / frames)`, and the last
         // one is the last step exactly.
@@ -4307,7 +4510,7 @@ impl World {
                 self.advance(dt)?;
             }
             taken = want;
-            frames.push(pantometry::scene::capture(&self.sim, &placed));
+            frames.push(self.capture());
         }
         pantometry::scene::settle_framing(&mut frames);
         Ok(frames)

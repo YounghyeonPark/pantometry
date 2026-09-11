@@ -198,7 +198,6 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
     // that true.
     let steps = world.steps();
     let dt = Time::from_si(scene.duration_s / steps as f64);
-    let placed = world.placements();
 
     let mut drift: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -209,7 +208,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
     let mut worst_books: Option<Margin> = None;
 
     let mut frames = Vec::with_capacity(scene.frames + 1);
-    frames.push(pantometry::scene::capture(&world.sim, &placed));
+    frames.push(world.capture());
     let mut taken = 0usize;
     for frame_index in 1..=scene.frames {
         let want = (frame_index * steps).div_ceil(scene.frames);
@@ -316,7 +315,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
             }
         }
         taken = want;
-        frames.push(pantometry::scene::capture(&world.sim, &placed));
+        frames.push(world.capture());
     }
     pantometry::scene::settle_framing(&mut frames);
 

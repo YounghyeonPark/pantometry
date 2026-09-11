@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-five places it is awkward, thirty-eight of which have been changed — see
+has already found forty-six places it is awkward, thirty-nine of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,26 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Added
+
+- **A field could be asked for its mean, its peak and its coldest, and not for a place.**
+  `Scene::probes` names points, and reports each in every frame beside that domain's own scalars:
+
+  ```json
+  "probes": { "junction": { "in": "module", "at_mm": [6.0, 6.0, 12.0] } }
+  ```
+
+  **In millimetres, which is the decision the key turns on.** A point in cells moves when the grid
+  is refined, so a resolution sweep would compare two places and call the difference
+  discretisation. In millimetres the same point reads 44.301778 °C at 1.5 mm and 44.286211 °C at
+  0.75 mm — a convergence pair for one design number.
+
+  `24-a-power-module-junction-to-ambient` names its junction and its baseplate now, where it read
+  the block's `peak` — the hottest cell anywhere, which is the junction there only because the die
+  spans the whole cross-section. The two agree to the bit, which is worth having on its own: `peak`
+  comes from the cells the domain holds and a probe from `ScalarField::at`, which interpolates.
+
+  A probe outside the part, on a domain with no field, or misspelled is refused at build with what
+  the caller needs; the library needed no change at all.
 
 - **A scene could say what its drive is and not when it changes.** Every scene in this repository
   ran at a constant one, and the questions a design actually asks are not constant: the junction

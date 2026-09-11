@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-eight of the forty-five are fixed**, and seven are recorded rather than actioned. The reasons
+**Thirty-nine of the forty-six are fixed**, and seven are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, one because the flag it wants is a breaking
 change to a published crate for five readings in forty-seven, and the rest on scope. The entries are
@@ -598,7 +598,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-five findings, and the source has shifted ten times — the table below has eleven rows and
+Forty-six findings, and the source has shifted ten times — the table below has eleven rows and
 that sentence said "seven" through four of them.
 
 | how many | where they came from |
@@ -613,7 +613,7 @@ that sentence said "seven" through four of them.
 | 30, 31 | **making an unreachable domain reachable**, which is where the layers above it show what they assumed |
 | 33 | **the audit refusing three correct runs in one sitting**, all with the same shape |
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
-| 35–45 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
+| 35–46 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
 
 **Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
 should take away, because neither is "use the API and see what hurts". Building the next domain and
@@ -629,7 +629,7 @@ of one, a notch nobody could measure the grid of: none of them was a bug, and al
 wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
 whether the file describes anything.
 
-Thirty-eight are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+Thirty-nine are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
 seven findings after that — the test counts the *summary* at the top of the file, and this sentence
 is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
@@ -1444,6 +1444,63 @@ written; `run_streaming` claimed byte-identity "which the tests pin" and nothing
 claimed to be `World::run`'s loop while being a third of it.
 
 What separates the three is only when they were caught, and that was luck rather than method.
+
+---
+
+## 46. A field could be asked for its mean, its peak and its coldest, and not for a place
+
+A design number is almost always at a place — the junction, the sensor, the point under the
+baseplate — and the scene format had three aggregates and no way to name one.
+`24-a-power-module-junction-to-ambient` read its junction as the block's `peak`, the hottest cell
+*anywhere*. That is the junction here by a coincidence of the geometry: the die spans the whole
+cross-section, so the problem is one-dimensional in `z` and the top face is the hottest place in
+the part. It would not be for a module with two dies at different powers, and there would have been
+no way to ask for the cooler one.
+
+**Fixed**: `Scene::probes` names points.
+
+```json
+"probes": { "junction": { "in": "module", "at_mm": [6.0, 6.0, 12.0] } }
+```
+
+**In millimetres, and that is the decision the key turns on.** A point stated in cells moves when
+the grid is refined, so `verify`'s resolution sweep would compare two different places and call the
+difference discretisation — the same error a notch's blocked cells made until they learned to
+refine into their eight children, one finding ago. Measured: the same point reads 44.301778 °C at
+1.5 mm and 44.286211 °C at 0.75 mm, which is a **convergence pair for one design number** rather
+than a comparison of two places.
+
+**The library needed nothing.** `ScalarField::at(p, t)` already takes a position in length units
+and already reports the field's unit; the extent comes from the same `Placement` the panel is drawn
+at, so a probe is inside exactly the box the picture shows. The capability was in the kernel and
+the scene format had never exposed it.
+
+### Three things it cost
+
+**A probe outside the part reads a place the part does not have.** `at` is a function of a
+position, not a lookup in an array, so a point a millimetre past the die comes back as a number in
+the right units with nothing to say it is extrapolated — in every frame, in the CSV, in the report
+and in the sweep, converging nicely. Refused at build with the box.
+
+**A probe reported kelvin into a column of celsius.** `Reading::value` states the one exception
+this workspace makes to SI — "temperatures are celsius, because that is the unit a column of them
+is read in" — and a field's `at` answers in the SI base unit, so the first version put
+**500.3026 K beside a peak of 227.1526 C** in one table: the same number twice, in two units, in
+the column a reader compares down. The panel stays in kelvin; it is a picture with its own labelled
+scale rather than a row beside those three.
+
+**A sabotage passed.** Reading `at_mm` as metres left four of five tests green, because
+`ScalarField::at` **clamps at the faces** and every probe in them sat on a face or at the centre —
+so `12 m` and `12 mm` came back as the same top face. A point a quarter of the way up tells them
+apart: 32.79, 44.30 and 62.97 °C at three places in one field.
+
+### And the capture had to be collapsed first
+
+Three loops photographed a run — `World::run`, the editor's streaming path, `verify`'s instrumented
+sweep — each calling `pantometry::scene::capture` itself, six call sites. A probe added to one of
+them would have appeared in the report, the CSV or the resolution sweep depending on which caller a
+reader went through. `World::capture` is the one place now, which is findings 44 and 45 answered
+structurally rather than one at a time.
 
 ---
 

@@ -436,9 +436,8 @@ pub fn run_streaming(
     // arithmetic, so two runs of one scene take the same path whichever call made them.
     let steps = world.steps();
     let dt = pantometry::units::Time::from_si(scene.duration_s / steps as f64);
-    let placed = world.placements();
 
-    let mut frames = vec![pantometry::scene::capture(world.simulation(), &placed)];
+    let mut frames = vec![world.capture()];
     emit(pantometry::view::to_json(&title, &frames));
     let mut taken = 0usize;
     for i in 1..=scene.frames {
@@ -455,7 +454,7 @@ pub fn run_streaming(
             })?;
         }
         taken = want;
-        frames.push(pantometry::scene::capture(world.simulation(), &placed));
+        frames.push(world.capture());
         emit(pantometry::view::to_json(&title, &frames));
     }
     pantometry::scene::settle_framing(&mut frames);
