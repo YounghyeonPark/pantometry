@@ -11,7 +11,7 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Thirty-nine of the forty-six are fixed**, and seven are recorded rather than actioned. The reasons
+**Forty of the forty-seven are fixed**, and seven are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, one because the flag it wants is a breaking
 change to a published crate for five readings in forty-seven, and the rest on scope. The entries are
@@ -598,7 +598,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-six findings, and the source has shifted ten times — the table below has eleven rows and
+Forty-seven findings, and the source has shifted ten times — the table below has eleven rows and
 that sentence said "seven" through four of them.
 
 | how many | where they came from |
@@ -613,7 +613,7 @@ that sentence said "seven" through four of them.
 | 30, 31 | **making an unreachable domain reachable**, which is where the layers above it show what they assumed |
 | 33 | **the audit refusing three correct runs in one sitting**, all with the same shape |
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
-| 35–46 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
+| 35–47 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
 
 **Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
 should take away, because neither is "use the API and see what hurts". Building the next domain and
@@ -629,7 +629,7 @@ of one, a notch nobody could measure the grid of: none of them was a bug, and al
 wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
 whether the file describes anything.
 
-Thirty-nine are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+Forty are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
 seven findings after that — the test counts the *summary* at the top of the file, and this sentence
 is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
@@ -1501,6 +1501,53 @@ sweep — each calling `pantometry::scene::capture` itself, six call sites. A pr
 them would have appeared in the report, the CSV or the resolution sweep depending on which caller a
 reader went through. `World::capture` is the one place now, which is findings 44 and 45 answered
 structurally rather than one at a time.
+
+---
+
+## 47. A scene skipped its own resolution sweep, honestly, and stayed unmeasured
+
+A structure's elements have to be the cells of the block it follows — `World::build` refuses the
+pair otherwise — so refining one without the other is not a finer statement of the same problem.
+`25-what-140-kelvin-does-to-the-solder` is the only scene with such a pair, and it has been wrong
+in both directions:
+
+1. `DomainSpec::refined` passed the structure through unchanged, with a comment saying it was
+   "reported as unswept". It was not. The block doubled, the structure did not, and the sweep
+   reported the whole refined scene as **refused** — so the scene had been *failing* its own
+   resolution sweep since it shipped, which reads as a finding about the scene rather than about
+   the sweep. Finding 39 caught that and made it skip.
+2. A skip is honest and still leaves the scene unmeasured. Two commits of this session turned on
+   measurements nobody could take — a notch's grid error, a motor's overshoot — and this is the
+   same gap with a nicer message on it.
+
+**Fixed.** Refining the pair is a statement about two domains at once, which a function seeing one
+cannot make; `Scene::refined` sees all of them. It doubles every other domain first, then every
+structure that follows one, and refuses when the named partner did not double.
+
+What the skip cost:
+
+```text
+  strain energy   0.0274238 J -> 0.0263010 J    -4.09%
+  strain z        -8.8099e-4  -> -8.6800e-4     -1.48%
+```
+
+512 elements against 4096. The strain the whole scene is about moves 1.48% with the grid, and
+nothing could ask.
+
+### Two things worth keeping
+
+**A first measurement of that said 5.31%**, from a refinement written by hand that doubled the
+cells and the regions and left the block's `contact` faces and `dissipation` boxes where they were.
+The number that matters is the one the sweep makes, because the sweep is what a reader runs — and
+a hand-rolled check of a machine's arithmetic is a second implementation, which convention 1 of
+this workspace exists to forbid.
+
+**A sabotage passed, for the second time in two findings, and for the same reason.** Removing the
+check that the partner actually doubled left both tests green, because the test that was supposed
+to cover it used a block that **refuses first** — so the structure never had its turn. The case
+that needs the check is a partner with no grid at all: a lump, a heater, a network passes through
+in silence and says nothing. A test that reaches a guard through a path that fails earlier is not a
+test of that guard.
 
 ---
 

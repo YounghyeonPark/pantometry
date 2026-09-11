@@ -1114,16 +1114,28 @@ fn a_body_strained_past_its_yield_is_a_finding() {
     );
 }
 
-/// **A structure that follows a block cannot be refined alone, and the sweep says so rather than
-/// building a scene that cannot stand.**
+/// **A structure refines with the block it follows**, which took two goes to get right.
 ///
-/// `DomainSpec::refined` passed a structure through unchanged and its comment said it was
-/// "reported as unswept". It was not: the block it follows doubled, the structure did not, and
-/// `World::build` refused the pair because an element and a cell have to be the same box — so the
-/// sweep reported the whole refined scene as **refused**, and `25-what-140-kelvin-does-to-the-solder`
-/// had been failing its own resolution sweep since it shipped.
+/// A structure's elements have to be that block's cells — `World::build` refuses the pair
+/// otherwise — so refining one without the other is not a finer statement of the same problem. It
+/// has been wrong in both directions:
+///
+/// 1. `DomainSpec::refined` passed a structure through unchanged, with a comment saying it was
+///    "reported as unswept". It was not. The block doubled, the structure did not, and the sweep
+///    reported the whole refined scene as **refused** — so
+///    `25-what-140-kelvin-does-to-the-solder` had been *failing* its own resolution sweep since it
+///    shipped, which read as a finding about the scene rather than about the sweep.
+/// 2. Then it skipped, with a reason, which was honest and still left the scene unmeasured.
+///
+/// Refining the pair is a statement about two domains at once, which a function seeing one cannot
+/// make. [`Scene::refined`](pantometry_world::Scene::refined) sees all of them, so it doubles the
+/// block first, then every structure that follows one, and refuses if the block it names did not
+/// double.
+///
+/// What the skip cost: scene 25's strain energy moves **4.09%** between 512 elements and 4096 —
+/// 0.0274238 J against 0.0263010 — and the strain the scene is about moves 1.48% in `z`.
 #[test]
-fn a_coupled_structure_skips_the_resolution_sweep_and_names_why() {
+fn a_structure_refines_with_the_block_it_follows() {
     let s = scene(
         r#"{
   "title": "a bonded bar",
@@ -1139,23 +1151,94 @@ fn a_coupled_structure_skips_the_resolution_sweep_and_names_why() {
   ]
 }"#,
     );
-    let b = verify(&s, false).expect("it runs");
-    match &b.resolution {
-        SweepOutcome::Skipped(why) => {
-            println!("  skipped: {why}");
-            assert!(
-                why.contains("the same problem"),
-                "the skip should say why: {why}"
-            );
+
+    // The pair doubles together, and stays the same box.
+    let fine = s.refined().expect("a structure refines with its block");
+    let mut seen = 0;
+    for spec in &fine.domains {
+        match spec {
+            DomainSpec::Block { cells, cell_mm, .. }
+            | DomainSpec::Structure { cells, cell_mm, .. } => {
+                assert_eq!(*cells, [8, 4, 4]);
+                assert_eq!(*cell_mm, 1.0);
+                seen += 1;
+            }
+            other => panic!("{other:?}"),
         }
-        other => panic!("a coupled structure should skip, not {other:?}"),
     }
-    // A refusal would have carried the exit code; a skip that says why does not.
+    assert_eq!(seen, 2, "both halves of the pair have to refine");
+    // Which is the thing that matters: the refined scene has to *build*, and it did not before.
+    pantometry_world::World::build(fine).expect("the refined pair is a scene");
+
+    // And the sweep runs rather than skipping or being refused.
+    let b = verify(&s, false).expect("it runs");
+    let sweep = ran(&b.resolution);
+    assert!(
+        sweep.shifts.iter().any(|x| x.domain == "body"),
+        "the structure was not measured: {:?}",
+        sweep.shifts
+    );
     assert!(
         !b.findings
             .iter()
             .any(|f| f.contains("sweep's run was refused")),
-        "it was refused rather than skipped: {:?}",
+        "the refined pair was refused: {:?}",
         b.findings
+    );
+}
+
+/// **A structure whose partner did not refine is refused, naming it.**
+///
+/// The pair has to double together or `World::build` rejects it with a message about element
+/// counts, which says nothing about why. Two ways the partner can fail to double, and only one of
+/// them is caught by the block's own refusal:
+///
+/// - the block **refuses**, for a one-cell feature, and the whole scene refuses with its reason;
+/// - the named domain has **no grid at all** — a lump, a heater, a network — so it passes through
+///   unchanged and says nothing. That one is this check's, and a sabotage that removed it passed a
+///   test using the first case, because the block refused before the structure had its turn.
+#[test]
+fn a_structure_whose_partner_did_not_refine_is_refused() {
+    // A block that refuses for its own reason: the scene refuses with that reason.
+    let hot_spot = scene(
+        r#"{
+  "title": "a body on a spotted block",
+  "duration_s": 1.0, "frames": 3, "conservation_tolerance": 1e-6,
+  "domains": [
+    { "kind": "block", "name": "hot", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "initial_c": 20.0, "material": "copper",
+      "hot_spot": { "at": [2, 1, 1], "above_k": 10.0 } },
+    { "kind": "structure", "name": "body", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "material": "copper", "follows": "hot", "reference_c": 40.0,
+      "held": [{ "face": "x-min", "as": "clamp" }] }
+  ]
+}"#,
+    );
+    let why = hot_spot.refined().expect_err("a hot spot must refuse");
+    assert!(why.contains("hot spot"), "{why}");
+
+    // A partner with no grid: it passes through in silence, and the structure has to say so.
+    let lump = scene(
+        r#"{
+  "title": "a body on a lump",
+  "duration_s": 1.0, "frames": 3, "conservation_tolerance": 1e-6,
+  "domains": [
+    { "kind": "lump", "name": "hot", "volume_cm3": 8.0, "thickness_mm": 2.0,
+      "initial_c": 20.0, "ambient_c": 20.0, "area_cm2": 24.0 },
+    { "kind": "block", "name": "other", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "initial_c": 20.0, "material": "copper" },
+    { "kind": "structure", "name": "body", "cells": [4, 2, 2], "cell_mm": 2.0,
+      "material": "copper", "follows": "hot", "reference_c": 40.0,
+      "held": [{ "face": "x-min", "as": "clamp" }] }
+  ]
+}"#,
+    );
+    let why = lump
+        .refined()
+        .expect_err("a structure following something with no grid must be refused");
+    assert!(why.contains("did not refine"), "{why}");
+    assert!(
+        why.contains("\"hot\""),
+        "the refusal should name the partner: {why}"
     );
 }

@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-six places it is awkward, thirty-nine of which have been changed — see
+has already found forty-seven places it is awkward, forty of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -29,6 +29,17 @@ The exception is the twelfth domain, which is not about the editor at all: compa
 pharmacokinetics, and the count of commits above does not include it.
 
 ### Added
+
+- **A structure refines with the block it follows**, so `25-what-140-kelvin-does-to-the-solder`
+  stopped skipping its own resolution sweep. A structure's elements have to be that block's cells,
+  so refining one without the other is a scene that will not build — which `DomainSpec::refined` is
+  right to refuse, seeing one domain. `Scene::refined` sees all of them: it doubles every other
+  domain, then every structure that follows one, and refuses when the named partner did not double.
+
+  What the skip cost: the scene's strain energy moves **4.09%** between 512 elements and 4096 —
+  0.0274238 J against 0.0263010 — and the strain it is about moves 1.48% in `z`. A first pass at
+  that number said 5.31%, from a hand-written refinement that left the block's `contact` faces and
+  `dissipation` boxes where they were; the number that matters is the one the sweep makes.
 
 - **A field could be asked for its mean, its peak and its coldest, and not for a place.**
   `Scene::probes` names points, and reports each in every frame beside that domain's own scalars:

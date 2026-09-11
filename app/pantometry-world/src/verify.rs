@@ -1318,11 +1318,48 @@ impl Scene {
     pub fn refined(&self) -> Result<Scene, String> {
         let mut finer = self.clone();
         let mut refined_any = false;
+        // **Two passes, because a structure that follows a block is refinable only with it.**
+        // A structure's elements have to be that block's cells — `World::build` refuses the pair
+        // otherwise — so doubling one without the other is not a finer statement of the same
+        // problem, it is a scene that will not build. [`DomainSpec::refined`] sees one domain and
+        // is right to refuse; this sees all of them, so it can double the pair and check that it
+        // did.
+        //
+        // What the refusal cost was the measurement. `25-what-140-kelvin-does-to-the-solder` has
+        // skipped its resolution sweep since it shipped, and its strain energy moves **4.09%**
+        // between 512 elements and 4096 — 0.0274238 J against 0.0263010 — a number nobody could
+        // ask for. The strain the whole scene is about moves 1.48% in `z`.
+        //
+        // A first pass at that measurement said 5.31%, from a refinement written by hand that
+        // doubled the cells and the regions and left the block's `contact` faces and
+        // `dissipation` boxes where they were. The number that matters is the one the sweep
+        // makes, because the sweep is what a reader runs.
+        let mut doubled: std::collections::BTreeSet<String> = Default::default();
         for spec in &mut finer.domains {
+            if matches!(spec, DomainSpec::Structure { .. }) {
+                continue;
+            }
             if let Some(f) = spec.refined()? {
+                doubled.insert(f.name().to_string());
                 *spec = f;
                 refined_any = true;
             }
+        }
+        for spec in &mut finer.domains {
+            let DomainSpec::Structure { name, follows, .. } = spec else {
+                continue;
+            };
+            if let Some(block) = follows {
+                if !doubled.contains(block) {
+                    return Err(format!(
+                        "{name}: follows {block:?}, which did not refine — a structure's elements \
+                         have to be that block's cells, so refining one without the other is a \
+                         scene that will not build"
+                    ));
+                }
+            }
+            *spec = spec.structure_refined();
+            refined_any = true;
         }
         if !refined_any {
             return Err(
@@ -1337,6 +1374,50 @@ impl Scene {
 }
 
 impl DomainSpec {
+    /// This structure at doubled resolution.
+    ///
+    /// The same arithmetic a [`DomainSpec::Block`] uses — cells doubled, the cell halved, region
+    /// bounds doubled — because a structure's elements *are* a block's cells and the two have to
+    /// stay the same box. `held` and `pressed` name **faces**, which do not scale with a grid.
+    ///
+    /// Not public, and called only from [`Scene::refined`], because a structure that follows a
+    /// block refines only with it and this function cannot see the block.
+    fn structure_refined(&self) -> DomainSpec {
+        let DomainSpec::Structure {
+            name,
+            cells,
+            cell_mm,
+            material,
+            regions,
+            held,
+            pressed,
+            follows,
+            reference_c,
+        } = self
+        else {
+            return self.clone();
+        };
+        DomainSpec::Structure {
+            name: name.clone(),
+            cells: [cells[0] * 2, cells[1] * 2, cells[2] * 2],
+            cell_mm: cell_mm / 2.0,
+            material: material.clone(),
+            regions: regions
+                .iter()
+                .map(|r| crate::Region {
+                    material: r.material.clone(),
+                    from: [r.from[0] * 2, r.from[1] * 2, r.from[2] * 2],
+                    to: [r.to[0] * 2, r.to[1] * 2, r.to[2] * 2],
+                    initial_c: r.initial_c,
+                })
+                .collect(),
+            held: held.clone(),
+            pressed: pressed.clone(),
+            follows: follows.clone(),
+            reference_c: *reference_c,
+        }
+    }
+
     /// This domain at doubled resolution, `Ok(None)` if it has no resolution, or the reason
     /// doubling would change the problem rather than refine it.
     ///
@@ -1374,16 +1455,17 @@ impl DomainSpec {
             // it costs is a real measurement: a coupled scene is exactly where discretisation
             // error is worth knowing, and refining the two in step is a statement this per-domain
             // method cannot make — `Scene::refined` sees every domain and could.
-            DomainSpec::Structure {
-                name,
-                follows: Some(block),
-                ..
-            } => {
+            // **A structure is refined by [`Scene::refined`], not here.** One that follows a
+            // block is refinable only together with it, and that is a statement about two
+            // domains at once, which a function seeing one cannot make. One that follows nothing
+            // could be refined here — but then a scene would refine its structures in two
+            // different places depending on a field, so both go through the scene.
+            DomainSpec::Structure { name, .. } => {
                 return Err(format!(
-                    "{name}: follows {block:?}, and a structure's elements have to be that block's                      cells — so refining one without the other is not the same problem. Refining                      them together is a statement about two domains at once, which this is not"
+                    "{name}: a structure is refined with the block it follows, which is a \
+                     statement about two domains at once — `Scene::refined` makes it"
                 ))
             }
-            DomainSpec::Structure { .. } => return Ok(None),
             // **A well refines and its eigenstate number does not.** `n` names which standing
             // shape, not a wavelength in cells, so doubling the grid keeps the same state and the
             // discrete eigenvalue converges on the continuum one from below — which is the thing
