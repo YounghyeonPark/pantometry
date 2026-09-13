@@ -77,6 +77,12 @@ fn friction() -> Option<String> {
 /// Findings are `## <n>.` headings; a fixed one opens its resolution with `**Fixed`. The summary
 /// reads "**X of the Y are fixed**, and Z are recorded rather than actioned", so all three have
 /// to agree with each other as well as with the file.
+///
+/// **And the marker has to be there when the finding says it is fixed**, which is the half this
+/// test did not have. It counted the marker, the summary was pinned to that count, and two
+/// findings whose resolutions opened with something else were counted as open — so the test, the
+/// count and the summary all agreed with each other about a tree none of them described. Forty
+/// and seven, for a file that was forty-two and five.
 #[test]
 fn the_summary_counts_what_the_file_contains() {
     let Some(text) = friction() else {
@@ -92,6 +98,44 @@ fn the_summary_counts_what_the_file_contains() {
         })
         .count();
     let fixed = text.lines().filter(|l| l.starts_with("**Fixed")).count();
+
+    // **A finding that says it is fixed has to carry the marker.** This counted `**Fixed` at the
+    // start of a line and nothing else, so a resolution that opened with something else was
+    // counted as open — and the summary, pinned to this count, said so. Two did: finding 10 opened
+    // with the retraction it was correcting ("this said 'not a defect anywhere', and that was
+    // wrong. Fixed 2026-09-07") and finding 36 with what the battery does now, above three
+    // paragraphs each beginning "the X is fixed". Forty and seven, for a tree that was forty-two
+    // and five.
+    //
+    // Nothing can read prose and tell whether a defect was repaired. What it can tell is that a
+    // body **claims** a fix and does not carry the marker, which is the only way the two have ever
+    // disagreed here. Measured against the file at the time: this rule flags exactly those two and
+    // none of the five that are genuinely open, so it is a check and not a nuisance.
+    let claims_a_fix = |body: &str| {
+        ["is fixed", "are fixed", "was fixed", "Fixed"]
+            .iter()
+            .any(|w| body.contains(w))
+    };
+    let mut unmarked = Vec::new();
+    for chunk in text.split("\n## ").skip(1) {
+        let (head, body) = chunk.split_once('\n').unwrap_or((chunk, ""));
+        if head
+            .split_once('.')
+            .is_none_or(|(n, _)| n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()))
+        {
+            continue;
+        }
+        let marked = body.lines().any(|l| l.starts_with("**Fixed"));
+        if !marked && claims_a_fix(body) {
+            unmarked.push(head.to_string());
+        }
+    }
+    assert!(
+        unmarked.is_empty(),
+        "these findings say they are fixed and do not open a line with `**Fixed`, so the count \
+         above and the summary pinned to it are describing the markup rather than the tree: {:#?}",
+        unmarked
+    );
 
     assert!(
         findings > 0,

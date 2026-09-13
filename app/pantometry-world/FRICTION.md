@@ -11,10 +11,18 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Forty of the forty-seven are fixed**, and seven are recorded rather than actioned. The reasons
+**Forty-two of the forty-seven are fixed**, and five are recorded rather than actioned. The reasons
 differ and are given in each: one because the kernel already refuses the mistake it describes,
 one because it is documented rather than changed, one because the flag it wants is a breaking
-change to a published crate for five readings in forty-seven, and the rest on scope. The entries are
+change to a published crate for five readings in forty-seven, and the rest on scope.
+
+**A fixed finding opens its resolution with `**Fixed`, at the start of a line**, because that is
+what `friction_counts.rs` counts and the summary above is pinned to that count. It said "forty
+… and seven" until somebody looked: finding 10 opened with the retraction it was correcting and
+finding 36 with what the battery does now, so two resolved findings were counted as open and the
+test agreed with the file about the file rather than about the tree. The test refuses that shape
+now — a body that says it is fixed without carrying the marker is a failure, not a silent
+subtraction. The entries are
 kept rather than deleted, because what the API used to be is the argument for what it is — and because the next consumer should be able
 to see that the answer to "this is awkward" was to change the library rather than to work
 around it. Each fixed entry says what was done.
@@ -295,7 +303,8 @@ at 41 cells.
 Found by an assertion failing, not by reasoning: a test checked that the bar held every joule
 the beam paid, computed the mean from the render panel, and missed by 1.2%.
 
-**This said "not a defect anywhere", and that was wrong.** Fixed 2026-09-07.
+**Fixed on 2026-09-07**, and what it replaced was a refusal: this entry said "not a defect
+anywhere", and that was wrong.
 
 The reasoning was that `ScalarField` is a function of position behaving as documented and the
 renderer was sampling it as it should. Both halves are true and the conclusion does not follow,
@@ -629,7 +638,7 @@ of one, a notch nobody could measure the grid of: none of them was a bug, and al
 wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
 whether the file describes anything.
 
-Forty are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+Forty-two are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
 seven findings after that — the test counts the *summary* at the top of the file, and this sentence
 is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
@@ -957,9 +966,10 @@ STL to hold a range of 0.067 K, a Biot number of 8.6e-4. And `19-a-coating-stops
 asserted that the largest cell-to-cell step lands on the interface, which is true and was a claim
 about **0.08 K** on a block whose excursion was 60 K.
 
-**The battery raises it now**, with the corpus above written beside the threshold, and `scene.rs`
-pins the set so an arrival or a departure is a failure rather than a quieter list. The table is
-the corpus the threshold was chosen against, not the state of the tree.
+**Fixed as a measurement**, which is how findings 39 and 47 are marked for the same shape: the
+battery raises it now, with the corpus above written beside the threshold, and `scene.rs` pins the
+set so an arrival or a departure is a failure rather than a quieter list. The table is the corpus
+the threshold was chosen against, not the state of the tree.
 
 **The coating scene is fixed and left the list.** Its pulse was one cell at +60 K — 0.145 J spread
 over 1 458 cells — and it is the whole heated face now, eighty-one times the energy. The interface

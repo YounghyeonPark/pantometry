@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-seven places it is awkward, forty of which have been changed — see
+has already found forty-seven places it is awkward, forty-two of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -101,6 +101,18 @@ pharmacokinetics, and the count of commits above does not include it.
   difference is exactly zero.
 
 ### Fixed
+
+- **Two findings were fixed and the count did not know.** `FRICTION.md` says how many of its
+  findings are resolved, and `friction_counts.rs` pins that sentence to the number of lines opening
+  with `**Fixed`. Finding 10 opened with the retraction it was correcting — "this said 'not a defect
+  anywhere', and that was wrong. Fixed 2026-09-07" — and finding 36 with what the battery does now,
+  above three paragraphs each beginning "the X is fixed". Neither carried the marker, so the file
+  said **forty and seven** for a tree that was **forty-two and five**, and the test agreed with it.
+
+  A test that counts a convention cannot see a resolution that did not follow it. What it can see
+  is a body that *claims* a fix and carries no marker, which is the only way the two have ever
+  disagreed here — measured against the file, that rule flags exactly those two and none of the
+  five that are genuinely open. It is a failure now rather than a silent subtraction.
 
 - **The verification battery verified a run nobody wrote.** `run_measured`'s loop advanced
   `world.sim`, the simulation inside the world, which does **one** of the five things
