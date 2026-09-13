@@ -39,6 +39,7 @@ dependencies = [
  "pantometry-optics",
  "pantometry-pharmacokinetic",
  "pantometry-porous",
+ "pantometry-protein",
  "pantometry-quantum",
  "pantometry-scene",
  "pantometry-shape",
@@ -146,6 +147,14 @@ name = "pantometry-porous"
 version = "0.20.0"
 dependencies = [
  "glam",
+ "pantometry-core",
+ "pantometry-units",
+]
+
+[[package]]
+name = "pantometry-protein"
+version = "0.20.0"
+dependencies = [
  "pantometry-core",
  "pantometry-units",
 ]

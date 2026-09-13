@@ -1,0 +1,19 @@
+[package]
+name = "pantometry-protein"
+description = "Protein motion as a simulation domain: elastic network normal modes, and what a bound ligand does to them"
+keywords = ["protein", "normal-modes", "biophysics", "physics", "simulation"]
+categories = ["science", "simulation"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+pantometry-core = { workspace = true }
+pantometry-units = { workspace = true }
+
+[dev-dependencies]
+pantometry-core = { workspace = true }
+pantometry-units = { workspace = true }

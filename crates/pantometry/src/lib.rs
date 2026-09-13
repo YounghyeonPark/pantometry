@@ -62,18 +62,19 @@
 //! pantometry-thermal          depends on core   │
 //! pantometry-mechanics        depends on core   │
 //! pantometry-acoustic         depends on core   ├ one crate per physics, and none knows another
-//! pantometry-molecular        depends on core   │   -- twelve of them, and six more not listed
+//! pantometry-molecular        depends on core   │   -- thirteen, and six more not listed
 //! pantometry-electrical       depends on core   │
-//! pantometry-pharmacokinetic  depends on core   ┘
+//! pantometry-pharmacokinetic  depends on core   │
+//! pantometry-protein          depends on core   ┘
 //! pantometry-scene            depends on core      where things are, and what a run looks like
 //! pantometry-view             depends on scene     how to draw that, chosen by the data's shape
 //! pantometry                  depends on all of them
 //! ```
 //!
-//! None of the twelve domains knows about any of the others. They meet on the kernel's
+//! None of the thirteen domains knows about any of the others. They meet on the kernel's
 //! [`Exchange`](pantometry_core::Exchange), and each one that arrived left the others
 //! untouched — which is the claim the split was made to test, and has held every time a domain
-//! has been added, most recently for compartmental pharmacokinetics.
+//! has been added, most recently for a protein's normal modes.
 //!
 //! [`scene`] and [`view`] are layers up rather than domains, and they are bound by the same rule
 //! from the other side: neither names a domain. A physics that arrives tomorrow is captured
@@ -96,6 +97,7 @@ pub use pantometry_molecular as molecular;
 pub use pantometry_optics as optics;
 pub use pantometry_pharmacokinetic as pharmacokinetic;
 pub use pantometry_porous as porous;
+pub use pantometry_protein as protein;
 pub use pantometry_quantum as quantum;
 pub use pantometry_scene as scene;
 pub use pantometry_shape as shape;
@@ -149,6 +151,7 @@ pub mod prelude {
     };
     pub use pantometry_pharmacokinetic::{Clearance, Compartment, CompartmentModel};
     pub use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck, Shot};
+    pub use pantometry_protein::{correlation, Modes, Network, Protein, Structure};
     pub use pantometry_quantum::{Wavenumber, Well, PROBABILITY};
     pub use pantometry_scene::{
         capture, sample_field, settle_framing, Extent, Frame, Panel, PanelData, Placed, Placement,

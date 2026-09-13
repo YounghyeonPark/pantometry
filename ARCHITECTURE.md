@@ -31,7 +31,7 @@ promise dates.
     ┌───────────────────────────┴─────────────────────────────────┐
     │  PHYSICS       what evolves, and what it conserves           │
     │                the kernel, and one crate per physics         │
-    │                         `pantometry-core` + twelve domain crates │
+    │                         `pantometry-core` + thirteen domain crates │
     └───────────────────────────▲─────────────────────────────────┘
                                 │  fills
     ┌───────────────────────────┴─────────────────────────────────┐
@@ -143,6 +143,7 @@ separately have no way to touch.
 | `pantometry-elastic` | What a shape does under load: `∇·σ = 0` solved on trilinear elements, so a stiffness is a property of a geometry. Four moduli come out exactly — `E`, the constrained `M`, the bulk `K` and the shear `G` — and Clapeyron's `2U = Σf·u` says the discretisation is self-consistent |
 | `pantometry-porous` | Flow through a packed bed: Darcy's law solved as a field, the heat the liquid carries, and the dissolution that rides on both. An espresso puck, and also a filter, a catalyst bed and an aquifer |
 | `pantometry-quantum` | A wavefunction in a well: the time-dependent Schrödinger equation, marched with the same staggered leapfrog family the acoustic domain uses — real part on integer steps, imaginary on halves — so **probability is conserved as an identity of the update**, the way `∇·B` is on the Yee grid. Eigenvalues against the discrete operator's own closed form, Gaussian spreading and Ehrenfest's theorem at second order |
+| `pantometry-protein` | How a protein's fold moves: one node per alpha carbon, one spring per pair inside a cutoff, and the Hessian's eigenvectors are the collective motions. Rigid motions annihilated to `1.5e-17` of the matrix; a straight chain reproduces `4γ sin²(jπ/2N)`; a ligand cannot make a residue more mobile, by a theorem about the Schur complement rather than by observation. Checked against two measurements: deposited B-factors, where one line of geometry does as well, and the open-to-closed motion of adenylate kinase, where the softest mode scores **0.799** against a chance level of `0.039` |
 | `pantometry-shape` | Designed geometry as input: an STL read and measured, and rasterised into the cells a domain fills — with a report of what the cells could **not** hold, because a rib finer than the grid does not fail, it disappears. Depends on `pantometry-units` and nothing else |
 | `pantometry-scene` | Where things are and what a run looks like: placement, capture, and the shapes a view can draw. Names no domain |
 | `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
@@ -170,7 +171,8 @@ pantometry-elastic     depends on core      │
 pantometry-em          depends on core      │
 pantometry-fluid       depends on core      │
 pantometry-porous      depends on core      │
-pantometry-quantum     depends on core     ─┘
+pantometry-quantum     depends on core      │
+pantometry-protein     depends on core     ─┘
 pantometry-shape       depends on units only                ── designed geometry in
 pantometry-scene       depends on core                      ── where things are
 pantometry-view        depends on scene                     ── how to draw that
@@ -376,7 +378,7 @@ a galaxy — a simulation has to declare which regime it is in.
 
 ## Where the work is: 3D is not the default yet
 
-The physics layer is twelve crates deep and dimensionally uneven. This is the honest state.
+The physics layer is thirteen crates deep and dimensionally uneven. This is the honest state.
 
 | crate | space it lives in | for the goal |
 | --- | --- | --- |
@@ -392,6 +394,7 @@ The physics layer is twelve crates deep and dimensionally uneven. This is the ho
 | `pantometry-fluid` | **3D** — incompressible Navier–Stokes by projection | done |
 | `pantometry-quantum` | **1D** `Well` — a wavefunction between walls | arrived one-dimensional, as every wave here did; higher dimensions are cells and cost, not new physics |
 | `pantometry-pharmacokinetic` | **no space at all** — `CompartmentModel` is a graph, like `ThermalNetwork`. A compartment is an apparent volume, not a place | done, and 3D is not what it is missing |
+| `pantometry-protein` | **3D and no grid** — a `3n`-dimensional eigenproblem over points, so space is the structure rather than a discretisation of it | done; what it is missing is size, not dimension, at `n³` a sweep |
 
 Two observations follow, and they point in opposite directions.
 

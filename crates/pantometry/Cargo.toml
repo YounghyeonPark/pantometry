@@ -21,6 +21,7 @@ pantometry-molecular = { workspace = true }
 pantometry-electrical = { workspace = true }
 pantometry-optics = { workspace = true }
 pantometry-pharmacokinetic = { workspace = true }
+pantometry-protein = { workspace = true }
 pantometry-porous = { workspace = true }
 pantometry-quantum = { workspace = true }
 pantometry-scene = { workspace = true }

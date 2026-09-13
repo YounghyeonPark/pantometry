@@ -27,7 +27,7 @@ example CI runs on every commit, and every example checks itself against a close
 ## Install
 
 ```sh
-cargo add pantometry     # one dependency, all eighteen published crates
+cargo add pantometry     # one dependency, all nineteen published crates
 pip install pantometry   # or from Python — see bindings/python
 ```
 
@@ -82,7 +82,7 @@ thick ones are what a lumped model cannot tell you: the peak is well above it.*
 | read | for |
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | the whole API on one page. `cargo run --example agents_quickstart` is a runnable version, including a deliberate 10% energy leak so you can see what the audit says |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | the map: three layers, the eighteen crates, what is built, what is missing, and what is deliberately not here |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | the map: three layers, the nineteen crates, what is built, what is missing, and what is deliberately not here |
 | [EVIDENCE.md](EVIDENCE.md) | how the claims are checked, and what checking them found — including two real defects the conservation audit reported as clean |
 | [EXAMPLES.md](EXAMPLES.md) | every example and what it demonstrates |
 | [app/README.md](app/README.md) | the binary: CLI, viewer, editor, accelerator |

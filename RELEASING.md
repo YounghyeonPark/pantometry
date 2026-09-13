@@ -116,15 +116,19 @@ Each crate must be live on the index before the next one resolves it.
 set -euo pipefail
 for c in pantometry-units pantometry-core pantometry-acoustic pantometry-mechanics pantometry-molecular \
          pantometry-optics pantometry-thermal pantometry-electrical pantometry-elastic pantometry-em \
-         pantometry-fluid pantometry-porous pantometry-quantum pantometry-pharmacokinetic \n         pantometry-shape pantometry-scene pantometry-view pantometry; do
+         pantometry-fluid pantometry-porous pantometry-quantum pantometry-pharmacokinetic \n         pantometry-protein pantometry-shape pantometry-scene pantometry-view pantometry; do
   cargo publish -p "$c" --locked      # once per crate. Twice publishes the first and stops on it
 done
 git tag -a vX.Y.Z -F message.txt && git push origin vX.Y.Z   # the tag publishes the wheel
 ```
 
-`pantometry-pharmacokinetic` is new at the next release and goes after the other domains and
-before `pantometry`, which is the only ordering constraint on it: it depends on `pantometry-units`
-and `pantometry-core` and nothing else, and only the facade depends on it.
+`pantometry-pharmacokinetic` and `pantometry-protein` are new at the next release and go after
+the other domains and before `pantometry`, which is the only ordering constraint on either: each
+depends on `pantometry-units` and `pantometry-core` and nothing else, and only the facade depends
+on them. `pantometry-protein` also carries `structures/`, six Protein Data Bank entries totalling
+1.1 MB that its tests `include_str!` — the largest thing this workspace publishes, and the reason
+is in `crates/pantometry-protein/structures/README.md`: a fixture that has been through a script
+can no longer be checked against what it came from.
 
 A **new** crate hits crates.io's new-crate rate limit — a burst of five, then roughly one per ten
 minutes. Existing crates do not, so a release that adds no crate goes through in one pass. A release

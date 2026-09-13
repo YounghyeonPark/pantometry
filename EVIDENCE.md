@@ -521,3 +521,57 @@ different:
 
 The third is the interesting one, because a tolerance chosen without knowing that
 would either fail on correct code or hide a real leak.
+
+## A check a trivial predictor also passes
+
+`pantometry-protein` predicts how far each residue of a protein moves, and a crystallographer
+measured that: a PDB file's temperature factors are `B = 8π²⟨Δr²⟩/3`. Comparing the two is the
+best-looking check in this repository — an independent measurement, taken by somebody else, years
+before the code existed — and correlations of `0.659` for lysozyme and `0.571` for ubiquitin are
+inside the range the elastic-network literature reports.
+
+Then the same file measures two predictors that are one line of geometry each:
+
+| | the model | distance from the centroid | neighbours within the cutoff | residue index |
+| --- | --- | --- | --- | --- |
+| 1CRN | +0.395 | +0.402 | +0.423 | +0.375 |
+| 1UBQ | +0.571 | **+0.804** | **+0.768** | +0.346 |
+| 193L | +0.659 | **+0.699** | **+0.697** | +0.262 |
+| 4LYZ | −0.404 | −0.301 | −0.267 | −0.234 |
+
+**Neither geometric predictor loses to the model on any structure.** Nothing is wrong with the
+arithmetic; the check is weak, and it is weak for a reason that generalises past proteins. A
+B-factor is **one scalar per residue**, and the model's claim is about a *direction* in `3n` space —
+which residues move together and which way. A scalar comparison cannot see that claim at all, so
+passing it distinguishes the model from nothing.
+
+The version of this test written first asserted that the model beat the substitutes. It failed, and
+the honest repair was to assert the ordering that was measured rather than to find a structure where
+the model wins.
+
+### What a sufficient check looked like
+
+Adenylate kinase closes two lids over its substrates. Both ends of that motion are deposited —
+`4AKE` open, `1AKE` closed — and superposed they are **7.1 Å** apart. Given only the open
+structure, the model's **single softest mode** overlaps the observed motion by **0.799**, and ten
+modes reach **0.966**.
+
+The scale that number is read against is not another model but chance: in `3 × 214 = 642`
+dimensions a direction chosen without looking overlaps a fixed one by `√(2/πn) = 0.0315`, measured
+over two hundred draws at `0.0312`. The worst of those two hundred was `0.123`.
+
+That is the shape of a check worth having, and the two differ in one property: **what a wrong
+model would have to get right to pass.** To pass the B-factor comparison, it has to know which
+residues are on the outside. To pass this one, it has to know what the protein does.
+
+### Also: a theorem, and the matrix it is a theorem about
+
+Binding a ligand cannot make a residue more mobile. The effective Hessian on the protein's
+coordinates is the bound potential minimised over the ligand's positions, every coupling term is a
+square, so it dominates the bare Hessian and the covariance goes the other way.
+
+Taking that from the **complex's** Hessian instead — the obvious thing, and what this crate did
+first — breaks it: a pseudo-inverse removes the null space it is handed, the complex's rigid
+motions are not the protein's, and residue 4 of a test helix came out `1.003` times as mobile after
+binding. Through the Schur complement the same residue comes out at `0.828`. The theorem found the
+defect; no amount of the simulation looking reasonable would have.
