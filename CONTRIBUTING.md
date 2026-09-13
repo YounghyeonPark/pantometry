@@ -78,6 +78,36 @@ Seven were the same mistake — reading the *output* of a check as evidence the 
 | `cargo publish` twice per crate, once through `grep` and once to read `$?` | the first call published, the second failed with "already exists", and the release loop stopped on its first crate |
 | a script that edited two files, then `cargo fmt --all --check`, then committed | the script wrote the first file, raised on the second file's anchor, and **the commit still ran** — unformatted code and half a changelog, red on `main` |
 
+### Run it **once**, and make a second run refuse
+
+The entries above are all about reading a check's output as evidence it ran. This one is about
+reading a **log** that had two authors, and it is the first where the thing this document calls
+the authority was itself the unreliable part.
+
+A gate run was stopped and its child kept going. A second run started, truncated the log under
+the first, and the two interleaved. What came out for a twenty-four-step gate:
+
+- **forty-four** step markers rather than twenty-four, twenty of the steps appearing twice,
+- `the gate passed` **and** `THE GATE DID NOT PASS`, both in one file,
+- and the first of those was read, and reported, before the count was.
+
+Stopping a gate does not stop what it started. Nothing in `set -e`, `&&`, or one-check-per-command
+helps: each individual check really did run and really did report its own exit code, and the
+arithmetic on top of them was over two runs.
+
+The fix is a lock the second run cannot take, so that it refuses instead of joining in:
+
+```sh
+if ! (set -o noclobber; echo $$ > "$L.lock") 2>/dev/null; then
+  echo "another run holds $L.lock (pid $(cat "$L.lock" 2>/dev/null)) -- refusing"
+  exit 98
+fi
+trap 'rm -f "$L.lock"' EXIT
+```
+
+And the cheap check that catches it having happened anyway: the number of step markers in the log
+has to equal the number of steps, and no step may appear twice.
+
 ### `set -euo pipefail` is not the fix it looks like, and that is measured
 
 The sixth entry above happened **with `set -eo pipefail` on the first line**, which is why this is
@@ -154,6 +184,15 @@ document off a disk and has no `#![cfg(not(target_family = "wasm"))]`. A `wasm32
 repository, so the walk finds nothing, and the "a check that stopped finding things would pass
 forever" assertion fires about the wrong thing. `counts_in_prose` and `citation_is_valid` carry
 that line; `the_documents_link_to_things_that_exist` shipped without it, twenty-seven checks green.
+
+**Compiling is not all of it, and the second miss was a different mechanism.** `rustc --print cfg
+--target wasm32-wasip1` says `panic="abort"`, so `catch_unwind` compiles there and catches nothing:
+a test that used it to check that a constructor refuses bad input compiled clean under `--no-run`
+and trapped in CI with `wasm trap: unreachable` and exit 134 — the assertion firing as designed and
+taking the process with it. The guard is `#[cfg(panic = "unwind")]` on the part that needs
+unwinding, not on the test. Both misses can be checked without wasmtime: `rustc --print cfg` gives
+the target's panic strategy, and the panic message's absence from the `wasm32-wasip1` binary —
+beside the strings either side of it, which are present — says the block was compiled out.
 
 ### What the gate does not cover, and where those live instead
 
@@ -247,6 +286,20 @@ room mode 1.4% low, which looks exactly like discretisation error and invites a 
 tolerance. What showed it was not discretisation was that refining the grid **halved** the
 error instead of quartering it — a second-order scheme converging at first order means the
 boundary condition is wrong. No single run could have said that.
+
+**A closed form is exact as mathematics and has to be evaluated as arithmetic.** A tolerance that
+counts only what the *code* rounds is too tight by whatever the *reference* rounds, and the
+difference can be a platform. `pantometry-protein` compares its eigenvalues against
+`4 sin²(jπ/2N)`: exact, and evaluated with the platform's `sin`, which is not correctly rounded,
+is not required to be, and is not the same function on two machines. The floor counted the
+solver's rotations and nothing else, and it held here — error exactly zero — and on Ubuntu and
+macOS, and failed on CI's Windows runner at `8.88e-16` against `4.44e-16`. One ulp for `sin`, one
+more for squaring it, half for rounding the square: three, and the bound is now `rotations + 3`.
+
+The library's own answers did not move. Everything it computes uses `+ - * / sqrt`, all of which
+IEEE-754 defines exactly, so "bit-for-bit across platforms" still holds — what varied was the
+thing it was being checked against, which is the one place in that crate where a platform can
+differ at all.
 
 ### A tolerance has to be earned
 
