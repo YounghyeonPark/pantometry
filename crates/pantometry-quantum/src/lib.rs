@@ -658,6 +658,12 @@ impl Domain for Well {
         ]
     }
 
+    /// The norm is what a unitary scheme is meant to hold at one, so it measures the scheme and
+    /// not the state. See [`Domain::diagnostics`].
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &["norm"]
+    }
+
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }

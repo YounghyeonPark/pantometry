@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-seven places it is awkward, forty-two of which have been changed — see
+has already found forty-seven places it is awkward, forty-three of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -99,6 +99,25 @@ pharmacokinetics, and the count of commits above does not include it.
   number the scene used to report is **17.8 K low** for choosing an insulation class. The peak being
   above the end is asserted as a shape rather than a value, because under a constant drive that
   difference is exactly zero.
+
+### Fixed
+
+### Added
+
+- **`Domain::diagnostics`: which of a domain's readings describe the solve rather than the world.**
+  A residual, a divergence a projection removes, a norm a unitary scheme preserves, a cell Reynolds
+  number — each is worth a column and none is an answer, and a consumer comparing readings between
+  two runs has no way to tell. `pantometry-world`'s battery could not, and printed
+  `residual 0.000000 -> 0.000000 (281492.026%)` under a heading that says the grid did it.
+
+  It worked around that with a list of five labels it kept itself. This is the same statement made
+  where the knowledge is: five crates declare six labels, the battery asks a built world, and the
+  answer is a `(domain, label)` pair rather than a label — which removes the ambiguity the list
+  needed a pin for, where a *different* domain reporting `norm` as its answer would have been
+  swallowed. Additive: `Domain` has thirteen other methods with defaults.
+
+  FRICTION 40 proposed a flag on `Reading` and then argued, correctly, that the fields are public
+  so a flag is a breaking change. The argument was sound and about the wrong object.
 
 ### Fixed
 

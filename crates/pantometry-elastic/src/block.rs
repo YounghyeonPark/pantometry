@@ -894,6 +894,12 @@ impl Domain for Block {
         out
     }
 
+    /// The residual says how well the solve converged, not what the body did. See
+    /// [`Domain::diagnostics`].
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &["residual"]
+    }
+
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }

@@ -68,7 +68,7 @@
 //! the refusal cost was the measurement — `17-a-busbar-with-a-notch` turns out to be 4.65% above
 //! the answer its shape has, converging at `h^(4/3)` because a re-entrant corner sets the rate.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{CoolingSpec, DissipationSpec, DomainSpec, OnDisk, Parts, Rasterised, Scene, World};
 use pantometry::core::{Margin, Reading};
@@ -95,6 +95,10 @@ pub struct Measured {
     /// The final frame's readings — the scalars each domain chose to report, which are the
     /// observables the sweeps compare.
     pub readings: Vec<Reading>,
+    /// Which of those `(domain, label)` pairs the domains themselves called statements about the
+    /// solve rather than about the world. Collected here because a sweep compares two `Measured`
+    /// after both worlds are gone. See [`diagnostics_of`].
+    pub diagnostic: BTreeSet<(String, String)>,
     /// The range every reading of one unit covered in one domain over the whole run, keyed by
     /// `(domain, unit)`.
     ///
@@ -349,6 +353,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
         }
     }
     Ok(Measured {
+        diagnostic: diagnostics_of(&world.sim),
         past_yield: world.past_yield(),
         arrival: if arrival {
             how_far_from_settled(&mut world, &span)
@@ -385,7 +390,8 @@ pub struct Shift {
     /// A reading sitting near zero exaggerates this ratio; the absolute pair is beside it in
     /// the report for exactly that case.
     pub relative: f64,
-    /// A statement about the solve rather than about the world — see [`DIAGNOSTICS`]. Its
+    /// A statement about the solve rather than about the world — see
+    /// [`Domain::diagnostics`]. Its
     /// `relative` is not a discretisation and is left out of [`Sweep::worst`]; the report prints
     /// the two values instead of a percentage.
     pub diagnostic: bool,
@@ -606,53 +612,37 @@ const WINDOW_SHIFT: f64 = 0.005;
 /// second copy of the number would agree with itself while the two drifted apart.
 pub const UNIFORM_FIELD: f64 = 0.05;
 
-/// Readings that describe the **solve** rather than the world, by label.
+/// Which `(domain, label)` readings of a built world describe the **solve** rather than the world.
 ///
-/// # Why a list, and why it is not a threshold
+/// # This was a list here, and the list was the defect
 ///
-/// The resolution sweep's header says "what moved is discretisation", and for a solver residual
+/// The battery's resolution sweep says "what moved is discretisation", and for a solver residual
 /// that is false in a way no denominator repairs. `17-a-busbar-with-a-notch` printed
 ///
 /// ```text
 ///   busbar   residual   0.000000 -> 0.000000  (281492.026%)
 /// ```
 ///
-/// The residual went from 7.793e-13 to 6.644e-13 — both converged, both meaningless to compare —
-/// and the denominator was the **4.08e-17 it happened to wobble by** between the first and second
-/// frame of the base run, which is conjugate gradients stopping at a different iterate and not a
-/// span. Every part of that row is a lie: two values printed as zero, a percentage of noise, and
-/// a header attributing it to the grid.
+/// — two converged residuals, 7.793e-13 and 6.644e-13, divided by the **4.08e-17** one of them
+/// wobbled by between two frames of the *base* run, which is conjugate gradients stopping at a
+/// different iterate and not a span.
 ///
-/// The obvious repair — floor the denominator — does not work here, and measuring says why. The
-/// wobble is 5.2e-5 of the residual's own magnitude, which is far above any rounding floor: it is
-/// real variation in a real quantity. The quantity is just not one that converges to anything.
-/// Refining the grid changes the iteration count, and the residual is wherever the iteration
-/// happened to cross the tolerance.
-///
-/// So the discriminator is not numerical, it is what the number *means*, and a list is the honest
-/// shape for that. It is short because these are rare: a residual, a divergence a projection is
-/// meant to have removed, a norm a unitary scheme is meant to preserve, a cell Péclet or Reynolds
-/// number that reports whether the scheme is in its regime. What they share is a target the
-/// solver holds them at, so the value carries no information about the answer.
-///
-/// # What holds it
-///
-/// `every_scene_that_ships_runs_and_says_something_true` collects every `(label, unit)` the thirty
-/// scenes emit as it walks them, and pins all 47 against [`is_diagnostic`] — so a domain that adds
-/// a reading cannot leave this list quietly stale, it has to be decided about. That is the
-/// weakness of a list, and the test is the only thing that makes one safe here.
-///
-/// [`Reading`] cannot carry this itself: its fields are public, so a flag is
-/// a breaking change to a published crate. FRICTION.md finding 40.
-pub const DIAGNOSTICS: &[&str] = &["residual", "divergence", "div B", "norm", "cell Reynolds"];
-
-/// Is this reading a statement about the solve rather than about the world?
-///
-/// Public because `every_scene_that_ships_runs_and_says_something_true` walks the shipped scenes
-/// and pins the classification of all 47 labels they emit against this — a second copy of the
-/// list would agree with itself while the two drifted apart.
-pub fn is_diagnostic(label: &str) -> bool {
-    DIAGNOSTICS.contains(&label)
+/// The first repair was a constant in this file naming five labels. It worked, and it was a second
+/// copy of something only the domain knows: it needed three pins to keep it honest, and it keyed on
+/// the **label alone**, so a new domain reporting `norm` as its *answer* would have been swallowed
+/// by it. [`Domain::diagnostics`] puts the statement where
+/// the knowledge is, and asking a built world turns it into `(domain, label)` pairs — which is
+/// what the ambiguity needed and what a list could not give.
+/// Public because [`Measured::diagnostic`] is, and a field whose documentation points at a private
+/// function is a field whose documentation a reader cannot follow.
+pub fn diagnostics_of(sim: &Simulation) -> BTreeSet<(String, String)> {
+    sim.domains()
+        .flat_map(|d| {
+            d.diagnostics()
+                .iter()
+                .map(move |l| (d.name().to_string(), (*l).to_string()))
+        })
+        .collect()
 }
 
 /// One sweep: the scene rerun with one knob moved, and what each reading did.
@@ -699,6 +689,7 @@ fn compare(
     base: &[Reading],
     other: &[Reading],
     span: &BTreeMap<(String, &'static str), f64>,
+    diagnostic: &BTreeSet<(String, String)>,
 ) -> Sweep {
     let mut shifts = Vec::new();
     let mut unmatched = Vec::new();
@@ -773,7 +764,7 @@ fn compare(
                     base: r.value,
                     other: o.value,
                     relative,
-                    diagnostic: is_diagnostic(&r.label),
+                    diagnostic: diagnostic.contains(&(r.domain.clone(), r.label.clone())),
                 });
             }
             None => unmatched.push(format!("{}/{}", r.domain, r.label)),
@@ -821,13 +812,18 @@ fn compare(
 /// the number that would fix it lives with the domain, not here; if that day comes, the floor
 /// becomes something the domain reports, the way `Ledger` carries `scale` for the same
 /// reason.
-fn orders_of(f1: &[Reading], f2: &[Reading], f4: &[Reading]) -> Vec<(String, String, Order)> {
+fn orders_of(
+    f1: &[Reading],
+    f2: &[Reading],
+    f4: &[Reading],
+    diagnostic: &BTreeSet<(String, String)>,
+) -> Vec<(String, String, Order)> {
     let mut out = Vec::new();
     for r1 in f1 {
         // A diagnostic has no order because it is not converging to anything: the notch's
         // residual measured **-0.77**, a rate at which nothing happens, printed in a column of
-        // real ones. See [`DIAGNOSTICS`].
-        if is_diagnostic(&r1.label) {
+        // real ones. See [`diagnostics_of`].
+        if diagnostic.contains(&(r1.domain.clone(), r1.label.clone())) {
             continue;
         }
         let find = |rs: &[Reading]| {
@@ -1230,8 +1226,18 @@ pub fn verify_with(scene: &Scene, deep: bool, files: &dyn Parts) -> Result<Batte
 /// trace — `orders_of` skips a reading it cannot find in all three, and a skip with nothing
 /// counting it is how a list comes up one row short and looks complete.
 fn deepen(sweep: &mut Sweep, base: &Measured, middle: &Measured, finest: &Measured) {
-    sweep.orders = orders_of(&base.readings, &middle.readings, &finest.readings);
-    let presence = compare(&base.readings, &finest.readings, &base.span);
+    sweep.orders = orders_of(
+        &base.readings,
+        &middle.readings,
+        &finest.readings,
+        &base.diagnostic,
+    );
+    let presence = compare(
+        &base.readings,
+        &finest.readings,
+        &base.span,
+        &base.diagnostic,
+    );
     for entry in presence.unmatched {
         if !sweep.unmatched.contains(&entry) {
             sweep.unmatched.push(entry);
@@ -1267,7 +1273,7 @@ fn window_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Parts) -
         Ok(m) => m,
         Err(e) => return SweepOutcome::Failed(format!("with the window halved, {e}")),
     };
-    let mut sweep = compare(&base.readings, &half.readings, &base.span);
+    let mut sweep = compare(&base.readings, &half.readings, &base.span, &base.diagnostic);
     for a in &half.anomalies {
         sweep.broken.push(format!("in the halved-window run: {a}"));
     }
@@ -1289,7 +1295,7 @@ fn resolution_sweep(scene: &Scene, base: &Measured, deep: bool, files: &dyn Part
         Ok(m) => m,
         Err(e) => return SweepOutcome::Failed(format!("refined 2x, {e}")),
     };
-    let mut sweep = compare(&base.readings, &fine.readings, &base.span);
+    let mut sweep = compare(&base.readings, &fine.readings, &base.span, &base.diagnostic);
     for a in &fine.anomalies {
         sweep.broken.push(format!("in the refined run: {a}"));
     }
@@ -2114,19 +2120,24 @@ mod tests {
     fn an_order_is_not_invented_from_the_rounding_floor() {
         let r = |v: f64| Reading::new("d", "x", v, "");
         // Differences at 1e-16 of the scale: below the floor on both.
-        let o = orders_of(&[r(1.0)], &[r(1.0 + 1e-16)], &[r(1.0 + 2e-16)]);
+        let o = orders_of(
+            &[r(1.0)],
+            &[r(1.0 + 1e-16)],
+            &[r(1.0 + 2e-16)],
+            &BTreeSet::new(),
+        );
         assert!(matches!(o[0].2, Order::BelowFloor));
         // A real coarse difference over a rounding-level fine one: converged, not infinite.
-        let o = orders_of(&[r(1.01)], &[r(1.0)], &[r(1.0 + 1e-16)]);
+        let o = orders_of(&[r(1.01)], &[r(1.0)], &[r(1.0 + 1e-16)], &BTreeSet::new());
         assert!(matches!(o[0].2, Order::BelowFloor));
         // The mirror: a rounding-level coarse difference under a real fine one is not an
         // order of -inf, it is no order at all.
-        let o = orders_of(&[r(1.0)], &[r(1.0 + 1e-16)], &[r(1.001)]);
+        let o = orders_of(&[r(1.0)], &[r(1.0 + 1e-16)], &[r(1.001)], &BTreeSet::new());
         assert!(matches!(o[0].2, Order::NotAsymptotic));
-        let o = orders_of(&[r(1.0)], &[r(1.0)], &[r(1.001)]);
+        let o = orders_of(&[r(1.0)], &[r(1.0)], &[r(1.001)], &BTreeSet::new());
         assert!(matches!(o[0].2, Order::NotAsymptotic));
         // Clean halving reads first order.
-        let o = orders_of(&[r(1.4)], &[r(1.2)], &[r(1.1)]);
+        let o = orders_of(&[r(1.4)], &[r(1.2)], &[r(1.1)], &BTreeSet::new());
         match o[0].2 {
             Order::Measured(p) => assert!((p - 1.0).abs() < 1e-12),
             _ => panic!("a clean ratio was refused"),
@@ -2147,7 +2158,7 @@ mod tests {
         // magnitude near zero would have given.
         let travelled: BTreeMap<(String, &'static str), f64> =
             [(("bar".to_string(), "C"), 30.0)].into();
-        let s = compare(&[c(0.00035)], &[c(0.00355)], &travelled);
+        let s = compare(&[c(0.00035)], &[c(0.00355)], &travelled, &BTreeSet::new());
         assert!(
             s.shifts[0].relative < 1e-3,
             "a millikelvin of a 30 K cooldown read as {:.3}",
@@ -2155,7 +2166,12 @@ mod tests {
         );
         // And with no span at all — a reading that never moved — the old representation scale
         // is the fallback, so the same pair still does not read as a fraction of nothing.
-        let s = compare(&[c(0.00035)], &[c(0.00355)], &BTreeMap::new());
+        let s = compare(
+            &[c(0.00035)],
+            &[c(0.00355)],
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
         assert!(
             s.shifts[0].relative < 1e-4,
             "a millikelvin on a still reading read as {:.3}",
@@ -2163,7 +2179,7 @@ mod tests {
         );
         // Kelvin-rounding differences (~6e-14 absolute) sit below the kelvin-scale floor
         // (~2.7e-10) and stay refused rather than becoming an order of zero.
-        let o = orders_of(&[c(0.0)], &[c(6e-14)], &[c(1.2e-13)]);
+        let o = orders_of(&[c(0.0)], &[c(6e-14)], &[c(1.2e-13)], &BTreeSet::new());
         assert!(matches!(o[0].2, Order::BelowFloor));
     }
 
@@ -2177,10 +2193,16 @@ mod tests {
     fn a_diagnostic_cannot_set_the_worst_shift() {
         let r = |l: &str, v: f64, u: &'static str| Reading::new("d", l, v, u);
         // The notch's own numbers: a residual that halved, beside a reading that moved 0.1%.
+        // The pair the *domain* declared, which is what this asks about now. Keyed on
+        // `(domain, label)`, so a different domain's `residual` is a different question.
+        let declared: BTreeSet<(String, String)> = [("d".to_string(), "residual".to_string())]
+            .into_iter()
+            .collect();
         let s = compare(
             &[r("residual", 7.793e-13, ""), r("peak", 1.0, "C")],
             &[r("residual", 6.644e-13, ""), r("peak", 1.001, "C")],
             &BTreeMap::new(),
+            &declared,
         );
         assert!(
             s.shifts.iter().any(|x| x.diagnostic),
@@ -2207,6 +2229,7 @@ mod tests {
             &[r("d", "x", f64::NAN)],
             &[r("d", "x", 1.0)],
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert!(s.shifts.is_empty(), "a NaN was compared as arithmetic");
         assert_eq!(s.broken.len(), 1);
@@ -2215,6 +2238,7 @@ mod tests {
             &[r("d", "x", 1.0), r("d", "x", 2.0)],
             &[r("d", "x", 1.0)],
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert!(
             s.broken

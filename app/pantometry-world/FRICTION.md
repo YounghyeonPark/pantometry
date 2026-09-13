@@ -11,10 +11,11 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Forty-two of the forty-seven are fixed**, and five are recorded rather than actioned. The reasons
-differ and are given in each: one because the kernel already refuses the mistake it describes,
-one because it is documented rather than changed, one because the flag it wants is a breaking
-change to a published crate for five readings in forty-seven, and the rest on scope.
+**Forty-three of the forty-seven are fixed**, and four are recorded rather than actioned. The
+reasons differ and are given in each: one because the kernel already refuses the mistake it
+describes and a second consumer would be needed to make the duplication worth removing, one because
+a domain may not know another so the library cannot close it, one because the shape of the answer
+is not obvious, and one on scope.
 
 **A fixed finding opens its resolution with `**Fixed`, at the start of a line**, because that is
 what `friction_counts.rs` counts and the summary above is pinned to that count. It said "forty
@@ -638,7 +639,7 @@ of one, a notch nobody could measure the grid of: none of them was a bug, and al
 wrong. What a suite checks is that the arithmetic is consistent with the file; nothing in it asks
 whether the file describes anything.
 
-Forty-two are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
+Forty-three are fixed. That line said "ten" until a test counted them, and "twenty-eight" for
 seven findings after that — the test counts the *summary* at the top of the file, and this sentence
 is below it, which is the failure
 `prose-auditor` exists for and the second time this file has been the one carrying it — and the
@@ -1205,12 +1206,34 @@ discriminator is not numerical, it is what the number *means*.
 > here: an iterative solve that quietly stopped early produces a field shaped like an answer, and
 > the only thing that would ever say otherwise is a column somebody can look at.
 
-**Worked around, in the consumer, with the cost written down.** `verify::DIAGNOSTICS` names the
-five labels the shipped scenes emit that describe the solve — a residual, a `divergence` a
-projection removes, a `div B` a Yee grid preserves, a wavefunction norm, and a cell Reynolds
-number. They print their two values and no percentage, and they are kept out of `Sweep::worst`,
-which the window sweep raises a finding on: a residual that moved would otherwise have fired it
-with a message about the scene's answer depending on `frames`.
+**Fixed, and the entry's own proposal was the thing to question.** It said a flag on `Reading`,
+and then argued that a flag on `Reading` is a breaking change — correctly: those fields are public,
+so adding one breaks every struct literal, for a property six readings in this workspace have. That
+argument is sound and it is about the wrong object. **Which readings describe the solve is not the
+reading's property, it is the domain's statement about its own output**, and `Domain` already has
+thirteen methods with defaults, so one more is additive:
+
+```rust
+fn diagnostics(&self) -> &'static [&'static str] { &[] }
+```
+
+Five crates declare six labels — `Conductor` and elastic `Block` their residual, `Channel` its
+divergence and cell Reynolds number, `Cavity` its `div B`, the quantum well its norm — and the
+battery asks a built world instead of keeping a list. They print their two values and no
+percentage, get no order, and stay out of `Sweep::worst`, which the window sweep raises a finding
+on.
+
+**It also removed the ambiguity the workaround needed a pin for.** A list keyed on the label alone,
+so this entry recorded that a *different* domain reporting `norm` as its answer would be swallowed;
+asking the world gives `(domain, label)` pairs, which is what that needed and what a list could not
+give. Three pins become one: `pantometry`'s own suite refuses a domain that declares a label it
+does not emit, and a `Box` that forgets to forward — measured, because a forwarding impl returning
+`&[]` passed every other check.
+
+**What the workaround was, for the record.** `verify::DIAGNOSTICS` named the five labels the
+shipped scenes emit, with three pins in the scene walk to keep it honest: the labels, the length of
+the list (a label in it that no scene emitted changed nothing, so `"flux"` and `"peak "` could be
+added and the walk stayed green), and who emitted them.
 
 A list is a shape that goes stale in silence, and it took three pins to make one safe. The scene
 walk collects every `(label, unit)` the thirty scenes emit and pins all **47** against

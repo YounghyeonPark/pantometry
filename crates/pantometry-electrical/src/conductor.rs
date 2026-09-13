@@ -623,6 +623,15 @@ impl Domain for Conductor {
         ]
     }
 
+    /// **The residual is the one reading here that is not an answer.** It says how well the
+    /// conjugate-gradient solve converged, which is worth a column — an iterative solve that
+    /// stopped early produces a field shaped like an answer — and is not a number that converges
+    /// to anything as a grid refines: what moves is the iteration count, and the residual is
+    /// wherever the iteration crossed its tolerance.
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &["residual"]
+    }
+
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }

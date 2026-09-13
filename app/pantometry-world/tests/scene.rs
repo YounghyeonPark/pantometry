@@ -854,7 +854,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // walk goes and pinned below. See `verify::UNIFORM_FIELD` for the measurement and the corpus.
     let mut flat: Vec<String> = Vec::new();
     // Every `(label, unit)` any shipped scene reports, collected as the walk goes and pinned
-    // below. See `verify::DIAGNOSTICS` for what the pin is holding and why it has to be a list.
+    // below, and beside it which `(domain, label)` pairs the domains themselves called statements
+    // about the solve. See `Domain::diagnostics`.
     let mut emitted: Vec<(String, &'static str)> = Vec::new();
     // And *who* emits a diagnostic label, which the pair above cannot see. See the pin below.
     let mut diagnosed: Vec<(String, String)> = Vec::new();
@@ -885,17 +886,27 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             .run()
             .unwrap_or_else(|v| panic!("{name} ({title}) stopped conserving: {v}"));
 
+        // What this scene's own domains say about their own readings, asked of the built world
+        // rather than looked up in a list somebody else keeps.
+        let declared: std::collections::BTreeSet<(String, String)> = world
+            .simulation()
+            .domains()
+            .flat_map(|d| {
+                d.diagnostics()
+                    .iter()
+                    .map(move |l| (d.name().to_string(), (*l).to_string()))
+            })
+            .collect();
+
         for frame in &frames {
             for r in &frame.readings {
                 let pair = (r.label.clone(), r.unit);
                 if !emitted.contains(&pair) {
                     emitted.push(pair);
                 }
-                if pantometry_world::verify::is_diagnostic(&r.label) {
-                    let who = (r.domain.clone(), r.label.clone());
-                    if !diagnosed.contains(&who) {
-                        diagnosed.push(who);
-                    }
+                let who = (r.domain.clone(), r.label.clone());
+                if declared.contains(&who) && !diagnosed.contains(&who) {
+                    diagnosed.push(who);
                 }
             }
         }
@@ -3287,23 +3298,18 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // misses are worth naming: `invariant` (27) is the *energy* an FDTD scheme conserves — a
     // physical quantity that converges — and `unevenness` and `ring over core` (18) are what
     // scene 18 is asking, not how well it was solved.
-    // **The list itself, which the pin below cannot reach.** That pin constrains the
-    // *intersection* of what the scenes emit with `DIAGNOSTICS`, so a label in `DIAGNOSTICS` that
-    // no scene emits changes nothing. Measured: adding `"flux"` and `"peak "` — the second a
-    // trailing-space near-miss of a live answer label, which reads in the source as though the
-    // list covered `peak` — left the whole thirty-scene walk green. Every entry has to be one a
-    // scene actually reports.
-    assert_eq!(
-        pantometry_world::verify::DIAGNOSTICS.len(),
-        5,
-        "the classification changed size; the lists below and the prose that quotes them have to \
-         change with it"
-    );
-
-    // **And who emits one**, which `(label, unit)` cannot see: `is_diagnostic` keys on the label
-    // alone, so a *new* domain reporting `norm` as its answer — a displacement norm, say — would
-    // be silently dropped from the sweep while `norm []` stayed in the list below unchanged.
-    // Six domains across five scenes, and a seventh is a decision, not a detail.
+    // **Which domains call one of their readings a diagnostic**, pinned as `(domain, label)`.
+    //
+    // This took three assertions when the classification was a list of labels in `verify`: one for
+    // the labels the scenes emit, one for the length of the list — a label in it that no scene
+    // emitted changed nothing, so `"flux"` and `"peak "` could be added and the whole walk stayed
+    // green — and one for who emitted them, because keying on the label alone meant a *new* domain
+    // reporting `norm` as its answer would have been swallowed.
+    //
+    // `Domain::diagnostics` removed the first two problems by removing the list: a domain that
+    // declares a label it does not emit fails in `pantometry`'s own suite, and there is no second
+    // copy to drift. What is left is this — the set of pairs, so an arrival or a departure is a
+    // decision somebody made rather than a line nobody read.
     diagnosed.sort();
     assert_eq!(
         diagnosed
@@ -3322,17 +3328,14 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     );
 
     emitted.sort();
+    let declared_labels: std::collections::BTreeSet<&str> =
+        diagnosed.iter().map(|(_, l)| l.as_str()).collect();
     let (diagnostics, answers): (Vec<_>, Vec<_>) = emitted
         .iter()
-        .partition(|(label, _)| pantometry_world::verify::is_diagnostic(label));
+        .partition(|(label, _)| declared_labels.contains(label.as_str()));
     let named = |v: &[&(String, &'static str)]| -> Vec<String> {
         v.iter().map(|(l, u)| format!("{l} [{u}]")).collect()
     };
-    assert_eq!(
-        diagnostics.len(),
-        pantometry_world::verify::DIAGNOSTICS.len(),
-        "a label in DIAGNOSTICS that no shipped scene emits is a classification nothing checks"
-    );
     assert_eq!(
         named(&diagnostics),
         [

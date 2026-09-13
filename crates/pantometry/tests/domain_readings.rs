@@ -107,3 +107,76 @@ fn the_default_is_empty_and_that_is_visible() {
     // this is silently absent from every table rather than broken. Absent columns are at least
     // visible in a header; that is the whole mitigation and it is worth saying out loud.
 }
+
+/// **A domain that calls a reading a diagnostic has to emit it.**
+///
+/// [`Domain::diagnostics`] names labels, and nothing about a `&'static [&'static str]` says the
+/// domain produces them. A typo, or a label renamed on one side only, leaves a declaration
+/// pointing at nothing — and the consumer that asked would go on comparing the *real* residual
+/// across a sweep as though it converged to something, which is the row this method exists to
+/// stop: `residual 0.000000 -> 0.000000 (281492.026%)` under a heading that says the grid did it.
+///
+/// So every declared label is checked against the readings the same domain hands back, for each
+/// domain in this workspace that declares any. `divergence` is `cell Reynolds`'s neighbour in one
+/// of them, so a list is exercised as well as a single.
+#[test]
+fn a_declared_diagnostic_is_a_reading_the_domain_emits() {
+    fn holds(what: &str, d: &dyn Domain) {
+        let declared = d.diagnostics();
+        assert!(
+            !declared.is_empty(),
+            "{what} declares no diagnostics, and this test is about the ones that do"
+        );
+        let emitted: Vec<String> = d.readings().into_iter().map(|r| r.label).collect();
+        for label in declared {
+            assert!(
+                emitted.iter().any(|e| e == label),
+                "{what} declares {label:?} a diagnostic and reports {emitted:?}"
+            );
+        }
+        // Through a `&dyn Domain`, which is a reborrow and cannot lose anything.
+        let same: &dyn Domain = d;
+        assert_eq!(same.diagnostics(), declared, "{what}: a reborrow lost it");
+    }
+
+    // **And through the `Box` the simulation actually holds**, which is a *different* impl and
+    // the only one every layer above will take. A `&dyn Domain` cast is a reborrow and forwards
+    // nothing; this file already holds `readings` against the same hazard, for the same reason.
+    // Measured: a forwarding `diagnostics` returning `&[]` passed every other check here.
+    fn boxed_too(what: &str, d: impl Domain + 'static) {
+        let direct = d.diagnostics();
+        let boxed: Box<dyn Domain> = Box::new(d);
+        assert_eq!(
+            boxed.diagnostics(),
+            direct,
+            "{what}: the box swallowed the declaration"
+        );
+        assert!(!direct.is_empty(), "{what} declares nothing to swallow");
+    }
+
+    boxed_too(
+        "a boxed conductor",
+        pantometry_electrical::Conductor::new(
+            "bar",
+            (4, 2, 2),
+            Length::mm(1.0),
+            Resistivity::ohm_m(1.724e-8),
+            Voltage::v(1e-3),
+        ),
+    );
+
+    holds(
+        "a conductor",
+        &pantometry_electrical::Conductor::new(
+            "bar",
+            (4, 2, 2),
+            Length::mm(1.0),
+            Resistivity::ohm_m(1.724e-8),
+            Voltage::v(1e-3),
+        ),
+    );
+    holds(
+        "a quantum well",
+        &pantometry_quantum::Well::new("well", Mass::kg(9.109e-31), Length::nm(10.0), 64),
+    );
+}

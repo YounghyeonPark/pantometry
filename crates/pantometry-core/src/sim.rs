@@ -237,6 +237,40 @@ pub trait Domain {
         Vec::new()
     }
 
+    /// Which of [`readings`](Domain::readings)'s labels describe the **solve** rather than the
+    /// world.
+    ///
+    /// A residual, a divergence a projection is meant to have removed, a norm a unitary scheme is
+    /// meant to preserve, a cell Péclet or Reynolds number: each is a real number a caller should
+    /// be able to see, and none of them is an *answer*. What they share is a value the solver
+    /// holds them at, so refining a grid or halving a window moves them for reasons that say
+    /// nothing about the physics.
+    ///
+    /// **Why the domain and not the caller.** A consumer comparing readings between two runs —
+    /// which is what a convergence study is — has no way to tell the two kinds apart, and will
+    /// compare them all. `pantometry-world`'s battery did, and printed
+    ///
+    /// ```text
+    ///   busbar   residual   0.000000 -> 0.000000  (281492.026%)
+    /// ```
+    ///
+    /// under a heading that says "what moved is discretisation": two converged conjugate-gradient
+    /// residuals, 7.793e-13 and 6.644e-13, divided by the 4.08e-17 one of them wobbled by between
+    /// two frames of the same run. It worked around it with a list of labels it kept itself, which
+    /// is a second copy of something only the domain knows — and keyed on the label alone, so a
+    /// *different* domain reporting `norm` as its answer would have been swallowed by it.
+    ///
+    /// **Not a field on [`Reading`].** That struct's fields are public, so a flag on it is a
+    /// breaking change for a property that six readings in this workspace have; and the property
+    /// is not really the reading's, it is the domain's statement about its own output.
+    ///
+    /// Empty by default, and opt-in with the hazard `as_any` taught: a domain that forgets it has
+    /// its residual compared across a sweep as though it converged to something, which is a row
+    /// that looks routine and measures nothing.
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// This domain as a countable set of bodies, if that is what it is.
     ///
     /// The counterpart to [`as_field`](Domain::as_field), and between them they cover both kinds
@@ -290,6 +324,10 @@ impl Domain for Box<dyn Domain> {
     }
     fn readings(&self) -> Vec<Reading> {
         (**self).readings()
+    }
+
+    fn diagnostics(&self) -> &'static [&'static str] {
+        (**self).diagnostics()
     }
     fn books_balance(&self) -> bool {
         (**self).books_balance()

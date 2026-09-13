@@ -1599,6 +1599,13 @@ impl Domain for Cavity {
         ]
     }
 
+    /// `div B` is the constraint a Yee grid preserves to rounding by construction, so what it
+    /// reports is the arithmetic rather than the field. See
+    /// [`Domain::diagnostics`].
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &["div B"]
+    }
+
     /// **How strong the electric field is**, so a resonance can be looked at.
     ///
     /// The caveat is the one a magnitude always carries: `E` is a vector on cell edges and this is

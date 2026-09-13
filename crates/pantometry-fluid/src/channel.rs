@@ -840,6 +840,14 @@ impl Domain for Channel {
         out
     }
 
+    /// **Two, and both are about the scheme.** The divergence is what the projection is meant
+    /// to have removed — its target is zero and it reports how close it got — and the cell
+    /// Reynolds number says whether the discretisation is in the regime it is valid in. Neither
+    /// is a property of the flow the caller asked about.
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &["divergence", "cell Reynolds"]
+    }
+
     /// **Speed**, so a flow can be looked at.
     ///
     /// The honest caveat is in the unit and in this sentence rather than in a refusal to draw one:
