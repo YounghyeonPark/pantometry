@@ -175,6 +175,9 @@ fn a_straight_chain_is_the_one_dimensional_chain_and_bends_for_free() {
 /// Two clusters further apart than the cutoff are two structures, and each brings its own six.
 /// The failure this guards is silent: the twelfth zero is not an error, the thirteenth eigenvalue
 /// is tiny rather than absent, and the "softest collective mode" is one cluster leaving.
+///
+/// The counts run everywhere. The refusal is checked only where a panic unwinds, for the reason
+/// written beside it.
 #[test]
 fn a_network_in_pieces_is_caught_before_it_is_used() {
     let mut points: Vec<[f64; 3]> = helix(10).residues().iter().map(|r| r.at).collect();
@@ -188,19 +191,34 @@ fn a_network_in_pieces_is_caught_before_it_is_used() {
     assert_eq!(apart.components(), 2);
     assert_eq!(Modes::of(&apart).rigid_body_modes(), 12);
 
-    let refused = std::panic::catch_unwind(|| {
-        Protein::new(
-            "split",
-            &apart,
-            Qty::from_si(300.0),
-            Qty::from_si(1.8e-25),
-            1,
-        )
-    });
-    assert!(
-        refused.is_err(),
-        "a protein was built out of two structures"
-    );
+    // **Only where a panic unwinds.** `catch_unwind` returns `Err` by catching the unwind, and
+    // `wasm32` panics by aborting: this compiled on the local gate, which runs the wasm tests
+    // with `--no-run`, and trapped in CI with `wasm trap: unreachable` and exit 134 -- the
+    // assertion firing exactly as designed and taking the process with it.
+    //
+    // Everything above runs on every target. What is cfg'd out is the refusal, and the reason is
+    // a property of the target's panic strategy rather than of the check.
+    #[cfg(panic = "unwind")]
+    {
+        let refused = std::panic::catch_unwind(|| {
+            Protein::new(
+                "split",
+                &apart,
+                Qty::from_si(300.0),
+                Qty::from_si(1.8e-25),
+                1,
+            )
+        });
+        let message = refused.expect_err("a protein was built out of two structures");
+        let said = message
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or("");
+        assert!(
+            said.contains("falls into 2 pieces"),
+            "it refused for some other reason: {said:?}"
+        );
+    }
     println!("  two clusters: 2 components, 12 zeros, and Protein::new refuses");
 }
 

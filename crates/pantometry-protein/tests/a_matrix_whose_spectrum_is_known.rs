@@ -61,6 +61,26 @@ fn rotations(n: usize, sweeps: usize) -> usize {
     sweeps.max(1) * n.max(2).saturating_sub(1)
 }
 
+/// The floor for a comparison against a closed form that has to be **evaluated**, which
+/// [`rotation_floor`] alone is too tight for.
+///
+/// `4 sin²(jπ/2N)` is exact as mathematics and is not exact as arithmetic. `sin` is not
+/// correctly rounded and is not the same function on two platforms: a libm is normally within one
+/// ulp and normally no better, squaring doubles that relative error, and rounding the square adds
+/// a half. Three ulps of the value, and the value is at most the largest eigenvalue, which is at
+/// most `‖A‖_F`.
+///
+/// **This is the only place in the crate where a platform difference can appear.** Everything the
+/// library itself computes uses `+ - * / sqrt`, every one of which IEEE-754 defines exactly, so
+/// its answers are bit-identical everywhere and convention 3 holds. What varies is the reference.
+///
+/// Measured, and the reason this exists: at `n = 2` this machine got an error of exactly `0` and
+/// CI's Windows runner got `8.88e-16` — two ulps of 2.0 — against a rotations-only floor of
+/// `4.44e-16`. A bound that holds on the machine that wrote it is not a bound.
+fn evaluated_floor(n: usize, sweeps: usize) -> f64 {
+    (rotations(n, sweeps) + 3) as f64 * f64::EPSILON
+}
+
 /// The floor for an **invariant that is a sum**, which [`rotation_floor`] alone is too tight for.
 ///
 /// `Σλ²` and `‖A‖²_F` are the same exact number computed two ways, and the two ways add up
@@ -125,9 +145,10 @@ fn a_free_chain_has_the_spectrum_of_a_sine_squared_and_one_exact_zero() {
         assert!(s.converged(), "n = {n} did not converge");
 
         let scale = m.frobenius_squared().sqrt();
-        // Weyl: a symmetric matrix's eigenvalues move by no more than the norm of the
-        // perturbation, and the perturbation here is the rotations' own backward error.
-        let floor = rotation_floor(n, s.sweeps()) * scale;
+        // Weyl for the solver's half, plus the reference's own evaluation. The sliding mode
+        // below keeps the tighter of the two, because zero does not go through `sin`.
+        let exact_zero = rotation_floor(n, s.sweeps()) * scale;
+        let floor = evaluated_floor(n, s.sweeps()) * scale;
         let mut worst: f64 = 0.0;
         for j in 0..n {
             let exact = 4.0 * (j as f64 * PI / (2.0 * n as f64)).sin().powi(2);
@@ -142,12 +163,12 @@ fn a_free_chain_has_the_spectrum_of_a_sine_squared_and_one_exact_zero() {
         // The sliding mode, separately, because the line above measures it against a *scale* and
         // this one says it is zero at the level a sum of `n` unit terms can be zero at.
         assert!(
-            s.values()[0].abs() <= floor,
-            "n = {n}: the sliding mode came back at {:e}, not zero",
+            s.values()[0].abs() <= exact_zero,
+            "n = {n}: the sliding mode came back at {:e}, not zero, over {exact_zero:e}",
             s.values()[0]
         );
         println!(
-            "  free chain n = {n:3}: worst {worst:.3e}, sliding mode {:.3e}",
+            "  free chain n = {n:3}: worst {worst:.3e}/{floor:.3e}, sliding mode {:.3e}/{exact_zero:.3e}",
             s.values()[0]
         );
     }
@@ -171,7 +192,7 @@ fn a_held_chain_matches_its_eigenvectors_as_well_as_its_eigenvalues() {
         }
         let s = m.eigen();
         let scale = m.frobenius_squared().sqrt();
-        let floor = rotation_floor(n, s.sweeps()) * scale;
+        let floor = evaluated_floor(n, s.sweeps()) * scale;
 
         let mut worst_value: f64 = 0.0;
         let mut worst_vector: f64 = 0.0;
@@ -284,6 +305,13 @@ fn a_planted_spectrum_comes_back_including_a_triple_root_and_a_zero() {
 
     let s = m.eigen();
     assert!(s.converged());
+    // Rotations only. `A` was *built* in floating point -- each entry is a sum of `n` triple
+    // products, so it carries about `2n ε` of relative error and is not quite the matrix whose
+    // eigenvalues are exactly `planted`; Weyl turns that into another `2n ε ‖A‖` of eigenvalue
+    // error. At `n = 8` that is `16 ε ‖A‖` against a floor of about `49 ε ‖A‖`, and the
+    // measured error is `1.42e-14` against a floor of `1.18e-13`, so the term is inside the
+    // margin and the floor stays where it is. Written down because the sine tests above had the
+    // same omission and it took a Windows runner to find it.
     let floor = rotation_floor(n, s.sweeps()) * m.frobenius_squared().sqrt();
     for (k, &want) in planted.iter().enumerate() {
         let got = s.values()[k];
