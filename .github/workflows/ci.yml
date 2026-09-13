@@ -200,15 +200,31 @@ jobs:
       # used to run in the library's `test` job; they moved with `pantometry-world` and this is
       # where they are held now. That count said twenty-eight through two more scenes.
       #
-      # **This is the long job, and turning a measurement on is what makes it longer.** Measured
-      # across one session: 50.6 min, then 77.6 after three sweeps that had been skipping learned
-      # to run — a notch's grid error, a motor's load profile, and a structure refined with the
-      # block it follows, which solves 4096 elastic elements per step at twice the grid. Each was
-      # worth it and each was measured before it was turned on; the point of writing the trend
-      # down is that the *next* one should be measured too, because they all land here.
+      # **This is the long job, and its wall time here says almost nothing.** Twelve runs measured:
       #
-      # GitHub's default ceiling is 360 min, so there is room. What there is not is a reason to
-      # spend it without looking.
+      #   38.4  40.8  41.0  47.0  47.6  48.8  49.4  49.7  50.6  55.4  72.0  77.6   minutes
+      #
+      # A session that turned on three resolution sweeps sits on both sides of that spread — mean
+      # **52.5 min over the six runs before it and 50.6 over the six after** — and the second
+      # longest run in the set predates it. A first version of this comment read two of those
+      # numbers as "50.6 then 77.6, a 53% rise from the sweeps". Two samples of a runner is not a
+      # trend, and a comment about measuring before claiming is a poor place to skip the measuring.
+      #
+      # **What does hold is where the time sits**, measured on one machine with a warm build, where
+      # the runner's variance is not in the way. Three runs of this step:
+      #
+      #   2412 s across 55 binaries, 1932 of them one test   80%
+      #   2618 s across 55 binaries, 2253 of them one test   86%
+      #   1955 s across 55 binaries, 1600 of them one test   82%
+      #
+      # The absolute wanders by a third; the **share does not**. That one test is
+      # `a_streamed_run_reads_back`, which drives all thirty scenes through the editor's streaming
+      # path in a **debug** build, and the next three together are 300-400 s.
+      #
+      # So a scene that gains a second gains it thirty times there before it costs anything
+      # anywhere else. Whoever wants this job shorter should start with that binary and not with
+      # the suite — and should measure it locally, because CI cannot resolve a change this job's
+      # own spread is larger than.
       #
       # The device tests need a real adapter and a runner has none. Every one of them skips with a
       # printed reason rather than quietly, and a software rasteriser is deliberately not used: it

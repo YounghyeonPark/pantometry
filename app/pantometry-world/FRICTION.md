@@ -1534,11 +1534,37 @@ What the skip cost:
 512 elements against 4096. The strain the whole scene is about moves 1.48% with the grid, and
 nothing could ask.
 
-**And it is not free.** CI's `the app` job went from **50.6 minutes to 77.6** over the session that
-turned on three such measurements — this one, a notch's grid error and a motor's load profile. Each
-was measured before it was switched on (3.9 s against 28.4 for this scene's own run), and the
-number is recorded beside the job because that is where it lands. There is room against GitHub's
-360-minute ceiling; there is no reason to spend it without looking.
+**And it is not free**, though saying how much cost a correction. This scene's own run goes from
+3.9 s to 28.4 when the pair refines, which is why it was measured before being switched on. What
+that does to CI is a different question, and the first answer written here was wrong: it read
+**50.6 minutes then 77.6** off two runs of `the app` and called it a 53% rise from the sweeps.
+
+Twelve runs of that job measure
+
+```text
+  38.4  40.8  41.0  47.0  47.6  48.8  49.4  49.7  50.6  55.4  72.0  77.6   minutes
+```
+
+— **52.5 mean over the six before this session and 50.6 over the six after**, with the second
+longest run in the set predating it. Two samples of a runner is not a trend. A note about measuring
+before claiming is a poor place to skip the measuring, and it is the same shape as everything else
+in findings 43 to 47: a statement that is true as a *measurement* and false as a *claim*.
+
+**What holds is where the time sits**, measured on one machine with a warm build where the
+runner's variance is not in the way — and measured **three times**, having just been caught quoting
+one sample as a fact:
+
+```text
+  2412 s across 55 binaries, 1932 of them one test   80%
+  2618 s across 55 binaries, 2253 of them one test   86%
+  1955 s across 55 binaries, 1600 of them one test   82%
+```
+
+The absolute wanders by a third between runs of the same tree; the **share does not**. That one
+test is `a_streamed_run_reads_back`, which drives all thirty scenes through the editor's streaming
+path in a *debug* build, and the next three together are 300–400 s. A scene that gains a second
+gains it thirty times there before it costs anything anywhere else, and that is the number to act
+on.
 
 ### Two things worth keeping
 
