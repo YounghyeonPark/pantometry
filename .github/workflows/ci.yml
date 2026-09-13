@@ -200,6 +200,16 @@ jobs:
       # used to run in the library's `test` job; they moved with `pantometry-world` and this is
       # where they are held now. That count said twenty-eight through two more scenes.
       #
+      # **This is the long job, and turning a measurement on is what makes it longer.** Measured
+      # across one session: 50.6 min, then 77.6 after three sweeps that had been skipping learned
+      # to run — a notch's grid error, a motor's load profile, and a structure refined with the
+      # block it follows, which solves 4096 elastic elements per step at twice the grid. Each was
+      # worth it and each was measured before it was turned on; the point of writing the trend
+      # down is that the *next* one should be measured too, because they all land here.
+      #
+      # GitHub's default ceiling is 360 min, so there is room. What there is not is a reason to
+      # spend it without looking.
+      #
       # The device tests need a real adapter and a runner has none. Every one of them skips with a
       # printed reason rather than quietly, and a software rasteriser is deliberately not used: it
       # would be checking a different implementation than anyone runs.

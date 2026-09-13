@@ -1534,6 +1534,12 @@ What the skip cost:
 512 elements against 4096. The strain the whole scene is about moves 1.48% with the grid, and
 nothing could ask.
 
+**And it is not free.** CI's `the app` job went from **50.6 minutes to 77.6** over the session that
+turned on three such measurements — this one, a notch's grid error and a motor's load profile. Each
+was measured before it was switched on (3.9 s against 28.4 for this scene's own run), and the
+number is recorded beside the job because that is where it lands. There is room against GitHub's
+360-minute ceiling; there is no reason to spend it without looking.
+
 ### Two things worth keeping
 
 **A first measurement of that said 5.31%**, from a refinement written by hand that doubled the
