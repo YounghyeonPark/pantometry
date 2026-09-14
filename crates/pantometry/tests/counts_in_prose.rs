@@ -524,6 +524,60 @@ fn the_unearned_passes_are_counted_where_they_are_listed() {
     phrase("CLAUDE.md", "the index: **{}** instances", listed);
 }
 
+/// **Every crate in `crates/` has a row in the table `AGENTS.md` calls "What is in the box".**
+///
+/// That table says every name below it is re-exported through `pantometry::prelude::*`, and five
+/// crates' worth of names were re-exported and not below it: `elastic`, `em`, `fluid`, `porous`
+/// and `protein`. Five of thirteen domains, in the one document `CLAUDE.md` points at for *using*
+/// the library, and nothing compared it against anything.
+///
+/// It is the same shape as every count in this file and it needed a different check, because the
+/// failure is not a stale number — it is a **missing row**, which no sentence anywhere states and
+/// which reads exactly like a crate that does not exist. Both directions, because each catches a
+/// different mistake: a crate with no row is undiscoverable, and a row for a crate that is gone is
+/// a name a reader will look for and not find.
+#[test]
+fn what_is_in_the_box_is_what_is_in_crates() {
+    let Ok(text) = std::fs::read_to_string(root().join("AGENTS.md")) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(root().join("crates")) else {
+        return;
+    };
+    let mut on_disk: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        // The facade is what the table is *about*; it does not hold anything of its own.
+        .filter(|n| n.starts_with("pantometry-"))
+        .collect();
+    if on_disk.is_empty() {
+        return;
+    }
+    on_disk.sort();
+
+    let mut in_table: Vec<String> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("| `pantometry-"))
+        .filter_map(|l| l.split('`').next())
+        .map(|n| format!("pantometry-{n}"))
+        .collect();
+    in_table.sort();
+    in_table.dedup();
+
+    let missing: Vec<&String> = on_disk.iter().filter(|c| !in_table.contains(c)).collect();
+    assert!(
+        missing.is_empty(),
+        "in crates/ and not in AGENTS.md's table, so a reader cannot find them: {missing:?}"
+    );
+    let gone: Vec<&String> = in_table.iter().filter(|c| !on_disk.contains(c)).collect();
+    assert!(
+        gone.is_empty(),
+        "in AGENTS.md's table and not in crates/: {gone:?}"
+    );
+    println!("  {} crates, all of them in the box", on_disk.len());
+}
+
 /// The **six crates that are not a physics**, so the domain count is a subtraction with a stated
 /// list rather than a number somebody remembers.
 ///
