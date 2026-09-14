@@ -11,11 +11,12 @@ Everything below was hit while building the smallest thing that loads a scene, r
 two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Forty-three of the forty-seven are fixed**, and four are recorded rather than actioned. The
+**Forty-three of the forty-eight are fixed**, and five are recorded rather than actioned. The
 reasons differ and are given in each: one because the kernel already refuses the mistake it
 describes and a second consumer would be needed to make the duplication worth removing, one because
 a domain may not know another so the library cannot close it, one because the shape of the answer
-is not obvious, and one on scope.
+is not obvious, one on scope, and one because the alternative to a panic is a type that does not
+exist yet and wants a second consumer to justify.
 
 **A fixed finding opens its resolution with `**Fixed`, at the start of a line**, because that is
 what `friction_counts.rs` counts and the summary above is pinned to that count. It said "forty
@@ -608,7 +609,7 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-seven findings, and the source has shifted ten times — the table below has eleven rows and
+Forty-eight findings, and the source has shifted ten times — the table below has eleven rows and
 that sentence said "seven" through four of them.
 
 | how many | where they came from |
@@ -1615,6 +1616,42 @@ in silence and says nothing. A test that reaches a guard through a path that fai
 test of that guard.
 
 ---
+
+## 48. A constructor panics on the one input a consumer does not write
+
+`Protein::new` asserts that its network is one connected piece. Below the percolation cutoff a
+structure falls into several, each free to drift away from the others, so the softest mode becomes
+one of them leaving and every fluctuation the model reports is that drift. Refusing it is right.
+**Panicking to refuse it is what this entry is about.**
+
+Every other assertion in that crate guards something the caller wrote: an index past the end, a
+temperature that is not positive, a matrix that is not square. This one guards something the caller
+**read**. The cutoff is a number in a scene file and the structure is a Protein Data Bank entry
+somebody downloaded, and whether those two percolate together is not a property of the calling code
+at all — it is a property of a protein, discoverable only by building the network and looking.
+
+`Network::components` exists and says so, so the panic is documented and avoidable. That is the
+argument for leaving it, and it is weaker here than it is for `Symmetric::get`: "you could have
+asked" is a fair thing to say about a loop bound and a strange thing to say about a file.
+
+**What it cost, concretely.** Wiring the domain into the scene format meant the build arm could not
+simply call the constructor. It calls `components()` first, compares it against one, and returns a
+`String` naming the cutoff and the piece count — because a scene is data somebody wrote and the
+format's contract is to report bad data as an error, not to take the process down with it. So the
+panic is unreachable from the scene format, and the work of making it unreachable is duplicated in
+every consumer that reads a structure from anywhere.
+
+**Recorded rather than actioned, and the reason is that the alternative is not obviously better.**
+A `Result` here would be the fourth error type in a crate whose other refusals are asserts, and it
+would push a `?` into every test and example that builds a protein from a structure known to be
+connected — which is all of them, because a disconnected one is not a protein. The honest shape may
+be neither: a `Network::connected(self) -> Option<Connected>` that makes the state a type, so the
+constructor takes something that cannot be disconnected and nobody checks twice. That is a bigger
+change than this entry is evidence for, and it wants a second consumer before it is worth making.
+
+What this does argue for now is the documentation, which says it: the panic is named in
+`Protein::new`'s own `# Panics`, and `Network::components` explains what it is for rather than
+merely what it returns.
 
 ## What this report does not cover
 
