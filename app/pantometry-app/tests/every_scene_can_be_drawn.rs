@@ -159,12 +159,12 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         drawn + skipped + empty.len() + blank.len()
     );
     // And which machine this is, said rather than left to be inferred from a fold in a log. There
-    // is no middle: an adapter renders all 27 or there is none and all 27 skip. A run that drew 24
+    // is no middle: an adapter renders all 28 or there is none and all 28 skip. A run that drew 24
     // is a renderer that started refusing scenes, and under the old guard it was just a smaller
     // number.
     assert!(
-        (drawn == 27 && skipped == 0) || (drawn == 0 && skipped == 27),
-        "{drawn} drew and {skipped} skipped — with an adapter all 27 draw, without one all 27 skip"
+        (drawn == 28 && skipped == 0) || (drawn == 0 && skipped == 28),
+        "{drawn} drew and {skipped} skipped — with an adapter all 28 draw, without one all 28 skip"
     );
 }
 

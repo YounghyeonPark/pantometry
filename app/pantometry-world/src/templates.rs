@@ -87,7 +87,7 @@ impl Template {
 /// The examples, keyed by the `kind` the scene format spells.
 ///
 /// Sorted by kind, so a menu built from this is in a stable order.
-pub const TEMPLATES: [Template; 19] = [
+pub const TEMPLATES: [Template; 20] = [
     Template {
         kind: "atoms",
         about: "A Lennard-Jones fluid in a periodic box",
@@ -202,6 +202,15 @@ pub const TEMPLATES: [Template; 19] = [
         json: r#"{ "kind": "orbit", "name": "orbit", "central_kg": 1.989e+30,
           "radii_m": [57900000000.0, 108200000000.0, 149600000000.0],
           "inclinations_deg": [7.0, 3.4, 0.0], "satellite_kg": 3.3e+23 }"#,
+    },
+    Template {
+        kind: "protein",
+        about: "A protein moving along the collective modes of its own fold",
+        duration_s: 2e-11,
+        frames: 16,
+        json: r#"{ "kind": "protein", "name": "protein", "pdb": "structures/1CRN.pdb",
+          "cutoff_a": 15.0, "stiffness_n_per_m": 0.695, "temperature_c": 37.0,
+          "seed": 20260914 }"#,
     },
     Template {
         kind: "puck",

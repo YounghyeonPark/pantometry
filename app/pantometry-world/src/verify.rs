@@ -1811,7 +1811,15 @@ impl DomainSpec {
             | DomainSpec::Network { .. }
             | DomainSpec::Orbit { .. }
             | DomainSpec::Bounce { .. }
-            | DomainSpec::Atoms { .. } => None,
+            | DomainSpec::Atoms { .. }
+            // **A protein has no resolution to halve.** Every other spatial domain here states a
+            // grid and the sweep asks whether the answer is the problem's or the grid's. A
+            // structure is not a discretisation of anything: it is where the atoms were measured
+            // to be, and there is nothing between two of them to subdivide. The parameter that
+            // *could* be doing the work is the cutoff, and `a_protein_sweeps_its_cutoff` sweeps
+            // that instead — a motion that moved with the cutoff would be a statement about the
+            // cutoff rather than about the fold.
+            | DomainSpec::Protein { .. } => None,
         };
         Ok(spec)
     }

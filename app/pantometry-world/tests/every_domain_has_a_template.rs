@@ -20,8 +20,14 @@
 #![cfg(not(target_family = "wasm"))]
 
 use pantometry_world::templates::{Template, TEMPLATES};
+use pantometry_world::Beside;
 use pantometry_world::{OnDisk, Scene, World};
 use std::collections::BTreeSet;
+
+/// Where a template's files are, which is beside the shipped scenes.
+fn parts() -> Beside {
+    Beside(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes"))
+}
 
 /// The `kind` of every domain in every shipped scene.
 fn kinds_in_scenes() -> BTreeSet<String> {
@@ -136,7 +142,11 @@ fn every_template_builds_except_the_one_that_cannot() {
         );
         let scene: Scene = serde_json::from_str(&json)
             .unwrap_or_else(|e| panic!("{kind}: the template does not fit a scene: {e}\n{json}"));
-        match World::build_with(scene, &OnDisk) {
+        // **Beside the scenes, not against the working directory.** `OnDisk` reads the name as
+        // typed, and this crate's own documentation calls that a trap for exactly this case: the
+        // `protein` template names a structure file, and a template that builds only when the
+        // test happens to be run from the package root is a template that does not build.
+        match World::build_with(scene, &parts()) {
             Ok(_) => {}
             Err(why) if why.contains("follows") => refused_at_build.push(kind),
             Err(why) => panic!("{kind}: the template does not build: {why}"),

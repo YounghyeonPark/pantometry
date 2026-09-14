@@ -1,6 +1,6 @@
 # Scenes
 
-Thirty worlds described as data, covering **all eleven** of the library's domains — twenty-nine of them
+Thirty-one worlds described as data, covering **twelve** of the library's thirteen domains — every one but `pharmacokinetic`, whose compartments are a graph with nothing to place — twenty-nine of them
 one question at a time, and one that is actually a world. The count above this line used to read
 "twenty-seven of them ... and one", which is twenty-eight and was never the number of files in this
 directory; **seventeen** state a single kind of domain and thirteen state more, so no split of them
@@ -19,7 +19,7 @@ pointing at a node the scene defines. It reports a parse failure as `file:line:c
 keys that were expected, which is what an editor puts a squiggle under. CI runs it over every
 scene, because it would otherwise be the one entry point nothing exercises.
 
-Every file carries a `format` number, and **absence means 1** — which is what all thirty here
+Every file carries a `format` number, and **absence means 1** — which is what all thirty-one here
 are: nothing has yet changed what an existing key means. A version this build cannot read is refused
 rather than half-run: `deny_unknown_fields` catches a key that was *added*, but not one whose
 meaning changed, and that is what the number is for.
@@ -36,7 +36,7 @@ No second argument prints the numbers and checks them. A second argument writes 
 | `out.gltf` | The last frame as **surfaces** — a field's boundary, a body's sphere, with normals — for Blender, three.js or any glTF reader |
 | `out.usda` | The **whole run** as USD: geometry, colour and every domain's scalars, animated on a timeline, for usdview, Omniverse, Houdini or Maya |
 
-`.csv` is the one that reaches the domains a picture cannot. Twelve of these thirty scenes have
+`.csv` is the one that reaches the domains a picture cannot. Twelve of these thirty-one scenes have
 a domain with no field and no bodies, and for several the scalar *is* the result: `13` is about a
 winding whose resistance follows its own temperature, and it drew nothing at all. As a table it
 shows the feedback directly — 12.46 W at 25 °C rising to 16.01 W at 99 °C, with the resistance
@@ -65,7 +65,7 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. **Twenty-three** of the thirty scenes have geometry
+`.gltf` is the one that leaves this workspace. **Twenty-three** of the thirty-one scenes have geometry
 to export — bodies, ray paths, a 3D field as its cell centres — and the other **seven** are
 **refused with a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not
 something to put in a 3D viewer, and the message says which panel and why.
@@ -137,6 +137,7 @@ presence is itself the check that `"material": "ice"` reached the domain.
 | `29-a-designed-bracket-becomes-cells` | The first scene whose geometry comes from a **file** rather than from numbers in the JSON: an L-bracket named as an ASCII STL, rasterised onto 2 mm cells, carrying a module’s **20 W** from the tip of one arm, round the corner, into a bolt pad at the tip of the other. The check is the **outline**, not the mesh — the shoelace area of the seven-point profile times the 20 mm extrusion is 33 000 mm3, which 4 125 cells would hold and 4 100 do, **-0.61%**. Comparing against `Mesh::volume` instead would only say the crate agrees with itself, since that is the divergence theorem over the same triangles the rasteriser read. **It cooled over its whole footprint into still air** until `verify` learned to say when a grid is idle: every cell shed where it stood, so 4 100 cells rasterised from a shape all held the same number and the field spanned **0.067 K** at a Biot number of 8.6e-4. The route is the only reason the shape is in the file, and there was no route. It holds **52.4420 °C at the module against 30.5449 at the bolts** now — 21.90 K across a path the outline decides. It starts at 44 °C rather than 20: from cold, most of the run charged the bracket’s mass rather than establishing the gradient, and nine test binaries walk every shipped scene, so 900 s cost nine times over. 200 s from near the answer is within 0.09% of the settled peak. That needed `cooling` to name a *box* on a face: stating a smaller area does not do it, because the area is divided among the cells on the face, so a tenth of the area is a tenth of the conductance spread over all of it |
 | `30-two-phases-crossing-at-a-clearance` | Two blackened copper busbars, identical but for their current, one turned a quarter turn and lifted to a 4 mm clearance — an arrangement where *not conducting* is the design requirement. **The first scene to state a `poses` entry**, and it exists because the other twenty-nine could not fail: under the identity a domain’s own coordinates and the world’s are the same thing, so three separate consumers dropped the placement in turn and every scene agreed with all of them. **It was two domains and they could not see each other.** Two surfaces at 335.6 K and 319.0 K, ε = 0.9, four millimetres apart, exchange **6.5711 mW** across the 8 × 8 mm patch where they cross — 7.64% of what the cooler bar dissipates — and two `Solid3D` domains exchange nothing but bus totals, which carry an amount and no location. As one block it is `find_gaps`, the same pairing `23` is checked on. The closed form is a **pair**: each bar sheds convectively and radiatively *and* trades with the other, solved by iteration from the constants, giving 22.0246 and 6.2523 K against a measured **22.0218 and 6.2493**. Uncoupled they would sit at 22.4333 and 5.8139, so the exchange is forty times the tolerance the balance is asserted to. Each bar is a **lump** and that is the physics: with every watt leaving at the ends, a 32 mm copper bar 8 mm square at 0.344 W varies by `P·L/(8kA)` = 53.6 mK, and it measures 0.585 |
 
+| `31-a-protein-shaking-at-body-temperature` | Crambin's 46 alpha carbons, read out of the Protein Data Bank entry `1CRN` sitting beside this file, joined by 688 springs at a 15 Å cutoff and shaking along the 132 collective modes its own fold has. **The first scene whose geometry is a measurement rather than a design** — `29` names an STL somebody drew, and this names coordinates somebody refined. **It is also the first with no resolution to sweep**, and that is the interesting part: every other spatial scene here states a grid and `verify` halves it to ask whether the answer is the problem's or the discretisation's, while a structure *is* its own resolution and `refined()` refuses it in as many words. What could quietly be doing the work instead is the **cutoff**, so that is what is swept: at 10, 12, 18 and 20 Å — from 334 springs to 936 — the softest mode is still best matched by the softest mode of the 15 Å reference, winning by **0.361** at its closest against the **0.085** a direction picked without looking would score. The first version of that check asked for an overlap above 0.9 and measured 0.815, 0.927, 0.849 and 0.809; moving the bar to fit would have been choosing a number, so the claim became an ordering with no number in it. The structure file is a **second copy** of the one `pantometry-protein` is checked against and a test holds the two byte for byte, because the copy that drifts is the one nothing compares |
 `22` is the pair to read with `21`, and the ratio between them is the whole point. Diluting the wax to four
 fifths by volume makes a cubic millimetre of buffer hold a fifth less latent heat, so the same twenty watts
 clear it a quarter faster — and `1.25` is `1/0.8` with the density and the latent heat cancelled out. The
@@ -378,7 +379,7 @@ it is not an error estimate; `--deep`'s measured order is what tells the two apa
 ## Every one of them is run by CI
 
 A scene in this repository is a claim, and one that parses and then produces nonsense is worse
-than none at all. `tests/scene.rs` runs all thirty on every commit and asserts one number each —
+than none at all. `tests/scene.rs` runs all thirty-one on every commit and asserts one number each —
 chosen to be a property of the physics rather than of the file, so it would change if the
 library broke and not merely if the scene were edited. Adding a scene without a claim fails
 the test rather than passing quietly. CI also runs the real binary on the real files, which is

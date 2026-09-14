@@ -23,7 +23,7 @@ the format's own complaint, by name.
 
 The duration and frame count a new scene starts from are not chosen: each comes from a shipped
 scene that uses that kind, and a test holds every one of them
-against the thirty scenes on disk.
+against the thirty-one scenes on disk.
 
 The viewport is an instrument, not a preview: a colour bar with numbers on it, a scale bar in
 model metres, a probe that names whatever the cursor is over, and a transport — play, step either

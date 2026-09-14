@@ -1,4 +1,4 @@
-//! The thirty shipped scenes, offered as starting points.
+//! The thirty-one shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -87,6 +87,11 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
         "atoms in a lattice and out of one, and a particle in a well",
     ),
     (
+        "proteins",
+        "Proteins",
+        "the collective motions of a fold, from a Protein Data Bank file",
+    ),
+    (
         "radio",
         "Resonant cavities",
         "Maxwell's equations on a Yee grid",
@@ -105,10 +110,10 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
 ];
 
 /// How many areas there are.
-pub const AREA_COUNT: usize = 11;
+pub const AREA_COUNT: usize = 12;
 
 /// Every shipped scene, as a starting point.
-pub const PRESETS: [Preset; 30] = [
+pub const PRESETS: [Preset; 31] = [
     Preset {
         file: "01-room-mode.json",
         area: "rooms",
@@ -400,6 +405,17 @@ pub const PRESETS: [Preset; 30] = [
         json: include_str!("../scenes/30-two-phases-crossing-at-a-clearance.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/30-two-phases-crossing-at-a-clearance.png"
+        )),
+    },
+    Preset {
+        file: "31-a-protein-shaking-at-body-temperature.json",
+        area: "proteins",
+        title: "crambin at body temperature, moving along the collective modes its own fold has",
+        kinds: &["protein"],
+        needs_a_part: false,
+        json: include_str!("../scenes/31-a-protein-shaking-at-body-temperature.json"),
+        thumb: Some(include_bytes!(
+            "../thumbnails/31-a-protein-shaking-at-body-temperature.png"
         )),
     },
 ];

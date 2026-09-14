@@ -942,6 +942,66 @@ pub enum DomainSpec {
         #[serde(default)]
         release: Release,
     },
+    /// A protein shaking along its own normal modes, read out of a Protein Data Bank file.
+    ///
+    /// The alpha carbons become nodes, every pair within `cutoff_a` gets a spring, and the
+    /// eigenvectors of the Hessian are the collective motions the fold has. See
+    /// `pantometry_protein` for what that model does and does not claim; the short version is
+    /// that it predicts **which way** a structure moves and says nothing about how tightly
+    /// anything binds.
+    ///
+    /// # It has no resolution, and that is not an omission
+    ///
+    /// Every other spatial domain here states a grid, and [`Scene::refined`] halves it to ask
+    /// whether the answer is the problem's or the grid's. A protein has no grid: the structure
+    /// *is* the data, at whatever resolution the crystallographer resolved it, and there is
+    /// nothing to subdivide. So a scene of nothing but this refuses to refine with the same
+    /// message a scene of pure systems gets, and what stands in for that sweep is the **cutoff**
+    /// — the one parameter that could quietly be doing the work. `a_protein_sweeps_its_cutoff`
+    /// is that check: the softest mode has to point the same way at 10, 15 and 20 Å, because a
+    /// motion that moved with the cutoff would be a statement about the cutoff.
+    ///
+    /// # Cost
+    ///
+    /// A `3N × 3N` eigenproblem for `N` residues, cubic in `N`. Crambin's 46 residues take
+    /// 0.04 s in release and 0.76 s in debug; two hundred residues is minutes in debug, which is
+    /// why the shipped scene is a small protein and the large ones stay in
+    /// `pantometry-protein`'s own release-only tests.
+    Protein {
+        /// Domain name, and the handle the renderer uses to find it again.
+        name: String,
+        /// The structure, as a path beside the scene — the same rule `stl` follows.
+        pdb: String,
+        /// Which chain to take, when the file holds more than one copy of the protein.
+        ///
+        /// A deposited file is often a dimer because that is what crystallised, not because the
+        /// molecule is one. Building a network across both joins two things that are not joined,
+        /// and every mode after that is about the crystal. `None` takes the file as it stands.
+        #[serde(default)]
+        chain: Option<char>,
+        /// How far apart two residues can be and still share a spring, in ångström.
+        ///
+        /// Fifteen is the value the anisotropic network model was published with. Too small and
+        /// the network falls into pieces that drift apart for free, which `World::build` refuses
+        /// rather than reporting as a soft mode.
+        cutoff_a: f64,
+        /// Every spring's stiffness, in N/m.
+        ///
+        /// It multiplies the whole Hessian, so it scales every amplitude and changes no shape.
+        /// `0.695` is one kcal/mol/Å².
+        stiffness_n_per_m: f64,
+        /// The temperature the modes are excited to.
+        temperature_c: f64,
+        /// The mass on each node, in daltons. A residue averages about 110.
+        ///
+        /// It sets the *rate* of the motion and nothing else: every amplitude, fluctuation and
+        /// energy here is independent of it.
+        #[serde(default = "residue_mass")]
+        mass_da: f64,
+        /// The seed the mode phases are drawn from.
+        #[serde(default)]
+        seed: u64,
+    },
     /// A heat source with a finite tank, defined in this crate rather than the library.
     ///
     /// The publisher half of a coupled scene. See [`heater::Heater`] for why it is written
@@ -1539,6 +1599,22 @@ impl Parts for Beside {
     }
 }
 
+/// The average mass of an amino-acid residue, in daltons.
+fn residue_mass() -> f64 {
+    110.0
+}
+
+/// The chain identifiers a structure holds, for an error that has to say what *is* there.
+fn chains_of(structure: &pantometry::protein::Structure) -> String {
+    let mut seen: Vec<char> = structure.residues().iter().map(|r| r.chain).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.iter()
+        .map(|c| format!("{c:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// [`Parts`] held in memory: the name is a label somebody chose.
 ///
 /// What a browser has after a drop, and what a test has instead of a temporary directory. The
@@ -1917,6 +1993,7 @@ impl DomainSpec {
             | DomainSpec::Orbit { name, .. }
             | DomainSpec::Bounce { name, .. }
             | DomainSpec::Atoms { name, .. }
+            | DomainSpec::Protein { name, .. }
             | DomainSpec::Lump { name, .. }
             | DomainSpec::Network { name, .. }
             | DomainSpec::Winding { name, .. }
@@ -1992,6 +2069,78 @@ impl DomainSpec {
                 watts,
                 reserve_j,
             } => Box::new(Heater::new(name.clone(), *watts, *reserve_j)),
+            DomainSpec::Protein {
+                name,
+                pdb,
+                chain,
+                cutoff_a,
+                stiffness_n_per_m,
+                temperature_c,
+                mass_da,
+                seed,
+            } => {
+                let bytes = files.bytes(pdb).map_err(|e| format!("{name}: {e}"))?;
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| format!("{name}: {pdb} is not text, so it is not a PDB file"))?;
+                let whole = pantometry::protein::Structure::from_pdb(&text)
+                    .map_err(|e| format!("{name}: {pdb}: {e}"))?;
+                // A chain that is named and absent is a typo with a structure behind it: taking
+                // the whole file instead would build the dimer the scene asked not to have.
+                let structure = match chain {
+                    Some(id) => whole.chain(*id).ok_or_else(|| {
+                        format!(
+                            "{name}: {pdb} has no chain {id:?}; it has {}",
+                            chains_of(&whole)
+                        )
+                    })?,
+                    None => whole,
+                };
+                for (what, value) in [
+                    ("cutoff_a", *cutoff_a),
+                    ("stiffness_n_per_m", *stiffness_n_per_m),
+                    ("mass_da", *mass_da),
+                ] {
+                    // Not `!(value > 0.0)`: clippy refuses a negated comparison on a partially
+                    // ordered type, and it is right that the NaN case should be written down
+                    // rather than ride along inside a negation.
+                    if value.is_nan() || value <= 0.0 {
+                        return Err(format!(
+                            "{name}: {what} is {value}, which is not a length, a \
+                                            stiffness or a mass"
+                        ));
+                    }
+                }
+                let network = pantometry::protein::Network::new(
+                    &structure,
+                    Length::from_si(cutoff_a * 1e-10),
+                    Stiffness::from_si(*stiffness_n_per_m),
+                );
+                // Below its percolation cutoff the network is several molecules, each free to
+                // drift away from the others, and `Protein::new` panics rather than returning
+                // that as a soft mode. A scene is data somebody wrote, so this has to be an
+                // error the format reports and not a panic the CLI dies of.
+                let pieces = network.components();
+                if pieces != 1 {
+                    return Err(format!(
+                        "{name}: at a {cutoff_a} A cutoff this structure is {pieces} separate \
+                         networks, each with six rigid-body modes of its own, so the softest \
+                         motion would be one of them drifting away rather than the protein \
+                         moving. Raise `cutoff_a`"
+                    ));
+                }
+                log.notes.push(format!(
+                    "{name}: {} residues, {} springs at {cutoff_a} A",
+                    structure.len(),
+                    network.springs()
+                ));
+                Box::new(pantometry::protein::Protein::new(
+                    name.clone(),
+                    &network,
+                    Temperature::from_si(temperature_c + 273.15),
+                    Mass::from_si(mass_da * 1.660_539_068_92e-27),
+                    *seed,
+                ))
+            }
             DomainSpec::Beam {
                 name,
                 onto,
@@ -4951,9 +5100,10 @@ impl DomainSpec {
                 cells[2],
             )),
             // Bodies, which carry their own positions and need no extent.
-            DomainSpec::Orbit { .. } | DomainSpec::Bounce { .. } | DomainSpec::Atoms { .. } => {
-                Placement::default()
-            }
+            DomainSpec::Orbit { .. }
+            | DomainSpec::Bounce { .. }
+            | DomainSpec::Atoms { .. }
+            | DomainSpec::Protein { .. } => Placement::default(),
             // No picture at all: sources, sinks, a lumped mass, a graph of nodes. Their result
             // is a reading, and `Domain::readings` collects it without anybody placing them.
             DomainSpec::Heater { .. }

@@ -406,7 +406,7 @@ fn the_scene_count_agrees_everywhere_it_is_written() {
     // which is what it is for.
     phrase(
         "ARCHITECTURE.md",
-        "with {} scenes across all eleven domains",
+        "with {} scenes across twelve of the thirteen domains",
         scenes,
     );
     phrase(

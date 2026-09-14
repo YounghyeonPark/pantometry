@@ -40,6 +40,7 @@ AREA = {
     "04": "heat", "15": "heat", "20": "heat", "21": "heat", "22": "heat", "23": "heat", "29": "heat",
     "18": "flow", "26": "flow",
     "08": "matter", "09": "matter", "28": "matter",
+    "31": "proteins",
     "27": "radio",
     "06": "orbits",
     "07": "contact",
@@ -55,13 +56,14 @@ AREAS = [
     ("optics", "Light on a surface", "a beam, a lamp with a real spectrum, and a coating"),
     ("flow", "Flow", "pressure-driven water, and liquid through a packed bed"),
     ("matter", "Matter", "atoms in a lattice and out of one, and a particle in a well"),
+    ("proteins", "Proteins", "the collective motions of a fold, from a Protein Data Bank file"),
     ("radio", "Resonant cavities", "Maxwell's equations on a Yee grid"),
     ("orbits", "Orbits", "bodies under their own gravity"),
     ("contact", "Contact", "a ball on a floor, losing energy to its dashpot"),
     ("everything", "All of it at once", "five domains, four crates, one clock and one audit"),
 ]
 
-HEADER = r"""//! The thirty shipped scenes, offered as starting points.
+HEADER = r"""//! The thirty-one shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong

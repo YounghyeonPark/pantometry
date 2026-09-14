@@ -4,8 +4,8 @@
 
 | what | where | why it exists |
 | --- | --- | --- |
-| `presets.rs` | `app/pantometry-world/src/` | the thirty shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
-| 27 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 282 KiB in total and 10.4 KiB each |
+| `presets.rs` | `app/pantometry-world/src/` | the thirty-one shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
+| 28 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 123 KiB in total and 4.4 KiB each. **Measured here rather than remembered**: this line said 282 KiB and 10.4 KiB each while the committed tiles were already this size, and regenerating them changed nothing but the count |
 
 ```sh
 cargo build --release --bin pantometry --manifest-path app/Cargo.toml
@@ -82,10 +82,16 @@ their counts — so a third one arriving is a failure rather than something to n
 By rank because the threshold it replaced sat at 90 and the third-lowest tile is 94: four pixels of
 37 440, which is not a margin.
 
-## Three groups of tiles are the same picture, and one of them was a real defect
+## One group of tiles is the same picture, and the group that was a real defect is gone
 
-27 tiles, **24 distinct images**: `20`, `21` and `22` draw one image between them, and `24` and
-`25` another.
+28 tiles, **26 distinct images**: `20`, `21` and `22` draw one image between them and nothing else
+collides.
+
+**This paragraph said three groups and twenty-four distinct, and both were stale.** Measured by
+hash: 20, 21 and 22 share `b5f4f6a5…`, while 24 is `3b467ac8…` and 25 is `c817ebce…` — two
+different pictures that this file went on calling one. The test beside it,
+`the_tiles_tell_the_scenes_apart_or_say_which_they_do_not`, pins the *set* of collisions rather
+than a count of them and so had been right all along; nothing compared the two.
 
 **It was 23, and the extra collision is why this check exists.** `08-atoms-crystal` and
 `09-atoms-liquid` drew the identical picture because both scenes were frozen lattices — they asked

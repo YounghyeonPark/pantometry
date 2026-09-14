@@ -1,0 +1,16 @@
+{
+  "title": "crambin at body temperature, moving along the collective modes its own fold has",
+  "duration_s": 2e-11,
+  "frames": 16,
+  "domains": [
+    {
+      "kind": "protein",
+      "name": "crambin",
+      "pdb": "structures/1CRN.pdb",
+      "cutoff_a": 15.0,
+      "stiffness_n_per_m": 0.695,
+      "temperature_c": 37.0,
+      "seed": 20260914
+    }
+  ]
+}

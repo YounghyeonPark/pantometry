@@ -1294,6 +1294,68 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: the beam landed in the middle: {middle:.4} K against {end:.4} K"
                 );
             }
+            // **Equipartition, and then the crystallographer.**
+            //
+            // The closed form first: every one of the `3N - 6` non-rigid modes carries exactly
+            // `k_B T`, half kinetic and half potential, because that is what the amplitudes were
+            // chosen to put there. 46 residues is 132 modes at 310.15 K, which is `5.647e-19 J`
+            // and does not move over the run -- the motion is written down rather than
+            // integrated, so there is no integrator to leak.
+            //
+            // Then the part that makes this a protein rather than a spring network: the file
+            // carries a temperature factor for every atom, `B = 8 pi^2 <dr^2> / 3`, refined by
+            // somebody else years before this existed. The panel this scene draws is coloured by
+            // the predicted fluctuation, so the two are directly comparable -- as a **shape**,
+            // not a size, because the spring constant divides every prediction equally and
+            // nothing here predicts it. `pantometry-protein`'s own tests measure 0.395 for this
+            // entry at this cutoff, and what is asserted here is that the picture on the screen
+            // is that number rather than a different one computed the same way somewhere else.
+            "31-a-protein-shaking-at-body-temperature.json" => {
+                let reading = |label: &str| {
+                    last.readings
+                        .iter()
+                        .find(|r| r.label == label)
+                        .unwrap_or_else(|| panic!("{name}: no {label} reading"))
+                        .value
+                };
+                assert_eq!(
+                    reading("rigid modes"),
+                    6.0,
+                    "{name}: crambin is not collinear"
+                );
+                assert!(
+                    reading("mode separation") > 1e6,
+                    "{name}: the six zeros are only {:e} below the first real mode",
+                    reading("mode separation")
+                );
+                let modes = 3.0 * 46.0 - 6.0;
+                let want = modes * 1.380_649e-23 * (37.0 + 273.15);
+                let held = reading("energy");
+                assert!(
+                    (held / want - 1.0).abs() < 1e-12,
+                    "{name}: equipartition says {want:e} J in {modes} modes, and it holds {held:e}"
+                );
+
+                // The deposited B-factors, out of the structure the scene names.
+                let pdb = dir.join("structures/1CRN.pdb");
+                let text = std::fs::read_to_string(&pdb)
+                    .unwrap_or_else(|e| panic!("{name}: {}: {e}", pdb.display()));
+                let measured = pantometry::protein::Structure::from_pdb(&text)
+                    .expect("alpha carbons")
+                    .experimental_fluctuations()
+                    .expect("1CRN carries B-factors");
+                // The panel is `sqrt(<dr^2>)`; the file's is `<dr^2>`.
+                let predicted: Vec<f64> = last.panels[0].values().iter().map(|v| v * v).collect();
+                assert_eq!(predicted.len(), measured.len(), "{name}: 46 residues");
+                let r = pantometry::protein::correlation(&predicted, &measured)
+                    .expect("neither series is constant");
+                assert!(
+                    (r - 0.395).abs() < 0.01,
+                    "{name}: the drawn fluctuations correlate with the deposited B-factors at \
+                     {r:.3}, and the crate measures 0.395 for this entry at this cutoff -- so \
+                     either the scene is not drawing what it says or the two have diverged"
+                );
+            }
             // Kepler's third law, from the picture. The satellites are on circular orbits,
             // so `v = sqrt(GM/r)` and the fastest is the innermost: 7546 m/s at 7000 km
             // against Earth's mass, computed here and not read off the domain.
@@ -3320,6 +3382,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "busbar/residual",
             "coolant/cell Reynolds",
             "coolant/divergence",
+            "crambin/mode separation",
+            "crambin/rigid modes",
             "particle/norm",
             "resonator/div B",
             "stress/residual",
@@ -3342,8 +3406,10 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "cell Reynolds []",
             "div B []",
             "divergence [m/s]",
+            "mode separation []",
             "norm []",
             "residual []",
+            "rigid modes []",
         ],
         "the set of readings that describe the solve rather than the world has changed"
     );
@@ -3359,9 +3425,11 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "coldest [C]",
             "current [A]",
             "delivered [g]",
+            "displacement [m]",
             "dissipated [J]",
             "dissipating [W]",
             "electric [J]",
+            "energy [J]",
             "field energy [J]",
             "flow [g/s]",
             "free strain []",
@@ -3381,7 +3449,9 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "reserve [J]",
             "resistance [ohm]",
             "ring over core []",
+            "softest mode [Hz]",
             "spent [J]",
+            "spread [m]",
             "stator [C]",
             "strain energy [J]",
             "strain x []",

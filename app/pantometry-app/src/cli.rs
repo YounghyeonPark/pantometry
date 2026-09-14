@@ -390,9 +390,33 @@ fn work(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .flat_map(|f| f.panels.iter().filter(|p| p.name == spec.name()))
             .flat_map(|p| p.values().iter())
             .fold(0.0f64, |m, v| m.max(v.abs()));
+        // **Four decimal places throws away anything small, and two shipped scenes are small.**
+        // `15-a-hot-spot-in-a-block` reports an elastic displacement and
+        // `31-a-protein-shaking-at-body-temperature` a residue's fluctuation; both are real
+        // motions of around `1e-11 m` and both printed `0.0000 now, 0.0000 peak`, which reads as
+        // "nothing moved" about a run in which something did. SI is the unit and the number is
+        // the number, so the line changes notation rather than scale, and only when fixed point
+        // would have discarded the value entirely.
+        // `{:.4}` rounds anything under `5e-5` to `0.0000`, so the threshold is where the number
+        // is **discarded** rather than merely shortened: `9.759e-4` printing as `0.0010` is two
+        // significant figures and is left alone. Each of the pair is judged on its own, because
+        // the bouncing ball's line is `3.441e-14 now, 2.8603 peak` and the whole point of it is
+        // that those differ by fourteen orders.
+        let discarded = |v: f64| v != 0.0 && v.abs() < 1e-4;
+        let show = |v: f64| {
+            if discarded(v) {
+                format!("{v:.3e}")
+            } else {
+                format!("{v:.4}")
+            }
+        };
         println!(
-            "  {:<14} {:<12} |{}| {:.4} now, {:.4} peak over the run",
-            panel.name, shape, panel.unit, now, over_run
+            "  {:<14} {:<12} |{}| {} now, {} peak over the run",
+            panel.name,
+            shape,
+            panel.unit,
+            show(now),
+            show(over_run)
         );
     }
 

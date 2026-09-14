@@ -256,8 +256,8 @@ fn every_tile_decodes_to_something() {
     // A run in which every preset had `thumb: None` would light nothing and pass the loop above.
     assert_eq!(
         lit_by.len(),
-        27,
-        "27 presets carry a tile, and this run found {}",
+        28,
+        "28 presets carry a tile, and this run found {}",
         lit_by.len()
     );
     lit_by.sort_unstable();
@@ -324,8 +324,8 @@ fn the_tiles_tell_the_scenes_apart_or_say_which_they_do_not() {
     );
     assert_eq!(
         by_bytes.len(),
-        25,
-        "27 tiles, and {} of them are distinct pictures",
+        26,
+        "28 tiles, and {} of them are distinct pictures",
         by_bytes.len()
     );
 }

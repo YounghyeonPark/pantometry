@@ -73,6 +73,11 @@ fn the_schedule_a_template_suggests_is_one_a_scene_uses() {
     }
 }
 
+/// Where a template's files are, which is beside the shipped scenes.
+fn beside() -> pantometry_world::Beside {
+    pantometry_world::Beside(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes"))
+}
+
 /// **A scene made of one kind parses, and builds unless the format will not let it stand alone.**
 ///
 /// `structure` names the block it `follows` and is refused by the build; `beam` names what it
@@ -92,7 +97,11 @@ fn a_new_scene_of_one_kind_builds_or_names_what_it_needs() {
             "{}: one kind should make one domain",
             t.kind
         );
-        match World::build_with(scene, &OnDisk) {
+        // **Beside the scenes, not against the working directory.** `OnDisk` reads the name as
+        // typed, which this crate's own `Beside` documentation calls a trap in the paragraph
+        // explaining why `Beside` exists: the `protein` template names a structure file, and a
+        // test that finds it only when run from the package root is a test about the shell.
+        match World::build_with(scene, &beside()) {
             Ok(_) => {}
             Err(why) if why.contains("follows") => refused.push(t.kind),
             Err(why) => panic!(
