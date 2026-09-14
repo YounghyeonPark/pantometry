@@ -464,6 +464,66 @@ fn the_releasing_example_command_counts_every_example() {
     );
 }
 
+/// **The gate's own tally, against the rows that are the tally.**
+///
+/// `CONTRIBUTING.md` said the gate had reported an unearned result **eight** times while its table
+/// held six rows, eight more instances were described in the prose under it, and `CLAUDE.md`
+/// narrated a sixth through a tenth of its own — one of which, the background log read while it
+/// was still being written, appeared in `CONTRIBUTING.md` nowhere at all. `CLAUDE.md` meanwhile
+/// said that file "has all eight".
+///
+/// Two documents numbering two different sets is the same defect as one stale number, and it is
+/// worse in one way: each looked consistent on its own. So the numbering lives in the table, and
+/// this holds every sentence that states it against the number of rows — which is a count of the
+/// thing rather than a count somebody remembered.
+#[test]
+fn the_unearned_passes_are_counted_where_they_are_listed() {
+    let Ok(text) = std::fs::read_to_string(root().join("CONTRIBUTING.md")) else {
+        return;
+    };
+    // The index: the rows of the table under that heading, which begin with their own number.
+    let listed = text
+        .lines()
+        .skip_while(|l| !l.starts_with("### This gate has reported a result it had not earned"))
+        .take_while(|l| !l.starts_with("### Run it"))
+        .filter(|l| {
+            l.starts_with("| ")
+                && l[2..]
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|w| w.parse::<usize>().is_ok())
+        })
+        .count();
+    assert!(
+        listed >= 8,
+        "only {listed} numbered rows under that heading — the table is the index and an empty \
+         one would make every phrase below pass against nothing"
+    );
+    println!("  {listed} instances listed");
+
+    // And the rows are numbered 1..=listed, so a row nobody renumbered is a row nobody counted.
+    let numbers: Vec<usize> = text
+        .lines()
+        .skip_while(|l| !l.starts_with("### This gate has reported a result it had not earned"))
+        .take_while(|l| !l.starts_with("### Run it"))
+        .filter_map(|l| l.strip_prefix("| "))
+        .filter_map(|l| l.split_whitespace().next())
+        .filter_map(|w| w.parse::<usize>().ok())
+        .collect();
+    assert_eq!(
+        numbers,
+        (1..=listed).collect::<Vec<_>>(),
+        "the rows are not numbered 1..={listed}"
+    );
+
+    phrase(
+        "CONTRIBUTING.md",
+        "reported a result it had not earned, {} times",
+        listed,
+    );
+    phrase("CLAUDE.md", "the index: **{}** instances", listed);
+}
+
 /// The **six crates that are not a physics**, so the domain count is a subtraction with a stated
 /// list rather than a number somebody remembers.
 ///

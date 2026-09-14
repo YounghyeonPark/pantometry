@@ -65,18 +65,36 @@ held to them. The application lives in [`app/`](app/README.md) now, which is its
 which cargo keeps out of this one, so there is nothing left to exclude and every member here is
 published and held to all three.
 
-### This gate has reported a result it had not earned, eight times
+### This gate has reported a result it had not earned, sixteen times
 
-Seven were the same mistake — reading the *output* of a check as evidence the check **ran**:
+**This table is the index, and it is the only place the count is kept.** It used to say eight while
+holding six rows, with eight more instances described in the prose below it and one described only
+in `CLAUDE.md` — which said this file "has all eight" and then narrated a ninth of its own. Two
+documents numbering two different sets is the same defect as a stale count, so the numbering lives
+here and `CLAUDE.md` points at it. `the_unearned_passes_are_counted_where_they_are_listed` holds
+the two together.
 
-| what was done | what happened |
-| --- | --- |
-| unchained lines | a failure in the middle scrolled past and the last line's status was read as the gate's |
-| `... \|\| break` in the examples loop | one example failed, the loop stopped, and the only symptom was output that was not there |
-| `cargo clippy ... ; echo OK` | a version bump had invalidated `Cargo.lock`, so `--locked` refused to start and `OK` printed anyway |
-| `cargo clippy ... \| tail -1` under `set -e` | a pipeline's exit status is its **last** command's, and `tail` succeeded. This is what `pipefail` is for |
-| `cargo publish` twice per crate, once through `grep` and once to read `$?` | the first call published, the second failed with "already exists", and the release loop stopped on its first crate |
-| a script that edited two files, then `cargo fmt --all --check`, then committed | the script wrote the first file, raised on the second file's anchor, and **the commit still ran** — unformatted code and half a changelog, red on `main` |
+The first six are one mistake — reading the *output* of a check as evidence the check **ran** —
+and the rest are the ways that is not the only one.
+
+| | what was done | what happened |
+| --- | --- | --- |
+| 1 | unchained lines | a failure in the middle scrolled past and the last line's status was read as the gate's |
+| 2 | `... \|\| break` in the examples loop | one example failed, the loop stopped, and the only symptom was output that was not there |
+| 3 | `cargo clippy ... ; echo OK` | a version bump had invalidated `Cargo.lock`, so `--locked` refused to start and `OK` printed anyway |
+| 4 | `cargo clippy ... \| tail -1` under `set -e` | a pipeline's exit status is its **last** command's, and `tail` succeeded. This is what `pipefail` is for |
+| 5 | `cargo publish` twice per crate, once through `grep` and once to read `$?` | the first call published, the second failed with "already exists", and the release loop stopped on its first crate |
+| 6 | a script that edited two files, then `cargo fmt --all --check`, then committed | the script wrote the first file, raised on the second file's anchor, and **the commit still ran** — unformatted code and half a changelog, red on `main` |
+| 7 | `gh run watch --exit-status` | returned zero with a job still `queued` |
+| 8 | `gh run list --limit 1` after a push | that is the **previous** commit's run, and with `cancel-in-progress` it had five jobs `cancelled` — neither a pass nor a failure |
+| 9 | a checkout that moved, without `cargo clean` | binaries kept the old `env!("CARGO_MANIFEST_DIR")`; six tests would have validated the *old* tree and printed `ok` had it still been on disk |
+| 10 | `grep FAILED` over a test log still being written | `cargo test` was in the background and the failing binary had not run yet. `4a3654f` shipped `heat_crosses_a_join_and_not_a_gap` failing and it reached `main` |
+| 11 | a test that reads a file, without `cfg(not(target_family = "wasm"))` | twenty-seven checks green here, `test (wasm32-wasip1, wasmtime)` red |
+| 12 | `catch_unwind` in a test compiled for `wasm32` | that target is `panic="abort"`, so it caught nothing; compiled clean under `--no-run` and trapped in CI with exit 134 |
+| 13 | clippy **1.96** locally against CI's **1.98** | two lints that do not exist in 1.96 were failing every job that runs clippy, and both workspaces' gates were green |
+| 14 | the library gate alone, with `app/` unrun | `native viewer` and `gpu accelerator` sat red on `main` over `cargo fmt`, twenty steps passing on every commit in between |
+| 15 | a change *inside* the library that broke a workspace outside it | `extent_m` on `PanelData::Field` made the viewer's `deny_unknown_fields` reader refuse every run file, with the gate green |
+| 16 | two gate runs writing one log | a stopped run's child kept going, the new one truncated the log under it, and a twenty-four-step gate produced forty-four markers and both verdicts |
 
 ### Run it **once**, and make a second run refuse
 
@@ -127,6 +145,14 @@ So: save the gate as a file and run the file, chain every step with `&&`, or run
 command and read its exit code. The last is what caught the sixth one after three shell guards had
 not. And a doubled command is caught by none of them — running each check **once** is the only fix for
 that.
+
+**The one that reached `main`.** `cargo test --locked --workspace` takes long enough here to be
+moved to the background, and its output file is then a transcript that is still being written — so
+a `grep` over it for `FAILED` finds nothing, because the failing binary has not run yet. Commit
+`4a3654f` shipped `heat_crosses_a_join_and_not_a_gap` failing on that reading, and it was found a
+commit later by a clean worktree at that sha rather than by the gate. Reading a partial file is the
+same mistake as reading a roll-up: wait for the exit code, and read *that*. The claim that a test
+suite passed is the one claim in this repository that has never survived being inferred.
 
 Two more of the same shape, outside the shell.
 

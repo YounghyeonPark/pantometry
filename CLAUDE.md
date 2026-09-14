@@ -14,32 +14,35 @@ physics" cost one crate.
 does **not** protect here, measured: `( set -e; false; echo reached )` prints `reached` and exits 0. It
 works in a fresh `bash -c`, so the option is right and the paste is what defeats it.
 
-The surest thing is one check per command with its exit code read. That is what caught the sixth time
-this gate reported a pass it had not earned — three shell guards had not.
-[CONTRIBUTING.md](CONTRIBUTING.md#run-what-ci-runs) is the authority and has all eight with what each
-cost. The seventh is not a shell problem: `gh run list --limit 1` after a push returns the *previous*
-commit's run, and with `cancel-in-progress` on this workflow that run has probably just been
-**cancelled** — neither a pass nor a failure. Select a run by `headSha`. The eighth is not either, and
-points the other way: after this checkout moved from `C:\dev\pantometry-core`, the gate ran test binaries
-with the old path still baked in through `env!("CARGO_MANIFEST_DIR")` — a loud failure only because
-the old directory was gone; had it still existed, six tests would have **passed** against the wrong
-tree. `cargo clean` after moving a checkout.
+The surest thing is one check per command with its exit code read — three shell guards had not
+caught the one that needed it. [CONTRIBUTING.md](CONTRIBUTING.md#run-what-ci-runs) is the authority
+and its table is the index: **sixteen** instances with what each cost, numbered there and nowhere
+else, because this file used to number them too and the two sets had drifted apart by two.
 
-The ninth reached `main` and sat there: commit `4a3654f` shipped `heat_crosses_a_join_and_not_a_gap`
-failing, and it was found a commit later by a clean worktree at that sha rather than by the gate.
-The mechanism is the tool boundary, not the shell: `cargo test --locked --workspace` takes long
-enough here to be **moved to the background**, and its output file is a transcript that is still
-growing — a `grep` over it for `FAILED` finds nothing, because the failing binary has not run yet.
-Reading a partial file is the same mistake as reading a roll-up. Wait for the exit code, and read
-*that*. The claim that a test suite passed is the one claim in this repository that has never
-survived being inferred.
+What is worth carrying every session is which *kind* of thing each was, since none of them is a
+shell problem and every one of them looked like success:
 
-**The tenth was not the shell, the tool boundary or the tree — it was the compiler.** Nothing here
-pins a toolchain and CI takes `dtolnay/rust-toolchain@stable`, so **stable is the contract** and this
-gate was two releases behind it: clippy **1.96** locally against CI's **1.98**. Two lints that do not
-exist in 1.96 were failing every job that runs clippy, and both workspaces' gates were green.
-`rustup update` before trusting a green. A gate on an older toolchain than CI's is a gate reporting
-about a different repository, and it fails in the direction that looks like success.
+- **The tool lies about selection.** `gh run list --limit 1` after a push returns the *previous*
+  commit's run, and `cancel-in-progress` means that run was probably **cancelled** — neither a pass
+  nor a failure. Select by `headSha`, and ask each job for its own `conclusion`.
+- **The tree is not the one that was compiled.** After this checkout moved from
+  `C:\dev\pantometry-core`, binaries kept the old `env!("CARGO_MANIFEST_DIR")`; six tests would have
+  validated the dead tree and printed `ok` had it still been on disk. `cargo clean` every workspace
+  after a checkout moves.
+- **The result is not finished being written.** `cargo test --locked --workspace` is long enough to
+  be moved to the background, and its output file is then a transcript still growing: a `grep` for
+  `FAILED` finds nothing because the failing binary has not run yet. `4a3654f` reached `main` that
+  way. Wait for the exit code, and read *that*.
+- **The compiler is not CI's.** Nothing pins a toolchain and CI takes
+  `dtolnay/rust-toolchain@stable`, so **stable is the contract**; this gate ran clippy **1.96**
+  against CI's **1.98** with two lints failing every job, both workspaces green. `rustup update`
+  before trusting a green.
+- **The log had two authors.** A stopped run's child kept going and a new run truncated the log
+  under it: forty-four step markers for a twenty-four-step gate, and both verdicts in one file.
+  Run it once, and make a second run refuse.
+
+The claim that a test suite passed is the one claim in this repository that has never survived
+being inferred.
 
 ```sh
 # Correct in a file, inert when pasted -- see above.
