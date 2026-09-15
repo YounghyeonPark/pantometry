@@ -96,6 +96,14 @@ honestly whether the new domain is 1D, 2D or 3D), `CONTRIBUTING.md` and `CLAUDE.
 list what the kernel knows nothing about, the publish loop in `RELEASING.md`, and the repository
 description. Run `prose-auditor` afterwards rather than trusting the list.
 
+**The repository description is the one on that list with nothing behind it**, and it is the one
+that was missed. `counts_in_prose.rs` guards `CITATION.cff` and `.zenodo.json` because they are the
+two documents that leave the repository; the description leaves it further than either, is the
+first thing a reader sees, and lives outside the tree where no test can reach it. It named **ten**
+domains until 0.21.0 — quantum, pharmacokinetics and protein dynamics had each been added with this
+line in front of whoever added them. Three domains, two of them across more than one release. Read
+it with `gh repo view --json description,repositoryTopics`, and the topics too.
+
 **10. A scene, if `pantometry-world` can express it.** Thirty-one ship, all run by CI through the real
 binary, and each asserts one number that is a property of the physics rather than of the file. A
 domain with a scene is a domain somebody has used from outside.
