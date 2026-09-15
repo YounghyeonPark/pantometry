@@ -5,7 +5,7 @@
 [![docs.rs](https://docs.rs/pantometry/badge.svg)](https://docs.rs/pantometry)
 
 Physics for simulated worlds — a kernel that knows nothing about any particular physics, and
-twelve domains built on it that do: **light, heat, motion, sound, electricity, electromagnetic
+thirteen domains built on it that do: **light, heat, motion, sound, electricity, electromagnetic
 fields, elastic deformation, incompressible flow, flow through a packed bed, matter one atom at a
 time, a quantum wavefunction in a well, and a drug distributing through a body.** Two layers above
 them place a simulation in the world and draw it, and neither knows a domain either.
@@ -32,7 +32,7 @@ pip install pantometry   # or from Python — see bindings/python
 ```
 
 ```toml
-pantometry = "0.20"
+pantometry = "0.21"
 ```
 
 ## Run
@@ -106,7 +106,7 @@ and GitHub renders it as a **Cite this repository** button; the same content as 
 @software{park_pantometry,
   author  = {Park, Younghyeon},
   title   = {pantometry: physics for simulated worlds, checked against closed forms},
-  version = {0.20.0},
+  version = {0.21.0},
   year    = {2026},
   doi     = {10.5281/zenodo.22233493},
   url     = {https://doi.org/10.5281/zenodo.22024817},
@@ -160,8 +160,8 @@ without any additional terms or conditions.
 Every dependency is permissive too, and that is checked rather than remembered: `deny.toml`
 holds an allow-list and CI fails on anything outside it. Twelve external crates at the time of
 writing, of which three reach a *published* artifact — `glam`, `serde` and `serde_core`, all under
-the same `MIT OR Apache-2.0`. `pantometry-world` also links `serde_json` and its three
-transitive crates, but it is not published. The rest are compile-time or test-only.
+the same `MIT OR Apache-2.0`. `serde_json` and its three transitive crates are a **dev**-dependency
+of four of the published crates, so they reach no artifact either. The rest are compile-time or test-only.
 
 Two crates were added in 0.9.0 and the count did not move. `pantometry-view` has **no** dependency
 at all beyond `pantometry-scene`: SVG and HTML are text, so a renderer is a `format!` and a file

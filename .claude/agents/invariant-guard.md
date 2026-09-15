@@ -93,7 +93,7 @@ alters that constant, that is the finding** — it is never the fix.
 cargo clippy --workspace --lib -- -W missing_docs 2>&1 | grep -c "^warning: missing"
 ```
 
-Must be `0`. All **twenty-two** crates carry `#![deny(missing_docs)]` — the seventeen in `crates/`
+Must be `0`. All **twenty-four** crates carry `#![deny(missing_docs)]` — the nineteen in `crates/`
 and the five libraries in `app/` — so a regression is a build failure. But check that the attribute
 is still present and still positioned before any item, since an inner attribute after the first item
 is a compile error and it is easy to reintroduce while editing the top of a file.
@@ -104,8 +104,8 @@ is a compile error and it is easy to reintroduce while editing the top of a file
 nothing failed and nothing said so.
 
 ```sh
-grep -l "deny(missing_docs)" crates/*/src/lib.rs app/*/src/lib.rs | wc -l   # 22
-ls -d crates/*/src/lib.rs app/*/src/lib.rs | wc -l                          # 22, and they must match
+grep -l "deny(missing_docs)" crates/*/src/lib.rs app/*/src/lib.rs | wc -l   # 24
+ls -d crates/*/src/lib.rs app/*/src/lib.rs | wc -l                          # 24, and they must match
 ```
 
 ## 5. The promises CI makes
@@ -116,7 +116,7 @@ Run these exactly as CI does:
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-cargo +1.78 build --locked --workspace --exclude pantometry-world     # the declared MSRV
+cargo +1.78 build --locked --workspace                                # the declared MSRV
 cargo deny check                             # licences and advisories
 ```
 
@@ -145,7 +145,7 @@ for d in crates/*/; do printf "%s " "$d"; ls "$d" | grep -c LICENSE; done   # ea
 New since the workspace went to crates.io, and the one invariant here that cannot be fixed after
 the fact: a published version is permanent. You may yank it, you may not replace it.
 
-`pantometry` 0.19.0 is on crates.io and the tree is 0.20.0. So a change to the public API has a
+`pantometry` 0.20.0 is on crates.io and the tree is 0.21.0. So a change to the public API has a
 version consequence, and `0.x` semantics mean **a breaking change needs the minor bumped**.
 
 Do not take those two numbers on trust — this line has been stale before. The two commands

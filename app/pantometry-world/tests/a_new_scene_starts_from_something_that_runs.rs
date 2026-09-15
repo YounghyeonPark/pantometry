@@ -7,7 +7,7 @@
 //!
 //! That is the shape `every_domain_has_a_template` established, for the same reason: a table
 //! maintained by hand is a table that is silently wrong between the change and the noticing, and
-//! the thirty scenes are the set that is maintained by something else.
+//! the thirty-one scenes are the set that is maintained by something else.
 //!
 //! # Not under `wasm32`
 //!

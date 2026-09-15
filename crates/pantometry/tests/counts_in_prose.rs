@@ -578,6 +578,75 @@ fn what_is_in_the_box_is_what_is_in_crates() {
     println!("  {} crates, all of them in the box", on_disk.len());
 }
 
+/// **The tile count and the domain-kind count, which are a `wc -l` and drifted anyway.**
+///
+/// This file's own doc explains why the scene *numerators* are left alone: they need every scene
+/// run, and a guard that demands an edit whenever one moves is a guard somebody rewrites rather
+/// than reads. Neither of these is like that.
+///
+/// The tile count was written into four places and was wrong in **three different directions at
+/// once** — 27, 28 and 30 — eleven lines apart in one file. The domain-kind count was nineteen in
+/// two READMEs and in the editor's own start screen while `DomainSpec` and `TEMPLATES` both held
+/// twenty. Each is one directory listing or one array length away from being checkable.
+#[test]
+fn the_tile_and_kind_counts_agree_with_the_files() {
+    let Ok(tiles) = std::fs::read_dir(root().join("app/pantometry-world/thumbnails")) else {
+        return;
+    };
+    let tiles = tiles
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
+        .count();
+    if tiles == 0 {
+        return;
+    }
+    println!("  {tiles} tiles");
+    // Digits rather than `phrase`, which spells its numbers: both of these sentences carry the
+    // figure as a numeral, and rewriting a table cell into words to suit a helper would be the
+    // guard rewriting the document.
+    for (file, template) in [
+        ("CLAUDE.md", "the {} tiles the chooser draws"),
+        ("tools/presets/README.md", "| {} PNG tiles |"),
+    ] {
+        let text = std::fs::read_to_string(root().join(file)).unwrap_or_default();
+        let want = template.replace("{}", &tiles.to_string());
+        assert!(
+            text.contains(&want),
+            "{file} no longer contains {want:?} — if the sentence was reworded, update the              template here, because a phrase that cannot be found is the failure this is shaped              to give instead of a silent pass"
+        );
+        for other in [tiles - 1, tiles + 1, 27, 30] {
+            let wrong = template.replace("{}", &other.to_string());
+            assert!(
+                other == tiles || !text.contains(&wrong),
+                "{file} says {wrong:?} as well, so one of them is stale"
+            );
+        }
+    }
+
+    // `TEMPLATES` is the array the editor offers and `DomainSpec` is what the format defines;
+    // `every_domain_has_a_template` already holds those two against each other and against the
+    // scenes, so reading one of them here is reading the set all three agree on.
+    let Ok(templates) =
+        std::fs::read_to_string(root().join("app/pantometry-world/src/templates.rs"))
+    else {
+        return;
+    };
+    let Some(kinds) = templates
+        .split_once("pub const TEMPLATES: [Template; ")
+        .and_then(|(_, r)| r.split_once(']'))
+        .and_then(|(n, _)| n.parse::<usize>().ok())
+    else {
+        panic!("TEMPLATES no longer declares its own length, which this reads");
+    };
+    println!("  {kinds} domain kinds");
+    phrase("app/editor-core/README.md", "each of the {} kinds", kinds);
+    phrase(
+        "app/pantometry-world/src/templates.rs",
+        "{} variants, ",
+        kinds,
+    );
+}
+
 /// The **six crates that are not a physics**, so the domain count is a subtraction with a stated
 /// list rather than a number somebody remembers.
 ///

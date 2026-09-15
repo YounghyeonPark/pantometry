@@ -1200,7 +1200,7 @@ impl App {
         // The chooser, which is the second half of the start screen rather than a window over
         // it: there is still nothing open, and the way back is a button on it.
         //
-        // **Two screens.** New project offers the thirty shipped scenes by what they are a
+        // **Two screens.** New project offers the thirty-one shipped scenes by what they are a
         // simulation of; `Custom…` opens the list of kinds. The first screen asked the kind
         // question directly and answered it in the format's vocabulary — `bar`, `block`, `hall` —
         // which is right for a file and wrong for somebody deciding what to make.

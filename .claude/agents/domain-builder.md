@@ -118,7 +118,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-cargo +1.78 build --locked --workspace --exclude pantometry-world
+cargo +1.78 build --locked --workspace
 cargo deny check
 ```
 

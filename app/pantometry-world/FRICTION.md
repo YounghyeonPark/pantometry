@@ -261,7 +261,7 @@ time, and `0.5 x 76.1 = 38.05` is the relation. The 61-cell bar the new tests us
 numbers are right for their own bar and neither is right for the other, which is why the refusal
 prints the two times rather than a ratio alone.
 
-All thirty shipped scenes still build. That is asserted rather than assumed: `max_stable_dt` is
+All thirty-one shipped scenes still build. That is asserted rather than assumed: `max_stable_dt` is
 state-dependent, so a domain whose limit is tightest at `t = 0` and loosens as it runs would have
 been refused at build for a run it survives, and this would have been a regression rather than a
 fix.
@@ -942,7 +942,7 @@ is not wrong. It passes every check it has, converges perfectly, conserves to tw
 answers a question one ordinary differential equation answers — and the report reads exactly like
 the report of a scene with a real gradient.
 
-Measured across all thirty shipped scenes, of which eleven domains report both a peak and a
+Measured across all thirty-one shipped scenes, of which eleven domains report both a peak and a
 coldest. The number is the last frame's `peak − coldest` over the range that domain's readings
 covered across the whole run:
 
@@ -1418,8 +1418,8 @@ scene whose window is a quarter of its frame:
 The third line is the proof: the streaming path's answer was identical to the *unwindowed* scene,
 so the step had never been shortened at all.
 
-**No shipped scene could show it.** All thirty have `steps == frames`, measured, which is why
-thirty scenes through this path in CI on every commit said nothing. A scene using `window_s` for
+**No shipped scene could show it.** All thirty-one have `steps == frames`, measured, which is why
+thirty-one scenes through this path in CI on every commit said nothing. A scene using `window_s` for
 what it is for was one file away.
 
 **Fixed** by giving the streaming loop `World::run`'s schedule step for step — `steps` whole steps
@@ -1595,7 +1595,7 @@ one sample as a fact:
 ```
 
 The absolute wanders by a third between runs of the same tree; the **share does not**. That one
-test is `a_streamed_run_reads_back`, which drives all thirty scenes through the editor's streaming
+test is `a_streamed_run_reads_back`, which drives all thirty-one scenes through the editor's streaming
 path in a *debug* build, and the next three together are 300–400 s. A scene that gains a second
 gains it thirty times there before it costs anything anywhere else, and that is the number to act
 on.

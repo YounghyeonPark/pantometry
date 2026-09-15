@@ -481,18 +481,23 @@ iteration count changes, and the residual is wherever the iteration crossed its 
 numerical rule separates this row from the others, because what separates it is what the number
 *means*.
 
-`verify::DIAGNOSTICS` names the five labels the thirty scenes emit that describe the solve rather
-than the world — a residual, a divergence a projection removes, a `div B` a Yee grid preserves, a
-wavefunction norm, a cell Reynolds number. They print their values with no percentage, get no
-order, and stay out of `Sweep::worst`, which the window sweep raises a finding on — held by a unit
-test that calls `compare` directly, because the filter was measured to be unreachable from any
-scene: deleting it left both workspaces green.
+**A domain says which of its own readings describe the solve**, through `Domain::diagnostics`.
+Seven labels across five crates: a residual from `Conductor` and from elastic `Block`, a divergence
+and a cell Reynolds number from `Channel`, a `div B` from `Cavity`, a wavefunction norm from the
+quantum well, and a rigid-mode count and mode separation from `Protein`. They print their values
+with no percentage, get no order, and stay out of `Sweep::worst`, which the window sweep raises a
+finding on — held by a unit test that calls `compare` directly, because the filter was measured to
+be unreachable from any scene: deleting it left both workspaces green.
 
-A list goes stale in silence, and one pin was not enough. The scene walk pins all **47** labels
-against the classification, the **length** of the list itself (the first pin constrains only the
-intersection, so two invented labels passed), and the **six** domain/label pairs that carry a
-diagnostic today (`is_diagnostic` keys on the label alone, so a new domain reporting `norm` as its
-answer would vanish from the sweep in silence).
+**This was a list in `verify` and the list was the defect.** It named labels, so it went stale in
+silence and needed three pins to hold: the labels the scenes emit, the length of the list itself
+(the first pin constrains only the intersection, so `"flux"` and `"peak "` could be invented and
+the whole walk stayed green), and who emitted them — because keying on a label alone meant a *new*
+domain reporting `norm` as its **answer** would vanish from the sweep with nothing to say so.
+Asking the domain removes the first two problems by removing the list, and gives `(domain, label)`
+pairs, which is what the third needed. The scene walk pins the **55** `(label, unit)` pairs the
+thirty-one scenes emit — 48 answers and 7 diagnostics — and the **8** `(domain, label)` pairs, so
+an arrival or a departure is a decision somebody made rather than a line nobody read.
 
 The near misses are the argument for a list rather than a heuristic: `invariant` is the energy an
 FDTD scheme conserves — a physical quantity that converges — and `unevenness` and `ring over core`

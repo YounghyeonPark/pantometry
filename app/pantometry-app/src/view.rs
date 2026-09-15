@@ -114,7 +114,7 @@ pub fn run(args: &[String]) -> i32 {
     // pipelines: a body and a field sample are points, and a point is two short segments in
     // screen space, which is the pipeline that was already here. What the old rule cost is that
     // `PanelData::paths` is built by two examples and by tests and by no `Domain` at all, so
-    // **none of the thirty shipped scenes could be drawn by this shell** — the refusal was the
+    // **none of the shipped scenes could be drawn by this shell** — the refusal was the
     // only thing it ever said about a scene.
     let Some(panel) = run.panels().into_iter().next() else {
         eprintln!("{}: this run has no panels at all", run.title);

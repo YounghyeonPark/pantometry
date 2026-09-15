@@ -18,7 +18,7 @@ messages carry the full account.
 `CLAUDE.md`'s gate is a `set -euo pipefail` script now, and carries a table of the five disguises in
 which it has reported a pass it had not earned. Four of them are closed by that one line.
 
-## [Unreleased]
+## [0.21.0] — 2026-09-15
 
 Fifteen commits, and the theme is the editor: it gained a way in, a way to choose what to simulate,
 and one home per command. Most of what is recorded here is what looking at it found — the editor
@@ -755,6 +755,84 @@ pharmacokinetics, and the count of commits above does not include it.
 - **`README.md`'s BibTeX and the version DOI.** 0.20.0's Zenodo record is
   [10.5281/zenodo.22233493](https://doi.org/10.5281/zenodo.22233493), and the citation block was a
   ninth place a version lives that no list covered.
+
+### Added
+
+- **`pantometry-protein`, the thirteenth domain: a coarse-grained elastic network model.** One node
+  per residue at its alpha carbon, one spring between every pair inside a cutoff, and the
+  eigenvectors of the Hessian are the collective motions the fold has. `Structure::from_pdb` reads
+  a Protein Data Bank entry, `Network` builds the springs, `Modes` diagonalises, and `Protein` moves
+  the structure along those modes at a temperature — written down in closed form rather than
+  integrated, so there is no integrator error and the energy is exactly `(3n − 6) k_BT`.
+
+  **No new dependency.** The workspace still resolves twelve external crates: a dense symmetric
+  eigensolver is two hundred lines of cyclic Jacobi with a closed form for every part of it, and it
+  is checked against `4 sin²(jπ/2N)` for a free chain, the Dirichlet chain's own eigenvectors, a
+  planted spectrum with a triple root and a zero, `Σλ = tr A`, `Σλ² = ‖A‖²_F` and `‖Av − λv‖`.
+
+  **What it answers, and what it does not.** Given only the *open* structure of adenylate kinase,
+  its softest mode overlaps the 7.1 Å motion the enzyme actually performs on closing by **0.799**,
+  where a direction picked without looking scores `1/√642 = 0.039`. Binding a ligand cannot make any
+  residue more mobile — a theorem about the Schur complement, not an observation — and the residue
+  the ligand sits on loses 38.8% of its motion. It says nothing about binding affinity, it is not
+  docking, it has no side chains, and it cannot travel along a large transition.
+
+- **A thirty-first scene, and the first whose geometry is a measurement.** `29` names an STL
+  somebody drew; `31-a-protein-shaking-at-body-temperature` names coordinates somebody refined.
+  It is also the first scene with no resolution to sweep — a structure *is* its own resolution — so
+  `Scene::refined` refuses it and the **cutoff** is swept instead.
+
+### Fixed
+
+- **A check the model passes that one line of geometry also passes.** Predicted fluctuations against
+  deposited B-factors: `0.659` for lysozyme, `0.571` for ubiquitin. The distance from the centroid
+  scores `0.699` and `0.804` on the same data, and the contact number `0.697` and `0.768`. **Neither
+  geometric predictor loses to the model on any structure in the crate.** The test written first
+  asserted that the model won; it failed, and the repair was to assert the ordering that was
+  measured. A B-factor is one scalar per residue and cannot see a claim about direction, which is
+  why the adenylate kinase comparison exists.
+
+- **Two theorems asserted about the wrong object.** "Binding adds springs, so by Weyl every
+  eigenvalue rises" is not Weyl's inequality — a ligand adds *nodes*, and mode 5 of a test helix
+  falls from `0.204` to `0.178` N/m. And the protein's own statistics are not the `pp` block of the
+  complex Hessian's pseudo-inverse: residue 4 came out `1.003` times as mobile after binding, which
+  the theorem forbids. Through the Schur complement it is `0.828`.
+
+- **A shipped scene reporting that nothing moved.** The CLI formatted body and field values with
+  `{:.4}`, so anything under `5e-5` printed as `0.0000`. `15-a-hot-spot-in-a-block` was reporting an
+  elastic displacement of 17 to 50 µm as zero. Measured across all thirty-one scenes, before and
+  after: exactly three lines change and every one was showing a real value as nothing.
+
+- **Three things the gate on one machine cannot see**, each found by CI after a green local run:
+  `app/Cargo.lock` goes stale when the facade gains a dependency and the library gate never enters
+  that directory; a closed form evaluated with `sin` is not the same number on two platforms, so a
+  floor counting only the solver's rounding held here at exactly zero and failed on Windows at
+  `8.88e-16` against `4.44e-16`; and `catch_unwind` compiles for `wasm32` and catches nothing there,
+  because that target is `panic="abort"` — which `--no-run` cannot discover.
+
+- **A gate log with two authors.** A stopped run's child kept going, a new run truncated the log
+  under it, and a twenty-four-step gate produced forty-four step markers and both `the gate passed`
+  and `THE GATE DID NOT PASS` in one file. None of the existing guards touch that: every individual
+  check ran and reported its own exit code.
+
+### Changed
+
+- **The tally of unearned passes, which two documents were keeping separately.** `CONTRIBUTING.md`
+  said eight while holding six rows, `CLAUDE.md` narrated a sixth through a tenth of its own and
+  said that file "has all eight", and the instance that reached `main` — `4a3654f`, a `grep` over a
+  test log still being written — was in neither list. **Sixteen**, indexed in one table, held
+  against its own rows by a test, and `CLAUDE.md` no longer carries ordinals.
+
+- **`AGENTS.md`'s "What is in the box" listed twelve crates out of eighteen.** Its first line says
+  every name below it is re-exported through the prelude; `elastic`, `em`, `fluid`, `porous`,
+  `shape` and `protein` were re-exported and not below it. A missing row states nothing, so no count
+  guard could see it — the new test compares the table against `crates/` in both directions, and
+  found the sixth on its first run after five had been counted by reading.
+
+- **FRICTION is forty-eight findings**, forty-three fixed and five recorded. The new one is a
+  constructor that panics on data the caller read rather than wrote: `Protein::new` refuses a
+  disconnected network, and the scene format has to pre-check `components()` to report it as an
+  error instead of dying.
 
 ## [0.20.0] — 2026-09-01
 
@@ -4177,7 +4255,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.21.0
 [0.20.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.20.0
 [0.19.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.19.0
 [0.18.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.18.0

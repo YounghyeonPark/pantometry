@@ -18,7 +18,7 @@
 //! it drew in metres.
 //!
 //! A number rather than a picture because **five of the six sites would look perfectly fine on any
-//! scene that states no pose**, which is twenty-nine of the thirty shipped. A missed site collapses
+//! scene that states no pose**, which is thirty of the thirty-one shipped. A missed site collapses
 //! that one panel onto the origin, which is a coordinate and not an appearance.
 //!
 //! # The flat painter, which this does not reach and no longer needs to
@@ -126,7 +126,7 @@ fn the_camera_frames_the_world_and_not_a_union_of_local_boxes() {
 
 #[test]
 fn a_run_that_states_no_placement_is_drawn_exactly_as_it_was() {
-    // Twenty-nine of the thirty shipped scenes and every run written before format 2. The
+    // Thirty of the thirty-one shipped scenes and every run written before format 2. The
     // placement being the identity has to cost nothing: a panel whose numbers went through an
     // identity quaternion and came back rounded would put a wobble into every camera fit for no
     // reason, and would do it everywhere rather than in the one case anybody would look at.

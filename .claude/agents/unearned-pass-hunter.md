@@ -120,7 +120,7 @@ probably just been **cancelled**, which is neither a pass nor a failure.
 A publish script printed `all 17 published at 0.19.0` while publishing 0.20.0, because the
 version was a string typed once. A prose guard's template hard-coded one half of a pair and
 would have refused a correct file the day the other half moved. `RELEASING.md`'s table of "the
-eight places a version lives" has been wrong four times, in both directions.
+nine places a version lives" has been wrong four times, in both directions.
 
 **Ask:** does the message derive its numbers from the thing it describes, or restate them?
 

@@ -20,7 +20,7 @@
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-five kilobytes for all thirty.
+//! there is no disk to read a scene off. Twenty-six kilobytes for all thirty-one.
 
 /// One scene, offered as a starting point.
 pub struct Preset {

@@ -569,7 +569,7 @@ fn write_curves(
 /// two writers say the same thing about the same [`Placed`] and only spell it differently.
 ///
 /// Empty when the placement is the identity — the byte every file this workspace had written
-/// until scene 30 placed two busbars, and twenty-nine of the thirty shipped scenes still.
+/// until scene 30 placed two busbars, and thirty of the thirty-one shipped scenes still.
 fn write_xform(out: &mut String, place: Placed) {
     if place.is_here() {
         out.push_str("        uniform token[] xformOpOrder = []\n");
@@ -652,7 +652,7 @@ fn write_designed(out: &mut String, path: &str, name: &str, part: &mesh::Designe
 
 /// Every domain's scalars, as custom attributes with time samples.
 ///
-/// This is the half of a scene no picture reaches. Twelve of the thirty shipped scenes have a
+/// This is the half of a scene no picture reaches. Twelve of the thirty-one shipped scenes have a
 /// domain with no field and no bodies, and for several of them the scalar *is* the result — a
 /// winding whose resistance follows its own temperature draws nothing at all and is the whole
 /// subject of its scene.

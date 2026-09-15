@@ -130,7 +130,7 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         blank.is_empty(),
         "these scenes rendered an empty canvas: {blank:?}"
     );
-    // **Pinned, in both directions.** Twenty-seven of the thirty draw; three carry no panel at
+    // **Pinned, in both directions.** Twenty-eight of the thirty-one draw; three carry no panel at
     // all, and they are the three whose domains are a `network` and a `winding` — readings, not
     // places, which the editor's viewport says in as many words. A fourth arriving means either
     // a scene lost its geometry or a domain stopped reporting one, and both are worth a failure

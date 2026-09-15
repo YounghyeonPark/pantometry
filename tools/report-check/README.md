@@ -10,7 +10,7 @@ node tools/report-check/check.js /tmp/w.html
 
 It needs node and nothing else — no npm, no `package.json`, no install step. CI runs it as its own
 job over eight reports covering all six view kinds; see `.github/workflows/ci.yml`. It is **not**
-part of the twenty-one-step gate in `CONTRIBUTING.md`, for the same reason `bindings/python` is not:
+part of the twenty-four-step gate in `CONTRIBUTING.md`, for the same reason `bindings/python` is not:
 the gate is the toolchain a Rust change needs, and this needs another one.
 
 ## Why this exists

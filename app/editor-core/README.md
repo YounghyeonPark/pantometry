@@ -42,7 +42,7 @@ the text and re-checks on the same frame. `kind` and `name` are the two it holds
 because they identify rather than describe — the format refuses unknown fields when a `kind`
 changes, and five other keys refer to a domain by `name`.
 
-**Domain → Add** puts a new domain in, from a starting example of each of the nineteen kinds the
+**Domain → Add** puts a new domain in, from a starting example of each of the twenty kinds the
 format defines, named so it does not collide with anything already there; **Domain → Delete**
 takes the selected one out along with the comma that held it. The list lives in
 `pantometry_world::templates`, beside the format rather than beside the editor, and a test
@@ -61,7 +61,7 @@ is filled in where it is found; a scene that gains a pose keeps every other byte
 Every one of those is a byte splice rather than a re-serialise, so the file keeps its own
 formatting and key order. `editor_core::set_number`, `set_text`, `set_pose`, `add_domain` and
 `remove_domain` are where that lives and where the tests for it are — including one that adds each
-of the nineteen kinds and removes it again, and asserts the file is byte-identical to what it
+of the twenty kinds and removes it again, and asserts the file is byte-identical to what it
 started as.
 
 Nothing in any of it enumerates domain kinds, so a domain written out of tree is as editable as a

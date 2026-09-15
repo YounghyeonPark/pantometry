@@ -1,9 +1,9 @@
 # Scenes
 
-Thirty-one worlds described as data, covering **twelve** of the library's thirteen domains — every one but `pharmacokinetic`, whose compartments are a graph with nothing to place — twenty-nine of them
+Thirty-one worlds described as data, covering **twelve** of the library's thirteen domains — every one but `pharmacokinetic`, whose compartments are a graph with nothing to place — thirty of them
 one question at a time, and one that is actually a world. The count above this line used to read
 "twenty-seven of them ... and one", which is twenty-eight and was never the number of files in this
-directory; **seventeen** state a single kind of domain and thirteen state more, so no split of them
+directory; **eighteen** state a single kind of domain and thirteen state more, so no split of them
 into "one physics" and "a world" was ever going to be a count of anything. Nothing here is Rust: the
 physics, the resolution, the coupling and the run length are all in the file, and the same
 binary runs all of them.
@@ -65,13 +65,14 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. **Twenty-three** of the thirty-one scenes have geometry
+`.gltf` is the one that leaves this workspace. **Twenty-four** of the thirty-one scenes have geometry
 to export — bodies, ray paths, a 3D field as its cell centres — and the other **seven** are
 **refused with a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not
 something to put in a 3D viewer, and the message says which panel and why.
 
 Those two were nineteen and ten, and had been wrong by three in each direction for long enough that
-nothing records when they stopped being right. Nothing counts them: `counts_in_prose.rs` guards the
+nothing records when they stopped being right. The first moved again at 0.21.0, when a protein's
+alpha carbons became a thirty-first scene with bodies to export; the second did not. Nothing counts them: `counts_in_prose.rs` guards the
 *total* half of this sentence and says in its own doc why it leaves the numerator alone — a
 numerator is a different count with a different source, and this one needs every scene exported to
 establish. So it is a **release-time** count now, with the command in `RELEASING.md`, rather than a

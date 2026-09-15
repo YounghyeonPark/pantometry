@@ -103,7 +103,8 @@ The device tests there skip loudly on a machine with no adapter. A skip that say
 result; a skip that says nothing is the shape of a suite that has stopped testing anything.
 
 **Read a result from the thing that produced it, and read whether the check *ran* rather than what it
-printed.** Six times this gate has said `ok` while failing, and once that reached `main`. A CI run's
+printed.** Sixteen times this gate has said `ok` while failing, and once that reached `main` — indexed in
+CONTRIBUTING.md, counted nowhere else. A CI run's
 roll-up has said `success` with a job still `queued`; ask each job for its own `conclusion`. A script
 that edits several files can write the first and raise on the next, so check every anchor before
 writing any of them.
@@ -191,13 +192,16 @@ earned and was not.
 | [app/viewer-core/README.md](app/viewer-core/README.md) | touching the viewer. Why it does not link `pantometry`, and the test that holds that now the workspace boundary does not |
 | [app/editor-core/README.md](app/editor-core/README.md) | touching the editor. Why it *does* link `pantometry`, the shaded viewport, and the two halves the platform rules keep apart |
 | [tools/screenshot/README.md](tools/screenshot/README.md) | changing the editor's interface. `docs/editor.png` is the one figure no command in CI can refresh, so it carries `docs/editor.txt` — the same frame through `--ui-dump` — and a test that fails when the picture is stale |
-| [tools/presets/README.md](tools/presets/README.md) | adding or removing a scene, or touching the New-project screen. It writes `presets.rs` and the 27 tiles the chooser draws, both of which are **committed** — the exception to "nothing generated is committed", and what holds them against the scenes |
+| [tools/presets/README.md](tools/presets/README.md) | adding or removing a scene, or touching the New-project screen. It writes `presets.rs` and the 28 tiles the chooser draws, both of which are **committed** — the exception to "nothing generated is committed", and what holds them against the scenes |
 | [tools/report-check/README.md](tools/report-check/README.md) | touching the HTML report's viewer. It is four hundred lines of JavaScript in a Rust string and this is the only thing that executes it — plus why a `vm.runInContext` harness measured a renderer 30x slower than it is |
 | [.claude/agents/README.md](.claude/agents/README.md) | adding a reviewer |
 
 Two of those are separate workspaces because a dependency tree does not belong in the library's
-lockfile. Measured: the library resolves **12** external crates, `bindings/python` **15**, a wgpu
-window **86**, and a GUI shell **371**. `deny.toml` gates every one of the library's twelve, CI
+lockfile. Measured, with `cargo metadata` counting packages that have a source: the library resolves
+**12** external crates, `bindings/python` **19**, and `app/` **430** — of which `app/deny.toml`
+gates the **330** that its three targets resolve. The wgpu window and the GUI shell used to be
+counted separately at 86 and 371; they are one workspace now and that pair is what a merged
+number replaced. `deny.toml` gates every one of the library's twelve, CI
 builds with `--locked`, and the same crates go to `wasm32` and Rust 1.78 — none of which can carry
 a GPU stack, a libpython link, or a window toolkit.
 

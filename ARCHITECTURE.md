@@ -147,7 +147,7 @@ separately have no way to touch.
 | `pantometry-shape` | Designed geometry as input: an STL read and measured, and rasterised into the cells a domain fills — with a report of what the cells could **not** hold, because a rib finer than the grid does not fail, it disappears. Depends on `pantometry-units` and nothing else |
 | `pantometry-scene` | Where things are and what a run looks like: placement, capture, and the shapes a view can draw. Names no domain |
 | `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
-| `pantometry` | A facade over the other sixteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
+| `pantometry` | A facade over the other eighteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
 | `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because a GPU stack is 86 external crates and a GUI shell 371 against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
@@ -494,7 +494,7 @@ These are not style. Each one is what makes some part of the goal reachable.
 
 1. **The kernel must never depend on a domain.** Without this, "add a physics" means "edit the
    kernel", and the goal is a rewrite each time.
-2. **No domain may depend on another.** They meet on the bus. Twelve domains have now been added
+2. **No domain may depend on another.** They meet on the bus. Thirteen domains have now been added
    without this breaking, which is the evidence that the split is real.
 3. **The arrows point one way.** Analysis → scene → physics. A domain that can see the scene can
    see another domain through it. This is enforced by cargo rather than by discipline now that
@@ -548,7 +548,7 @@ different quantities, the second separates domains carrying the same one.
    `dx/(c√3)`, checked against the rigid-wall mode frequencies and a second-order convergence
    rate measured across three doublings.
 
-   Nine of the twelve domains are three-dimensional now. What is left is `pantometry-optics`, whose rays
+   Ten of the thirteen domains are three-dimensional now. What is left is `pantometry-optics`, whose rays
    are already 3D and whose *fields* are not — and gap 4 below, which closed `pantometry-electrical`,
    is why this sentence used to say eight. `pantometry-quantum` is one-dimensional and
    `pantometry-pharmacokinetic` has no space at all; the second of those is not a gap, in the
@@ -913,7 +913,7 @@ but a test that fails if they ever stop being two limits of one physics.
    They are not different pipelines. A body and a field sample are points, and a point is two short
    segments in screen space, which is the pipeline that was already there — so `viewer_core::
    segments` grew two arms and the shell, the depth sort and the snapshot were not touched.
-   **Twenty-seven of the thirty draw now**; the other three are a `network` and two `winding`s,
+   **Twenty-eight of the thirty-one draw now**; the other three are a `network` and two `winding`s,
    whose domains report readings rather than places, and that set is pinned in both directions.
 
    The part worth keeping is what it nearly cost. *Where is sample `i` in the world* lived in

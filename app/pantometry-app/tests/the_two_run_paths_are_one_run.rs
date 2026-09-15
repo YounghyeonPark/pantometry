@@ -8,7 +8,7 @@
 //! What the gap hid: `run_streaming` computed its own step as `duration_s / frames`, ignoring
 //! [`Scene::window_s`](pantometry_world::Scene::window_s). That key exists precisely so the step
 //! can be shorter than a frame, so any scene using it for what it is for ran one experiment in the
-//! CLI and a different one in the editor. No shipped scene did — all thirty have `steps == frames`
+//! CLI and a different one in the editor. No shipped scene did — all thirty-one have `steps == frames`
 //! — which is why nothing said.
 
 #![cfg(not(target_family = "wasm"))]

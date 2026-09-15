@@ -17,7 +17,7 @@ The split existed for a reason that is still true, and the numbers are measured 
 
 | | external crates |
 | --- | --- |
-| the library, all seventeen published crates | **12** |
+| the library, all nineteen published crates | **12** |
 | `bindings/python`, which is split out for this | 15 |
 | a wgpu window | 86 |
 | a GUI shell | 371 |
@@ -59,7 +59,7 @@ three lines.
 
 **`pantometry-world` left the library's `deny.toml`, so this workspace grew one.** It was a member
 there, so its dependencies were licence-gated with the library's twelve; it is here now beside
-stacks that had never been gated at all. `app/deny.toml` gates all 374, and its allow-list was built
+stacks that had never been gated at all. `app/deny.toml` gates the 330 its three targets resolve, and its allow-list was built
 by censusing what is actually here rather than by copying the library's.
 
 Its first run found **four advisories**, all reached through `eframe` and none fixable from here:
@@ -70,7 +70,7 @@ a proc macro that never reaches a binary, and the parser for the fonts egui embe
 ignore list with that argument beside it rather than as a bare id. The library's own twelve remain
 clean, and nothing in `crates/` depends on anything here.
 
-**The thirty scenes left the library's gate.** Their closed-form checks — scene 21's
+**The thirty-one scenes left the library's gate.** Their closed-form checks — scene 21's
 `8.3e-15`, scene 24's `1.1e-4`, scene 25's 8.4× relaxation — are among the strongest physics tests
 in the repository, and `cargo test --locked --workspace` in the root no longer runs them. They run
 here. `CLAUDE.md` says both gates, not one, and CI has a job for each.
@@ -80,7 +80,7 @@ here. `CLAUDE.md` says both gates, not one, and CI has a job for each.
 | | |
 | --- | --- |
 | `pantometry-app` | the binary. `main.rs` dispatches; `cli.rs`, `view.rs` and `edit.rs` are what used to be three `main`s |
-| `pantometry-world` | the scene format, the `World` builder, the verify battery, and the thirty scenes |
+| `pantometry-world` | the scene format, the `World` builder, the verify battery, and the thirty-one scenes |
 | `pantometry-gpu` | `Solid3D`'s stencil as a compute shader, with the CPU domain as the reference. Its own README |
 | `viewer-core` | reads a run **file** and turns it into something a renderer can draw. No GPU, no window |
 | `editor-core` | the GUI-free half of the editor: check, place, run, verify, and the geometry the viewport draws |

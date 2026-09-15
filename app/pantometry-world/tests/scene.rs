@@ -3338,10 +3338,12 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // a claim, which is what a pin is for.
     // **A reading is an answer or a statement about the solve, and the sweep has to know which.**
     //
-    // `verify::DIAGNOSTICS` is a list of labels, which is a shape that goes stale in silence: a
-    // domain that gains a residual would be compared across grids as though it converged to
-    // something, and nothing would say. This is what stops that. It pins all **49** labels the
-    // thirty scenes emit, so a new one fails here and has to be decided about.
+    // A *list* of labels is a shape that goes stale in silence: a domain that gains a residual
+    // would be compared across grids as though it converged to something, and nothing would say.
+    // `verify::DIAGNOSTICS` was that list; `Domain::diagnostics` replaced it, so a domain now says
+    // which of its own readings describe the solve. This is what stops the drift. It pins all
+    // **55** labels the thirty-one scenes emit, so a new one fails here and has to be decided
+    // about.
     //
     // What the sweep did without it, on `17-a-busbar-with-a-notch`:
     //

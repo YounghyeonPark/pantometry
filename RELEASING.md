@@ -4,8 +4,8 @@ Read this before a release and not otherwise. It was inside `CLAUDE.md`, which i
 session, and a procedure you follow once per release does not need to be in front of you for the
 hundred commits in between.
 
-Eighteen crates are published together and share one version. **A published version is permanent** —
-it can be yanked, never replaced — so the cost of a release is eighteen permanent version numbers on
+Nineteen crates are published together and share one version. **A published version is permanent** —
+it can be yanked, never replaced — so the cost of a release is nineteen permanent version numbers on
 crates.io, one on PyPI, and a prose sweep.
 
 ## When
@@ -23,7 +23,7 @@ All of them, or the release is broken in a way only one CI job can see:
 
 | | occurrences |
 | --- | --- |
-| `Cargo.toml` | 19 — the workspace version and all eighteen path pins |
+| `Cargo.toml` | 20 — the workspace version and all nineteen path pins. **19 at 0.20.0**, and the row moved when `pantometry-protein` arrived: a table that counts path pins gains a row every time a crate does, which is the argument for the `grep -c` below rather than for this column |
 | `bindings/python/Cargo.toml` | 2 — the crate's own version **and** the exact `pantometry` pin |
 | `bindings/python/pyproject.toml` | 1 — the wheel's version |
 | `AGENTS.md` | 1 — `pantometry = "0.x"`, which `documented_version.rs` checks |
@@ -31,7 +31,7 @@ All of them, or the release is broken in a way only one CI job can see:
 | `.claude/agents/invariant-guard.md` | 1 — which version is published against which is in the tree |
 | `CITATION.cff` | 1 — `version`. Also update `date-released`, which is not a version string and so is not caught by the grep below. The grep returns **2**: the other hit is a comment recording which version's Zenodo deposition failed, and bumping that would erase the history it is there for |
 | `.zenodo.json` | 1 — `version`. **The row this table was missing**, and it gained it the way the last one did: the 0.15.0 release bumped the seven above and `citation_is_valid` refused, because it asserts the deposition's version *is* the crate's. A table that has now been wrong three times is a table to count against rather than to read |
-| `README.md` | 1 — the BibTeX block's `version`, which is **not** the `doi` beside it and does not move at the same time. **The row this table was missing at 0.20.0**: the seven-file grep below does not reach it, `counts_in_prose.rs` does not guard it, and the 0.19.0 release only got it right because it was bumped by hand as a separate step. It shipped stale for the length of one release. Four times wrong now, in both directions |
+| `README.md` | **4 occurrences, 2 of which move** — the `pantometry = "0.x"` install line and the BibTeX block's `version`. The other two are the sentence naming whose DOI the `doi` field is, which moves only when one is minted, and a record of a past mistake that must not move at all. So `grep -c` counts four here and two is the answer; the row said 1. The BibTeX `version`, which is **not** the `doi` beside it and does not move at the same time. **The row this table was missing at 0.20.0**: the seven-file grep below does not reach it, `counts_in_prose.rs` does not guard it, and the 0.19.0 release only got it right because it was bumped by hand as a separate step. It shipped stale for the length of one release. Four times wrong now, in both directions |
 
 Count them rather than trusting this table, because it has already been wrong in both directions. It
 lost a row when the docs were split — `CLAUDE.md` carried the `pip install ... .whl` line and the
@@ -97,7 +97,7 @@ for f in pantometry-world/scenes/*.json; do
   then echo refused
   else echo "FAILED $n"
   fi
-done | sort | uniq -c            # 23 export, 7 refused, 0 otherwise
+done | sort | uniq -c            # 24 export, 7 refused, 0 otherwise
 
 for f in pantometry-world/scenes/*.json; do
   cargo run --locked -q --release --bin pantometry -- run "$f" /tmp/one.svg 2>&1 \
@@ -112,11 +112,19 @@ rather than the one that looks stale.
 
 Each crate must be live on the index before the next one resolves it.
 
+**Read the word list before running it.** This block carried a literal `\n` between
+`pantometry-pharmacokinetic` and `pantometry-protein` from `17d4950` until 0.21.0, and nothing
+executed it in between because no release happened. In `sh` that word expands to `n`, so the loop
+would have run `cargo publish -p n`, failed, and stopped under `set -euo pipefail` — with fourteen
+crates permanently on the index and five not. A half-published release cannot be undone: a version
+number is spent whether or not the set it belonged to went out.
+
 ```sh
 set -euo pipefail
 for c in pantometry-units pantometry-core pantometry-acoustic pantometry-mechanics pantometry-molecular \
          pantometry-optics pantometry-thermal pantometry-electrical pantometry-elastic pantometry-em \
-         pantometry-fluid pantometry-porous pantometry-quantum pantometry-pharmacokinetic \n         pantometry-protein pantometry-shape pantometry-scene pantometry-view pantometry; do
+         pantometry-fluid pantometry-porous pantometry-quantum pantometry-pharmacokinetic \
+         pantometry-protein pantometry-shape pantometry-scene pantometry-view pantometry; do
   cargo publish -p "$c" --locked      # once per crate. Twice publishes the first and stops on it
 done
 git tag -a vX.Y.Z -F message.txt && git push origin vX.Y.Z   # the tag publishes the wheel
