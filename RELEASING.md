@@ -130,10 +130,10 @@ done
 git tag -a vX.Y.Z -F message.txt && git push origin vX.Y.Z   # the tag publishes the wheel
 ```
 
-`pantometry-pharmacokinetic` and `pantometry-protein` are new at the next release and go after
-the other domains and before `pantometry`, which is the only ordering constraint on either: each
-depends on `pantometry-units` and `pantometry-core` and nothing else, and only the facade depends
-on them. `pantometry-protein` also carries `structures/`, six Protein Data Bank entries totalling
+`pantometry-pharmacokinetic` and `pantometry-protein` were new at 0.21.0 and went after the other
+domains and before `pantometry`, which was the only ordering constraint on either: each depends on
+`pantometry-units` and `pantometry-core` and nothing else, and only the facade depends on them.
+Both are on the index now, so the next release adds no new crate unless one arrives. `pantometry-protein` also carries `structures/`, six Protein Data Bank entries totalling
 1.1 MB that its tests `include_str!` — the largest thing this workspace publishes, and the reason
 is in `crates/pantometry-protein/structures/README.md`: a fixture that has been through a script
 can no longer be checked against what it came from.
@@ -306,6 +306,7 @@ list actually wants.
 | 0.18.0 | `10.5281/zenodo.22142201` |
 | 0.19.0 | `10.5281/zenodo.22218821` |
 | 0.20.0 | `10.5281/zenodo.22233493` — cite a version DOI when the result depends on which version ran, which for this library it does. Minted seconds after the release, and the records API had it on the first query. **Which of the three deliveries is acted on varies**: 0.19.0's `released` answered 202 and its `published` 409; 0.20.0's `published` answered 202 and its `released` 409. The reliable statement is that exactly one of the three does, not which — the section below names `published` and this row used to name `released`, and each was one release read as a rule |
+| 0.21.0 | `10.5281/zenodo.22760497` — **and the tag alone did not get here.** `git push origin v0.21.0` ran the wheel workflow to completion and Zenodo stayed at 0.20.0; the integration listens for the *release* webhook, which line 327 of this file already said and which was read only after the deposition did not appear. `gh release create v0.21.0` on the same tag fired it, and the record was there on the first query |
 
 Both are in `CITATION.cff` and `README.md`'s BibTeX block. The concept DOI is the `doi:` field,
 because that is the one a reader following a reference wants; the version DOI lives on each Zenodo

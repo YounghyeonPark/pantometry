@@ -18,6 +18,11 @@ messages carry the full account.
 `CLAUDE.md`'s gate is a `set -euo pipefail` script now, and carries a table of the five disguises in
 which it has reported a pass it had not earned. Four of them are closed by that one line.
 
+## [Unreleased]
+
+Nothing yet. `main` being ahead of the registries is the normal state; this is where the next
+batch accumulates.
+
 ## [0.21.0] — 2026-09-15
 
 Fifteen commits, and the theme is the editor: it gained a way in, a way to choose what to simulate,
