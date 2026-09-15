@@ -1,0 +1,38 @@
+{
+  "title": "a 500 mg bolus distributing into tissue and leaving the body, twelve hours of it",
+  "duration_s": 43200.0,
+  "frames": 13,
+  "window_s": 10.0,
+  "domains": [
+    {
+      "kind": "compartments",
+      "name": "subject",
+      "volumes": [
+        {
+          "label": "plasma",
+          "volume_l": 5.0,
+          "clearance_l_per_h": 3.0
+        },
+        {
+          "label": "tissue",
+          "volume_l": 20.0
+        }
+      ],
+      "links": [
+        {
+          "between": [
+            "plasma",
+            "tissue"
+          ],
+          "clearance_l_per_h": 8.0
+        }
+      ],
+      "boluses": [
+        {
+          "into": "plasma",
+          "dose_mg": 500.0
+        }
+      ]
+    }
+  ]
+}

@@ -104,7 +104,7 @@ domains until 0.21.0 — quantum, pharmacokinetics and protein dynamics had each
 line in front of whoever added them. Three domains, two of them across more than one release. Read
 it with `gh repo view --json description,repositoryTopics`, and the topics too.
 
-**10. A scene, if `pantometry-world` can express it.** Thirty-one ship, all run by CI through the real
+**10. A scene, if `pantometry-world` can express it.** Thirty-two ship, all run by CI through the real
 binary, and each asserts one number that is a property of the physics rather than of the file. A
 domain with a scene is a domain somebody has used from outside.
 

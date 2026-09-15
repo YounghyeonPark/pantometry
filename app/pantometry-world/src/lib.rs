@@ -1002,6 +1002,37 @@ pub enum DomainSpec {
         #[serde(default)]
         seed: u64,
     },
+    /// A drug moving between well-stirred compartments, and out of the body.
+    ///
+    /// The other domain with **no space at all**: a compartment is an apparent volume, not a
+    /// place, so this draws no picture and its whole output is [`Domain::readings`] — a
+    /// concentration per compartment and the mass balance. `network` is the same shape and three
+    /// scenes state it, which is why "nothing to draw" was never the reason this kind did not
+    /// exist. Nobody had written it.
+    ///
+    /// # What the numbers are
+    ///
+    /// Litres, litres per hour, milligrams and hours, because that is what a dose is written in
+    /// and a scene is a document somebody reads. The field names carry the unit, as `cell_mm` and
+    /// `initial_c` do elsewhere in this format.
+    ///
+    /// A compartment with no `clearance_l_per_h` does not eliminate; it only holds and exchanges.
+    /// At least one has to, or the drug never leaves and the run has no terminal phase to measure.
+    Compartments {
+        /// Domain name.
+        name: String,
+        /// The compartments, in the order a reader thinks of them: central first.
+        volumes: Vec<CompartmentSpec>,
+        /// Intercompartmental clearance between two of them, by label.
+        #[serde(default)]
+        links: Vec<LinkSpec>,
+        /// Doses given all at once, at `t = 0`.
+        #[serde(default)]
+        boluses: Vec<DoseSpec>,
+        /// Doses spread evenly over a window.
+        #[serde(default)]
+        infusions: Vec<InfusionSpec>,
+    },
     /// A heat source with a finite tank, defined in this crate rather than the library.
     ///
     /// The publisher half of a coupled scene. See [`heater::Heater`] for why it is written
@@ -1599,6 +1630,53 @@ impl Parts for Beside {
     }
 }
 
+/// One compartment of a [`DomainSpec::Compartments`] model.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompartmentSpec {
+    /// What it is called, and the label its concentration is reported under.
+    pub label: String,
+    /// Its apparent volume of distribution, in litres.
+    pub volume_l: f64,
+    /// Clearance out of the body, in litres per hour. Absent means it does not eliminate.
+    #[serde(default)]
+    pub clearance_l_per_h: f64,
+}
+
+/// An intercompartmental clearance between two compartments of a model.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkSpec {
+    /// The two labels it joins. Order does not matter; the flow is symmetric in clearance.
+    pub between: [String; 2],
+    /// The clearance between them, in litres per hour.
+    pub clearance_l_per_h: f64,
+}
+
+/// A dose given all at once.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DoseSpec {
+    /// Which compartment it goes into, by label.
+    pub into: String,
+    /// How much, in milligrams.
+    pub dose_mg: f64,
+}
+
+/// A dose spread evenly over a window.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InfusionSpec {
+    /// Which compartment it goes into, by label.
+    pub into: String,
+    /// The whole dose, in milligrams, delivered evenly across the window.
+    pub dose_mg: f64,
+    /// When it starts, in hours.
+    pub from_h: f64,
+    /// When it stops, in hours.
+    pub to_h: f64,
+}
+
 /// The average mass of an amino-acid residue, in daltons.
 fn residue_mass() -> f64 {
     110.0
@@ -1994,6 +2072,7 @@ impl DomainSpec {
             | DomainSpec::Bounce { name, .. }
             | DomainSpec::Atoms { name, .. }
             | DomainSpec::Protein { name, .. }
+            | DomainSpec::Compartments { name, .. }
             | DomainSpec::Lump { name, .. }
             | DomainSpec::Network { name, .. }
             | DomainSpec::Winding { name, .. }
@@ -2069,6 +2148,103 @@ impl DomainSpec {
                 watts,
                 reserve_j,
             } => Box::new(Heater::new(name.clone(), *watts, *reserve_j)),
+            DomainSpec::Compartments {
+                name,
+                volumes,
+                links,
+                boluses,
+                infusions,
+            } => {
+                if volumes.is_empty() {
+                    return Err(format!(
+                        "{name}: a model with no compartments holds nothing"
+                    ));
+                }
+                // Litres and litres per hour in the file; SI in the library.
+                let litre = 1e-3;
+                let per_hour = litre / 3600.0;
+                let mut model = CompartmentModel::new(name.clone());
+                let mut handles: Vec<(String, Compartment)> = Vec::new();
+                for c in volumes {
+                    // Not `!(x > 0.0)`: clippy refuses a negated comparison on a partially
+                    // ordered type, and NaN deserves to be written down rather than ride along
+                    // inside a negation.
+                    if c.volume_l.is_nan() || c.volume_l <= 0.0 {
+                        return Err(format!(
+                            "{name}: {} has a volume of {} L, which is not a volume",
+                            c.label, c.volume_l
+                        ));
+                    }
+                    if handles.iter().any(|(l, _)| *l == c.label) {
+                        return Err(format!("{name}: two compartments are called {}", c.label));
+                    }
+                    let handle = model.eliminating(
+                        c.label.clone(),
+                        Volume::from_si(c.volume_l * litre),
+                        Clearance::from_si(c.clearance_l_per_h * per_hour),
+                    );
+                    handles.push((c.label.clone(), handle));
+                }
+                // A model where nothing eliminates never empties, so its terminal phase is a
+                // horizontal line and every half-life it reports is infinite.
+                if volumes.iter().all(|c| c.clearance_l_per_h <= 0.0) {
+                    return Err(format!(
+                        "{name}: no compartment eliminates, so the dose never leaves and there is \
+                         no terminal phase to measure"
+                    ));
+                }
+                let find = |label: &str| -> Result<Compartment, String> {
+                    handles
+                        .iter()
+                        .find(|(l, _)| l == label)
+                        .map(|(_, h)| *h)
+                        .ok_or_else(|| {
+                            format!(
+                                "{name}: no compartment called {label:?}; it has {}",
+                                handles
+                                    .iter()
+                                    .map(|(l, _)| format!("{l:?}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })
+                };
+                for l in links {
+                    let (a, b) = (find(&l.between[0])?, find(&l.between[1])?);
+                    model
+                        .link(a, b, Clearance::from_si(l.clearance_l_per_h * per_hour))
+                        .map_err(|e| format!("{name}: {e}"))?;
+                }
+                for d in boluses {
+                    model
+                        .bolus(find(&d.into)?, Mass::from_si(d.dose_mg * 1e-6))
+                        .map_err(|e| format!("{name}: {e}"))?;
+                }
+                for i in infusions {
+                    model
+                        .infuse(
+                            find(&i.into)?,
+                            Mass::from_si(i.dose_mg * 1e-6),
+                            Time::from_si(i.from_h * 3600.0),
+                            Time::from_si(i.to_h * 3600.0),
+                        )
+                        .map_err(|e| format!("{name}: {e}"))?;
+                }
+                if boluses.is_empty() && infusions.is_empty() {
+                    return Err(format!(
+                        "{name}: nothing was administered, so every concentration stays zero and \
+                         the run says nothing"
+                    ));
+                }
+                log.notes.push(format!(
+                    "{name}: {} compartments, {} link(s), {:.1} mg administered",
+                    volumes.len(),
+                    links.len(),
+                    boluses.iter().map(|d| d.dose_mg).sum::<f64>()
+                        + infusions.iter().map(|i| i.dose_mg).sum::<f64>()
+                ));
+                Box::new(model)
+            }
             DomainSpec::Protein {
                 name,
                 pdb,
@@ -5111,7 +5287,10 @@ impl DomainSpec {
             | DomainSpec::Lump { .. }
             | DomainSpec::Light { .. }
             | DomainSpec::Winding { .. }
-            | DomainSpec::Network { .. } => Placement::default(),
+            | DomainSpec::Network { .. }
+            // A compartment is an apparent volume and not a place, so there is nothing to put
+            // anywhere. `network` is the same and for the same reason.
+            | DomainSpec::Compartments { .. } => Placement::default(),
             // A channel's field is its **speed**, sampled at its own cell centres. The caveat is
             // in the unit and in `Channel::as_field`'s doc rather than in a refusal to draw: a
             // magnitude shows where the fluid is moving fast and not which way it is going. Drawn

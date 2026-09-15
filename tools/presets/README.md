@@ -4,7 +4,7 @@
 
 | what | where | why it exists |
 | --- | --- | --- |
-| `presets.rs` | `app/pantometry-world/src/` | the thirty-one shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
+| `presets.rs` | `app/pantometry-world/src/` | the thirty-two shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
 | 28 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 123 KiB in total and 4.4 KiB each. **Measured here rather than remembered**: this line said 282 KiB and 10.4 KiB each while the committed tiles were already this size, and regenerating them changed nothing but the count |
 
 ```sh

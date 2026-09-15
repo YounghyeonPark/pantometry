@@ -496,7 +496,7 @@ the whole walk stayed green), and who emitted them — because keying on a label
 domain reporting `norm` as its **answer** would vanish from the sweep with nothing to say so.
 Asking the domain removes the first two problems by removing the list, and gives `(domain, label)`
 pairs, which is what the third needed. The scene walk pins the **55** `(label, unit)` pairs the
-thirty-one scenes emit — 48 answers and 7 diagnostics — and the **8** `(domain, label)` pairs, so
+thirty-two scenes emit — 52 answers and 7 diagnostics — and the **8** `(domain, label)` pairs, so
 an arrival or a departure is a decision somebody made rather than a line nobody read.
 
 The near misses are the argument for a list rather than a heuristic: `invariant` is the energy an

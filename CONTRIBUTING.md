@@ -282,7 +282,7 @@ while the gate stayed green, because nothing in `crates/` reads that format back
 
 So, before a commit that changes a **wire format, a public type in `pantometry-scene`, or anything
 `pantometry-view` writes**, run `app/` too — and in fact run it before any commit, because the
-thirty-one scenes and their closed-form checks live there now:
+thirty-two scenes and their closed-form checks live there now:
 
 ```sh
 cd app

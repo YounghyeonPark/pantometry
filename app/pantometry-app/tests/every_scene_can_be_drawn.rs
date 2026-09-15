@@ -130,24 +130,29 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         blank.is_empty(),
         "these scenes rendered an empty canvas: {blank:?}"
     );
-    // **Pinned, in both directions.** Twenty-eight of the thirty-one draw; three carry no panel at
-    // all, and they are the three whose domains are a `network` and a `winding` — readings, not
-    // places, which the editor's viewport says in as many words. A fourth arriving means either
+    // **Pinned, in both directions.** Twenty-eight of the thirty-two draw; four carry no panel at
+    // all, and every one of them is a graph rather than a place — a `network`, two `winding`s and
+    // a compartment model, which report readings and not positions. A fifth arriving means either
     // a scene lost its geometry or a domain stopped reporting one, and both are worth a failure
     // rather than a quieter list.
+    //
+    // The fourth is `32`, and it is the reason that domain has a scene at all: "a compartment is
+    // an apparent volume, not a place" is why it draws nothing, and it was mistaken for a reason
+    // it could not be a scene. The three above it had been proving otherwise since they shipped.
     assert_eq!(
         empty,
         [
             "11-motor-thermal-network",
             "12-winding-heats-a-motor",
-            "13-winding-that-heats-itself"
+            "13-winding-that-heats-itself",
+            "32-a-dose-distributing-and-leaving"
         ],
         "the set of scenes with nothing to draw has changed"
     );
     // **Every scene landed in exactly one bucket.** The guard here was `drawn > 0 || skipped > 0`,
     // written against "a run in which every scene skipped would report nothing and pass" — and
     // `|| skipped > 0` admits precisely that run, which is CI's: `ci.yml` says the runner has no
-    // adapter, so all 27 drawable scenes skip and this passes on the second term. A disjunction
+    // adapter, so all 28 drawable scenes skip and this passes on the second term. A disjunction
     // cannot be false in the environment it was written to protect.
     //
     // Arithmetic instead. A scene that fell out of the walk — a `continue` added above, a bucket

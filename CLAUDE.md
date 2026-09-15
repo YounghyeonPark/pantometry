@@ -86,7 +86,7 @@ CI does **not** cover `bindings/python` or `app/` from this gate — each has it
 procedure.
 
 **`app/` has its own gate and it is not optional.** Everything a person *runs* lives there — the
-CLI, the viewer, the editor and the GPU accelerator — and so do the thirty-one scenes and their
+CLI, the viewer, the editor and the GPU accelerator — and so do the thirty-two scenes and their
 closed-form checks, which used to run in the line above. Two workspaces, two gates:
 
 ```sh

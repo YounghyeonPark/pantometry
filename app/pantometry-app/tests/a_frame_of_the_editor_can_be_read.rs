@@ -353,10 +353,28 @@ fn the_chooser_offers_every_kind_the_format_defines() {
     // contain the word `bar`.
     let d = dump(&["--new", "--custom"]);
     assert_eq!(count(&d, "callbacks"), 0, "a viewport with no scene:\n{d}");
+
+    // **One frame of a scrollable list shows what fits in the frame.** Every kind is named — the
+    // names are compact enough that twenty-one of them clear the `Back` row at y=859 — and the
+    // descriptions run out before the list does. That was not true at twenty and the assertion
+    // said so; it is a fact about a 950-pixel window and a `ScrollArea`, not about the chooser
+    // forgetting anything, and `elided=0` in the dump says nothing was truncated.
+    let below_the_fold: Vec<&str> = pantometry_world::templates::TEMPLATES
+        .iter()
+        .filter(|t| !d.contains(t.about))
+        .map(|t| t.kind)
+        .collect();
+    assert_eq!(
+        below_the_fold,
+        vec!["winding"],
+        "the set of kinds whose description is off the bottom of one frame has changed. One \
+         more is a list that has outgrown the window again; one fewer is the window or the row \
+         height having changed, and both are worth reading rather than passing:\n{d}"
+    );
     for t in pantometry_world::templates::TEMPLATES {
         assert!(d.contains(t.kind), "{} is not offered:\n{d}", t.kind);
         assert!(
-            d.contains(t.about),
+            d.contains(t.about) || below_the_fold.contains(&t.kind),
             "{} is offered with nothing said about it:\n{d}",
             t.kind
         );
@@ -393,7 +411,8 @@ fn a_set_that_cannot_share_one_duration_says_so_before_it_is_made() {
     // apart`, and that number was a product of the units error in `atoms`: it held 6e-12 s against
     // a domain whose own time unit is one second. Corrected to 6.0 the two are 300 apart, under the
     // threshold, and this test had nothing to look at. The table's real extremes are a quantum
-    // `well` at 2e-13 s and an `orbit` at 7200 — 3.6e16, which no correction is going to move.
+    // `well` at 2e-13 s and a `compartments` model at 43200 — 2.16e17, which no correction is
+    // going to move. `orbit` held the far end at 3.6e16 until a dose took half a day to leave.
     let far = dump(&["--new", "well,orbit"]);
     assert!(
         far.contains("times apart"),

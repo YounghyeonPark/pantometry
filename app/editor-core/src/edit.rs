@@ -717,7 +717,7 @@ pub fn pose_of(text: &str, name: &str) -> [f64; 3] {
 ///
 /// [`set_number`] and [`set_text`] replace the bytes of a value that already exists, which is
 /// every edit the inspector makes to a domain's own fields. A position is different: **thirty
-/// of the thirty-one shipped scenes state no `poses` at all** — it was thirty of thirty until scene 30
+/// of the thirty-two shipped scenes state no `poses` at all** — it was thirty of thirty until scene 30
 /// placed two busbars — so moving anything usually means writing a key that is not in the file. Three levels of it can be missing, and each is handled where it
 /// is found: the `at_m` array, the domain's entry, or the whole `poses` object.
 ///

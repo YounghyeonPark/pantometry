@@ -41,6 +41,7 @@ AREA = {
     "18": "flow", "26": "flow",
     "08": "matter", "09": "matter", "28": "matter",
     "31": "proteins",
+    "32": "medicine",
     "27": "radio",
     "06": "orbits",
     "07": "contact",
@@ -57,13 +58,14 @@ AREAS = [
     ("flow", "Flow", "pressure-driven water, and liquid through a packed bed"),
     ("matter", "Matter", "atoms in a lattice and out of one, and a particle in a well"),
     ("proteins", "Proteins", "the collective motions of a fold, from a Protein Data Bank file"),
+    ("medicine", "A dose in a body", "compartments, clearance, and the curve a dose traces"),
     ("radio", "Resonant cavities", "Maxwell's equations on a Yee grid"),
     ("orbits", "Orbits", "bodies under their own gravity"),
     ("contact", "Contact", "a ball on a floor, losing energy to its dashpot"),
     ("everything", "All of it at once", "five domains, four crates, one clock and one audit"),
 ]
 
-HEADER = r"""//! The thirty-one shipped scenes, offered as starting points.
+HEADER = r"""//! The thirty-two shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -85,7 +87,7 @@ HEADER = r"""//! The thirty-one shipped scenes, offered as starting points.
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-six kilobytes for all thirty-one.
+//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-two.
 
 /// One scene, offered as a starting point.
 pub struct Preset {

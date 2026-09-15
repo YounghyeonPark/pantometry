@@ -92,7 +92,7 @@ fn along_x() -> Extent {
 
 #[test]
 fn the_identity_is_exact() {
-    // Thirty of the thirty-one shipped scenes are this case, so it has to be exact rather than
+    // Thirty-one of the thirty-two shipped scenes are this case, so it has to be exact rather than
     // near, and not approximately so: a writer decides
     // by `is_here` whether to emit a transform at all, and "close enough" would make that
     // decision depend on rounding.

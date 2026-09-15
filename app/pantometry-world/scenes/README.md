@@ -1,9 +1,9 @@
 # Scenes
 
-Thirty-one worlds described as data, covering **twelve** of the library's thirteen domains — every one but `pharmacokinetic`, whose compartments are a graph with nothing to place — thirty of them
+Thirty-two worlds described as data, covering **all thirteen** of the library's domains — `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-one of them
 one question at a time, and one that is actually a world. The count above this line used to read
 "twenty-seven of them ... and one", which is twenty-eight and was never the number of files in this
-directory; **eighteen** state a single kind of domain and thirteen state more, so no split of them
+directory; **nineteen** state a single kind of domain and thirteen state more, so no split of them
 into "one physics" and "a world" was ever going to be a count of anything. Nothing here is Rust: the
 physics, the resolution, the coupling and the run length are all in the file, and the same
 binary runs all of them.
@@ -19,7 +19,7 @@ pointing at a node the scene defines. It reports a parse failure as `file:line:c
 keys that were expected, which is what an editor puts a squiggle under. CI runs it over every
 scene, because it would otherwise be the one entry point nothing exercises.
 
-Every file carries a `format` number, and **absence means 1** — which is what all thirty-one here
+Every file carries a `format` number, and **absence means 1** — which is what all thirty-two here
 are: nothing has yet changed what an existing key means. A version this build cannot read is refused
 rather than half-run: `deny_unknown_fields` catches a key that was *added*, but not one whose
 meaning changed, and that is what the number is for.
@@ -36,7 +36,7 @@ No second argument prints the numbers and checks them. A second argument writes 
 | `out.gltf` | The last frame as **surfaces** — a field's boundary, a body's sphere, with normals — for Blender, three.js or any glTF reader |
 | `out.usda` | The **whole run** as USD: geometry, colour and every domain's scalars, animated on a timeline, for usdview, Omniverse, Houdini or Maya |
 
-`.csv` is the one that reaches the domains a picture cannot. Twelve of these thirty-one scenes have
+`.csv` is the one that reaches the domains a picture cannot. Twelve of these thirty-two scenes have
 a domain with no field and no bodies, and for several the scalar *is* the result: `13` is about a
 winding whose resistance follows its own temperature, and it drew nothing at all. As a table it
 shows the feedback directly — 12.46 W at 25 °C rising to 16.01 W at 99 °C, with the resistance
@@ -65,7 +65,7 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. **Twenty-four** of the thirty-one scenes have geometry
+`.gltf` is the one that leaves this workspace. **Twenty-four** of the thirty-two scenes have geometry
 to export — bodies, ray paths, a 3D field as its cell centres — and the other **seven** are
 **refused with a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not
 something to put in a 3D viewer, and the message says which panel and why.
@@ -380,7 +380,7 @@ it is not an error estimate; `--deep`'s measured order is what tells the two apa
 ## Every one of them is run by CI
 
 A scene in this repository is a claim, and one that parses and then produces nonsense is worse
-than none at all. `tests/scene.rs` runs all thirty-one on every commit and asserts one number each —
+than none at all. `tests/scene.rs` runs all thirty-two on every commit and asserts one number each —
 chosen to be a property of the physics rather than of the file, so it would change if the
 library broke and not merely if the scene were edited. Adding a scene without a claim fails
 the test rather than passing quietly. CI also runs the real binary on the real files, which is

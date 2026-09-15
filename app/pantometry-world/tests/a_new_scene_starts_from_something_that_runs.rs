@@ -7,7 +7,7 @@
 //!
 //! That is the shape `every_domain_has_a_template` established, for the same reason: a table
 //! maintained by hand is a table that is silently wrong between the change and the noticing, and
-//! the thirty-one scenes are the set that is maintained by something else.
+//! the thirty-two scenes are the set that is maintained by something else.
 //!
 //! # Not under `wasm32`
 //!
@@ -159,7 +159,7 @@ fn exactly_two_kinds_name_a_partner() {
 /// 3e14 apart because `atoms` held `duration_s: 6e-12` against a domain whose own time unit is one
 /// second — a units error, not a timescale. Corrected to 6.0 they are **300** apart, under the
 /// chooser's own 1e3 threshold, and this test was measuring the bug. The table's real extremes are
-/// `well` and `orbit`, and they do not depend on anybody's units being right.
+/// `well` and `compartments`, and they do not depend on anybody's units being right.
 #[test]
 fn the_timescale_span_says_when_a_set_cannot_run_together() {
     assert_eq!(templates::timescale_span(&["room"]), 1.0);
@@ -167,8 +167,8 @@ fn the_timescale_span_says_when_a_set_cannot_run_together() {
         (templates::timescale_span(&["bar", "heater"]) - 1.0).abs() < 1e-12,
         "two kinds a scene already runs together are not one apart"
     );
-    let far = templates::timescale_span(&["well", "orbit"]);
-    assert!(far > 1e12, "2e-13 s against two hours came out as {far}");
+    let far = templates::timescale_span(&["well", "compartments"]);
+    assert!(far > 1e12, "2e-13 s against twelve hours came out as {far}");
     // And the extremes are the extremes: nothing in the table is further apart than these two, or
     // the sentence above names the wrong pair and the count in `templates`' own doc is stale
     // again. Measured from the table rather than remembered.
@@ -176,12 +176,13 @@ fn the_timescale_span_says_when_a_set_cannot_run_together() {
     let widest = templates::timescale_span(&every);
     assert!(
         (widest - far).abs() / far < 1e-12,
-        "the widest pair in the table spans {widest}, and `well` against `orbit` spans {far}"
+        "the widest pair in the table spans {widest}, and `well` against `compartments` spans          {far}"
     );
-    // Sixteen orders, which is what three doc comments now say.
+    // Seventeen orders, which is what two live doc comments say. It was sixteen, and `orbit`
+    // held the far end until `compartments` arrived with a twelve-hour run.
     assert!(
-        (3.6e16..3.7e16).contains(&widest),
-        "the table spans {widest}, and the docs say 3.6e16"
+        (2.1e17..2.2e17).contains(&widest),
+        "the table spans {widest}, and the docs say 2.16e17"
     );
 }
 

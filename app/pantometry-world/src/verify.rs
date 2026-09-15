@@ -543,7 +543,7 @@ pub fn connected_bodies(frame: &pantometry::scene::Frame) -> Vec<(String, usize,
 /// How much a halved coupling window may move a reading before it is a finding.
 ///
 /// **A chosen number, and the corpus it was chosen against is written down** — the same standing
-/// this workspace gives `crop_to_content`'s magnification cap. Measured over all thirty-one shipped
+/// this workspace gives `crop_to_content`'s magnification cap. Measured over all thirty-two shipped
 /// scenes: twenty-two move by exactly 0.000%, three by 0.002–0.008% (kelvin rounding), and the
 /// rest by 0.144, 0.238, 0.275, 0.608, 0.674 and 0.966%. The gap between 0.275 and 0.608 is where
 /// this sits.
@@ -570,7 +570,7 @@ const WINDOW_SHIFT: f64 = 0.005;
 /// arithmetic that changes nothing.
 ///
 /// **A chosen number, and the corpus it was chosen against is written down** — the same standing
-/// `WINDOW_SHIFT` above has. Measured over all thirty-one shipped scenes, of which eleven domains
+/// `WINDOW_SHIFT` above has. Measured over all thirty-two shipped scenes, of which eleven domains
 /// report both a peak and a coldest:
 ///
 /// ```text
@@ -1812,6 +1812,9 @@ impl DomainSpec {
             | DomainSpec::Orbit { .. }
             | DomainSpec::Bounce { .. }
             | DomainSpec::Atoms { .. }
+            // A compartment model is a graph of volumes, like `Network`: there is no grid, and
+            // halving a volume states a different problem rather than the same one more finely.
+            | DomainSpec::Compartments { .. }
             // **A protein has no resolution to halve.** Every other spatial domain here states a
             // grid and the sweep asks whether the answer is the problem's or the grid's. A
             // structure is not a discretisation of anything: it is where the atoms were measured

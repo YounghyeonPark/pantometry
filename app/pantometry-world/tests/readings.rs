@@ -1,6 +1,6 @@
 //! Every domain reports scalars, including the ones that have no picture.
 //!
-//! **Twelve of the thirty-one** shipped scenes contain a domain the filmstrip cannot draw — a
+//! **Thirteen of the thirty-two** shipped scenes contain a domain the filmstrip cannot draw — a
 //! heater, a lamp, a winding, a thermal network — and for several the scalar *is* the result. The
 //! count is measured by running every scene and reading what the binary says it drew; it stood at
 //! "eight of the fourteen" through fourteen more scenes. The

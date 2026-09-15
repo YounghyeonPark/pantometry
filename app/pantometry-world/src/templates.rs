@@ -14,9 +14,9 @@
 //! Rust cannot list an enum's variants, so no compiler check can prove this list is complete.
 //! What can be proved is that it agrees with a set maintained somewhere else entirely, and one
 //! exists: **every kind the format defines appears in at least one shipped scene.** Measured, not
-//! assumed — twenty variants, twenty distinct kinds across the thirty-one scenes. So the
+//! assumed — twenty-one variants, twenty-one distinct kinds across the thirty-two scenes. So the
 //! test compares the two sets **in both directions**, which is the same shape as
-//! `counts_in_prose`: a template with no scene fires one half, a twenty-first domain with a scene
+//! `counts_in_prose`: a template with no scene fires one half, a twenty-second domain with a scene
 //! fires the other.
 //!
 //! # Text, not a serialised `DomainSpec`
@@ -39,10 +39,11 @@
 ///
 /// Grown from a `(kind, json)` pair when the editor gained a chooser: a person picking what to
 /// simulate needs to be told what each kind *is*, and a scene made of one needs a duration and a
-/// frame count that the kind can actually run under. Those two numbers span **sixteen** orders of
-/// magnitude across this table — `well` settles in 2e-13 s and an `orbit` takes 7200, a span of
-/// 3.6e16 — which is a fact about the physics and the reason a chooser has to say so rather than
-/// pick a default and hope.
+/// frame count that the kind can actually run under. Those two numbers span **seventeen** orders
+/// of magnitude across this table — `well` settles in 2e-13 s and a `compartments` model runs for
+/// twelve hours, a span of 2.16e17 — which is a fact about the physics and the reason a chooser has
+/// to say so rather than pick a default and hope. It was 3.6e16 and `orbit` held the far end until
+/// a dose took half a day to leave a body.
 ///
 /// **It said fourteen orders and named `atoms` against a thermal `network`**, and both halves were
 /// wrong. The extremes have always been `well` and `orbit`, so the count was stale whatever
@@ -87,7 +88,7 @@ impl Template {
 /// The examples, keyed by the `kind` the scene format spells.
 ///
 /// Sorted by kind, so a menu built from this is in a stable order.
-pub const TEMPLATES: [Template; 20] = [
+pub const TEMPLATES: [Template; 21] = [
     Template {
         kind: "atoms",
         about: "A Lennard-Jones fluid in a periodic box",
@@ -144,6 +145,17 @@ pub const TEMPLATES: [Template; 20] = [
         json: r#"{ "kind": "channel", "name": "channel", "cells": [4, 16, 4], "cell_mm": 0.125,
           "fluid": "water", "walls": {"lower_m_per_s": 0.0, "upper_m_per_s": 0.0},
           "drive_m_per_s2": [0.02, 0.0, 0.0] }"#,
+    },
+    Template {
+        kind: "compartments",
+        about: "A dose distributing between compartments and leaving the body",
+        duration_s: 43200.0,
+        frames: 13,
+        json: r#"{ "kind": "compartments", "name": "compartments",
+          "volumes": [ { "label": "plasma", "volume_l": 5.0, "clearance_l_per_h": 3.0 },
+                       { "label": "tissue", "volume_l": 20.0 } ],
+          "links": [ { "between": ["plasma", "tissue"], "clearance_l_per_h": 8.0 } ],
+          "boluses": [ { "into": "plasma", "dose_mg": 500.0 } ] }"#,
     },
     Template {
         kind: "conductor",

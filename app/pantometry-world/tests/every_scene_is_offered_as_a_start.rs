@@ -180,7 +180,7 @@ fn every_area_is_named_and_none_is_empty() {
 /// from: the no-panel branch runs before an adapter is ever requested, so it reports the same
 /// three on a machine with no GPU — which is CI's case, stated in `ci.yml`.
 ///
-/// What this test is, then, is a pin: a compile-time constant against three literals. It cannot
+/// What this test is, then, is a pin: a compile-time constant against four literals. It cannot
 /// fail on its own, and it does not have to. It fails when somebody regenerates after a scene
 /// lost its geometry, which is exactly when the screen would otherwise start claiming that scene
 /// reports readings. The live check is the other file's, and it is live on any runner because of
@@ -197,7 +197,10 @@ fn a_preset_has_a_picture_unless_its_scene_has_nothing_to_draw() {
         [
             "11-motor-thermal-network.json",
             "12-winding-heats-a-motor.json",
-            "13-winding-that-heats-itself.json"
+            "13-winding-that-heats-itself.json",
+            // A compartment model, for the same reason the three above draw nothing: a graph of
+            // volumes has readings and not positions.
+            "32-a-dose-distributing-and-leaving.json"
         ],
         "the set of presets offered without a picture has changed"
     );

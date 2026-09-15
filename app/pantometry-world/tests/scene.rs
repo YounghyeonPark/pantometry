@@ -920,10 +920,15 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         // not positions, so `as_field` declines — but then it owes an arm in the match below,
         // and this list is how it says so. Adding a name here without an arm reintroduces
         // exactly the hole: a scene that runs, draws nothing, checks nothing, and passes.
-        const NOTHING_TO_DRAW: [&str; 3] = [
+        const NOTHING_TO_DRAW: [&str; 4] = [
             "11-motor-thermal-network.json",
             "12-winding-heats-a-motor.json",
             "13-winding-that-heats-itself.json",
+            // A compartment is an apparent volume and not a place, so there is nothing to put
+            // anywhere — the same reason the three above draw nothing, and the reason this scene
+            // could exist at all: "no space" was never what kept pharmacokinetics out of the
+            // format.
+            "32-a-dose-distributing-and-leaving.json",
         ];
         // Zero for a scene with no panel, which never reads it — the arms below that do are all
         // in the drawn branch.
@@ -1354,6 +1359,61 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: the drawn fluctuations correlate with the deposited B-factors at \
                      {r:.3}, and the crate measures 0.395 for this entry at this cutoff -- so \
                      either the scene is not drawing what it says or the two have diverged"
+                );
+            }
+            // **The slow root of the quadratic, and the mass balance.**
+            //
+            // A two-compartment model's plasma curve is `A e^{−αt} + B e^{−βt}` with `α` and `β`
+            // the roots of `λ² − (k₁₀ + k₁₂ + k₂₁)λ + k₁₀k₂₁ = 0`, computed here from the scene's
+            // own litres and litres per hour: `k₁₀ = 3/5`, `k₁₂ = 8/5`, `k₂₁ = 8/20` per hour, so
+            // `α = 2.504 /h` and `β = 0.09584 /h`. Twelve hours in, the fast term is `e^{−30}` of
+            // where it started, so the last frame's plasma concentration is the slow term alone
+            // and its value follows from the roots without any curve fitting.
+            //
+            // The *order* at which the step reaches that is
+            // `a_dose_leaves_at_the_rate_the_roots_say`, which is where the tolerance below is
+            // earned: explicit Euler at this window reads the terminal rate `1.3e-4` from `β`, and
+            // over twelve hours that is what the concentration inherits.
+            "32-a-dose-distributing-and-leaving.json" => {
+                let reading = |label: &str| {
+                    last.readings
+                        .iter()
+                        .find(|r| r.label == label)
+                        .unwrap_or_else(|| panic!("{name}: no {label} reading"))
+                        .value
+                };
+                // The roots, from the file rather than from the run.
+                let (k10, k12, k21) = (3.0f64 / 5.0, 8.0f64 / 5.0, 8.0f64 / 20.0);
+                let b = k10 + k12 + k21;
+                let root = (b * b - 4.0 * k10 * k21).sqrt();
+                let (alpha, beta) = ((b + root) / 2.0, (b - root) / 2.0);
+                // A bolus into the central compartment: `C(t) = (D/V₁)·[(α−k₂₁)e^{−αt} +
+                // (k₂₁−β)e^{−βt}]/(α−β)`, the standard two-compartment solution.
+                let (dose_mg, v1) = (500.0f64, 5.0f64);
+                let hours = 12.0f64;
+                let want = dose_mg / v1
+                    * ((alpha - k21) * (-alpha * hours).exp()
+                        + (k21 - beta) * (-beta * hours).exp())
+                    / (alpha - beta);
+                let got = reading("plasma");
+                assert!(
+                    (got / want - 1.0).abs() < 2e-3,
+                    "{name}: the closed form says {want:.5} mg/L at twelve hours and the run \
+                     reports {got:.5}"
+                );
+
+                // Nothing is created or destroyed: what was given is what is held plus what has
+                // been cleared. Exact, because the model moves mass rather than concentration.
+                let (held, cleared) = (reading("in the body"), reading("cleared"));
+                assert!(
+                    ((held + cleared) / dose_mg - 1.0).abs() < 1e-9,
+                    "{name}: {dose_mg} mg went in and {held:.4} + {cleared:.4} came out"
+                );
+                // And it has actually left: a run where nothing eliminated would hold all of it
+                // and satisfy the line above.
+                assert!(
+                    cleared > 0.7 * dose_mg,
+                    "{name}: only {cleared:.1} mg of {dose_mg} cleared in twelve hours"
                 );
             }
             // Kepler's third law, from the picture. The satellites are on circular orbits,
@@ -3342,7 +3402,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // would be compared across grids as though it converged to something, and nothing would say.
     // `verify::DIAGNOSTICS` was that list; `Domain::diagnostics` replaced it, so a domain now says
     // which of its own readings describe the solve. This is what stops the drift. It pins all
-    // **55** labels the thirty-one scenes emit, so a new one fails here and has to be decided
+    // **59** labels the thirty-two scenes emit, so a new one fails here and has to be decided
     // about.
     //
     // What the sweep did without it, on `17-a-busbar-with-a-notch`:
@@ -3424,6 +3484,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "absorbed [J]",
             "baseplate [C]",
             "bed temperature [C]",
+            "cleared [mg]",
             "coldest [C]",
             "current [A]",
             "delivered [g]",
@@ -3437,6 +3498,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "free strain []",
             "generated [J]",
             "housing [C]",
+            "in the body [mg]",
             "invariant [J]",
             "junction [C]",
             "kinetic energy [J]",
@@ -3448,6 +3510,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "peak [C]",
             "peak [Pa]",
             "peak speed [m/s]",
+            "plasma [mg/L]",
             "reserve [J]",
             "resistance [ohm]",
             "ring over core []",
@@ -3460,6 +3523,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "strain y []",
             "strain z []",
             "temperature [C]",
+            "tissue [mg/L]",
             "unevenness []",
             "volume change []",
             "winding [C]",

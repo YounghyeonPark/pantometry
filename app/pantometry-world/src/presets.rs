@@ -1,4 +1,4 @@
-//! The thirty-one shipped scenes, offered as starting points.
+//! The thirty-two shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -20,7 +20,7 @@
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-six kilobytes for all thirty-one.
+//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-two.
 
 /// One scene, offered as a starting point.
 pub struct Preset {
@@ -92,6 +92,11 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
         "the collective motions of a fold, from a Protein Data Bank file",
     ),
     (
+        "medicine",
+        "A dose in a body",
+        "compartments, clearance, and the curve a dose traces",
+    ),
+    (
         "radio",
         "Resonant cavities",
         "Maxwell's equations on a Yee grid",
@@ -110,10 +115,10 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
 ];
 
 /// How many areas there are.
-pub const AREA_COUNT: usize = 12;
+pub const AREA_COUNT: usize = 13;
 
 /// Every shipped scene, as a starting point.
-pub const PRESETS: [Preset; 31] = [
+pub const PRESETS: [Preset; 32] = [
     Preset {
         file: "01-room-mode.json",
         area: "rooms",
@@ -417,5 +422,14 @@ pub const PRESETS: [Preset; 31] = [
         thumb: Some(include_bytes!(
             "../thumbnails/31-a-protein-shaking-at-body-temperature.png"
         )),
+    },
+    Preset {
+        file: "32-a-dose-distributing-and-leaving.json",
+        area: "medicine",
+        title: "a 500 mg bolus distributing into tissue and leaving the body, twelve hours of it",
+        kinds: &["compartments"],
+        needs_a_part: false,
+        json: include_str!("../scenes/32-a-dose-distributing-and-leaving.json"),
+        thumb: None,
     },
 ];
