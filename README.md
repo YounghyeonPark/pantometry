@@ -108,9 +108,9 @@ and GitHub renders it as a **Cite this repository** button; the same content as 
   title   = {pantometry: physics for simulated worlds, checked against closed forms},
   version = {0.21.0},
   year    = {2026},
-  doi     = {10.5281/zenodo.22233493},
+  doi     = {10.5281/zenodo.22760497},
   url     = {https://doi.org/10.5281/zenodo.22024817},
-  note    = {ORCID: 0000-0002-4733-5049. The `doi` is 0.20.0's; the `url` is the concept DOI,
+  note    = {ORCID: 0000-0002-4733-5049. The `doi` is 0.21.0's; the `url` is the concept DOI,
              which always resolves to the newest version. Both move with a release --
              this block named 0.16.0 through the whole of 0.17.0, and its `version`
              was left at 0.19.0 through the 0.20.0 bump because no list covered it},
