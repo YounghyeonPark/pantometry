@@ -264,10 +264,15 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
     // The opening paragraph, which restates both halves in a different sentence from the closing
     // one. It read "Twenty-two findings ... seventeen of them fixed" while the file's other end
     // said thirty-four and twenty-nine.
+    //
+    // It said "findings have come out of it" until finding 49, which came out of one of the
+    // library's own examples instead. The sentence had to stop claiming every finding for this
+    // crate, and a template pinned to a claim that has become false is a template to change
+    // rather than a document to revert -- which is what the failure message here says to do.
     phrase(
         ".claude/agents/consumer-advocate.md",
         &format!(
-            "**{{}}** findings have\ncome out of it, {} of them fixed",
+            "**{{}}** findings are\nrecorded, {} of them fixed",
             WORDS[fixed]
         ),
         findings,

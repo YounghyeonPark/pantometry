@@ -8,15 +8,20 @@ who already knows the shape. The count used to be here and it is not a number th
 **795** across two releases and a consolidation, while the library's suite measured 733.
 
 Everything below was hit while building the smallest thing that loads a scene, runs it, couples
-two domains over a plain channel and two more over a shared boundary, and draws the result. None of it is a bug in the physics except finding 6, which is — and which no test inside the
+two domains over a plain channel and two more over a shared boundary, and draws the result —
+everything except **finding 49**, which came from one of the library's own examples rather than
+from this crate. That is weaker evidence and the entry says so: an example is written by somebody
+who already knows the shape. It is here because it is a finding about the same public API, and the
+register for those is this file. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Forty-three of the forty-eight are fixed**, and five are recorded rather than actioned. The
+**Forty-three of the forty-nine are fixed**, and six are recorded rather than actioned. The
 reasons differ and are given in each: one because the kernel already refuses the mistake it
 describes and a second consumer would be needed to make the duplication worth removing, one because
 a domain may not know another so the library cannot close it, one because the shape of the answer
-is not obvious, one on scope, and one because the alternative to a panic is a type that does not
-exist yet and wants a second consumer to justify.
+is not obvious, one on scope, one because the alternative to a panic is a type that does not
+exist yet and wants a second consumer to justify, and one because a single drawing is not enough to
+say what the shape of the answer is.
 
 **A fixed finding opens its resolution with `**Fixed`, at the start of a line**, because that is
 what `friction_counts.rs` counts and the summary above is pinned to that count. It said "forty
@@ -609,8 +614,10 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-eight findings, and the source has shifted ten times — the table below has eleven rows and
-that sentence said "seven" through four of them.
+Forty-nine findings, and the source has shifted twelve times — the table below has thirteen rows
+and that sentence said "seven" through four of them. The last two rows are each a single finding,
+and **48 had no row at all** until this edit: the table stopped at 47 while the sentence above it
+counted forty-eight, which is the shape of a count that moved and a table that did not.
 
 | how many | where they came from |
 | --- | --- |
@@ -625,6 +632,8 @@ that sentence said "seven" through four of them.
 | 33 | **the audit refusing three correct runs in one sitting**, all with the same shape |
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
 | 35–47 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
+| 48 | **wiring a domain that reads a file**, where what the constructor refuses is a property of the data rather than of the calling code |
+| 49 | **drawing an instrument rather than a graph** — the only row that is not this crate, and the only one where the thing being drawn is not a measurement |
 
 **Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
 should take away, because neither is "use the API and see what hurts". Building the next domain and
@@ -1653,10 +1662,47 @@ What this does argue for now is the documentation, which says it: the panic is n
 `Protein::new`'s own `# Panics`, and `Network::components` explains what it is for rather than
 merely what it returns.
 
+## 49. A layout has structure, and a panel has one quantity
+
+`PanelData::Paths` carries "one value per path, to colour it by — a wavelength, a field angle, a
+speed". A drawing of an *instrument* has two kinds of path in it and only one of them is a
+measurement: the rays have a field angle, and the glass they bend in has no value on that scale at
+all. It is structure. The format has no way to say so.
+
+This was found drawing the doublet in `optical_bench`, which is an example inside the library
+rather than this crate — so it is weaker evidence than the rest of this file, and it is recorded
+because the API it is about is the same one.
+
+**Three ways to say it, each measured.**
+
+*A panel of its own for the glass.* This is the obvious answer and it produces two pictures of one
+bench. `pantometry-view`'s report draws one card per panel and the native viewer draws the **first**
+panel and no other: measured, the generated report had two `layout` cards, and the viewer framed
+itself to 19 x 19 x 7 mm — the lens alone, with every ray off the screen. The instrument in one
+picture and the light in another is the thing drawing the glass was for.
+
+*A value that means "not on this scale".* The wire format writes `null` for anything not finite and
+the report's draw loop does `if(!isFinite(val)) continue;`, so the glass would be dropped silently.
+That is the shape of failure this repository hunts, not a way out of it.
+
+*The glass on the rays' scale, which is what shipped.* The panel's unit reads `deg field, 4 =
+glass`, so the colour bar and the caption carry the encoding instead of a labelled scale implying
+that a lens is a four-degree ray. It is ugly and it is honest, and being visible in the legend is
+most of the argument for leaving it there.
+
+**Recorded rather than actioned, and the reason is one drawing.** What the format would need is a
+path that carries no value and is drawn in a structural colour rather than off a scale —
+`Vec<Option<f64>>`, or a second run list, or a convention that a panel whose values are all equal is
+not a measurement. Each of those crosses the wire format, `viewer-core`, four hundred lines of the
+report's JavaScript, glTF and USD, and nothing here says which is right. One instrument is not
+enough to choose. A second drawing that wants the same thing would be, and this entry is what that
+one should be compared against.
+
 ## What this report does not cover
 
-**All eleven domains have scenes** — findings 31 and after closed the last four. What is left is
-smaller and more specific.
+**All thirteen domains have scenes** — findings 31 and after closed the last four of the eleven
+there were then, and the two domains added since have them too. This said "eleven" through both of
+them. What is left is smaller and more specific.
 
 **`TreeNBody`, `RigidBody` and the rest of mechanics.** Four types took `as_any` in this pass
 but only `NBody` and `ContactSystem` have scene variants, so Barnes-Hut and rigid rotation are

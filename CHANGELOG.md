@@ -3,7 +3,7 @@
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This workspace follows [semantic versioning](https://semver.org/). It is `0.x`, so the API is
 explicitly not stable and a minor bump may break you. The first consumer exists now, and it
-has already found forty-eight places it is awkward, forty-three of which have been changed — see
+has already found forty-nine places it is awkward, forty-three of which have been changed — see
 `app/pantometry-world/FRICTION.md`.
 
 **Entries below 0.16.0 name crates as `pantometry-*` and they were published as `dualis-*`.** The
@@ -65,7 +65,14 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 - **A report draws one card per panel**, so putting the glass in a panel of its own made two
   pictures of one bench — the instrument in one and the light in the other. The glass shares the
   rays’ panel and their scale, and the panel’s unit reads `deg field, 4 = glass` rather than
-  leaving a colour bar to imply a lens is a four-degree ray.
+  leaving a colour bar to imply a lens is a four-degree ray. **FRICTION 49**: `PanelData::Paths`
+  colours every path by one quantity, and a drawing of an instrument has structure in it that is
+  not a measurement. Recorded rather than actioned — one drawing is not enough to say whether the
+  answer is an optional value, a second run list, or a convention.
+- **FRICTION’s source table stopped at finding 47** while the sentence above it counted
+  forty-eight, and `CLAUDE.md` described the open findings as "the same underlying decision" where
+  the file itself gives a different reason for each. The report’s closing section also still said
+  eleven domains have scenes, which has been thirteen since `32-a-dose-distributing-and-leaving`.
 
 ## [0.21.0] — 2026-09-15
 
