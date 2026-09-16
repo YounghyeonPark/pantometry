@@ -75,7 +75,7 @@ pub use diffraction::{
 };
 pub use geometry::{
     annulus_intersect, cap_intersect, conic_intersect, conic_sag, cylinder_intersect,
-    plane_intersect, refract, sag, Hit, Ray,
+    plane_intersect, profile, refract, sag, Hit, Ray,
 };
 pub use material::{Dispersion, Material, C_LINE, D_LINE, F_LINE};
 pub use optics::{

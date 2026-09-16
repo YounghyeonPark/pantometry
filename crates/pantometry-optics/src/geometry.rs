@@ -169,10 +169,94 @@ fn conic_sag_si(r: f64, k: f64, h: f64) -> f64 {
     let h2 = h * h;
     let inner = 1.0 - (1.0 + k) * h2 / (r * r);
     if inner < 0.0 {
-        // Past where the conic exists; clamp to its edge rather than returning NaN.
-        return r;
+        // Past where the conic exists; clamp to its edge rather than returning NaN. The edge is
+        // where `inner` is zero, and the sag there is `h²/R` with `h² = R²/(1+k)` — so `R/(1+k)`.
+        // This said `R`, which is that value only for a sphere; an ellipsoid was clamped to a
+        // number `1+k` times too large. Nothing but `-1 < k` reaches this line at all, because
+        // for `k <= -1` the root is never imaginary.
+        return r / (1.0 + k);
     }
     h2 / (r * (1.0 + inner.sqrt()))
+}
+
+/// The meridional profile of a surface: the curve the surface **is**, as points in space.
+///
+/// [`cap_intersect`] and [`conic_intersect`] say where a ray meets a surface. This says where the
+/// surface is, which is a different question and the one a layout has to answer: a picture of an
+/// instrument that draws only the rays is a picture of light bending in empty space.
+///
+/// `2 * samples + 1` points, running from one edge through the vertex to the other, so the
+/// **vertex is always one of them** rather than falling between two.
+///
+/// `a` is the unit axis, as it is for [`cap_intersect`]; a longer one is a different conic,
+/// silently.
+///
+/// `across` picks the meridian. Any direction with a component perpendicular to `a` will do; it
+/// is projected and normalised, so sweeping it around the axis traces out the solid of revolution
+/// the surface actually is. `None` when it has no such component, or when `samples` is zero — a
+/// profile with no direction to run along is not an empty profile, and returning one would be the
+/// kind of nothing that looks like a drawing with the glass switched off.
+///
+/// "No such component" is asked of the **direction**, not of the vector: a perpendicular part
+/// shorter than `1e-8` of the whole. Normalising a nearly-parallel projection amplifies its own
+/// rounding by `1/sin`, so `sqrt(eps)` is where a direction stops meaning anything, and an
+/// absolute threshold would have made the answer depend on how long the caller's vector was. A
+/// zero or non-finite `across` is `None` for the same reason: it names no direction either.
+///
+/// # The aperture a surface actually has
+///
+/// A conic exists only where `1 - (1+k) h²/R²` is non-negative: a sphere stops at its equator
+/// `h = |R|`, an ellipsoid at `|R|/sqrt(1+k)`, and a paraboloid or hyperboloid never stops. Asked
+/// for more than that, this returns the surface's own extent. It has to: [`cap_intersect`] applies
+/// the same clamp as `semi_ap.min(|R|)`, so a profile drawn any wider would put the glass somewhere
+/// no ray can land, and the picture would disagree with the trace at exactly the edge where an
+/// optical design is decided.
+///
+/// **A clamped endpoint is where the surface turns vertical**, and a ray parallel to the axis is
+/// tangent to it there. `R² - h²` rounds through zero, so [`cap_intersect`] may return that point,
+/// a point a few hundred picometres away, or nothing at all — `sqrt` turns `eps` into `sqrt(eps)`.
+/// A caller that needs the drawing and the trace to agree point for point has to check that no
+/// surface is clamped, which is a fact about the prescription rather than about this function;
+/// `optical_bench` asks it of all three of its surfaces before it trusts anything else.
+pub fn profile(
+    v: LengthVec,
+    a: DVec3,
+    r: Length,
+    k: f64,
+    semi_ap: Length,
+    across: DVec3,
+    samples: usize,
+) -> Option<Vec<LengthVec>> {
+    if samples == 0 {
+        return None;
+    }
+    // A zero vector has no direction, and a relative threshold against zero admits everything --
+    // `0.0 < 1e-8 * 0.0` is false, so this line is what keeps `DVec3::ZERO` out. Not finite is the
+    // same answer: a profile of NaN points is drawable and invisible.
+    let length = across.length();
+    if !length.is_finite() || length == 0.0 {
+        return None;
+    }
+    let perpendicular = across - a * across.dot(a);
+    if perpendicular.length() < 1e-8 * length {
+        return None;
+    }
+    let across = perpendicular.normalize();
+    let (v_si, r_si) = (v.to_si(), r.to_si());
+    let mut h_max = semi_ap.to_si().abs();
+    if r_si != 0.0 && 1.0 + k > 0.0 {
+        h_max = h_max.min(r_si.abs() / (1.0 + k).sqrt());
+    }
+    let n = samples as i64;
+    Some(
+        (-n..=n)
+            .map(|i| {
+                let h = h_max * i as f64 / n as f64;
+                let z = conic_sag_si(r_si, k, h);
+                LengthVec::from_si(v_si + across * h + a * z)
+            })
+            .collect(),
+    )
 }
 
 /// Intersect a ray with a spherical cap (or flat disc when `r` is zero) of
@@ -661,6 +745,321 @@ mod tests {
         for (x, y) in a {
             assert!(x * x + y * y <= 1.0 + 1e-12);
         }
+    }
+
+    /// **Every point of a drawn profile is a point a traced ray lands on.**
+    ///
+    /// This is the claim that makes a drawing a drawing of the thing rather than a second
+    /// description of it. `profile` computes the sag; `cap_intersect` solves a quadratic and
+    /// `conic_intersect` runs Newton on it. They share no arithmetic, so agreeing is a fact about
+    /// the surface rather than about the code.
+    ///
+    /// **The conic rows are narrower than the spherical ones, and it is worth saying which.** For
+    /// a ray along the axis `h` does not change with `t`, so `conic_intersect`'s residual is
+    /// `z(t) - sag(h)` with `sag` the same `conic_sag_si` the profile was drawn from: Newton
+    /// inverts the function under test, and those three rows measure its convergence rather than
+    /// the shape of the surface. The shape is
+    /// [`every_point_of_a_drawn_profile_satisfies_the_conic_it_names`], which owes nothing to
+    /// either routine. The spherical rows are independent arithmetic on both sides -- a closed
+    /// quadratic against a sag formula -- and they are what this claim rests on.
+    ///
+    /// The floor is the quadratic's own error, and it is **not** four roundings at the scale of
+    /// `S = |R| + standoff`. For an axial ray at height `h`, `b = -S` and `disc = R² - h²`, so the
+    /// rounding that matters is the one in `disc`: of order `eps·S²`, which the square root divides
+    /// by `2 sqrt(disc)`, leaving about `eps·S²/2R` in `t`. The final subtraction adds `eps·S`. So
+    /// the floor is `4·eps·(S + S²/|R|)`, and dropping the second term -- as this did -- passes only
+    /// while `standoff` and `|R|` are the same size. Measured: with the old floor the `R = 50 mm`
+    /// row at 1 m of standoff is `1.430e-15` m against `9.326e-16`, which is 1.53 of it and fails.
+    /// Against this one every row below sits between 0.016 and 0.078.
+    ///
+    /// Nothing transcendental is evaluated, so it is the same number on every platform: `sqrt` is
+    /// correctly rounded and `sin` is not, which is what cost this repository a red Windows job
+    /// once already.
+    #[test]
+    fn every_point_of_a_drawn_profile_is_a_point_a_ray_lands_on() {
+        let mut worst: f64 = 0.0;
+        // Standoffs of 2 mm and 1 m as well as 30 mm, because the floor has to hold as `S/|R|`
+        // moves: it is the term the first version of it dropped.
+        for (r_mm, k, semi_mm, standoff) in [
+            (50.0, 0.0, 12.5, 30e-3),
+            (-50.0, 0.0, 12.5, 30e-3),
+            (39.754, 0.0, 9.5, 30e-3),
+            (50.0, 0.0, 12.5, 2e-3),
+            (50.0, 0.0, 12.5, 1.0),
+            (10.0, 0.0, 4.0, 500e-3),
+            (50.0, -1.0, 20.0, 30e-3),
+            (50.0, -2.5, 20.0, 30e-3),
+            (50.0, -0.5, 12.5, 30e-3),
+        ] {
+            let (r, semi) = (Length::mm(r_mm), Length::mm(semi_mm));
+            let points = profile(LengthVec::ZERO, DVec3::Z, r, k, semi, DVec3::Y, 24)
+                .expect("a meridian perpendicular to the axis");
+            let scale = r_mm.abs() * 1e-3 + standoff;
+            let floor = 4.0 * f64::EPSILON * (scale + scale * scale / (r_mm.abs() * 1e-3));
+            // Per row rather than across all of them: a global maximum lets eight rows collapse to
+            // bit-identical arithmetic while the ninth carries the assertion.
+            let mut row: f64 = 0.0;
+            for p in &points {
+                let at = p.to_si();
+                let off_axis = (at.x * at.x + at.y * at.y).sqrt() * 1e3;
+                // Straight down the axis at that height. The transverse coordinates of the hit
+                // are the ray's own and therefore exact; only the axial one carries the error.
+                let ray = Ray::new(
+                    LengthVec::from_si(DVec3::new(at.x, at.y, -standoff)),
+                    DVec3::Z,
+                );
+                let hit = if k == 0.0 {
+                    cap_intersect(ray, LengthVec::ZERO, DVec3::Z, r, semi)
+                } else {
+                    conic_intersect(ray, LengthVec::ZERO, DVec3::Z, r, k, semi)
+                }
+                .unwrap_or_else(|| {
+                    panic!(
+                        "R {r_mm} mm, k {k}: a ray aimed at the drawn point {off_axis:.4} mm off \
+                         axis missed the surface entirely"
+                    )
+                });
+                let gap = (hit.point.to_si() - at).length();
+                row = row.max(gap / floor);
+                assert!(
+                    gap < floor,
+                    "R {r_mm} mm, k {k}: the drawn point {off_axis:.4} mm off axis is {gap:.3e} m \
+                     from where a ray lands, against a floor of {floor:.3e}"
+                );
+            }
+            // If every gap in a row were zero, that row's two sides would be one piece of
+            // arithmetic rather than two ways of finding one surface.
+            assert!(
+                row > 0.0,
+                "R {r_mm} mm, k {k}, standoff {standoff} m: every drawn point matched to the last \
+                 bit, so these are not two computations"
+            );
+            println!("  R {r_mm:>7} mm  k {k:>5}  standoff {standoff:>5} m: {row:.3} of its floor");
+            worst = worst.max(row);
+        }
+        assert!(worst < 1.0, "the worst row was {worst:.2} of its floor");
+    }
+
+    /// **Every point of a drawn profile satisfies the equation of the conic it names.**
+    ///
+    /// A conic of revolution *is* `(1+k) z² - 2 R z + h² = 0`. That is the definition, not a
+    /// consequence of one: no sag formula, no intersection, nothing this crate computes. `profile`
+    /// produces `(h, z)` and this substitutes them.
+    ///
+    /// It exists because the ray test cannot carry the shape when `k != 0`. An axial ray holds `h`
+    /// fixed, so `conic_intersect`'s residual is `z(t) - conic_sag_si(h)` -- the same function the
+    /// profile was drawn from -- and Newton inverting the function under test agrees with it
+    /// whatever shape it has. Measured: multiplying `k` by 1.3 inside `conic_sag_si` for every
+    /// `k < -2` left all 124 tests in this crate passing. This one fails on it.
+    ///
+    /// A flat surface is not in the table: with `R = 0` the equation reads `(1+k) z² + h² = 0`,
+    /// which no point off the axis satisfies, because a plane is not a conic of revolution in this
+    /// spelling.
+    ///
+    /// The residual is judged against the size of the terms that make it. `z` carries a few `eps`
+    /// of relative error from the sag, the residual's sensitivity to `z` is `|2(1+k)z - 2R|` and
+    /// so about `2|R|`, and `eps·2|R z|` is one of the terms being summed -- so the bound is a
+    /// small multiple of `eps` and the multiple is the count of roundings, not a choice.
+    #[test]
+    fn every_point_of_a_drawn_profile_satisfies_the_conic_it_names() {
+        let mut worst: f64 = 0.0;
+        for (r_mm, k, semi_mm) in [
+            (50.0, 0.0, 12.5),
+            (-50.0, 0.0, 12.5),
+            (39.754, 0.0, 9.5),
+            (-43.633, 0.0, 9.5),
+            (50.0, -1.0, 20.0),
+            (50.0, -2.5, 20.0),
+            (50.0, -0.5, 12.5),
+            (50.0, 0.2, 12.5),
+            (50.0, 3.0, 20.0),
+        ] {
+            let r_si = r_mm * 1e-3;
+            let points = profile(
+                LengthVec::ZERO,
+                DVec3::Z,
+                Length::mm(r_mm),
+                k,
+                Length::mm(semi_mm),
+                DVec3::Y,
+                24,
+            )
+            .expect("a meridian perpendicular to the axis");
+            let mut row: f64 = 0.0;
+            for p in &points {
+                let at = p.to_si();
+                let (h, z) = ((at.x * at.x + at.y * at.y).sqrt(), at.z);
+                let residual = (1.0 + k) * z * z - 2.0 * r_si * z + h * h;
+                let terms = ((1.0 + k) * z * z).abs() + (2.0 * r_si * z).abs() + h * h;
+                // The vertex is the one point where every term is zero and the residual is
+                // exactly zero with it; there is nothing to divide by and nothing to learn.
+                if terms > 0.0 {
+                    row = row.max(residual.abs() / (terms * f64::EPSILON));
+                }
+            }
+            println!("  R {r_mm:>8} mm  k {k:>5}: residual {row:.2} eps of its own terms");
+            assert!(
+                row < 8.0,
+                "R {r_mm} mm, k {k}: a drawn point misses the conic it is supposed to be on by \
+                 {row:.1} eps of the terms, against the eight roundings that go into it"
+            );
+            worst = worst.max(row);
+        }
+        assert!(
+            worst > 0.0,
+            "every point satisfied the equation exactly, which a sag computed in floating point \
+             does not do -- the residual is being computed from the sag rather than from the point"
+        );
+    }
+
+    /// **A profile stops where the surface stops, and the sag at that edge is the conic's own.**
+    ///
+    /// A sphere ends at its equator and an ellipsoid sooner. Asked for more, `profile` gives the
+    /// surface's extent -- the same clamp `cap_intersect` applies -- because a drawn edge outside
+    /// the surface is an edge no ray can reach.
+    ///
+    /// The oblate spheroid is here because the clamp in `conic_sag_si` returned `R` for every
+    /// conic and the sag at the edge is `R/(1+k)`. For a sphere those are the same number, which
+    /// is why nothing noticed: the only surfaces that reach the clamp at all are the sphere, where
+    /// it was right, and the ellipsoid, where it was `1+k` times too large.
+    #[test]
+    fn a_profile_stops_where_the_surface_stops() {
+        let semi = Length::mm(40.0);
+        let r = Length::mm(50.0);
+
+        // A sphere: the equator, at `h = |R|`, where the sag is `R`. Asked for 60 mm of a surface
+        // that has 50, because asking for less than a surface has is not a clamp.
+        let sphere = profile(
+            LengthVec::ZERO,
+            DVec3::Z,
+            r,
+            0.0,
+            Length::mm(60.0),
+            DVec3::Y,
+            8,
+        )
+        .unwrap();
+        let edge = sphere.last().unwrap().in_mm();
+        assert!(
+            (edge.y - 50.0).abs() < 1e-9,
+            "a sphere of R 50 mm asked for 60 mm of aperture stops at its equator, 50 mm out, and \
+             this stopped at {:.4}",
+            edge.y
+        );
+        assert!((edge.z - 50.0).abs() < 1e-9, "and the sag there is R");
+
+        // An oblate spheroid, k = 3: the surface ends at `|R|/sqrt(1+k)` = 25 mm, and the sag
+        // there is `R/(1+k)` = 12.5 mm rather than R.
+        let oblate = profile(LengthVec::ZERO, DVec3::Z, r, 3.0, semi, DVec3::Y, 8).unwrap();
+        let edge = oblate.last().unwrap().in_mm();
+        assert!(
+            (edge.y - 25.0).abs() < 1e-9,
+            "|R|/sqrt(1+k) is 25 mm and the profile reached {:.4}",
+            edge.y
+        );
+        assert!(
+            (edge.z - 12.5).abs() < 1e-12,
+            "R/(1+k) is 12.5 mm and the sag at the edge is {:.6}; it read 50 while the clamp \
+             returned R",
+            edge.z
+        );
+
+        // **The clamp branch, reached directly.** Neither case above enters it: `profile` stops at
+        // exactly `|R|/sqrt(1+k)`, where `inner` comes out exactly `0.0` for these numbers and the
+        // main formula returns `h²/R`, which is `R/(1+k)` anyway. Reverting the clamp to `R` left
+        // every test in this crate passing. Past the edge there is no such luck, and the value
+        // there is the surface's own extent rather than `R`: for `R = 50 mm, k = 3` the edge is at
+        // 25 mm and the sag is 12.5, and the old spelling said 50.
+        assert!(
+            (conic_sag(r, 3.0, Length::mm(30.0)).in_mm() - 12.5).abs() < 1e-12,
+            "past the edge of an oblate spheroid the sag is R/(1+k) = 12.5 mm, and this read {:.6}",
+            conic_sag(r, 3.0, Length::mm(30.0)).in_mm()
+        );
+        // And for a sphere the two spellings are the same number, which is why nothing noticed.
+        assert!(
+            (conic_sag(r, 0.0, Length::mm(80.0)).in_mm() - 50.0).abs() < 1e-12,
+            "past the equator of a sphere the sag is R"
+        );
+
+        // A hyperboloid never runs out, so the aperture asked for is the aperture drawn.
+        let open = profile(LengthVec::ZERO, DVec3::Z, r, -2.0, semi, DVec3::Y, 8).unwrap();
+        assert!(
+            (open.last().unwrap().in_mm().y - 40.0).abs() < 1e-9,
+            "a hyperboloid has no equator to stop at"
+        );
+    }
+
+    /// **A profile with no meridian to run along is not an empty profile.**
+    ///
+    /// `across` parallel to the axis names no curve, and zero samples name no points. Both give
+    /// `None`, because a caller that draws an empty run gets a picture with the glass missing and
+    /// no reason given -- which is what `optical_bench` looked like before there was anything to
+    /// draw the glass with.
+    #[test]
+    fn a_profile_without_a_meridian_is_not_an_empty_one() {
+        let (r, semi) = (Length::mm(50.0), Length::mm(12.5));
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, DVec3::Z, 8).is_none());
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, -DVec3::Z, 8).is_none());
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, DVec3::ZERO, 8).is_none());
+        let nan = DVec3::new(f64::NAN, 1.0, 0.0);
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, nan, 8).is_none());
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, DVec3::Y, 0).is_none());
+
+        // **The same direction at two magnitudes is the same meridian.** An absolute threshold
+        // made this pair disagree: at unit length the perpendicular part is 1e-13 and was refused,
+        // and at a million times the length it was 1e-7 and drew a profile.
+        let hair = DVec3::new(0.0, 1e-13, 1.0);
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, hair, 8).is_none());
+        assert!(profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, hair * 1e6, 8).is_none());
+        // And a direction that is a real meridian is one at any length.
+        let long = profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, DVec3::Y * 3.0, 4).unwrap();
+        let unit = profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, DVec3::Y, 4).unwrap();
+        assert_eq!(
+            long, unit,
+            "the meridian is a direction, not a displacement"
+        );
+
+        // A meridian only partly perpendicular is projected onto the plane and used.
+        let slanted = profile(
+            LengthVec::ZERO,
+            DVec3::Z,
+            r,
+            0.0,
+            semi,
+            DVec3::new(0.0, 1.0, 5.0),
+            4,
+        )
+        .unwrap();
+        let straight = profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, DVec3::Y, 4).unwrap();
+        for (a, b) in slanted.iter().zip(&straight) {
+            assert!((a.to_si() - b.to_si()).length() < 1e-15);
+        }
+    }
+
+    /// **The vertex is on the curve, and the curve is the conic rather than the sphere it starts
+    /// from.**
+    ///
+    /// An odd number of points puts the middle one at the vertex exactly, which is the point a
+    /// prescription is written about. And the conic constant has to reach the drawn shape: at the
+    /// rim of this surface a paraboloid and its sphere are tens of micrometres apart, so a profile
+    /// that dropped `k` would be visibly the wrong shape and silently the right size.
+    #[test]
+    fn the_vertex_is_on_the_curve_and_the_conic_is_not_its_sphere() {
+        let v = LengthVec::mm(0.0, 0.0, 4.0);
+        let (r, semi) = (Length::mm(50.0), Length::mm(20.0));
+        let sphere = profile(v, DVec3::Z, r, 0.0, semi, DVec3::Y, 16).unwrap();
+        assert_eq!(sphere.len(), 33, "2 * samples + 1");
+        assert_eq!(sphere[16], v, "the middle point is the vertex itself");
+
+        let parabola = profile(v, DVec3::Z, r, -1.0, semi, DVec3::Y, 16).unwrap();
+        let apart = (sphere[32].to_si() - parabola[32].to_si()).length();
+        let want = (sag(r, semi) - conic_sag(r, -1.0, semi)).abs().to_si();
+        assert!(
+            (apart - want).abs() < 1e-12 && apart > 50e-6,
+            "the rims of the sphere and the paraboloid are {:.2} um apart and the sags say {:.2}",
+            apart * 1e6,
+            want * 1e6
+        );
     }
 
     /// A ray's direction is dimensionless and its origin is not, so the two cannot

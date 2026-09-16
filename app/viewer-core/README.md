@@ -103,11 +103,19 @@ the **same** camera, the same `viewer-core` segments and the same pipeline the w
 optical bench it reports
 
 ```text
-1046 of 792000 pixels carry a line (0.13%), in 3 shades
+75643 of 792000 pixels carry a line (9.55%), in 101 shades
 ```
 
-and three shades is the check worth having — one per field angle, so the value-to-colour mapping
-arrived intact.
+**This said `1046 ... in 3 shades`, and "three shades is the check worth having — one per field
+angle".** That was a true reading of a renderer that drew every line in the flat colour of its
+value, and it has not been that renderer for some time: a line is shaded by depth now, so a field
+angle is a family of shades rather than one. The committed fixture in `tests/runs/` has not changed
+since it was trimmed and reports 77506 in 100 shades when run today, so the drift is the renderer
+rather than the run. Nothing asserted either number, so nothing said it had moved.
+
+What survives is the weaker claim the count can still make: a snapshot in **one** shade is a
+value-to-colour mapping that has collapsed, and a snapshot in none is an empty vertex buffer. The
+number above is one machine's adapter; the shape of the check is what to keep.
 
 The lit count is measured against **the corner pixel**, not a constant. The target is sRGB, so the
 clear colour is stored far brighter than the linear number the pass was given — 56,66,77 rather

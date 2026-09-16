@@ -20,8 +20,52 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
-Nothing yet. `main` being ahead of the registries is the normal state; this is where the next
-batch accumulates.
+### Added
+
+- **`pantometry_optics::geometry::profile`** — the curve a surface *is*, as points in space, from
+  one edge through the vertex to the other. `cap_intersect` and `conic_intersect` say where a ray
+  meets a surface; nothing said where the surface was, so `optical_bench` drew its rays and no
+  glass at all: light bending in mid-air at angles the picture did not explain.
+
+  The doublet is drawn now, and the claim that makes it a drawing of the thing rather than a second
+  description of it is checked point by point: every drawn vertex is where a ray aimed at it lands,
+  inside a floor derived from the intersection’s own cancellation. One `Surface` list is both what
+  the rays are traced against and what the picture is drawn from.
+
+  The shape is checked against the definition of a conic, `(1+k)z² − 2Rz + h² = 0`, which owes
+  nothing to either routine — because the ray check cannot carry it. An axial ray holds `h` fixed,
+  so `conic_intersect` inverts the same sag the profile was drawn from and agrees with it whatever
+  shape it has: with `k` multiplied by 1.3 inside `conic_sag_si`, every test in the crate passed.
+
+### Fixed
+
+- **A conic clamped past its own edge returned `R` where the sag there is `R/(1+k)`.** Only a
+  sphere and an ellipsoid can reach that line at all — for `k <= -1` the root is never imaginary —
+  and for the sphere the two are the same number, which is why nothing noticed. An oblate spheroid
+  was clamped `1+k` times too far: at `R = 50 mm, k = 3` it drew the surface at 50 mm instead of
+  12.5. The test written for it reached the clamp only by accident and then not at all — a profile
+  stops where `inner` is exactly zero, which is the other branch — so it now calls `conic_sag`
+  past the edge, where there is no such luck.
+- **The floor on that point-by-point check dropped a factor of `S/|R|`.** For an axial ray the
+  rounding that matters is the one in `R² − h²`, which the square root divides by `2√(R² − h²)`;
+  a floor of `4·eps·S` passes only while the standoff and the radius are the same size. Measured:
+  at a metre of standoff the gap is `1.430e-15 m` against that floor’s `9.326e-16` and fails. It is
+  `4·eps·(S + S²/|R|)` now, per surface rather than one built from the largest radius.
+- **`app/viewer-core/README.md` quoted `1046 pixels ... in 3 shades` for the bench snapshot**, with
+  "one per field angle" as the check. Lines are depth-shaded now, so the unchanged committed
+  fixture reports 77506 in 100 shades — the drift is the renderer, not the run. Nothing asserted
+  either number, so nothing said it had moved.
+
+### Found
+
+- **A drawn shape makes a check the prescription cannot.** The bent doublet’s crown is 4.000 mm on
+  the axis and **1.801 mm** at its edge; the paraxial arithmetic that chose the curvatures has no
+  opinion on whether the two surfaces cross, and a prescription whose elements cross is one no
+  workshop can cut. `optical_bench` measures it now.
+- **A report draws one card per panel**, so putting the glass in a panel of its own made two
+  pictures of one bench — the instrument in one and the light in the other. The glass shares the
+  rays’ panel and their scale, and the panel’s unit reads `deg field, 4 = glass` rather than
+  leaving a colour bar to imply a lens is a four-degree ray.
 
 ## [0.21.0] — 2026-09-15
 
