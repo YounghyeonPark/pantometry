@@ -261,6 +261,10 @@ pub fn profile(
 
 /// Intersect a ray with a spherical cap (or flat disc when `r` is zero) of
 /// semi-aperture `semi_ap`, vertex `v`, unit axis `a`.
+///
+/// A point at exactly `semi_ap` is inside, and by the same `1e-12` band whether the surface is
+/// flat or curved — a fifty-picometre skin at a ten-millimetre aperture. The flat branch had no
+/// band at all, so the rim of a disc was outside its own aperture and the rim of a sphere was not.
 pub fn cap_intersect(ray: Ray, v: LengthVec, a: DVec3, r: Length, semi_ap: Length) -> Option<Hit> {
     let (origin, dir) = (ray.origin.to_si(), ray.dir);
     let (v_si, r_si, semi_si) = (v.to_si(), r.to_si(), semi_ap.to_si());
@@ -271,7 +275,12 @@ pub fn cap_intersect(ray: Ray, v: LengthVec, a: DVec3, r: Length, semi_ap: Lengt
         let p = ray.at(t).to_si();
         let w = p - v_si;
         let rho2 = w.length_squared() - w.dot(a).powi(2);
-        if rho2 <= semi_si * semi_si {
+        // The same edge band the curved branch below uses. It did not have one, so a flat cap
+        // **rejected a point at exactly its own semi-aperture** while a spherical one at the same
+        // aperture accepted it: an aperture that behaved differently depending on how the surface
+        // curves. Found by drawing the flint's flat back face out to 9.5 mm and firing a ray at
+        // the rim, which met the crown 4 mm upstream instead.
+        if rho2 <= semi_si * semi_si + 1e-12 {
             return Some(Hit {
                 t,
                 point: LengthVec::from_si(p),
@@ -501,6 +510,63 @@ mod tests {
             Length::mm(5.0)
         )
         .is_none());
+    }
+
+    /// **The rim belongs to the surface, and a flat cap says so as readily as a curved one.**
+    ///
+    /// A ray at exactly the semi-aperture has to land. It did for a sphere, whose branch carries a
+    /// `1e-12` edge band, and did not for a disc, whose branch compared `rho2 <= semi²` outright:
+    /// an aperture whose boundary depended on the curvature of the surface behind it.
+    ///
+    /// Found by drawing a lens rather than by reasoning about it. `optical_bench` draws the flint's
+    /// flat back face out to its 9.5 mm rim, and a ray fired at that rim met the crown's front
+    /// surface 4 mm upstream -- the drawn point was on a surface that said it was not there.
+    #[test]
+    fn the_rim_is_inside_the_aperture_whether_the_cap_is_flat_or_curved() {
+        let semi = Length::mm(9.5);
+        // **Rims, at azimuths a drawing uses.** The first version of this fired one ray from
+        // `(9.5, 0, 0)`, where `x*x + y*y` is `semi*semi` to the bit and `rho2 <= semi*semi` holds
+        // with or without the band -- so reverting the fix left it passing. `9.5 cos t` squared
+        // plus `9.5 sin t` squared is *not*, and that is the input the two versions disagree on.
+        let mut missed = Vec::new();
+        for (name, r) in [
+            ("flat", Length::ZERO),
+            ("convex", Length::mm(39.754)),
+            ("concave", Length::mm(-43.633)),
+        ] {
+            for step in 0..64 {
+                let turn = std::f64::consts::TAU * step as f64 / 64.0;
+                let across = DVec3::new(turn.cos(), turn.sin(), 0.0);
+                let rim = *profile(LengthVec::ZERO, DVec3::Z, r, 0.0, semi, across, 8)
+                    .expect("a meridian")
+                    .last()
+                    .expect("an end");
+                let at = rim.to_si();
+                let ray = ray_along(DVec3::Z, LengthVec::from_si(DVec3::new(at.x, at.y, -40e-3)));
+                match cap_intersect(ray, LengthVec::ZERO, DVec3::Z, r, semi) {
+                    Some(hit) => assert!(
+                        (hit.point.to_si() - at).length() < 1e-12,
+                        "{name} at {turn:.3} rad: the hit is {:.3e} m from the drawn rim",
+                        (hit.point.to_si() - at).length()
+                    ),
+                    None => missed.push(format!("{name} at {turn:.3} rad")),
+                }
+            }
+        }
+        assert!(
+            missed.is_empty(),
+            "a cap missed a ray aimed at its own drawn rim, so the point is on a surface that \
+             says it is not there: {missed:#?}"
+        );
+
+        // And a hair outside is still outside: the band is an edge, not a widening.
+        let outside = ray_along(DVec3::Z, LengthVec::mm(9.6, 0.0, -40.0));
+        for r in [Length::ZERO, Length::mm(39.754)] {
+            assert!(
+                cap_intersect(outside, LengthVec::ZERO, DVec3::Z, r, semi).is_none(),
+                "100 um outside a 9.5 mm aperture is outside it"
+            );
+        }
     }
 
     /// A spherical cap: an axial ray meets the vertex, and the normal there is the
@@ -875,16 +941,26 @@ mod tests {
             (50.0, 3.0, 20.0),
         ] {
             let r_si = r_mm * 1e-3;
-            let points = profile(
-                LengthVec::ZERO,
-                DVec3::Z,
-                Length::mm(r_mm),
-                k,
-                Length::mm(semi_mm),
-                DVec3::Y,
-                24,
-            )
-            .expect("a meridian perpendicular to the axis");
+            // Three azimuths rather than one. The residual is written in `h` and `z`, which any
+            // meridian has, and until this loop existed **nothing in this crate fired a check at a
+            // drawn point off the `y` axis** -- a `profile` that mishandled `across` could have
+            // been wrong everywhere else and right here.
+            let mut points = Vec::new();
+            for turn in [0.0f64, 0.31, 2.0] {
+                let across = DVec3::new(turn.cos(), turn.sin(), 0.0);
+                points.extend(
+                    profile(
+                        LengthVec::ZERO,
+                        DVec3::Z,
+                        Length::mm(r_mm),
+                        k,
+                        Length::mm(semi_mm),
+                        across,
+                        24,
+                    )
+                    .expect("a meridian perpendicular to the axis"),
+                );
+            }
             let mut row: f64 = 0.0;
             for p in &points {
                 let at = p.to_si();
@@ -1041,8 +1117,10 @@ mod tests {
     ///
     /// An odd number of points puts the middle one at the vertex exactly, which is the point a
     /// prescription is written about. And the conic constant has to reach the drawn shape: at the
-    /// rim of this surface a paraboloid and its sphere are tens of micrometres apart, so a profile
-    /// that dropped `k` would be visibly the wrong shape and silently the right size.
+    /// rim of this surface a paraboloid and its sphere are **174 um** apart, so a profile that
+    /// dropped `k` would be visibly the wrong shape and silently the right size. This said "tens
+    /// of micrometres", which is the kind of size written instead of a measurement -- and the
+    /// liveness floor below is 50, so the vague version was also three times out.
     #[test]
     fn the_vertex_is_on_the_curve_and_the_conic_is_not_its_sphere() {
         let v = LengthVec::mm(0.0, 0.0, 4.0);

@@ -89,8 +89,17 @@ jobs:
   # print is asserted against a closed form or an independent calculation, so running
   # them *is* the check.
   #
-  # No argument means "print and assert"; an argument would make them write an SVG. CI
-  # passes none, so nothing is generated and nothing generated is ever committed.
+  # No argument means "print and assert"; an argument makes them write their asset — an SVG for
+  # nine of them, and HTML, JSON or glTF for `optical_bench` and `portafilter_flow`, which choose
+  # by extension. This line said "an SVG" for all of them, and had since before either of those
+  # two existed.
+  #
+  # **CI passes none, and that is now a decision rather than an omission.** The branch behind the
+  # argument had never run here, so it was measured: all fifteen runs pass and write between
+  # 21 KB and 5.2 MB, `pantometry-view`'s asset writers have eight test files of their own, and
+  # the one thing those cannot see — the frame an individual example builds — is checked inside
+  # the example, which asks the panel how many runs and how many vertices it kept. Running every
+  # example twice would buy insurance against nothing that has happened.
   examples:
     name: examples
     runs-on: ubuntu-latest

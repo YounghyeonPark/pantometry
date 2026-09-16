@@ -387,35 +387,54 @@ fn main() {
     // side of a lens.
     let standoff = 40e-3;
     let mut worst: f64 = 0.0;
-    for surface in bench.surfaces() {
-        let scale = surface.r.abs() + standoff;
+    // **Every vertex that is drawn**, which is what the sentence above says and what this did not
+    // do: it read one meridian of the six, and none of the three rims -- 147 of the 1383 points the
+    // picture is made of. The rims are built at sixty-four azimuths and the sections at six, so a
+    // mistake in the azimuth would have been invisible at `y` and everywhere else in the frame.
+    //
+    // A drawn point does not carry which surface it belongs to, so each is asked of all three and
+    // judged by the nearest: a point of the glass is a point on one of the surfaces of the glass.
+    let floor_of = |s: &Surface| {
+        let scale = s.r.abs() + standoff;
         // A flat surface is met by `plane_intersect`, which does not cancel; its error is the
         // standoff's own rounding and there is no radius to divide by.
-        let floor = 4.0
-            * f64::EPSILON
-            * if surface.r == 0.0 {
+        4.0 * f64::EPSILON
+            * if s.r == 0.0 {
                 standoff
             } else {
-                scale + scale * scale / surface.r.abs()
-            };
-        let mut apart: f64 = 0.0;
-        for p in surface.meridian(DVec3::Y) {
-            let at = p.to_si();
-            let ray = Ray::new(
-                LengthVec::from_si(DVec3::new(at.x, at.y, -standoff)),
-                DVec3::Z,
-            );
-            let hit = surface
-                .meet(ray)
-                .expect("a ray aimed at a drawn point meets the surface it was drawn from");
-            apart = apart.max((hit.point.to_si() - at).length());
-        }
-        println!(
-            "  {:<30} {apart:>9.2e} m  against a floor of {floor:.2e} m",
-            format!("R {:>8.3} mm differs by", surface.r * 1e3)
+                scale + scale * scale / s.r.abs()
+            }
+    };
+    let mut checked = 0usize;
+    for at in glass_runs.iter().flatten() {
+        let at = DVec3::new(at[0], at[1], at[2]);
+        let ray = Ray::new(
+            LengthVec::from_si(DVec3::new(at.x, at.y, -standoff)),
+            DVec3::Z,
         );
-        worst = worst.max(apart / floor);
+        let nearest = bench
+            .surfaces()
+            .iter()
+            .filter_map(|s| {
+                s.meet(ray)
+                    .map(|h| (h.point.to_si() - at).length() / floor_of(s))
+            })
+            .fold(f64::INFINITY, f64::min);
+        // A miss shows up here as a large ratio rather than as an absence, because the nearest of
+        // the *other* surfaces is then what the point is compared against -- which is how the flat
+        // back face's rim was found: it read 4 mm, the distance to the crown.
+        assert!(
+            nearest.is_finite(),
+            "a ray aimed at the drawn point {:.4} mm off the axis met none of the three surfaces",
+            (at.x * at.x + at.y * at.y).sqrt() * 1e3
+        );
+        worst = worst.max(nearest);
+        checked += 1;
     }
+    println!(
+        "  {:<30} {checked:>9} points  worst {worst:.4} of its surface's floor",
+        "every drawn vertex, checked"
+    );
     check_between(
         "every drawn point is where a ray lands",
         worst,

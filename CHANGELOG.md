@@ -39,6 +39,17 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ### Fixed
 
+- **A flat cap rejected a ray aimed at its own rim, and a curved one at the same aperture did
+  not.** `cap_intersect`’s flat branch compared `rho2 <= semi²` outright while its spherical branch
+  compared `rho2 > semi² + 1e-12`, so an aperture’s boundary depended on how the surface behind it
+  curves. Found by drawing: the flint’s flat back face is drawn out to its 9.5 mm rim, and a ray
+  fired at that rim met the crown’s front surface 4 mm upstream — the drawn point was on a surface
+  that said it was not there.
+
+  The first regression test for it fired from `(9.5, 0, 0)`, where `x² + y²` is `semi²` to the bit
+  and the comparison holds either way; reverting the fix left it green. A rim is drawn at
+  sixty-four azimuths and `9.5 cos t` squared plus `9.5 sin t` squared is *not* `9.5²` to the bit,
+  which is the input the two versions disagree on. The test fires where the drawing draws now.
 - **A conic clamped past its own edge returned `R` where the sag there is `R/(1+k)`.** Only a
   sphere and an ellipsoid can reach that line at all — for `k <= -1` the root is never imaginary —
   and for the sphere the two are the same number, which is why nothing noticed. An oblate spheroid
@@ -46,6 +57,14 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   12.5. The test written for it reached the clamp only by accident and then not at all — a profile
   stops where `inner` is exactly zero, which is the other branch — so it now calls `conic_sag`
   past the edge, where there is no such luck.
+- **"Every drawn point" meant one meridian of six, and none of the three rims** — 147 of the
+  1383 vertices the picture is made of. The sections are drawn at six azimuths and the rims at
+  sixty-four, so an error in the azimuth would have been invisible at `y` and everywhere else in
+  the frame; nothing in `pantometry-optics` fired a check off the `y` axis either. Every drawn
+  vertex is checked now, and that is what found the flat cap above.
+- **A doc said a sphere and its paraboloid are "tens of micrometres" apart at the rim.** Measured,
+  174 — a size written where a measurement belonged, and three times out from the liveness floor
+  sitting under it.
 - **The floor on that point-by-point check dropped a factor of `S/|R|`.** For an axial ray the
   rounding that matters is the one in `R² − h²`, which the square root divides by `2√(R² − h²)`;
   a floor of `4·eps·S` passes only while the standoff and the radius are the same size. Measured:
