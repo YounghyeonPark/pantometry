@@ -1,5 +1,5 @@
-//! A real lens, traced ray by ray in three dimensions, and checked against the formulae an
-//! optical designer would use to sanity-check it.
+//! A real lens, traced ray by ray in three dimensions, drawn as the surfaces it is, and checked
+//! against the formulae an optical designer would use to sanity-check it.
 //!
 //! Every other example here evaluates a closed form. This one *traces*: a hexapolar bundle of
 //! rays leaves a pupil, refracts at four glass surfaces, and lands on a plane, and what it
@@ -31,7 +31,7 @@ use common::{check_between, heading};
 use glam::DVec3;
 use pantometry::prelude::*;
 use pantometry_core::oriented_against;
-use pantometry_optics::geometry::{cap_intersect, hexapolar_unit, refract, Ray};
+use pantometry_optics::geometry::{cap_intersect, hexapolar_unit, profile, refract, Hit, Ray};
 use pantometry_optics::material::Material;
 
 /// One refracting surface: a sphere of a given curvature with glass behind it.
@@ -46,6 +46,62 @@ struct Surface {
     /// What is *after* this surface, going left to right.
     after: Material,
 }
+
+impl Surface {
+    /// The vertex, on the axis.
+    fn vertex(&self) -> LengthVec {
+        LengthVec::m(0.0, 0.0, self.z)
+    }
+
+    /// Radius as the geometry wants it: zero is flat, where this type spells it `INFINITY`.
+    fn curvature(&self) -> Length {
+        Length::m(if self.radius.is_finite() {
+            self.radius
+        } else {
+            0.0
+        })
+    }
+
+    /// Where a ray meets it.
+    fn meet(&self, ray: Ray) -> Option<Hit> {
+        cap_intersect(
+            ray,
+            self.vertex(),
+            DVec3::Z,
+            self.curvature(),
+            Length::m(self.semi),
+        )
+    }
+
+    /// **The curve the surface is**, in the meridional plane, as `(z, height)` in millimetres.
+    ///
+    /// The picture drew each of these as a straight line at the vertex: a lens as three vertical
+    /// strokes, which is a symbol for a lens and not a lens. `profile` samples the same sag
+    /// [`cap_intersect`] solves against, so what is drawn is the surface the rays meet -- checked
+    /// point by point in `main`, because a drawing that is merely plausible is the easiest wrong
+    /// answer in optics.
+    fn outline(&self) -> Vec<(f64, f64)> {
+        profile(
+            self.vertex(),
+            DVec3::Z,
+            self.curvature(),
+            0.0,
+            Length::m(self.semi),
+            DVec3::X,
+            PROFILE_SAMPLES,
+        )
+        .expect("a meridian perpendicular to the axis")
+        .into_iter()
+        .map(|p| {
+            let v = p.to_si();
+            (v.z * 1e3, v.x * 1e3)
+        })
+        .collect()
+    }
+}
+
+/// Points per half-meridian of a drawn surface.
+const PROFILE_SAMPLES: usize = 24;
 
 /// A cemented achromatic doublet, **solved** rather than guessed, for a 100 mm focal length.
 ///
@@ -142,16 +198,22 @@ fn singlet_like(_doublet: &[Surface]) -> Vec<Surface> {
 /// `None` if it misses an aperture or is totally internally reflected — which is a real outcome
 /// and not an error, so it is reported as absence rather than as a panic.
 fn focus_of(height: f64, wavelength: Length, surfaces: &[Surface]) -> Option<f64> {
+    traced(height, wavelength, surfaces).map(|(focus, _)| focus)
+}
+
+/// The same trace, keeping the points it passes through.
+///
+/// `focus_of` computed every one of these and threw them away, so the picture drew a ray as two
+/// straight pieces with the glass jumped over -- "the bending inside is a few tenths of a
+/// millimetre and drawing it would add ink and no information", which was true of a picture whose
+/// glass was three vertical lines. Beside the real surfaces it is the information: it is where the
+/// bending happens.
+fn traced(height: f64, wavelength: Length, surfaces: &[Surface]) -> Option<(f64, Vec<(f64, f64)>)> {
     let mut ray = Ray::new(LengthVec::m(height, 0.0, -0.05), DVec3::new(0.0, 0.0, 1.0));
     let mut before = Material::air();
+    let mut path = vec![(-50.0, height * 1e3)];
     for s in surfaces {
-        let Some(hit) = cap_intersect(
-            ray,
-            LengthVec::m(0.0, 0.0, s.z),
-            DVec3::new(0.0, 0.0, 1.0),
-            Length::m(s.radius),
-            Length::m(s.semi),
-        ) else {
+        let Some(hit) = s.meet(ray) else {
             if std::env::var("TRACE").is_ok() {
                 eprintln!("  MISS at z={}", s.z);
             }
@@ -182,6 +244,8 @@ fn focus_of(height: f64, wavelength: Length, surfaces: &[Surface]) -> Option<f64
                 dir
             );
         }
+        let at = hit.point.to_si();
+        path.push((at.z * 1e3, at.x * 1e3));
         ray = ray.redirect(hit.t, dir);
         before = s.after.clone();
     }
@@ -192,7 +256,8 @@ fn focus_of(height: f64, wavelength: Length, surfaces: &[Surface]) -> Option<f64
     }
     let t = -p.x / ray.dir.x;
     let z = p.z + ray.dir.z * t;
-    Some(z - surfaces.last()?.z)
+    path.push((z * 1e3, 0.0));
+    Some((z - surfaces.last()?.z, path))
 }
 
 /// The lensmaker's equation for a thin doublet: the sum of the elements' powers.
@@ -328,6 +393,72 @@ fn main() {
         "a geometric spot far under the Airy radius means the trace is not tracing"
     );
 
+    // ================================================================ the drawn glass
+    heading("The glass the picture draws, against the surfaces the rays are traced against");
+
+    // **Every drawn point is a point a ray lands on.** `profile` evaluates a sag; `cap_intersect`
+    // solves a quadratic. Agreeing means the outline on the front page is the surface the trace
+    // uses, rather than a second and merely plausible description of it.
+    //
+    // The floor is the quadratic's own error: for an axial ray the rounding that matters is the
+    // one in `R^2 - h^2`, which the square root divides by `2 sqrt(R^2 - h^2)`, so it is
+    // `4 eps (S + S^2/|R|)` with `S = |R| + standoff`, per surface. `pantometry-optics` derives it
+    // and measures nine configurations against it.
+    let standoff = 0.05;
+    let mut worst = 0.0f64;
+    for s in &lens {
+        let scale = s.radius.abs() + standoff;
+        let floor = 4.0 * f64::EPSILON * (scale + scale * scale / s.radius.abs());
+        for (z_mm, h_mm) in s.outline() {
+            let at = DVec3::new(h_mm * 1e-3, 0.0, z_mm * 1e-3);
+            let ray = Ray::new(
+                LengthVec::m(at.x, 0.0, -standoff),
+                DVec3::new(0.0, 0.0, 1.0),
+            );
+            let hit = s
+                .meet(ray)
+                .expect("a ray aimed at a drawn point meets the surface it was drawn from");
+            worst = worst.max((hit.point.to_si() - at).length() / floor);
+        }
+    }
+    println!(
+        "  {:<34} {:>8} points on {} surfaces",
+        "the doublet is drawn as",
+        lens.len() * (2 * PROFILE_SAMPLES + 1),
+        lens.len()
+    );
+    check_between(
+        "every drawn point is where a ray lands",
+        worst,
+        0.0,
+        1.0,
+        "x the floor",
+    );
+    // Exactly zero everywhere would mean one of the two is reading the other.
+    assert!(
+        worst > 0.0,
+        "every drawn point matched a traced point to the last bit, so the drawing and the trace \
+         are not two ways of finding one surface"
+    );
+
+    // **The glass has thickness where it is drawn.** Two surfaces bounding one element can cross,
+    // and a prescription whose elements cross is one no workshop can cut -- which the lensmaker's
+    // equation above has no opinion on, because `f` is the same either way.
+    for (name, pair) in ["crown", "flint"].iter().zip(lens.windows(2)) {
+        let (front, back) = (pair[0].outline(), pair[1].outline());
+        let thinnest = front
+            .iter()
+            .zip(back.iter())
+            .map(|((zf, _), (zb, _))| zb - zf)
+            .fold(f64::INFINITY, f64::min);
+        println!("  {:<34} {thinnest:>8.3} mm at its thinnest", name);
+        assert!(
+            thinnest > 0.1,
+            "the {name} is {thinnest:.4} mm thick at its thinnest, which is a prescription no \
+             workshop would accept and, below zero, two surfaces that cross"
+        );
+    }
+
     if let Some(path) = std::env::args().nth(1) {
         let svg = draw(&lens, d, f_line, c_line);
         common::write(&path, &svg);
@@ -354,29 +485,30 @@ fn draw(lens: &[Surface], d: Length, f: Length, c: Length) -> String {
             if h.abs() < 1e-9 {
                 continue;
             }
-            let Some(focus) = focus_of(h, wavelength, lens) else {
+            // **The path the trace took**, not two straight pieces with the glass jumped over.
+            // Every vertex here is a point `cap_intersect` returned, so the ray is drawn bending
+            // where it bends -- which is only worth ink because the glass it bends in is drawn.
+            let Some((_, path)) = traced(h, wavelength, lens) else {
                 continue;
             };
-            let z_focus = (lens.last().unwrap().z + focus) * 1e3;
-            // Straight in, then straight out to where it crosses the axis. The bending inside
-            // the glass is real and is a few tenths of a millimetre across; drawing it would
-            // add ink and no information at this scale.
-            plot.polyline([(-12.0, h * 1e3), (0.0, h * 1e3)], &colour, 1.0);
             plot.polyline(
-                [(lens.last().unwrap().z * 1e3, h * 1e3), (z_focus, 0.0)],
+                path.into_iter().map(|(z, x)| (z.max(-12.0), x)),
                 &colour,
                 1.0,
             );
         }
     }
 
-    // The elements, as their vertex planes.
-    for s in lens {
-        plot.polyline(
-            [(s.z * 1e3, -s.semi * 1e3), (s.z * 1e3, s.semi * 1e3)],
-            &rgb(120, 122, 132),
-            1.8,
-        );
+    // **The elements, as the surfaces they are.** This drew a straight segment at each vertex --
+    // three vertical strokes for a doublet whose three surfaces are curved, which is a symbol for
+    // a lens rather than a lens, and it sat on the front page. Each element is closed here: its
+    // front surface from one edge through the vertex to the other, then the surface behind it
+    // home again.
+    for pair in lens.windows(2) {
+        let mut run = pair[0].outline();
+        run.extend(pair[1].outline().into_iter().rev());
+        run.push(run[0]);
+        plot.polyline(run, &rgb(120, 122, 132), 1.8);
     }
     plot.polyline(
         [(-12.0, 0.0), (z_end * 1.06, 0.0)],
@@ -390,7 +522,7 @@ fn draw(lens: &[Surface], d: Length, f: Length, c: Length) -> String {
         |v| format!("{v:.0}"),
         |v| format!("{v:.0}"),
     );
-    plot.title("a cemented achromat, traced");
+    plot.title("a cemented achromat, drawn as its surfaces and traced through them");
     plot.caption("z (mm) against ray height (mm) — red C, yellow d, blue F");
     plot.footnote(
         "the three colours cross the axis within a tenth of a millimetre of each other, which is what makes it an achromat",
