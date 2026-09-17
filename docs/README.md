@@ -39,7 +39,7 @@ nothing in the dump. What it holds is the failure that was actually coming.
 That is also how to refresh them. They are the one place in this repository where generated output
 is tracked on purpose: `.gitignore` still refuses assets at the root, which is where a run leaves
 them, and the rule those two lines exist for — a `git add -A` that put a 302 KB filmstrip and a
-927 KB frame dump into history — is untouched. These are 12 KB and 41 KB and are documentation.
+927 KB frame dump into history — is untouched. These are 17 KB and 41 KB and are documentation.
 
 They render on GitHub. They do not render on crates.io, which only shows images at absolute
 `https` URLs, and `raw.githubusercontent.com` serves SVG as text rather than as an image — so

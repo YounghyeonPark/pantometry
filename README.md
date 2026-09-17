@@ -20,7 +20,7 @@ Every claim is checked against a **closed form** or an independent computation, 
 another implementation that might be wrong in the same direction. Where no closed form exists,
 [EVIDENCE.md](EVIDENCE.md) says so.
 
-![A cemented achromat drawn as the surfaces it is, with three colours traced through the glass and crossing the axis within a tenth of a millimetre](docs/lens-achromat.svg)
+![A cemented achromat drawn as the surfaces it is, three colours traced through the glass, and below them where each colour focuses against a singlet of the same power](docs/lens-achromat.svg)
 
 *`cargo run --release --example lens_spots -- lens.svg`. The two SVGs here are an example's
 output and every example checks itself against a closed form. The editor screenshot below is the

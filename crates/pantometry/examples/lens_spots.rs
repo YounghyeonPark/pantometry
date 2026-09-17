@@ -460,7 +460,7 @@ fn main() {
     }
 
     if let Some(path) = std::env::args().nth(1) {
-        let svg = draw(&lens, d, f_line, c_line);
+        let svg = draw(&lens, &singlet, d, f_line, c_line);
         common::write(&path, &svg);
         println!("\n  wrote {path}");
     } else {
@@ -469,10 +469,11 @@ fn main() {
 }
 
 /// The meridional ray fan, which is the picture an optical designer actually reads.
-fn draw(lens: &[Surface], d: Length, f: Length, c: Length) -> String {
+fn draw(lens: &[Surface], singlet: &[Surface], d: Length, f: Length, c: Length) -> String {
+    let (w, h) = (880.0, 600.0);
     let z_end = (lens.last().unwrap().z + focus_of(1e-4, d, lens).unwrap()) * 1e3;
-    let mut plot = Plot::new(880.0, 420.0, (-12.0, z_end * 1.06), (-12.0, 12.0))
-        .viewport(64.0, 54.0, 800.0, 320.0);
+    let mut plot =
+        Plot::new(w, h, (-12.0, z_end * 1.06), (-12.0, 12.0)).viewport(64.0, 54.0, 800.0, 290.0);
 
     // Red, yellow, blue: the C, d and F lines, which is the order they focus in.
     for (wavelength, colour) in [
@@ -525,7 +526,72 @@ fn draw(lens: &[Surface], d: Length, f: Length, c: Length) -> String {
     plot.title("a cemented achromat, drawn as its surfaces and traced through them");
     plot.caption("z (mm) against ray height (mm) — red C, yellow d, blue F");
     plot.footnote(
-        "the three colours cross the axis within a tenth of a millimetre of each other, which is what makes it an achromat",
+        "at this scale the three colours lie on top of each other, which is the claim and not a picture of it — below is the picture",
     );
-    document(880.0, 420.0, [plot.finish()])
+
+    // ---------------------------------------------------------------- where each colour focuses
+    //
+    // **The panel above cannot show the thing it is about.** The doublet's F and C foci are 21.9 um
+    // apart in a frame 118 mm wide: two parts in ten thousand, so the three strokes coincide and
+    // the last one painted is the only one anybody sees. A footnote asserting achromatism over
+    // that is a caption doing the picture's job.
+    //
+    // This is the picture. Longitudinal aberration -- where a ray of each colour crosses the axis,
+    // against the height it entered at -- for the doublet and for the singlet of the same power
+    // the text compares it to. The singlet's colours fan across the panel and the doublet's are a
+    // bundle, and *that* is what "achromat" means. The axis is derived from both traces rather
+    // than chosen, so the comparison cannot be framed to flatter either.
+    let base = focus_of(1e-4, d, lens).expect("a paraxial ray gets through");
+    let heights: Vec<f64> = (1..=24).map(|k| k as f64 * 0.0095 / 24.0).collect();
+    let curve = |stack: &[Surface], wavelength: Length| -> Vec<(f64, f64)> {
+        heights
+            .iter()
+            .filter_map(|&hh| focus_of(hh, wavelength, stack).map(|z| ((z - base) * 1e6, hh * 1e3)))
+            .collect()
+    };
+    let colours = [
+        (c, rgb(226, 78, 52)),
+        (d, rgb(238, 196, 62)),
+        (f, rgb(74, 132, 238)),
+    ];
+    let all: Vec<(f64, f64)> = colours
+        .iter()
+        .flat_map(|&(wl, _)| [curve(lens, wl), curve(singlet, wl)])
+        .flatten()
+        .collect();
+    let (lo, hi) = all
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, b), &(x, _)| (a.min(x), b.max(x)));
+    let pad = (hi - lo) * 0.06;
+    let mut lca =
+        Plot::new(w, h, (lo - pad, hi + pad), (0.0, 10.0)).viewport(64.0, 420.0, 800.0, 120.0);
+    for (wavelength, colour) in &colours {
+        // The singlet first and thinner, so the doublet's bundle is drawn over it and read as the
+        // subject rather than as one more line.
+        lca.polyline(curve(singlet, *wavelength), colour, 0.9);
+    }
+    for (wavelength, colour) in &colours {
+        lca.polyline(curve(lens, *wavelength), colour, 1.8);
+    }
+    lca.axes(
+        &ticks(lo - pad, hi + pad, 8),
+        &ticks(0.0, 10.0, 3),
+        |v| format!("{v:.0}"),
+        |v| format!("{v:.0}"),
+    );
+    // Its own heading, in the panel's own space. `caption` writes at the top right of the
+    // *document*, so a second plot calling it lands on the first one's -- which is what this did,
+    // and the two ran through each other in the middle of a sentence.
+    lca.label(
+        64.0,
+        404.0,
+        "where each colour crosses the axis, in um from the d focus, against the height it entered at",
+        11.5,
+        "#6a6a6a",
+        "start",
+    );
+    lca.footnote(
+        "thick: the doublet, 21.9 um across. thin: a singlet of the same power, 1546 um — seventy times wider",
+    );
+    document(w, h, [plot.into_body(), lca.into_body()])
 }
