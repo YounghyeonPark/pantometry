@@ -710,6 +710,38 @@ fn the_crate_and_domain_counts_agree_everywhere_they_are_written() {
     // line pointing at the map. A short document's numbers are read more, not less.
     phrase("README.md", "all {} published crates", crates);
     phrase("README.md", "the map: three layers, the {} crates", crates);
+    phrase("README.md", "{} domains built on it", domains);
+
+    // **The list beside that number, counted.** The front page names the domains after it, and a
+    // count-guard cannot see the failure this had: the number was *right* and the list was short.
+    // `pantometry-pharmacokinetic` arrived and was written in; `pantometry-protein` arrived, moved
+    // the number to thirteen, and was never given a phrase -- so the sentence read thirteen over
+    // twelve items through a release and the line above passed the whole time.
+    //
+    // The items are comma-separated with `and` on the last, which is how the sentence is written;
+    // a phrase containing a comma would be miscounted, so the shape is asserted before the length.
+    let readme = std::fs::read_to_string(root().join("README.md")).unwrap_or_default();
+    if let Some((_, after)) = readme.split_once("domains built on it that do: **") {
+        let list = after
+            .split_once(".**")
+            .expect("the domain list ends with `.**`")
+            .0
+            .replace('\n', " ");
+        let items: Vec<&str> = list.split(", ").map(str::trim).collect();
+        assert!(
+            items.last().is_some_and(|l| l.starts_with("and ")),
+            "the domain list does not end with an `and` item, so splitting on commas is not how \
+             it is written any more and this count means nothing: {items:#?}"
+        );
+        assert_eq!(
+            items.len(),
+            domains,
+            "the front page counts {domains} domains and names {}. A domain arrived and the \
+             number moved without it being given a phrase, which is exactly what the line above \
+             cannot see:\n{items:#?}",
+            items.len()
+        );
+    }
     phrase(
         "ARCHITECTURE.md",
         "The physics layer is {} crates deep",

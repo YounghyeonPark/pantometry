@@ -7,8 +7,9 @@
 Physics for simulated worlds — a kernel that knows nothing about any particular physics, and
 thirteen domains built on it that do: **light, heat, motion, sound, electricity, electromagnetic
 fields, elastic deformation, incompressible flow, flow through a packed bed, matter one atom at a
-time, a quantum wavefunction in a well, and a drug distributing through a body.** Two layers above
-them place a simulation in the world and draw it, and neither knows a domain either.
+time, a quantum wavefunction in a well, the motions a measured protein has, and a drug
+distributing through a body.** Two layers above them place a simulation in the world and draw it,
+and neither knows a domain either.
 
 Dimensions live in the type system, so `Length + Time` does not compile. Conservation is audited
 rather than assumed, and a `Violation` names what went missing and where. Every result is
@@ -21,8 +22,10 @@ another implementation that might be wrong in the same direction. Where no close
 
 ![A cemented achromat traced in three colours, crossing the axis within a tenth of a millimetre](docs/lens-achromat.svg)
 
-*`cargo run --release --example lens_spots -- lens.svg`. Every figure here is the output of an
-example CI runs on every commit, and every example checks itself against a closed form.*
+*`cargo run --release --example lens_spots -- lens.svg`. The two SVGs here are an example's
+output and every example checks itself against a closed form. The editor screenshot below is the
+one figure CI cannot take — it needs a display and a GPU — so a test holds the same frame through
+`--ui-dump` and fails when the picture goes stale.*
 
 ## Install
 
@@ -46,7 +49,7 @@ cargo run --release --example beam_hot_spot      # a laser on a mirror, and the 
 cargo test --workspace                           # the suite, all against closed forms
 ```
 
-Add an output path to any example and it draws the result:
+Most examples take an output path and draw the result — an SVG, or a page you open:
 
 ```sh
 cargo run --release --example lens_spots -- lens.svg
@@ -90,12 +93,13 @@ thick ones are what a lumped model cannot tell you: the peak is well above it.*
 | [CHANGELOG.md](CHANGELOG.md) | what was found, as well as what was added |
 | [CLAUDE.md](CLAUDE.md) | working *on* pantometry rather than with it |
 
-There is one consumer, `pantometry-world`, and its first job was not to be a good application but
-to use the SDK the way a stranger would.
+`pantometry-world` was the **first** consumer — the editor has been the second since it needed
+`World::advance` made public, and the Python bindings are a third — and its first job was not to be
+a good application but to use the SDK the way a stranger would.
 [`app/pantometry-world/FRICTION.md`](app/pantometry-world/FRICTION.md) is what it came back with:
-**forty-nine findings, forty-three fixed and six argued down in writing.** Not one of the
-library's own tests could have found any of them — a test is written by somebody who already knows
-the shape.
+**forty-nine findings, forty-three fixed and six argued down in writing** — forty-eight from
+building it and one from an example, which says so. Not one of the library's own tests could have
+found any of them: a test is written by somebody who already knows the shape.
 
 ## Citation
 
@@ -163,7 +167,7 @@ writing, of which three reach a *published* artifact — `glam`, `serde` and `se
 the same `MIT OR Apache-2.0`. `serde_json` and its three transitive crates are a **dev**-dependency
 of four of the published crates, so they reach no artifact either. The rest are compile-time or test-only.
 
-Two crates were added in 0.9.0 and the count did not move. `pantometry-view` has **no** dependency
-at all beyond `pantometry-scene`: SVG and HTML are text, so a renderer is a `format!` and a file
+Two crates were added in 0.9.0 and the count did not move. `pantometry-view` has **no external**
+dependency at all — `pantometry-scene`, and two of this workspace's own crates to develop against: SVG and HTML are text, so a renderer is a `format!` and a file
 write, and the alternative would have put a plotting stack into the tree of every consumer who
 wanted a picture.

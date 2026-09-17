@@ -5,6 +5,13 @@ that CI runs on every commit, and each example is a closed-form check rather tha
 that something did not crash — so the claim in a caption is guarded where it is made, by the
 example, and not here.
 
+**CI runs the example and not the picture.** It passes no output path, so the committed SVG is
+never regenerated there and nothing compares the two: a figure that stopped matching what its
+example draws would age as quietly as the screenshot below, and only a caption that stopped being
+*true* takes a failing example with it. That is the half worth having and it is not the whole.
+Measured when this paragraph was written: regenerating both gives files byte-identical to the
+committed ones.
+
 ```sh
 cargo run --release --example lens_spots     -- docs/lens-achromat.svg
 cargo run --release --example beam_hot_spot  -- docs/beam-hot-spot.svg
