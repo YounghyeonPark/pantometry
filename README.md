@@ -22,10 +22,18 @@ another implementation that might be wrong in the same direction. Where no close
 
 ![A cemented achromat drawn as the surfaces it is, three colours traced through the glass, and below them where each colour focuses against a singlet of the same power](docs/lens-achromat.svg)
 
-*`cargo run --release --example lens_spots -- lens.svg`. The two SVGs here are an example's
+*`cargo run --release --example lens_spots -- lens.svg`. The three SVGs here are an example's
 output and every example checks itself against a closed form. The editor screenshot below is the
 one figure CI cannot take — it needs a display and a GPU — so a test holds the same frame through
 `--ui-dump` and fails when the picture goes stale.*
+
+![An optical bench in three dimensions: a doublet drawn as a solid of revolution, a fold mirror sized to the beam it carries, and three field angles folded through ninety degrees onto an image plane](docs/bench-3d.svg)
+
+*`cargo run --release --example optical_bench bench.svg`, or `bench.html` for the same scene
+rotatable in a browser, or `bench.gltf` for somebody else's renderer. **Every surface in it is
+drawn as the surface the rays are traced against**, checked point by point against the same
+intersection the trace uses — and the two flats are drawn to the footprint of the beam, because a
+prescription gives a fold mirror no size at all.*
 
 ## Install
 

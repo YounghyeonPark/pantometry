@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! cargo run --release --example optical_bench             # numbers, checked
-//! cargo run --release --example optical_bench bench.html  # and the 3D layout
+//! cargo run --release --example optical_bench bench.html  # and the 3D layout, rotatable
+//! cargo run --release --example optical_bench bench.svg   # or a still of it, for a page
 //! ```
 //!
 //! Every other example here draws a graph. This one draws the **instrument**: a collimated beam,
@@ -80,6 +81,10 @@ const PROFILE_SAMPLES: usize = 24;
 const RIM_SEGMENTS: usize = 64;
 /// Field angles traced, in degrees.
 const FIELDS: [f64; 3] = [0.0, 1.5, 3.0];
+/// Where the fold mirror's hit sits in a traced path: origin, three glass surfaces, the mirror.
+const MIRROR_AT: usize = 4;
+/// And the image plane, which is the last.
+const IMAGE_AT: usize = 5;
 /// Where the glass sits on that same scale.
 ///
 /// One panel carries one quantity, and a report draws one card per panel -- so a glass panel of
@@ -562,6 +567,56 @@ fn main() {
         "vertices",
     );
 
+    // **The flats contain the beam, and each is in its own plane.** A fold mirror drawn to the
+    // footprint of the light is only honest if the light is inside it: a rectangle built from the
+    // hits and then placed a little wrong would still look like a mirror, and the picture is where
+    // that would never be noticed. Both claims are arithmetic, so both are asserted here rather
+    // than in the drawing -- CI runs this example with no argument, so a check inside the drawing
+    // is a check CI does not run.
+    let flats = flats_of(&bench, &paths);
+    assert_eq!(flats.len(), 2, "a fold mirror and an image plane");
+    for (name, corners, at, normal) in [
+        ("fold mirror", &flats[0], MIRROR_AT, bench.fold_normal),
+        ("image plane", &flats[1], IMAGE_AT, DVec3::X),
+    ] {
+        let corner = |k: usize| DVec3::from_array(corners[k]);
+        let (origin, u, v) = (corner(0), corner(1) - corner(0), corner(3) - corner(0));
+        for c in corners {
+            let off = (DVec3::from_array(*c) - origin).dot(normal).abs();
+            assert!(
+                off < 1e-12,
+                "a corner of the {name} is {off:.3e} m off its own plane"
+            );
+        }
+        let (mut widest, mut outside) = (0.0f64, 0usize);
+        for r in paths.iter().filter(|r| r.len() > at) {
+            let d = DVec3::from_array(r[at]) - origin;
+            // Where the hit sits on the rectangle's own two axes, as a fraction of each side.
+            let (a, b) = (d.dot(u) / u.length_squared(), d.dot(v) / v.length_squared());
+            widest = widest.max(a.max(b).max(-a).max(-b));
+            if !(-1e-9..=1.0 + 1e-9).contains(&a) || !(-1e-9..=1.0 + 1e-9).contains(&b) {
+                outside += 1;
+            }
+        }
+        let side = (u.length() * 1e3, v.length() * 1e3);
+        println!(
+            "  {:<30} {:>6.2} x {:>5.2} mm  from {} hits",
+            format!("the {name} is drawn"),
+            side.0,
+            side.1,
+            paths.iter().filter(|r| r.len() > at).count()
+        );
+        assert_eq!(
+            outside, 0,
+            "{outside} rays land outside the {name} that is drawn for them"
+        );
+        assert!(
+            widest > 0.9,
+            "the {name} is drawn {widest:.3} of the way out to the beam it carries, so it is \
+             bigger than the footprint it is supposed to be"
+        );
+    }
+
     // ================================================================ the deliverable
     if let Some(path) = common::output_path() {
         let frame = Frame {
@@ -589,7 +644,9 @@ fn main() {
         // open, `.json` is the frames themselves for something else to draw — the native viewer
         // in `runtime/viewer`, for instance, which reads this and nothing else.
         let frames = std::slice::from_ref(&frame);
-        let asset = if path.ends_with(".json") {
+        let asset = if path.ends_with(".svg") {
+            layout_svg(&bench, &glass_runs, &paths, &colours)
+        } else if path.ends_with(".json") {
             pantometry::view::to_json("optical bench", frames)
         } else if path.ends_with(".gltf") {
             // Into somebody else's renderer: Blender, three.js, Omniverse, a USD pipeline. The
@@ -608,6 +665,114 @@ fn main() {
     } else {
         println!("\n  give a filename ending .html for the 3D layout");
     }
+}
+
+/// The two flats, as the rectangles the beam actually uses.
+///
+/// The prescription gives the fold mirror and the image plane no extent at all -- `plane_intersect`
+/// takes an infinite plane -- so a picture of the bench turned its rays through ninety degrees at
+/// nothing, which is the abstraction the glass was drawn to stop. A fold mirror's size is not an
+/// invention either: it is sized to the footprint of the beam it carries, and every ray's hit on
+/// it is already in the traced path. Each flat is the rectangle, in its own plane, that exactly
+/// contains those hits.
+///
+/// "Exactly" is the word to be careful about, and `the_flats_contain_the_beam` is where it is
+/// checked: a rectangle built from the hits and then drawn a little wrong would still look like a
+/// mirror.
+fn flats_of(bench: &Bench, rays: &[Vec<[f64; 3]>]) -> Vec<Vec<[f64; 3]>> {
+    [(MIRROR_AT, bench.fold_normal), (IMAGE_AT, DVec3::X)]
+        .iter()
+        .filter_map(|&(at, normal)| {
+            let hits: Vec<DVec3> = rays
+                .iter()
+                .filter(|r| r.len() > at)
+                .map(|r| DVec3::from_array(r[at]))
+                .collect();
+            if hits.len() < 3 {
+                return None;
+            }
+            let centre = hits.iter().sum::<DVec3>() / hits.len() as f64;
+            // Two directions in the plane. `DVec3::Y` is across the field for both of these and
+            // is perpendicular to each normal, so the other follows from the cross product.
+            let u = DVec3::Y;
+            let v = normal.cross(u).normalize();
+            let extent = |axis: DVec3| {
+                hits.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+                    let t = (*p - centre).dot(axis);
+                    (lo.min(t), hi.max(t))
+                })
+            };
+            let (u0, u1) = extent(u);
+            let (v0, v1) = extent(v);
+            Some(
+                [(u0, v0), (u1, v0), (u1, v1), (u0, v1), (u0, v0)]
+                    .iter()
+                    .map(|&(a, b)| point(LengthVec::from_si(centre + u * a + v * b)))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// The bench as a still picture, projected onto a page.
+///
+/// The HTML rotates and the glTF opens in somebody's renderer, and neither can go in a README --
+/// which takes static images and nothing else. This is the same scene through
+/// [`common::svg::View3`], which projects the way the HTML viewer projects, so the still and the
+/// page a reader can spin are pictures of one thing.
+///
+/// Colour is assigned here rather than taken from the panel's scale. A colour bar is what a
+/// *quantity* gets; on a page with a caption, three field angles and the glass they pass through
+/// are better served by four colours a reader can tell apart, and the caption names them.
+fn layout_svg(
+    bench: &Bench,
+    glass: &[Vec<[f64; 3]>],
+    rays: &[Vec<[f64; 3]>],
+    fields: &[f64],
+) -> String {
+    use common::svg::{document, rgb, Plot, View3};
+
+    let flats = flats_of(bench, rays);
+
+    let (w, h) = (880.0, 460.0);
+    let (vx, vy, vw, vh) = (40.0, 52.0, 800.0, 344.0);
+    let every = || {
+        glass
+            .iter()
+            .chain(rays.iter())
+            .chain(flats.iter())
+            .flatten()
+            .copied()
+    };
+
+    // Looked at from above and to one side, far enough that the perspective is a hint of depth
+    // rather than a distortion: at three scene-widths the near and far ends of the bench differ
+    // in scale by about a third.
+    let view = View3::framing(every(), -0.62, 0.42, 3.0);
+    let (x, y) = view.page_bounds(vw / vh);
+    let mut plot = Plot::new(w, h, x, y).viewport(vx, vy, vw, vh);
+
+    // The rays are 183 lines and the instrument is 17, so the instrument is drawn heavier and
+    // darker and the light lighter. A picture in which the glass cannot be found is the one this
+    // replaces.
+    let ink = [rgb(214, 108, 88), rgb(224, 186, 96), rgb(112, 158, 226)];
+    let metal = rgb(64, 66, 74);
+    let runs = glass
+        .iter()
+        .chain(flats.iter())
+        .map(|r| (r.clone(), metal.clone(), 1.7))
+        .chain(rays.iter().zip(fields).map(|(r, f)| {
+            let k = FIELDS.iter().position(|a| a == f).unwrap_or(0);
+            (r.clone(), ink[k % ink.len()].clone(), 0.45)
+        }));
+    plot.paths3(&view, runs);
+
+    plot.title("an optical bench: a doublet, a fold mirror and three field angles");
+    plot.caption("every surface is drawn as the surface the rays are traced against");
+    plot.footnote(
+        "dark: the doublet in six meridians with a rim at each surface, and the two flats drawn to the beam they carry. red, yellow, blue: 0, 1.5 and 3 degrees of field",
+    );
+    document(w, h, [plot.into_body()])
 }
 
 /// How many rays a hexapolar pupil of four rings holds.

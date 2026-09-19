@@ -6,7 +6,8 @@
 //! text. SVG *is* text: a `format!` and a file write, no encoder, no font handling, and it
 //! opens by double-click on every platform.
 //!
-//! What it does: axes with ticks, polylines, filled rectangles for a raster, and labels.
+//! What it does: axes with ticks, polylines, filled rectangles for a raster, labels, and a
+//! camera that puts points in space onto the page.
 //! What it does not: legends laid out automatically, log axes with minor ticks, anything
 //! interactive. When an example needs one of those, add it here rather than reaching for a
 //! crate — and when *that* stops being reasonable, the answer is `pantometry-world`, not a
@@ -34,6 +35,122 @@ pub struct Plot {
     /// padding by [`Plot::new`] and overridable by [`Plot::viewport`], which is how several
     /// plots share one canvas.
     area: (f64, f64, f64, f64),
+}
+
+/// A camera for drawing points in space on a flat page.
+///
+/// Rotate about the vertical axis, tilt, then divide by depth: the same three steps
+/// `pantometry-view`'s HTML viewer takes, so a still and the page a reader can spin agree about
+/// what the scene looks like. No lighting and no hidden-surface removal, because what this is for
+/// is a **layout** -- the lines are the subject and a solid would hide them.
+pub struct View3 {
+    azimuth: f64,
+    elevation: f64,
+    distance: f64,
+    centre: [f64; 3],
+    span: f64,
+    /// The box the projected scene occupies on the page, measured at construction.
+    page: (f64, f64, f64, f64),
+}
+
+impl View3 {
+    /// A camera framed on everything it will be asked to draw.
+    ///
+    /// `azimuth` and `elevation` are radians; `distance` is in units of the scene's own size, so
+    /// the framing does not move when the scene grows.
+    ///
+    /// The points are walked twice -- once for the box they occupy in space, once for the box
+    /// they occupy on the page after projection. The second is not the first: perspective is not
+    /// a scaling, and a bounding box projected corner by corner is not the projection's bounding
+    /// box.
+    pub fn framing(
+        points: impl IntoIterator<Item = [f64; 3]>,
+        azimuth: f64,
+        elevation: f64,
+        distance: f64,
+    ) -> View3 {
+        let pts: Vec<[f64; 3]> = points.into_iter().collect();
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for p in &pts {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        let centre = if pts.is_empty() {
+            [0.0; 3]
+        } else {
+            [0, 1, 2].map(|a| (lo[a] + hi[a]) / 2.0)
+        };
+        let span = if pts.is_empty() {
+            1.0
+        } else {
+            (0..3).fold(0.0f64, |s, a| s.max(hi[a] - lo[a])).max(1e-30)
+        };
+        let mut view = View3 {
+            azimuth,
+            elevation,
+            distance,
+            centre,
+            span,
+            page: (-0.5, 0.5, -0.5, 0.5),
+        };
+        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for p in &pts {
+            let (x, y, _) = view.project(*p);
+            x0 = x0.min(x);
+            x1 = x1.max(x);
+            y0 = y0.min(y);
+            y1 = y1.max(y);
+        }
+        if x0 <= x1 {
+            view.page = (x0, x1, y0, y1);
+        }
+        view
+    }
+
+    /// A point on the page, and its depth. Nearer is smaller.
+    pub fn project(&self, p: [f64; 3]) -> (f64, f64, f64) {
+        let n = [0, 1, 2].map(|a| (p[a] - self.centre[a]) / self.span);
+        let (ca, sa) = (self.azimuth.cos(), self.azimuth.sin());
+        let (x1, z1) = (n[0] * ca - n[2] * sa, n[0] * sa + n[2] * ca);
+        let (ce, se) = (self.elevation.cos(), self.elevation.sin());
+        let (y1, z2) = (n[1] * ce - z1 * se, n[1] * se + z1 * ce);
+        // A point level with the eye has no place on the page at all. Clamping is what the
+        // report's viewer does, and it keeps a line that reaches the eye plane from flying off
+        // to infinity and taking the framing with it.
+        let d = (z2 + self.distance).max(0.05);
+        (x1 / d, y1 / d, d)
+    }
+
+    /// The projected box, **grown** until it is `aspect` wide for its height.
+    ///
+    /// [`Plot`] maps x and y onto the viewport independently, so a projection handed a viewport
+    /// of a different shape comes out stretched -- a lens drawn as an ellipse, and nothing in the
+    /// picture to say it happened. Growing rather than cropping means the whole scene is still
+    /// there; the cost is margin, which is cheap.
+    pub fn page_bounds(&self, aspect: f64) -> ((f64, f64), (f64, f64)) {
+        let (x0, x1, y0, y1) = self.page;
+        let (mut w, mut h) = ((x1 - x0).max(1e-30), (y1 - y0).max(1e-30));
+        if w / h < aspect {
+            w = h * aspect;
+        } else {
+            h = w / aspect;
+        }
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        ((cx - w / 2.0, cx + w / 2.0), (cy - h / 2.0, cy + h / 2.0))
+    }
+}
+
+/// A run resolved for drawing: how far away it is, where its points land, and how to ink it.
+///
+/// Named rather than left a tuple because it is four fields deep, and clippy is right that
+/// nobody can read `Vec<(f64, Vec<(f64, f64)>, String, f64)>` and say which `f64` is which.
+struct Drawn {
+    depth: f64,
+    points: Vec<(f64, f64)>,
+    colour: String,
+    width: f64,
 }
 
 /// A colour, written the way SVG wants it.
@@ -132,6 +249,48 @@ impl Plot {
             r#"<polyline fill="none" stroke="{colour}" stroke-width="{w}" stroke-linejoin="round" points="{}"/>"#,
             pts.join(" ")
         );
+    }
+
+    /// Runs of points in space, drawn back to front through a [`View3`].
+    ///
+    /// Sorted by each run's mean depth, which is the only hidden-line rule a set of polylines can
+    /// have: a line in front covers one behind, rather than whichever happened to be last in the
+    /// array. It is what `pantometry-view`'s viewer does with a `Paths` panel, for the same
+    /// reason and with the same limitation -- two lines that cross are ordered as wholes.
+    ///
+    /// A run of fewer than two points is drawn as nothing by [`Plot::polyline`] and is **not**
+    /// dropped here, so a caller counting what it handed over gets the count back.
+    pub fn paths3(
+        &mut self,
+        view: &View3,
+        runs: impl IntoIterator<Item = (Vec<[f64; 3]>, String, f64)>,
+    ) {
+        let mut ordered: Vec<Drawn> = runs
+            .into_iter()
+            .map(|(pts, colour, width)| {
+                let projected: Vec<(f64, f64, f64)> =
+                    pts.iter().map(|&p| view.project(p)).collect();
+                // An empty run has no depth to sort by, and furthest is the harmless answer: it
+                // is drawn first and draws nothing.
+                let depth = if projected.is_empty() {
+                    f64::MAX
+                } else {
+                    projected.iter().map(|p| p.2).sum::<f64>() / projected.len() as f64
+                };
+                Drawn {
+                    depth,
+                    points: projected.into_iter().map(|(x, y, _)| (x, y)).collect(),
+                    colour,
+                    width,
+                }
+            })
+            .collect();
+        // Furthest first. `total_cmp` rather than `partial_cmp`, because a NaN depth would make
+        // the comparison inconsistent and the sort's order arbitrary.
+        ordered.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+        for run in ordered {
+            self.polyline(run.points, &run.colour, run.width);
+        }
     }
 
     /// A filled cell of a raster, given in data coordinates.
