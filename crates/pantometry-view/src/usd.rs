@@ -144,6 +144,30 @@ pub fn usda_with(title: &str, frames: &[Frame], drawing: &mesh::Drawing) -> Stag
 
         let path = format!("/World/{}", ident(&panel.name));
         match &panel.data {
+            PanelData::Surface {
+                positions,
+                triangles,
+                values,
+                ..
+            } => {
+                // A `Mesh` is what USD calls this, and its three arrays are exactly what a
+                // triangle list is: the points, how many corners each face has, and which point
+                // each corner names. Nothing is converted.
+                let counts: Vec<usize> = triangles.iter().map(|_| 3).collect();
+                let corners: Vec<u32> = triangles.iter().flatten().copied().collect();
+                let _ = (&counts, &corners);
+                write_solid(
+                    &mut out,
+                    &path,
+                    positions,
+                    triangles,
+                    values,
+                    lo,
+                    hi,
+                    signed,
+                    panel.place,
+                );
+            }
             PanelData::Field {
                 nx,
                 ny,
@@ -333,7 +357,8 @@ fn run_span(series: &[&PanelData]) -> (f64, f64, bool) {
         let values = match data {
             PanelData::Field { values, .. }
             | PanelData::Points { values, .. }
-            | PanelData::Paths { values, .. } => values,
+            | PanelData::Paths { values, .. }
+            | PanelData::Surface { values, .. } => values,
         };
         for v in values {
             if !v.is_finite() {
@@ -358,8 +383,83 @@ fn values_of(data: &PanelData) -> &[f64] {
     match data {
         PanelData::Field { values, .. }
         | PanelData::Points { values, .. }
-        | PanelData::Paths { values, .. } => values,
+        | PanelData::Paths { values, .. }
+        | PanelData::Surface { values, .. } => values,
     }
+}
+
+/// A triangle mesh as USD's own `Mesh`, coloured per vertex.
+///
+/// Three arrays and nothing converted: the points, how many corners each face has, and which point
+/// each corner names. `write_designed` writes the same prim for a part somebody designed, with one
+/// colour for the whole of it; a panel carries a value per vertex and says so with
+/// `interpolation = "vertex"`.
+#[allow(clippy::too_many_arguments)]
+fn write_solid(
+    out: &mut String,
+    path: &str,
+    positions: &[[f64; 3]],
+    triangles: &[[u32; 3]],
+    values: &[f64],
+    lo: f64,
+    hi: f64,
+    signed: bool,
+    place: Placed,
+) {
+    let mut b = [f32::MAX, f32::MAX, f32::MAX, f32::MIN, f32::MIN, f32::MIN];
+    for p in positions {
+        for a in 0..3 {
+            b[a] = b[a].min(p[a] as f32);
+            b[a + 3] = b[a + 3].max(p[a] as f32);
+        }
+    }
+    out.push_str(&format!(
+        "    def Mesh \"{}\"\n    {{\n",
+        path.rsplit('/').next().unwrap_or("solid")
+    ));
+    out.push_str(&format!(
+        "        float3[] extent = [({}, {}, {}), ({}, {}, {})]\n",
+        b[0], b[1], b[2], b[3], b[4], b[5]
+    ));
+    // `none`, as everywhere here: these are the faces the file states.
+    out.push_str("        uniform token subdivisionScheme = \"none\"\n");
+    out.push_str("        int[] faceVertexCounts = [");
+    for i in 0..triangles.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push('3');
+    }
+    out.push_str("]\n");
+    out.push_str("        int[] faceVertexIndices = [");
+    for (i, x) in triangles.iter().flatten().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&x.to_string());
+    }
+    out.push_str("]\n");
+    let points: Vec<[f32; 3]> = positions
+        .iter()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        .collect();
+    out.push_str("        point3f[] points = [");
+    write_points(out, &points);
+    out.push_str("]\n");
+    write_xform(out, place);
+    out.push_str("        color3f[] primvars:displayColor (\n");
+    out.push_str("            interpolation = \"vertex\"\n");
+    out.push_str("        )\n");
+    out.push_str("        color3f[] primvars:displayColor = [");
+    for (i, v) in values.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let c = linear(*v, lo, hi, signed);
+        out.push_str(&format!("({}, {}, {})", c[0], c[1], c[2]));
+    }
+    out.push_str("]\n");
+    out.push_str("    }\n\n");
 }
 
 #[allow(clippy::too_many_arguments)]

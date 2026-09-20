@@ -403,6 +403,26 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
             for panel in &frame.panels {
                 let scale = run.scale_of(panel.name());
                 match panel {
+                    // The browser editor draws dots and strokes on a 2D canvas; a solid has
+                    // no dot to stand for it and its edges are the honest line drawing.
+                    viewer_core::Panel::Surface { values, .. } => {
+                        let placed = panel.placed_surface_points();
+                        for t in panel.surface_faces() {
+                            let v = values.get(t[0]).copied().unwrap_or(0.0);
+                            for k in 0..3 {
+                                let a = project(placed[t[k]]);
+                                let b = project(placed[t[(k + 1) % 3]]);
+                                lines.push(serde_json::json!([
+                                    a.x,
+                                    a.y,
+                                    b.x,
+                                    b.y,
+                                    shade(v, scale),
+                                    0.7
+                                ]));
+                            }
+                        }
+                    }
                     viewer_core::Panel::Points {
                         positions, values, ..
                     } => {

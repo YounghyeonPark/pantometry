@@ -278,6 +278,66 @@ pub fn gltf_with(title: &str, frame: &Frame, drawing: &mesh::Drawing) -> Exporte
                     meshes.push(m);
                 }
             }
+            PanelData::Surface {
+                positions,
+                triangles,
+                values,
+                ..
+            } => {
+                let (lo, hi, signed) = mesh::span(values);
+                coloured = true;
+                let mut m = Mesh::new(&panel.name, 4);
+                m.place = panel.place;
+                // **Normals accumulated from the faces that meet at each vertex**, which is the
+                // right answer for a surface that is smooth -- and the reason a crease is made by
+                // *duplicating* a vertex rather than by a flag. Two faces that share a position
+                // and not an index keep their own normals, and a lens's rim is a crease exactly
+                // there.
+                //
+                // The cross product is left unnormalised on purpose: its length is twice the
+                // triangle's area, so a large face weighs what it should and a sliver weighs
+                // almost nothing. Normalising first would let a mesh's tessellation tilt its own
+                // shading.
+                let mut normals = vec![[0.0f64; 3]; positions.len()];
+                for t in triangles {
+                    let at = |k: usize| positions[t[k] as usize];
+                    let (a, b, c) = (at(0), at(1), at(2));
+                    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                    let n = [
+                        u[1] * v[2] - u[2] * v[1],
+                        u[2] * v[0] - u[0] * v[2],
+                        u[0] * v[1] - u[1] * v[0],
+                    ];
+                    for &i in t {
+                        for (slot, add) in normals[i as usize].iter_mut().zip(n) {
+                            *slot += add;
+                        }
+                    }
+                }
+                for (i, p) in positions.iter().enumerate() {
+                    m.positions.push([p[0] as f32, p[1] as f32, p[2] as f32]);
+                    let n = normals[i];
+                    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    // A vertex no triangle reaches has no normal to give, and is a vertex nothing
+                    // draws. Up is the harmless answer rather than a NaN that spreads.
+                    m.normals.push(if len > 0.0 {
+                        [
+                            (n[0] / len) as f32,
+                            (n[1] / len) as f32,
+                            (n[2] / len) as f32,
+                        ]
+                    } else {
+                        [0.0, 1.0, 0.0]
+                    });
+                    m.colours.push(colour(
+                        mesh::place(values.get(i).copied().unwrap_or(lo), lo, hi, signed),
+                        signed,
+                    ));
+                }
+                m.indices.extend(triangles.iter().flatten().copied());
+                meshes.push(m);
+            }
             PanelData::Field {
                 nx,
                 ny,

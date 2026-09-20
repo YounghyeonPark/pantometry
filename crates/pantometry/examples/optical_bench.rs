@@ -529,8 +529,17 @@ fn main() {
         FIELDS.iter().all(|f| *f < GLASS_ON_THE_FIELD_SCALE),
         "a field angle has reached the value the glass is drawn at, so the two would share a colour and the panel's unit would be lying"
     );
+    // The two flats go into the drawn panel as well, so the shell that shades and the still both
+    // show the bench bending its light at something rather than at nothing.
+    // The two flats, built here because the panel below draws them and the checks further down
+    // measure them: one call, so the picture and the assertion cannot describe different mirrors.
+    let flats = flats_of(&bench, &paths);
     let mut drawn = glass_runs.clone();
     let mut values = glass_values.clone();
+    for f in &flats {
+        drawn.push(f.clone());
+        values.push(GLASS_ON_THE_FIELD_SCALE);
+    }
     drawn.extend(paths.iter().cloned());
     values.extend(colours.iter().copied());
     // **`PanelData::paths` drops a run of fewer than two points.** A picture missing its glass
@@ -552,19 +561,110 @@ fn main() {
     let glass_vertices = 2 * MERIDIANS * (2 * (2 * PROFILE_SAMPLES + 1) + 1)
         + bench.surfaces().len() * (RIM_SEGMENTS + 1);
     let ray_vertices: usize = paths.iter().map(|p| p.len()).sum();
+    // Five points each: a rectangle's four corners and the one that closes it.
+    let flat_vertices: usize = flats.iter().map(|f| f.len()).sum();
     check(
         "every run handed to the panel is a run it drew",
         kept as f64,
-        (glass_runs.len() + paths.len()) as f64,
+        (glass_runs.len() + flats.len() + paths.len()) as f64,
         1e-12,
         "runs",
     );
     check(
         "and every vertex of it",
         vertices as f64,
-        (glass_vertices + ray_vertices) as f64,
+        (glass_vertices + flat_vertices + ray_vertices) as f64,
         1e-12,
         "vertices",
+    );
+
+    // ================================================================ the glass as a solid
+    heading("The doublet as a solid, and what makes it one");
+
+    let elements = bench.glass_solid();
+    println!(
+        "  {:<34} {:>7} vertices, {} triangles in {} elements",
+        "the doublet is meshed as",
+        elements.iter().map(|e| e.points.len()).sum::<usize>(),
+        elements.iter().map(|e| e.faces.len()).sum::<usize>(),
+        elements.len()
+    );
+    let mesh_points: Vec<[f64; 3]> = elements.iter().flat_map(|e| e.points.clone()).collect();
+
+    // **Every edge is shared by exactly two triangles.** That is what closed means, and it is the
+    // property a picture cannot show: a hole reads as shadow, and a surface with its inside facing
+    // out reads as a surface. Counted by *position* rather than by index, because the rim's
+    // vertices are deliberately written twice -- a crease is two faces that share a place and not
+    // an index -- so counting indices would report every crease as a hole.
+    //
+    // Positions compare by bits. They are the same `f64` copied from the same `profile` call, so
+    // two faces meeting at a corner hold identical patterns; a tolerance here would be a choice
+    // about how close is the same, and there is no such choice to make.
+    let key = |p: [f64; 3]| p.map(f64::to_bits);
+    for (name, e) in ["crown", "flint"].iter().zip(&elements) {
+        let mut edges: std::collections::BTreeMap<([u64; 3], [u64; 3]), usize> =
+            std::collections::BTreeMap::new();
+        for t in &e.faces {
+            for k in 0..3 {
+                let (a, b) = (
+                    key(e.points[t[k] as usize]),
+                    key(e.points[t[(k + 1) % 3] as usize]),
+                );
+                let edge = if a <= b { (a, b) } else { (b, a) };
+                *edges.entry(edge).or_default() += 1;
+            }
+        }
+        let open = edges.values().filter(|&&n| n != 2).count();
+        println!(
+            "  {:<34} {:>7} edges, {open} of them not shared by two faces",
+            format!("the {name} is closed?"),
+            edges.len()
+        );
+        assert_eq!(
+            open, 0,
+            "the {name} is not closed: {open} of {} edges are on one face or on three, which is              a hole or a fold and neither is a solid anybody could grind",
+            edges.len()
+        );
+    }
+
+    // **And every vertex of it is still on the surface the rays are traced against.** The mesh is
+    // swept from the same `profile` the outline is, so this is the same claim as above over the
+    // whole solid rather than over one meridian -- and it is the claim that keeps a mesh from
+    // becoming a decorative approximation of the lens the moment somebody tessellates it
+    // differently.
+    let mut off: f64 = 0.0;
+    for at in &mesh_points {
+        let at = DVec3::from_array(*at);
+        let ray = Ray::new(
+            LengthVec::from_si(DVec3::new(at.x, at.y, -standoff)),
+            DVec3::Z,
+        );
+        let nearest = bench
+            .surfaces()
+            .iter()
+            .filter_map(|s| s.meet(ray).map(|h| (h.point.to_si() - at).length()))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            nearest.is_finite(),
+            "a mesh vertex {:.4} mm off the axis is on none of the three surfaces",
+            (at.x * at.x + at.y * at.y).sqrt() * 1e3
+        );
+        off = off.max(nearest);
+    }
+    let mesh_floor = 4.0 * f64::EPSILON * {
+        let scale = bench.crown_r.abs().max(bench.cement_r.abs()) + standoff;
+        scale + scale * scale / bench.crown_r.abs().min(bench.cement_r.abs())
+    };
+    println!(
+        "  {:<34} {off:>7.2e} m  against a floor of {mesh_floor:.2e} m",
+        "every meshed vertex is on a surface"
+    );
+    check_between(
+        "every vertex of the solid is where a ray lands",
+        off / mesh_floor,
+        0.0,
+        1.0,
+        "x the floor",
     );
 
     // **The flats contain the beam, and each is in its own plane.** A fold mirror drawn to the
@@ -573,7 +673,6 @@ fn main() {
     // that would never be noticed. Both claims are arithmetic, so both are asserted here rather
     // than in the drawing -- CI runs this example with no argument, so a check inside the drawing
     // is a check CI does not run.
-    let flats = flats_of(&bench, &paths);
     assert_eq!(flats.len(), 2, "a fold mirror and an image plane");
     for (name, corners, at, normal) in [
         ("fold mirror", &flats[0], MIRROR_AT, bench.fold_normal),
@@ -621,12 +720,40 @@ fn main() {
     if let Some(path) = common::output_path() {
         let frame = Frame {
             time_s: 0.0,
-            panels: vec![Panel {
-                name: "bench".into(),
-                unit: "deg field, 4 = glass",
-                place: Placed::HERE,
-                data: panel,
-            }],
+            panels: vec![
+                // **The glass as a solid, in its own panel.** It shared the rays' scale because a
+                // report draws one card per panel and two panels were two pictures of one bench.
+                // The shell that shades is not the report and draws every panel now, and a solid
+                // and a set of lines are not one quantity however they are laid out.
+                Panel {
+                    name: "glass".into(),
+                    unit: "refractive index",
+                    place: Placed::HERE,
+                    data: PanelData::surface(
+                        elements.iter().flat_map(|e| e.points.clone()).collect(),
+                        {
+                            let mut faces = Vec::new();
+                            let mut base = 0u32;
+                            for e in &elements {
+                                faces.extend(
+                                    e.faces
+                                        .iter()
+                                        .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+                                );
+                                base += e.points.len() as u32;
+                            }
+                            faces
+                        },
+                        elements.iter().flat_map(|e| e.values.clone()).collect(),
+                    ),
+                },
+                Panel {
+                    name: "bench".into(),
+                    unit: "deg field, 4 = glass",
+                    place: Placed::HERE,
+                    data: panel,
+                },
+            ],
             readings: vec![
                 Reading::new("bench", "focal length", f_bent * 1e3, "mm"),
                 Reading::new("bench", "semi-aperture", SEMI * 1e3, "mm"),
@@ -957,6 +1084,17 @@ impl Surface {
     }
 }
 
+/// One element of the doublet, as the triangles that close it.
+///
+/// Per element and not one mesh for the pair, because the cemented face belongs to both: over the
+/// two together every edge on it is shared by four faces, and a check for two would call a correct
+/// solid broken. Each of these is closed on its own, which is also the thing a workshop would ask.
+struct Element {
+    points: Vec<[f64; 3]>,
+    faces: Vec<[u32; 3]>,
+    values: Vec<f64>,
+}
+
 /// The elements, and where they are.
 #[derive(Clone, Copy)]
 struct Bench {
@@ -1013,6 +1151,99 @@ impl Bench {
             },
             Surface { at: BACK_Z, r: 0.0 },
         ]
+    }
+
+    /// The glass as a **solid**: the triangles that bound each element.
+    ///
+    /// Every other shape this example emits is lines, and nothing in a line drawing takes light.
+    /// The renderer that shades a field's isosurface had exactly one producer, so an instrument
+    /// drawn as its own surfaces still arrived as a wireframe however carefully it was measured.
+    ///
+    /// One element is three pieces, in the order light meets them: the front surface, the rim
+    /// between the two edges, and the back surface. Each surface is a grid over
+    /// `(azimuth, height)` whose points come from [`Surface::meridian`] -- the same `profile`
+    /// checked point by point against the intersection the rays use, so the solid is the surface
+    /// and not a second description of it.
+    ///
+    /// **The rim's vertices are written twice**, once for the curved face and once for the
+    /// cylinder. A normal is accumulated from the faces that meet at a vertex, so sharing them
+    /// would round the edge of the glass into the side of it; two faces that share a position and
+    /// not an index keep their own normals, and that is what a crease is.
+    fn glass_solid(&self) -> Vec<Element> {
+        let [front, cement, back] = self.surfaces();
+        let azimuths: Vec<DVec3> = (0..RIM_SEGMENTS)
+            .map(|m| {
+                let t = std::f64::consts::TAU * m as f64 / RIM_SEGMENTS as f64;
+                DVec3::new(t.cos(), t.sin(), 0.0)
+            })
+            .collect();
+        // Half a meridian, from the vertex out to the rim. `meridian` runs edge to edge through
+        // the vertex, so the second half is the half a solid of revolution is swept from.
+        let half = |s: Surface, across: DVec3| -> Vec<LengthVec> {
+            s.meridian(across)[PROFILE_SAMPLES..].to_vec()
+        };
+        let rings = PROFILE_SAMPLES; // rows past the apex
+
+        let mut out = Vec::new();
+        for (a, b, index) in [(front, cement, N_CROWN), (cement, back, N_FLINT)] {
+            let (mut points, mut faces) = (Vec::new(), Vec::new());
+
+            // `outward` is which way the cap faces once the winding is chosen: the front surface
+            // faces the light coming in, the back surface faces away.
+            for (surface, outward) in [(a, -1.0f64), (b, 1.0)] {
+                // **One apex, fanned.** A grid gives every azimuth its own copy of the same point
+                // and the first row of quads is degenerate; the edge count says so at once.
+                let apex = points.len() as u32;
+                points.push(point(half(surface, azimuths[0])[0]));
+                let base = points.len() as u32;
+                for across in &azimuths {
+                    points.extend(half(surface, *across)[1..].iter().map(|p| point(*p)));
+                }
+                let at = |m: usize, r: usize| base + (m * rings + r - 1) as u32;
+                for m in 0..RIM_SEGMENTS {
+                    let n = (m + 1) % RIM_SEGMENTS;
+                    if outward > 0.0 {
+                        faces.push([apex, at(m, 1), at(n, 1)]);
+                    } else {
+                        faces.push([apex, at(n, 1), at(m, 1)]);
+                    }
+                    for r in 1..rings {
+                        let (i00, i01, i10, i11) = (at(m, r), at(m, r + 1), at(n, r), at(n, r + 1));
+                        if outward > 0.0 {
+                            faces.push([i00, i10, i11]);
+                            faces.push([i00, i11, i01]);
+                        } else {
+                            faces.push([i00, i11, i10]);
+                            faces.push([i00, i01, i11]);
+                        }
+                    }
+                }
+            }
+
+            // The rim: a cylinder between the two edges, with its own copies of both rings so the
+            // crease keeps its own normals.
+            let base = points.len() as u32;
+            for across in &azimuths {
+                for s in [a, b] {
+                    points.push(point(
+                        *half(s, *across).last().expect("a meridian has an end"),
+                    ));
+                }
+            }
+            for m in 0..RIM_SEGMENTS {
+                let (c0, c1) = (m as u32 * 2, ((m + 1) % RIM_SEGMENTS) as u32 * 2);
+                faces.push([base + c0, base + c0 + 1, base + c1 + 1]);
+                faces.push([base + c0, base + c1 + 1, base + c1]);
+            }
+
+            let values = vec![index; points.len()];
+            out.push(Element {
+                points,
+                faces,
+                values,
+            });
+        }
+        out
     }
 
     /// The glass itself, as runs of points, with the value each run is coloured by.

@@ -99,6 +99,11 @@ function checkReport(path) {
   // --- every view drew something ----------------------------------------------------------------
   const slots = r.canvases.map((c) => c.dataset.slot);
   ok(slots.length > 0, 'the page has at least one view');
+
+  // How many frames the run holds, read off the clock the page itself draws. Two checks below ask
+  // what stepping does, and a run of one frame answers them the other way round -- see each.
+  const total = (/frame \d+ \/ (\d+)/.exec(r.byId.tick.textContent) || [, '0'])[1] | 0;
+  ok(total > 0, 'the clock says how many frames there are', r.byId.tick.textContent);
   for (const c of r.canvases) {
     const slot = c.dataset.slot;
     const ctx = c._ctx;
@@ -190,8 +195,17 @@ function checkReport(path) {
      'it stopped after ' + times.length);
   // Distinct ticks, not "the tick differs from the first one": twelve steps of a twelve-frame run
   // wrap exactly back to where they started, and comparing the ends said the loop had not moved.
-  ok(seen.size > 1, 'the loop actually advanced the frame while timing',
-     'the tick never changed, so the times below measure an early return');
+  // **A run of one frame has nowhere to advance to**, and this asserted that every run does.
+  // It went unnoticed because CI points this checker at scenes, and the shipped scenes all run
+  // for a dozen frames or more; the first example to write a report is what found it. The
+  // question is still worth asking of a one-frame page -- it is the opposite question.
+  if (total > 1) {
+    ok(seen.size > 1, 'the loop actually advanced the frame while timing',
+       'the tick never changed, so the times below measure an early return');
+  } else {
+    ok(seen.size === 1, 'a one-frame run stays on its one frame while the loop times it',
+       'the tick moved through ' + seen.size + ' values and there is only one frame');
+  }
   if (times.length) {
     const sorted = times.slice().sort((a, b) => a - b);
     const median = sorted[sorted.length >> 1];
@@ -233,8 +247,16 @@ function checkReport(path) {
   const before = r.byId.tick.textContent;
   r.press('ArrowRight');
   const after = r.byId.tick.textContent;
-  ok(before !== after, 'the right arrow advances a frame',
-     'the tick said ' + JSON.stringify(before) + ' both times');
+  if (total > 1) {
+    ok(before !== after, 'the right arrow advances a frame',
+       'the tick said ' + JSON.stringify(before) + ' both times');
+  } else {
+    // Not a skip. A transport that runs off the end of a one-frame run is a transport that would
+    // index past the array on any run, and the clock is where that shows.
+    ok(before === after && /frame 1 \/ 1/.test(after),
+       'the right arrow stays put on a run of one frame',
+       'the tick went from ' + JSON.stringify(before) + ' to ' + JSON.stringify(after));
+  }
   r.press('Home');
   ok(/frame 1 \//.test(r.byId.tick.textContent), 'Home returns to the first frame',
      r.byId.tick.textContent);

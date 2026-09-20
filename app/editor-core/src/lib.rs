@@ -1175,6 +1175,8 @@ pub enum NodeKind {
     Points,
     /// Runs of connected points.
     Paths,
+    /// A triangle mesh bounding a solid.
+    Surface,
     /// A named scalar a domain reports.
     Reading,
 }
@@ -1189,6 +1191,7 @@ impl NodeKind {
             NodeKind::Field => "Field",
             NodeKind::Points => "Bodies",
             NodeKind::Paths => "Paths",
+            NodeKind::Surface => "Surface",
             NodeKind::Reading => "Scalar",
         }
     }
@@ -1449,6 +1452,16 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
                     detail.push(("vertices".into(), (vertices.len() / 3).to_string()));
                     detail.push(("bounds".into(), fmt_box(bounds)));
                     NodeKind::Paths
+                }
+                viewer_core::Panel::Surface {
+                    positions,
+                    triangles,
+                    ..
+                } => {
+                    detail.push(("triangles".into(), (triangles.len() / 3).to_string()));
+                    detail.push(("vertices".into(), (positions.len() / 3).to_string()));
+                    detail.push(("bounds".into(), fmt_box(bounds)));
+                    NodeKind::Surface
                 }
             };
             // The run's range, and this frame's — both, labelled, because they answer different

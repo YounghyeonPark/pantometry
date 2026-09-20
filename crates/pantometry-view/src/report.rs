@@ -130,6 +130,7 @@ pub fn html_with(title: &str, frames: &[Frame], drawing: &crate::mesh::Drawing) 
         for panel in &first.panels {
             let kinds: &[&str] = match &panel.data {
                 PanelData::Paths { .. } => &["layout"],
+                PanelData::Surface { .. } => &["solid"],
                 PanelData::Field { nz, .. } if *nz > 1 => &["volume", "slices"],
                 PanelData::Field { ny, .. } if *ny <= 1 => &["profile"],
                 PanelData::Field { .. } => &["heatmap"],
@@ -159,6 +160,7 @@ pub fn html_with(title: &str, frames: &[Frame], drawing: &crate::mesh::Drawing) 
                         "profile" => "1D field &middot; profile",
                         "heatmap" => "2D field &middot; heatmap",
                         "layout" => "paths &middot; 3D, drag to rotate",
+                        "solid" => "a surface &middot; 3D, lit, drag to rotate",
                         "volume" => "3D field &middot; rendered, drag to rotate",
                         "slices" => "3D field &middot; every z-slice, and the numbers",
                         _ => "bodies &middot; 3D, drag to rotate",
@@ -207,6 +209,9 @@ pub fn html_with(title: &str, frames: &[Frame], drawing: &crate::mesh::Drawing) 
 }
 
 /// The run as JSON, for the viewer above it.
+/// A double quote, so the format strings below carry no escapes and stay readable.
+const DQ: char = '"';
+
 fn json(frames: &[Frame], drawing: &crate::mesh::Drawing) -> String {
     let mut out = String::from("{\"design\":");
     out.push_str(&outlines(drawing));
@@ -245,6 +250,34 @@ fn json(frames: &[Frame], drawing: &crate::mesh::Drawing) -> String {
                     )),
                     nums(values)
                 )),
+                PanelData::Surface {
+                    positions,
+                    triangles,
+                    values,
+                    bounds,
+                } => {
+                    let flat: Vec<f64> = positions.iter().flatten().copied().collect();
+                    let faces: Vec<f64> = triangles.iter().flatten().map(|&i| i as f64).collect();
+                    out.push_str(&format!(
+                        "{}kind{}:{}solid{},{}b{}:{},{}p{}:{},{}t{}:{},{}v{}:{}",
+                        DQ,
+                        DQ,
+                        DQ,
+                        DQ,
+                        DQ,
+                        DQ,
+                        nums(bounds),
+                        DQ,
+                        DQ,
+                        nums(&flat),
+                        DQ,
+                        DQ,
+                        nums(&faces),
+                        DQ,
+                        DQ,
+                        nums(values)
+                    ));
+                }
                 PanelData::Paths {
                     vertices,
                     starts,
@@ -1044,6 +1077,66 @@ function project(pt, s, w, h){
   var fo=(Math.min(w,h)*0.60)/d;
   return {x:w/2+x1*fo, y:h/2-y1*fo, d:d, s:fo/Math.min(w,h)};
 }
+/* ---- 3D: a solid, painted back to front ---------------------------------------------------
+   The painter's algorithm over triangles, which is what a 2D canvas can do: sorted by mean
+   depth and filled, so a face in front covers one behind. Its limitation is the same one
+   `drawLayout` has and states -- two faces that interpenetrate are ordered as wholes -- and a
+   closed surface of revolution has none of those.
+
+   One key light down the eye and a floor under it, the same pair the GPU shell uses, so a face
+   turned away is dark and not black and the picture does not read as a silhouette. The light is
+   applied to the *face* normal rather than to the vertices: a canvas has no gradient fill along
+   a triangle, and flat shading is the honest version of what it can draw. */
+function drawSolid(v, f){
+  var x=begin(v), w=v.w, h=v.h, p=panelOf(f,v.panel), R=range[v.panel];
+  var b=p.b, s={c:[(b[0]+b[3])/2,(b[1]+b[4])/2,(b[2]+b[5])/2],
+                span:Math.max(b[3]-b[0],b[4]-b[1],b[5]-b[2])||1};
+  var n=p.t.length/3, order=[];
+  for(var k=0;k<n;k++){
+    var i0=p.t[3*k], i1=p.t[3*k+1], i2=p.t[3*k+2];
+    var a=[p.p[3*i0],p.p[3*i0+1],p.p[3*i0+2]];
+    var c=[p.p[3*i1],p.p[3*i1+1],p.p[3*i1+2]];
+    var d=[p.p[3*i2],p.p[3*i2+1],p.p[3*i2+2]];
+    var qa=project(a,s,w,h), qc=project(c,s,w,h), qd=project(d,s,w,h);
+    order.push({k:k, a:qa, c:qc, d:qd, i:i0,
+                u:[c[0]-a[0],c[1]-a[1],c[2]-a[2]],
+                v:[d[0]-a[0],d[1]-a[1],d[2]-a[2]],
+                depth:(qa.d+qc.d+qd.d)/3});
+  }
+  order.sort(function(m,o){ return o.depth-m.depth; });
+  order.forEach(function(o){
+    var nx=o.u[1]*o.v[2]-o.u[2]*o.v[1];
+    var ny=o.u[2]*o.v[0]-o.u[0]*o.v[2];
+    var nz=o.u[0]*o.v[1]-o.u[1]*o.v[0];
+    var len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+    /* The key is in world coordinates, so a rotated camera lights the same face the same way --
+       which is what makes turning the scene read as turning an object rather than a lamp. */
+    var lit=Math.abs((nx*0.35+ny*0.45+nz*0.82)/len)*0.65+0.35;
+    var base=css(R, R.at(p.v[o.i]));
+    x.fillStyle=shadeOf(base, lit);
+    x.beginPath();
+    x.moveTo(o.a.x,o.a.y); x.lineTo(o.c.x,o.c.y); x.lineTo(o.d.x,o.d.y);
+    x.closePath();
+    /* Stroked with its own fill as well as filled: adjacent triangles that share an exact edge
+       leave hairline seams in every canvas implementation, and a solid full of background-coloured
+       cracks reads as a mesh with holes in it. The same reason `cell` overlaps half a pixel. */
+    x.strokeStyle=x.fillStyle; x.lineWidth=1; x.stroke();
+    x.fill();
+  });
+  bar(x, v, R, p.unit);
+  v.hit = null;
+  cap(v, (p.t.length/3)+" triangles across "+len(Math.max(b[3]-b[0],b[4]-b[1],b[5]-b[2]))
+       +" · colour is "+p.unit+" · drag to rotate, scroll to zoom");
+}
+
+/* A colour multiplied by a lambert term, staying in the `rgb()` the ramp hands out. */
+function shadeOf(c, k){
+  var m=/rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(c);
+  if(!m) return c;
+  var r=Math.round(m[1]*k), g=Math.round(m[2]*k), b=Math.round(m[3]*k);
+  return "rgb("+r+","+g+","+b+")";
+}
+
 function drawScene(v, f){
   var x=begin(v), w=v.w, h=v.h, p=panelOf(f,v.panel), R=range[v.panel];
   var b=p.b, s={c:[(b[0]+b[3])/2,(b[1]+b[4])/2,(b[2]+b[5])/2],
@@ -1212,7 +1305,8 @@ function mark(which){
   views.forEach(function(v){
     if(which === "all"
        || (which === "frame")
-       || (which === "camera" && (v.kind==="scene"||v.kind==="volume"||v.kind==="layout"))
+       || (which === "camera" && (v.kind==="scene"||v.kind==="volume"||v.kind==="layout"
+                                  ||v.kind==="solid"))
        || which === v.slot) dirty[v.slot] = true;
   });
 }
@@ -1223,6 +1317,7 @@ function drawOne(v){
   else if(v.kind==="slices") drawSlices(v,f);
   else if(v.kind==="volume") drawVolume(v,f);
   else if(v.kind==="layout") drawLayout(v,f);
+  else if(v.kind==="solid") drawSolid(v,f);
   else if(v.kind==="scene") drawScene(v,f);
   else drawSeries(v);
 }
@@ -1299,7 +1394,7 @@ views.forEach(function(v){
 });
 
 views.filter(function(v){
-  return v.kind==="scene"||v.kind==="volume"||v.kind==="layout";
+  return v.kind==="scene"||v.kind==="volume"||v.kind==="layout"||v.kind==="solid";
 }).forEach(function(v){
   v.c.addEventListener("pointerdown",function(e){
     drag={x:e.clientX,y:e.clientY}; dragging=v; v.c.setPointerCapture(e.pointerId);

@@ -417,6 +417,33 @@ pub enum PanelData {
         /// `[x0, y0, z0, x1, y1, z1]`, the region to draw.
         bounds: [f64; 6],
     },
+    /// A triangle mesh: a surface that bounds a **solid**, rather than lines that suggest one.
+    ///
+    /// The fourth shape, and it took a lens to need it. [`PanelData::Paths`] can draw a doublet as
+    /// a wireframe of meridians and it is the real geometry -- but nothing in a set of lines can
+    /// be shaded, and the renderer that turns a field into a lit surface builds triangles for
+    /// [`PanelData::Field`] and for nothing else. An instrument could not reach it.
+    ///
+    /// Indices rather than three vertices per triangle: a closed solid shares every vertex between
+    /// six or so faces, and writing each one out again triples the file for a lens and multiplies
+    /// it worse for anything finer. What that costs is a per-vertex normal, which a renderer that
+    /// wants flat shading computes per face anyway.
+    Surface {
+        /// Every vertex, **in world coordinates** as [`PanelData::Points`] and
+        /// [`PanelData::Paths`] are.
+        positions: Vec<[f64; 3]>,
+        /// Three indices into `positions` per triangle, wound counter-clockwise seen from
+        /// outside.
+        ///
+        /// The winding is the caller's to get right and is not checked here: a mesh this crate
+        /// could verify the orientation of is a mesh it would have to know was closed, and an open
+        /// surface -- a mirror, a single refracting face -- is a thing somebody will want to draw.
+        triangles: Vec<[u32; 3]>,
+        /// One value per **vertex**, to colour it by.
+        values: Vec<f64>,
+        /// `[x0, y0, z0, x1, y1, z1]`, the region to draw.
+        bounds: [f64; 6],
+    },
     /// Bodies at positions **in world coordinates**, each with a value to colour it by.
     Points {
         /// Where each body is.
@@ -466,6 +493,58 @@ impl PanelData {
             bounds,
         }
     }
+
+    /// Build a [`PanelData::Surface`] from vertices and the triangles over them, measuring the box.
+    ///
+    /// # Panics
+    ///
+    /// If `values` is not one per vertex, or if a triangle names a vertex that is not there.
+    ///
+    /// **Loudly, and this is the one constructor here that does.** [`PanelData::paths`] drops a
+    /// run of fewer than two points because a degenerate run is a shape the data can have; an
+    /// index past the end of `positions` is not. Dropping it would leave a hole in a solid, which
+    /// is the failure this workspace hunts hardest: something that comes out missing and looks
+    /// fine. A caller that built a mesh wrong should hear about it where it was built.
+    pub fn surface(
+        positions: Vec<[f64; 3]>,
+        triangles: Vec<[u32; 3]>,
+        values: Vec<f64>,
+    ) -> PanelData {
+        assert_eq!(
+            values.len(),
+            positions.len(),
+            "a surface is coloured per vertex, and this has {} values for {} vertices",
+            values.len(),
+            positions.len()
+        );
+        if let Some(bad) = triangles
+            .iter()
+            .flatten()
+            .find(|&&i| i as usize >= positions.len())
+        {
+            panic!(
+                "a triangle names vertex {bad} of {} — a hole in a solid is not a shape the data \
+                 can have",
+                positions.len()
+            );
+        }
+        let mut bounds = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        for v in &positions {
+            for a in 0..3 {
+                bounds[a] = bounds[a].min(v[a]);
+                bounds[a + 3] = bounds[a + 3].max(v[a]);
+            }
+        }
+        if positions.is_empty() {
+            bounds = [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+        }
+        PanelData::Surface {
+            positions,
+            triangles,
+            values,
+            bounds,
+        }
+    }
 }
 
 impl Panel {
@@ -474,7 +553,8 @@ impl Panel {
         match &self.data {
             PanelData::Field { values, .. }
             | PanelData::Points { values, .. }
-            | PanelData::Paths { values, .. } => values,
+            | PanelData::Paths { values, .. }
+            | PanelData::Surface { values, .. } => values,
         }
     }
 
@@ -512,7 +592,9 @@ impl Panel {
     pub fn bounds(&self) -> [f64; 6] {
         match &self.data {
             PanelData::Field { extent_m, .. } => *extent_m,
-            PanelData::Points { bounds, .. } | PanelData::Paths { bounds, .. } => *bounds,
+            PanelData::Points { bounds, .. }
+            | PanelData::Paths { bounds, .. }
+            | PanelData::Surface { bounds, .. } => *bounds,
         }
     }
 

@@ -277,23 +277,30 @@ struct Gpu {
 
 impl App {
     fn new(run: Run, panel: String) -> App {
-        let framing = Framing::of(
-            run.framing_of(&panel)
-                .unwrap_or([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]),
-        );
+        // **The box every panel occupies, not the first one's.** A run can hold several and this
+        // shell draws all of them now; framing on one would put the others partly or wholly off
+        // the screen, which is how a picture loses something without saying it has.
+        let over_all = |run: &Run| {
+            let mut out = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+            for name in run.panels() {
+                if let Some(b) = run.framing_of(&name) {
+                    for a in 0..3 {
+                        out[a] = out[a].min(b[a]);
+                        out[a + 3] = out[a + 3].max(b[a + 3]);
+                    }
+                }
+            }
+            (out[0] <= out[3]).then_some(out)
+        };
+        let whole = over_all(&run).unwrap_or([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
+        let framing = Framing::of(whole);
         // Once, from the whole run. Re-fitting it per frame is what `Run::scale_of` exists to
         // stop, and for a while nothing called it.
         let span = run.scale_of(&panel).unwrap_or((0.0, 1.0));
         // Framed to what is actually there. The window can still be zoomed; `--snapshot` cannot,
         // and a fixed distance is a distance chosen for a cube.
         let mut camera = Camera::default();
-        camera.fit(
-            run.framing_of(&panel)
-                .unwrap_or([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]),
-            &framing,
-            16.0 / 9.0,
-            0.85,
-        );
+        camera.fit(whole, &framing, 16.0 / 9.0, 0.85);
         App {
             run,
             panel,
@@ -514,16 +521,88 @@ impl App {
     /// function that writes glTF and USD and that the editor shades. One picture, not three, and
     /// a size that cannot disagree with an export.
     fn vertices(&self, aspect: f64) -> (Vec<Vertex>, Vec<Vertex>) {
-        let Some(panel) = self
-            .run
-            .frames
-            .get(self.frame)
-            .and_then(|f| f.panels.iter().find(|p| p.name() == self.panel))
-        else {
+        let Some(frame) = self.run.frames.get(self.frame) else {
             return (Vec::new(), Vec::new());
         };
-
         let mut tris = Vec::new();
+        let mut out: Vec<Vertex> = Vec::new();
+        // **Every panel.** This drew `self.panel` and nothing else -- "the first one there is" --
+        // which was fair while every shape was lines and a run held one domain worth drawing. A
+        // bench whose glass is a solid and whose rays are paths is two panels, and showing one of
+        // them is a picture with the light missing and no note to say so. The legend and the
+        // readout still name the selected panel, because a colour bar belongs to one quantity.
+        for panel in &frame.panels {
+            let (t, l) = self.panel_vertices(panel, aspect);
+            tris.extend(t);
+            out.extend(l);
+        }
+        self.assemble(tris, out, aspect)
+    }
+
+    /// One panel's triangles and lines.
+    fn panel_vertices(
+        &self,
+        panel: &viewer_core::Panel,
+        aspect: f64,
+    ) -> (Vec<Vertex>, Vec<Vertex>) {
+        let mut tris = Vec::new();
+        // **A solid comes with its triangles.** The only producer of a lit surface here was
+        // `field_shell`, an isosurface through somebody's grid, so an instrument drawn as its own
+        // surfaces arrived as lines and left as lines however carefully it had been meshed.
+        // **Each panel on its own scale.** `self.span` is the selected panel's, which was the
+        // only panel there was; with two in a frame it painted a field angle as a refractive
+        // index and the rays came out the colours of glass. The legend still belongs to the
+        // selected one, because a colour bar names one quantity and there is room for one bar.
+        let span = self.run.scale_of(panel.name()).unwrap_or((0.0, 1.0));
+        if let viewer_core::Panel::Surface { values, .. } = panel {
+            let placed = panel.placed_surface_points();
+            let faces = panel.surface_faces();
+            let (lo, hi) = span;
+            let mut normals = vec![[0.0f64; 3]; placed.len()];
+            for t in &faces {
+                let (a, b, c) = (placed[t[0]], placed[t[1]], placed[t[2]]);
+                let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
+                for &i in t {
+                    for (slot, add) in normals[i].iter_mut().zip(n) {
+                        *slot += add;
+                    }
+                }
+            }
+            // The same key light the field's solid takes, so two solids in one frame are lit
+            // alike rather than by two conventions.
+            let key = [0.35f32, 0.45, 0.82];
+            for t in &faces {
+                for &i in t {
+                    let c = self.camera.project(placed[i], &self.framing, aspect);
+                    let n = normals[i];
+                    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    let unit_n = if len > 0.0 {
+                        [
+                            (n[0] / len) as f32,
+                            (n[1] / len) as f32,
+                            (n[2] / len) as f32,
+                        ]
+                    } else {
+                        [0.0, 1.0, 0.0]
+                    };
+                    let lit = (unit_n[0] * key[0] + unit_n[1] * key[1] + unit_n[2] * key[2])
+                        .abs()
+                        .mul_add(0.65, 0.35);
+                    let v = values.get(i).copied().unwrap_or(lo);
+                    let base = ramp(((v - lo) / (hi - lo).max(1e-30)).clamp(0.0, 1.0));
+                    tris.push(Vertex {
+                        position: [c.x as f32, c.y as f32, c.depth as f32],
+                        colour: [base[0] * lit, base[1] * lit, base[2] * lit],
+                    });
+                }
+            }
+        }
         if let viewer_core::Panel::Field {
             nx,
             ny,
@@ -575,7 +654,7 @@ impl App {
         // to build. A field that got a solid above skips them, or every cell would carry a cross
         // inside the block that is drawn over it.
         if tris.is_empty() {
-            for s in segments(panel, &self.camera, &self.framing, aspect, self.span) {
+            for s in segments(panel, &self.camera, &self.framing, aspect, span) {
                 let colour = ramp(s.shade);
                 out.push(Vertex {
                     position: [s.from.x as f32, s.from.y as f32, s.from.depth as f32],
@@ -587,6 +666,21 @@ impl App {
                 });
             }
         }
+        (tris, out)
+    }
+
+    /// Both sets, mapped into the depth range wgpu keeps.
+    ///
+    /// Split out when this shell began drawing every panel rather than one: the mapping has to
+    /// see the whole frame, so doing it per panel would have put each panel's own near face at
+    /// `z = 0` and stacked them in the order they were listed rather than where they are.
+    fn assemble(
+        &self,
+        tris: Vec<Vertex>,
+        out: Vec<Vertex>,
+        aspect: f64,
+    ) -> (Vec<Vertex>, Vec<Vertex>) {
+        let (mut tris, mut out) = (tris, out);
         // **`Projected::depth` is a distance from the eye, not a clip `z`.** wgpu keeps
         // `0 <= z <= 1` and discards the rest, so handing it metres drew nothing at all — the
         // first run of this rendered an empty frame and said so. Mapped over the range this frame

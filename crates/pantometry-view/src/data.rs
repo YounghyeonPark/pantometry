@@ -150,6 +150,25 @@ pub fn to_json(title: &str, frames: &[Frame]) -> String {
                         numbers(values)
                     ));
                 }
+                PanelData::Surface {
+                    positions,
+                    triangles,
+                    values,
+                    bounds,
+                } => {
+                    let flat: Vec<f64> = positions.iter().flatten().copied().collect();
+                    // Indices as numbers, because this format has one number writer and a
+                    // second one for integers would be a second place for `1e21` to appear in
+                    // a file a strict parser reads.
+                    let faces: Vec<f64> = triangles.iter().flatten().map(|&i| i as f64).collect();
+                    out.push_str(&format!(
+                        "\"kind\": \"surface\", \"bounds\": {}, \"positions\": {},                          \"triangles\": {}, \"values\": {}",
+                        numbers(bounds),
+                        numbers(&flat),
+                        numbers(&faces),
+                        numbers(values)
+                    ));
+                }
                 PanelData::Points {
                     positions,
                     values,

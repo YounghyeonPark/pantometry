@@ -2759,6 +2759,56 @@ impl App {
                             .extend(sphere.indices.iter().map(|k| base + k));
                     }
                 }
+                // **The shaded pass, from a panel rather than from a field.** Until now the
+                // only producer of a lit triangle was `field_shell` -- an isosurface through
+                // somebody's grid -- so an instrument drawn as its own surfaces arrived here as
+                // lines and left as lines. A solid comes with its triangles; all this does is
+                // place them and give each vertex a normal.
+                viewer_core::Panel::Surface { values, .. } => {
+                    let colouring = editor_core::Colouring::of(panel.unit(), values, scale);
+                    let placed = panel.placed_surface_points();
+                    let faces = panel.surface_faces();
+                    // Accumulated from the faces that meet at each vertex, weighted by area
+                    // because the cross product's length is twice it. A crease is made by
+                    // duplicating a vertex, which is the producer's business and not this one's.
+                    let mut normals = vec![[0.0f64; 3]; placed.len()];
+                    for t in &faces {
+                        let (a, b, c) = (placed[t[0]], placed[t[1]], placed[t[2]]);
+                        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                        let n = [
+                            u[1] * v[2] - u[2] * v[1],
+                            u[2] * v[0] - u[0] * v[2],
+                            u[0] * v[1] - u[1] * v[0],
+                        ];
+                        for &i in t {
+                            for (slot, add) in normals[i].iter_mut().zip(n) {
+                                *slot += add;
+                            }
+                        }
+                    }
+                    let base = solid.vertices();
+                    for (i, at) in placed.iter().enumerate() {
+                        let n = normals[i];
+                        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                        let unit_n = if len > 0.0 {
+                            [
+                                (n[0] / len) as f32,
+                                (n[1] / len) as f32,
+                                (n[2] / len) as f32,
+                            ]
+                        } else {
+                            [0.0, 1.0, 0.0]
+                        };
+                        let value = values.get(i).copied().unwrap_or(0.0);
+                        solid.push(framing.local(*at), unit_n, colouring.linear(value));
+                    }
+                    for t in &faces {
+                        for &i in t {
+                            solid.indices.push(base + i as u32);
+                        }
+                    }
+                }
                 viewer_core::Panel::Paths {
                     starts,
                     vertices,
@@ -3480,6 +3530,25 @@ impl App {
                                     [to_screen(a), to_screen(b)],
                                     egui::Stroke::new(1.5_f32, shade(*value, scale)),
                                 );
+                            }
+                        }
+                    }
+                    // A solid's edges, which is what a line painter can say about one. The
+                    // shaded pass is the GPU's and this viewport is not it; the outliner names the
+                    // panel `Surface` either way, so a reader is never left wondering what the
+                    // wireframe is.
+                    viewer_core::Panel::Surface { values, .. } => {
+                        if !self.shaded {
+                            let placed = panel.placed_surface_points();
+                            for t in panel.surface_faces() {
+                                let value = values.get(t[0]).copied().unwrap_or(0.0);
+                                for k in 0..3 {
+                                    let (a, b) = (placed[t[k]], placed[t[(k + 1) % 3]]);
+                                    painter.line_segment(
+                                        [to_screen(a), to_screen(b)],
+                                        egui::Stroke::new(0.7_f32, shade(value, scale)),
+                                    );
+                                }
                             }
                         }
                     }

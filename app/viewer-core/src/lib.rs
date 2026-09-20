@@ -303,24 +303,53 @@ pub enum Panel {
         /// One per run.
         values: Vec<f64>,
     },
+    /// A triangle mesh: a surface that bounds a solid.
+    ///
+    /// Named for what the wire format tags it, which is what `PanelData::Surface` is called on
+    /// the other side of the boundary. It was `Solid` here and `surface` there for about an hour,
+    /// and nothing in either workspace could see it: the writer wrote a tag the reader refused,
+    /// and the only place the two met was a parse error at run time.
+    ///
+    /// The shape that can be **lit**. Every other one here is points or lines, and the renderer's
+    /// triangle pass had exactly one producer -- a field's isosurface -- so an instrument drawn as
+    /// its real surfaces still arrived as a wireframe.
+    Surface {
+        /// Which domain this came from.
+        name: String,
+        /// What the values are in.
+        unit: String,
+        /// Where this panel's own coordinates sit in the world.
+        #[serde(default)]
+        place: Placed,
+        /// `[x0,y0,z0,x1,y1,z1]`.
+        bounds: [f64; 6],
+        /// Flattened `xyz` per vertex.
+        positions: Vec<f64>,
+        /// Three vertex indices per triangle, flattened.
+        triangles: Vec<f64>,
+        /// One per vertex.
+        values: Vec<f64>,
+    },
 }
 
 impl Panel {
     /// Which domain this panel came from.
     pub fn name(&self) -> &str {
         match self {
-            Panel::Field { name, .. } | Panel::Points { name, .. } | Panel::Paths { name, .. } => {
-                name
-            }
+            Panel::Field { name, .. }
+            | Panel::Points { name, .. }
+            | Panel::Paths { name, .. }
+            | Panel::Surface { name, .. } => name,
         }
     }
 
     /// What its values are in.
     pub fn unit(&self) -> &str {
         match self {
-            Panel::Field { unit, .. } | Panel::Points { unit, .. } | Panel::Paths { unit, .. } => {
-                unit
-            }
+            Panel::Field { unit, .. }
+            | Panel::Points { unit, .. }
+            | Panel::Paths { unit, .. }
+            | Panel::Surface { unit, .. } => unit,
         }
     }
 
@@ -329,7 +358,8 @@ impl Panel {
         match self {
             Panel::Field { values, .. }
             | Panel::Points { values, .. }
-            | Panel::Paths { values, .. } => values,
+            | Panel::Paths { values, .. }
+            | Panel::Surface { values, .. } => values,
         }
     }
 
@@ -341,7 +371,8 @@ impl Panel {
         match self {
             Panel::Field { place, .. }
             | Panel::Points { place, .. }
-            | Panel::Paths { place, .. } => *place,
+            | Panel::Paths { place, .. }
+            | Panel::Surface { place, .. } => *place,
         }
     }
 
@@ -371,7 +402,9 @@ impl Panel {
                 extent_m,
                 ..
             } => extent_m.unwrap_or([0.0, 0.0, 0.0, *nx as f64, *ny as f64, *nz as f64]),
-            Panel::Points { bounds, .. } | Panel::Paths { bounds, .. } => *bounds,
+            Panel::Points { bounds, .. }
+            | Panel::Paths { bounds, .. }
+            | Panel::Surface { bounds, .. } => *bounds,
         }
     }
 
@@ -446,6 +479,38 @@ impl Panel {
             .0
             .iter()
             .map(|v| place.apply(*v))
+            .collect()
+    }
+
+    /// Every vertex of a solid, placed into the world. Empty for every other shape.
+    pub fn placed_surface_points(&self) -> Vec<[f64; 3]> {
+        let Panel::Surface {
+            place, positions, ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|v| place.apply(*v))
+            .collect()
+    }
+
+    /// The three vertex indices of each triangle of a solid. Empty for every other shape.
+    ///
+    /// Separate from [`Panel::placed_surface_points`] because a caller that only wants the box, or
+    /// only the vertices, should not walk the faces to get them.
+    pub fn surface_faces(&self) -> Vec<[usize; 3]> {
+        let Panel::Surface { triangles, .. } = self else {
+            return Vec::new();
+        };
+        triangles
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
             .collect()
     }
 

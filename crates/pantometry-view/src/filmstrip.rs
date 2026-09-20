@@ -153,11 +153,94 @@ fn draw(p: &Panel, x0: f64, y0: f64, size: f64, extent: f64) -> String {
             bounds,
             boxed,
         } => scatter(positions, values, bounds, *boxed, x0, y0, size, extent),
+        // A thumbnail is a few hundred pixels across and a filled solid at that size is a blob
+        // with a colour. Its edges say what shape it is, which is what a strip of frames is read
+        // for -- and it is the same projection every other shape here uses.
+        PanelData::Surface {
+            positions,
+            triangles,
+            values,
+            bounds,
+        } => facets(positions, triangles, values, bounds, x0, y0, size, extent),
     };
     body + &format!(
         "<rect x='{x0:.1}' y='{y0:.1}' width='{size:.1}' height='{size:.1}' fill='none' \
          stroke='#bbb' stroke-width='0.7'/>\n"
     )
+}
+
+/// A solid, as the edges of its faces.
+///
+/// A thumbnail is a few hundred pixels across and a filled solid at that size is a blob with a
+/// colour; the edges say what shape it is, which is what a strip of frames is read for. Sorted
+/// back to front by mean depth, as [`strands`] is and for the same reason.
+#[allow(clippy::too_many_arguments)]
+fn facets(
+    positions: &[[f64; 3]],
+    triangles: &[[u32; 3]],
+    values: &[f64],
+    bounds: &[f64; 6],
+    x0: f64,
+    y0: f64,
+    size: f64,
+    extent: f64,
+) -> String {
+    let projected: Vec<(f64, f64, f64)> = corners(bounds).iter().map(|c| project(*c)).collect();
+    let (mut ax0, mut ay0, mut ax1, mut ay1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut d0, mut d1) = (f64::MAX, f64::MIN);
+    for (a, u, d) in &projected {
+        ax0 = ax0.min(*a);
+        ax1 = ax1.max(*a);
+        ay0 = ay0.min(*u);
+        ay1 = ay1.max(*u);
+        d0 = d0.min(*d);
+        d1 = d1.max(*d);
+    }
+    let span = (ax1 - ax0).max(ay1 - ay0).max(1e-30);
+    let pad = 0.06 * size;
+    let inner = size - 2.0 * pad;
+    let to_screen = |a: f64, u: f64| {
+        (
+            x0 + pad + (a - ax0) / span * inner,
+            y0 + pad + inner - (u - ay0) / span * inner,
+        )
+    };
+
+    let mut faces: Vec<(f64, usize)> = triangles
+        .iter()
+        .enumerate()
+        .map(|(k, t)| {
+            let mean = t
+                .iter()
+                .map(|&i| project(positions[i as usize]).2)
+                .sum::<f64>()
+                / 3.0;
+            (mean, k)
+        })
+        .collect();
+    faces.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+    let mut s = String::new();
+    for (mean, k) in faces {
+        let t = triangles[k];
+        let points: Vec<String> = t
+            .iter()
+            .chain(std::iter::once(&t[0]))
+            .map(|&i| {
+                let (a, u, _) = project(positions[i as usize]);
+                let (px, py) = to_screen(a, u);
+                format!("{px:.2},{py:.2}")
+            })
+            .collect();
+        let depth = ((d1 - mean) / (d1 - d0).max(1e-30)).clamp(0.0, 1.0);
+        let v = values.get(t[0] as usize).copied().unwrap_or(0.0);
+        let colour = faded(v / extent, 1.0 - depth);
+        s.push_str(&format!(
+            "<polyline points='{}' fill='none' stroke='{colour}' stroke-width='0.5'/>\n",
+            points.join(" ")
+        ));
+    }
+    s
 }
 
 /// Azimuth and elevation of the view, in radians.
