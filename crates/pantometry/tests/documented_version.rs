@@ -81,6 +81,104 @@ fn the_install_lines_quote_the_current_series() {
     }
 }
 
+/// **The citation block's version, its version DOI and its concept DOI are all somebody else's
+/// numbers.**
+///
+/// `README.md` renders a BibTeX entry that a reader copies into a bibliography, and every field in
+/// it restates something written elsewhere:
+///
+/// - `version` is the crate's, which a release bumps in nine places and has no reason to touch
+///   here;
+/// - `doi` is that version's row in `RELEASING.md`'s table, which is the only place the minted
+///   numbers are recorded;
+/// - `url` is the **concept** DOI, which never moves and is in `CITATION.cff`.
+///
+/// This was the last claim in the repository standing on nothing. `RELEASING.md` says so in as
+/// many words -- the block "shipped stale for the length of one release" and its `version` "was
+/// left at 0.19.0 through the 0.20.0 bump because no list covered it" -- and the note in the
+/// block itself records the same thing about 0.16.0 and 0.17.0. A document that has been wrong
+/// twice and knows it is a document to check rather than to read.
+///
+/// The `doi` is the one field a release cannot bump with the rest: it does not exist until the
+/// tag has fired the webhook. So this asks `RELEASING.md` rather than asking for a rule, and the
+/// order of operations stays what it is.
+#[test]
+fn the_citation_block_quotes_the_version_and_the_dois_it_should() {
+    let Some(readme) = repo_file("README.md") else {
+        return; // packaged build
+    };
+    // The field's value, from `name     = {value},`.
+    let field = |name: &str| -> Option<String> {
+        readme.lines().find_map(|l| {
+            let l = l.trim_start();
+            let rest = l
+                .strip_prefix(name)?
+                .trim_start()
+                .strip_prefix('=')?
+                .trim_start();
+            let inner = rest.strip_prefix('{')?;
+            Some(inner.split('}').next()?.to_string())
+        })
+    };
+
+    let stated = field("version").expect("the BibTeX block names a version");
+    assert_eq!(
+        stated,
+        env!("CARGO_PKG_VERSION"),
+        "README.md's BibTeX says version = {{{stated}}} and this crate is {}",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let Some(releasing) = repo_file("RELEASING.md") else {
+        return;
+    };
+    // **The table, by this version's row.** `| 0.21.0 | `10.5281/zenodo.22760497` -- ...`. Read by
+    // the row rather than by position, so adding a release does not shift the answer.
+    let row = format!("| {} |", env!("CARGO_PKG_VERSION"));
+    let minted = releasing
+        .lines()
+        .find(|l| l.trim_start().starts_with(&row))
+        .and_then(|l| l.split('`').nth(1).map(str::to_string));
+    match minted {
+        Some(minted) => {
+            let doi = field("doi").expect("the BibTeX block names a doi");
+            assert_eq!(
+                doi,
+                minted,
+                "README.md's BibTeX cites {doi} for {} and RELEASING.md's table says {minted}",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+        // **Between the bump and the tag there is no row**, and that is a real state rather than a
+        // failure: the DOI does not exist until the release webhook has fired. It is not silence
+        // either -- the release procedure is where the edit is listed, and this says which half of
+        // it has happened.
+        None => println!(
+            "  no version-DOI row for {} in RELEASING.md yet -- the `doi` is the edit that comes \
+             after the tag",
+            env!("CARGO_PKG_VERSION")
+        ),
+    }
+
+    // The concept DOI, which is the one that never moves. `CITATION.cff` is what a citation
+    // manager reads and the BibTeX is what a person copies; the two naming different records
+    // would be the worst version of this being wrong.
+    let concept = repo_file("CITATION.cff").and_then(|cff| {
+        cff.lines().find_map(|l| {
+            l.trim_start()
+                .strip_prefix("doi:")
+                .map(|v| v.trim().to_string())
+        })
+    });
+    if let Some(concept) = concept {
+        let url = field("url").expect("the BibTeX block names a url");
+        assert!(
+            url.ends_with(&concept),
+            "README.md's BibTeX `url` is {url} and CITATION.cff's concept DOI is {concept}"
+        );
+    }
+}
+
 /// **The subagents' own statements of the current version are current.**
 ///
 /// `invariant-guard` has a section on the one invariant that cannot be fixed after the fact — a
