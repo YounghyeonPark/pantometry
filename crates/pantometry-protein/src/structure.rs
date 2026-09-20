@@ -128,6 +128,62 @@ pub struct Structure {
 }
 
 impl Structure {
+    /// The atoms of one heteroatom group, for a ligand that came in the same file.
+    ///
+    /// [`Structure::from_pdb`] refuses `HETATM` and says why: a calcium ion writes `CA` in the
+    /// atom-name column and is not an alpha carbon. A bound ligand is in those same records, and
+    /// [`Network::with_ligand`](crate::Network::with_ligand) wants its coordinates -- so this is
+    /// the one way from a crystal structure to both halves of the complex it holds.
+    ///
+    /// `name` is the residue name in columns 18-20: `AP5` for the bi-substrate inhibitor in
+    /// `1AKE`, `HOH` for water. **Every atom of every copy**, so a file with the complex twice in
+    /// its asymmetric unit gives two ligands' worth -- see [`Structure::chain`] for the same
+    /// problem on the protein side, and pass `chain` here rather than filtering afterwards.
+    ///
+    /// Hydrogens are not special-cased. A crystal structure at ordinary resolution has none, and
+    /// one that does is a file whose author meant them to be there.
+    ///
+    /// Empty when nothing matched, which is a real answer: an apo structure has no ligand, and
+    /// [`Network::with_ligand`](crate::Network::with_ligand) of nothing is the network it started
+    /// as. A caller that asked for a group it expected to find should say so itself -- this
+    /// cannot tell a typo from an apo form.
+    pub fn ligand_from_pdb(text: &str, name: &str, chain: Option<char>) -> Vec<[f64; 3]> {
+        let mut atoms = Vec::new();
+        let mut seen_alt: Vec<(char, i32, String, char)> = Vec::new();
+        for line in text.lines() {
+            if line.starts_with("ENDMDL") {
+                break;
+            }
+            if !line.starts_with("HETATM") || line.len() < 54 {
+                continue;
+            }
+            if line[17..20].trim() != name {
+                continue;
+            }
+            let at = line[21..22].chars().next().unwrap_or(' ');
+            if chain.is_some_and(|c| c != at) {
+                continue;
+            }
+            // The same alternate-location rule the protein side uses, for the same reason: a
+            // second conformer of one atom is that atom modelled twice, not a second atom.
+            let alt = line[16..17].chars().next().unwrap_or(' ');
+            let seq: i32 = line[22..26].trim().parse().unwrap_or(0);
+            let atom = line[12..16].trim().to_string();
+            let key = (at, seq, atom, alt);
+            let first = (key.0, key.1, key.2.clone(), ' ');
+            if seen_alt.contains(&first) || seen_alt.contains(&key) {
+                continue;
+            }
+            seen_alt.push(first);
+            let parse = |from: usize, to: usize| line[from..to].trim().parse::<f64>().ok();
+            if let (Some(x), Some(y), Some(z)) = (parse(30, 38), parse(38, 46), parse(46, 54)) {
+                // Angstrom in the file, metres here, as everywhere in this crate.
+                atoms.push([x * 1e-10, y * 1e-10, z * 1e-10]);
+            }
+        }
+        atoms
+    }
+
     /// The alpha carbons of the first model in `text`.
     ///
     /// Takes `ATOM` records whose atom name is `CA` and whose element column is blank or `C`,

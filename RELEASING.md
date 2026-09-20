@@ -76,7 +76,7 @@ Count them rather than remembering them:
 
 ```sh
 ls crates | wc -l                                    # crates
-find crates -path '*examples*' -name '*.rs' -not -path '*common*' | wc -l   # examples: 15
+find crates -path '*examples*' -name '*.rs' -not -path '*common*' | wc -l   # examples: 16
 ls app/pantometry-world/scenes/*.json | wc -l         # scenes
 cargo test --locked --workspace --release 2>&1 | grep -E "test result:" \
   | awk -F'[; ]' '{p+=$4} END {print p}'             # tests
