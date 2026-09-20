@@ -47,6 +47,8 @@
 //! Two `642 × 642` eigenproblems, about twelve seconds in release and minutes in debug. The
 //! library gate and CI both run examples in release.
 
+use pantometry::scene::Frame;
+use pantometry_core::Reading;
 use pantometry_protein::{correlation, Modes, Network, Structure};
 use pantometry_units::Qty;
 
@@ -164,6 +166,75 @@ fn main() {
         10.0,
         100.0,
         "x a random direction",
+    );
+
+    // ================================================================ how far one mode gets
+    heading("Following that mode, and where it stops being the motion");
+
+    // **A mode is a direction, and a conformational change is a path.** Walking the open structure
+    // along mode 0 carries it towards the closed one -- and only so far: a harmonic approximation
+    // is a straight line through a curve, and past the tangent point it leaves again. Nothing here
+    // is fitted; the mode, the amplitude and the closed structure are each computed once.
+    //
+    // The amplitude is the thermal one, `sqrt(2 k_BT / lambda)`, so "x16" is a real unit rather
+    // than a knob: sixteen times the excursion this mode actually has at body temperature.
+    let shape = modes_open.shape(0);
+    let amplitude = (2.0 * 1.380_649e-23 * KELVIN / modes_open.eigenvalue(0).to_si()).sqrt();
+    println!(
+        "  {:<34} {:>6.2} A  thermal excursion of the softest mode at {KELVIN:.0} K",
+        "amplitude",
+        amplitude / A
+    );
+    let walked = |steps: f64| -> f64 {
+        let moved: Vec<[f64; 3]> = (0..open.len())
+            .map(|i| {
+                let p = open.residues()[i].at;
+                [
+                    p[0] + steps * amplitude * shape[3 * i],
+                    p[1] + steps * amplitude * shape[3 * i + 1],
+                    p[2] + steps * amplitude * shape[3 * i + 2],
+                ]
+            })
+            .collect();
+        // Superposed before measuring, so this is shape and not where the mode translated it.
+        let s = Structure::from_positions(moved);
+        s.superposed_onto(&fitted)
+            .expect("the same length")
+            .rmsd_to(&fitted)
+            .expect("the same length")
+    };
+    let at_rest = walked(0.0);
+    let mut best = (0.0f64, at_rest);
+    for k in 0..=40 {
+        let steps = k as f64;
+        let d = walked(steps);
+        if d < best.1 {
+            best = (steps, d);
+        }
+    }
+    for steps in [-8.0, 0.0, best.0, 2.0 * best.0] {
+        println!(
+            "  {:>6.0} x amplitude   {:>6.1} A of excursion   {:>5.2} A from the closed form",
+            steps,
+            (steps.abs() * amplitude) / A,
+            walked(steps) / A
+        );
+    }
+    // **The sign is the model's, not a fitted one.** Going the other way along the same mode takes
+    // the enzyme further from the closed structure, which is what makes "towards" mean something.
+    check_between(
+        "the mode leads towards the closed form and not away",
+        walked(-best.0) / at_rest,
+        1.0,
+        2.0,
+        "x the distance at rest",
+    );
+    check_between(
+        "and gets a third of the way there before it overshoots",
+        1.0 - best.1 / at_rest,
+        0.25,
+        0.6,
+        "of the way",
     );
 
     // ================================================================ what binding does
@@ -362,12 +433,162 @@ fn main() {
         );
     }
 
-    if let Some(path) = common::output_path() {
-        common::write(&path, &draw(&closed, &before, &after, &nearest));
-        println!("\n  the lid, the molecule under it, and what stopped moving");
-    } else {
-        println!("\n  give a filename ending .svg for the figure");
+    match common::output_path() {
+        Some(path) if path.ends_with(".svg") => {
+            common::write(&path, &draw(&closed, &before, &after, &nearest));
+            println!("\n  the lid, the molecule under it, and what stopped moving");
+        }
+        Some(path) => {
+            let frames = closing(&open, &closed, &ligand);
+            let asset = if path.ends_with(".json") {
+                pantometry::view::to_json("adenylate kinase closing", &frames)
+            } else {
+                pantometry::view::html("adenylate kinase closing", &frames)
+            };
+            common::write(&path, &asset);
+            println!(
+                "\n  {} frames. `pantometry view` plays it with space, or open the .html and drag",
+                frames.len()
+            );
+        }
+        None => println!("\n  a name ending .svg draws the figure, .json or .html the animation"),
     }
+}
+
+/// How many frames the closing animation holds: out along the mode and back.
+const FRAMES: usize = 48;
+/// How far out it goes, in thermal amplitudes of the softest mode.
+///
+/// Where the walk in `main` measures its closest approach to the closed structure. Past it the
+/// straight line leaves the curve again, which the animation shows by going there and coming back.
+const REACH: f64 = 16.0;
+
+/// The enzyme closing along its own softest mode, frame by frame, over the molecule it closes on.
+///
+/// **In the closed structure's frame.** The ligand's coordinates are in that frame and nothing in
+/// this crate hands out the transform that would carry them into the open one, so the network is
+/// rebuilt from the open structure superposed onto the closed: a rotated network has rotated
+/// modes, and the picture then has the protein and the molecule in one place.
+///
+/// The amplitude is not thermal. Sixteen times the excursion this mode actually has at body
+/// temperature is a path being followed, not a motion being watched, and the caption says so --
+/// what is physical about it is the *direction*, which is the model's and is checked in `main`.
+fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Frame> {
+    use pantometry::scene::{Panel, PanelData, Placed};
+
+    let start = open.superposed_onto(closed).expect("the same length");
+    let network = Network::new(&start, Qty::from_si(CUTOFF), Qty::from_si(SPRING));
+    let modes = Modes::of(&network);
+    let shape = modes.shape(0);
+    let amplitude = (2.0 * 1.380_649e-23 * KELVIN / modes.eigenvalue(0).to_si()).sqrt();
+    // Which way is towards the closed structure. The eigenvector's sign is arbitrary -- a mode is
+    // a line, not an arrow -- so it is chosen by asking, once, and not by hoping.
+    let toward = {
+        let at = |s: f64| {
+            let moved: Vec<[f64; 3]> = (0..start.len())
+                .map(|i| {
+                    let p = start.residues()[i].at;
+                    [
+                        p[0] + s * amplitude * shape[3 * i],
+                        p[1] + s * amplitude * shape[3 * i + 1],
+                        p[2] + s * amplitude * shape[3 * i + 2],
+                    ]
+                })
+                .collect();
+            Structure::from_positions(moved)
+                .rmsd_to(closed)
+                .expect("the same length")
+        };
+        if at(REACH) < at(-REACH) {
+            1.0
+        } else {
+            -1.0
+        }
+    };
+
+    let ligand_points: Vec<[f64; 3]> = ligand.to_vec();
+    (0..FRAMES)
+        .map(|f| {
+            // Out and back, as a cosine, so the ends are still and the middle is quick -- which is
+            // what a mode does and also what makes a loop read as a loop rather than a jump.
+            let phase = std::f64::consts::TAU * f as f64 / FRAMES as f64;
+            let steps = toward * REACH * (1.0 - phase.cos()) / 2.0;
+            let here: Vec<[f64; 3]> = (0..start.len())
+                .map(|i| {
+                    let p = start.residues()[i].at;
+                    [
+                        p[0] + steps * amplitude * shape[3 * i],
+                        p[1] + steps * amplitude * shape[3 * i + 1],
+                        p[2] + steps * amplitude * shape[3 * i + 2],
+                    ]
+                })
+                .collect();
+            let gone: Vec<f64> = (0..start.len())
+                .map(|i| {
+                    let p = start.residues()[i].at;
+                    let d = [here[i][0] - p[0], here[i][1] - p[1], here[i][2] - p[2]];
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() / A
+                })
+                .collect();
+            let rmsd = Structure::from_positions(here.clone())
+                .rmsd_to(closed)
+                .expect("the same length");
+            Frame {
+                time_s: f as f64 / FRAMES as f64,
+                panels: vec![
+                    // **The backbone one segment at a time.** `PanelData::paths` colours a
+                    // *run*, not a vertex, so the whole chain as one run is one colour -- which
+                    // it was, and the snapshot said so: "in 1 shades". Each consecutive pair is
+                    // its own run now, valued by how far its two ends have come, and the lids are
+                    // what lights up.
+                    Panel {
+                        name: "backbone".into(),
+                        unit: "A moved",
+                        place: Placed::HERE,
+                        data: PanelData::paths(
+                            (0..here.len() - 1).map(|i| vec![here[i], here[i + 1]]),
+                            (0..here.len() - 1)
+                                .map(|i| (gone[i] + gone[i + 1]) / 2.0)
+                                .collect(),
+                        ),
+                    },
+                    Panel {
+                        name: "AP5A".into(),
+                        unit: "atoms",
+                        place: Placed::HERE,
+                        data: PanelData::Points {
+                            positions: ligand_points.clone(),
+                            values: vec![1.0; ligand_points.len()],
+                            bounds: bounds_of(&ligand_points),
+                            boxed: false,
+                        },
+                    },
+                ],
+                readings: vec![
+                    Reading::new("closing", "from the closed form", rmsd / A, "A"),
+                    Reading::new("closing", "excursion", steps.abs() * amplitude / A, "A"),
+                    Reading::new(
+                        "closing",
+                        "the furthest residue has moved",
+                        gone.iter().fold(0.0f64, |m, v| m.max(*v)),
+                        "A",
+                    ),
+                ],
+            }
+        })
+        .collect()
+}
+
+/// The box a set of points occupies.
+fn bounds_of(points: &[[f64; 3]]) -> [f64; 6] {
+    let mut b = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+    for p in points {
+        for a in 0..3 {
+            b[a] = b[a].min(p[a]);
+            b[a + 3] = b[a + 3].max(p[a]);
+        }
+    }
+    b
 }
 
 /// Chain A of an entry, checked to be the entry it says it is.
