@@ -1,0 +1,7 @@
+front radius           39.7538 mm
+cemented radius       -43.6333 mm
+glass semi-aperture     9.5000 mm
+meshed                    6404 vertices, 12288 triangles in 2 elements
+drawn                      200 runs, 2491 vertices
+fold mirror               9.61 x 9.46 mm
+image plane               5.19 x 0.08 mm

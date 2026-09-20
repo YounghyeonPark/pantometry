@@ -35,6 +35,15 @@ drawn as the surface the rays are traced against**, checked point by point again
 intersection the trace uses — and the two flats are drawn to the footprint of the beam, because a
 prescription gives a fold mirror no size at all.*
 
+![The same bench through the GPU viewer: the doublet as a lit solid, the crown and the flint each
+coloured by its own refractive index, with the rays passing through the
+glass](docs/bench-app.png)
+
+*The same run through the viewer, which shades it: `pantometry view bench.json`. The glass is a
+**solid** here rather than an outline — 6 404 vertices and 12 288 triangles, every edge of each
+element shared by exactly two faces and every vertex still a point a ray lands on. A line behind it
+is hidden by it, which is a thing measured rather than looked at.*
+
 ## Install
 
 ```sh

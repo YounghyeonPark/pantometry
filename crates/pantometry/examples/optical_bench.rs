@@ -716,6 +716,76 @@ fn main() {
         );
     }
 
+    // ================================================================ the caption a machine reads
+    //
+    // **`docs/bench-app.png` is a photograph of a GPU.** CI has no adapter, so it is the second
+    // figure in this repository nothing in CI can refresh -- `docs/editor.png` is the first, and
+    // `tools/screenshot/README.md` spends a page on why that matters: a picture nothing compares
+    // ages in silence, and every change to the thing it shows leaves it a little more wrong.
+    //
+    // So the geometry the picture is of is written down beside it, and compared here. This runs on
+    // the argument-less invocation, which is the one CI makes of every example on every commit.
+    let caption = format!(
+        concat!(
+            "front radius        {:>10.4} mm\n",
+            "cemented radius     {:>10.4} mm\n",
+            "glass semi-aperture {:>10.4} mm\n",
+            "meshed              {:>10} vertices, {} triangles in {} elements\n",
+            "drawn               {:>10} runs, {} vertices\n",
+            "fold mirror         {:>10.2} x {:.2} mm\n",
+            "image plane         {:>10.2} x {:.2} mm\n",
+        ),
+        bench.crown_r * 1e3,
+        bench.cement_r * 1e3,
+        GLASS * 1e3,
+        elements.iter().map(|e| e.points.len()).sum::<usize>(),
+        elements.iter().map(|e| e.faces.len()).sum::<usize>(),
+        elements.len(),
+        kept,
+        vertices,
+        flat_size(&flats[0]).0 * 1e3,
+        flat_size(&flats[0]).1 * 1e3,
+        flat_size(&flats[1]).0 * 1e3,
+        flat_size(&flats[1]).1 * 1e3,
+    );
+    // **Writing the caption comes before checking it**, or the one command that fixes a stale
+    // figure is the one command the staleness blocks.
+    if let Some(path) = common::output_path() {
+        if path.ends_with(".txt") {
+            common::write(&path, &caption);
+            return;
+        }
+    }
+    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/bench-app.txt")
+        .canonicalize()
+        .ok();
+    match beside.as_deref().map(std::fs::read_to_string) {
+        Some(Ok(stored)) => {
+            // Carriage returns are the checkout's, not the geometry's: `core.autocrlf` rewrites
+            // the stored file and this string has none. The same flattening
+            // `the_screenshot_is_still_true` does, for the same reason.
+            let flat = |t: &str| t.replace('\r', "");
+            assert_eq!(
+                flat(&stored),
+                flat(&caption),
+                "the bench has changed since `docs/bench-app.png` was taken. Retake it --\n  \
+                 cargo run --release --example optical_bench bench.json\n  \
+                 cd app && cargo run --release -- view bench.json --snapshot ../docs/bench-app.ppm\n\
+                 -- and write this file with `--example optical_bench docs/bench-app.txt`. \
+                 Editing the text alone would restore the green and leave the picture as stale \
+                 as it is."
+            );
+            println!("  {:<34} {:>7}", "the app figure's caption agrees", "yes");
+        }
+        // A checkout without `docs/` is not this example's business, and neither is a packaged
+        // crate. A *missing* file is a skip; a file that disagrees is a failure.
+        _ => println!(
+            "  {:<34} {:>7}",
+            "no docs/bench-app.txt beside this", "skipped"
+        ),
+    }
+
     // ================================================================ the deliverable
     if let Some(path) = common::output_path() {
         let frame = Frame {
@@ -1362,6 +1432,12 @@ fn textbook_sag(r: f64, h: f64) -> f64 {
         return 0.0;
     }
     r - r.signum() * (r * r - h * h).sqrt()
+}
+
+/// The two sides of a drawn flat, in metres, from the rectangle's own corners.
+fn flat_size(corners: &[[f64; 3]]) -> (f64, f64) {
+    let at = |k: usize| DVec3::from_array(corners[k]);
+    ((at(1) - at(0)).length(), (at(3) - at(0)).length())
 }
 
 fn point(p: LengthVec) -> [f64; 3] {
