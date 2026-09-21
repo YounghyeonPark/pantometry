@@ -7,6 +7,9 @@
 
 use pantometry_protein::{ParseError, Structure};
 
+/// `1AKE`, whose chain A holds the inhibitor this counts.
+const CLOSED: &str = include_str!("../structures/1AKE.pdb");
+
 /// Ångström, in metres.
 const A: f64 = 1e-10;
 
@@ -256,4 +259,82 @@ fn one_chain_of_two_comes_out_alone() {
     );
     assert_eq!(s.chain('A').unwrap().residues()[0].name, "MET");
     println!("  chains A and B separate, chain C is None");
+}
+
+/// **The ligand comes out as the molecule, counted by element.**
+///
+/// Every other test here checks the reader against the format's rules, which it could satisfy
+/// while reading the wrong atoms. This checks it against a fact about the world that nothing in
+/// this repository produced: AP5A — P¹,P⁵-di(adenosine-5′)pentaphosphate, the bi-substrate
+/// inhibitor in `1AKE` — is **C20H29N10O22P5**, and a crystal structure at 1.9 Å has no
+/// hydrogens in it. So the reader has to find twenty carbons, ten nitrogens, twenty-two oxygens
+/// and five phosphorus atoms, and nothing else.
+///
+/// **It checks the alternate-location rule too, which nothing else did.** Counted raw, the `AP5`
+/// records of chain A are C20 N10 **O28 P6** — sixty-four, seven of which are one atom modelled
+/// in two places. The rule is what turns sixty-four into fifty-seven; the formula is what says
+/// fifty-seven is the *right* number and not merely a smaller one. Drop the rule and the oxygens
+/// go to twenty-eight and the phosphorus to six, which is no longer a molecule.
+#[test]
+fn the_ligand_is_the_molecule_its_formula_says() {
+    let atoms = Structure::ligand_from_pdb(CLOSED, "AP5", Some('A'));
+    let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for a in &atoms {
+        *tally.entry(a.element.as_str()).or_default() += 1;
+    }
+    let formula: Vec<(&str, usize)> = tally.into_iter().collect();
+    assert_eq!(
+        formula,
+        vec![("C", 20), ("N", 10), ("O", 22), ("P", 5)],
+        "AP5A is C20H29N10O22P5 and this file has no hydrogens, so its heavy atoms are \
+         C20 N10 O22 P5 — counted raw, before the alternate-location rule, they are C20 N10 O28 P6"
+    );
+    assert_eq!(atoms.len(), 57, "twenty and ten and twenty-two and five");
+
+    // **And every element came from the column, not from the name.** `PA` is the alpha
+    // phosphorus of a phosphate; a reader guessing off the atom name reads it as protactinium,
+    // and the tally above would still be five of *something*.
+    let phosphorus = atoms.iter().filter(|a| a.element == "P").count();
+    assert_eq!(
+        phosphorus, 5,
+        "the five phosphorus atoms are spelled P and not PA"
+    );
+    assert!(
+        atoms.iter().all(|a| a.element.len() == 1),
+        "every element in this molecule is a one-letter symbol"
+    );
+
+    // The coordinates still arrive in metres, and the molecule is a few angstrom across.
+    let span = |k: usize| {
+        let lo = atoms.iter().fold(f64::MAX, |m, a| m.min(a.at[k]));
+        let hi = atoms.iter().fold(f64::MIN, |m, a| m.max(a.at[k]));
+        (hi - lo) / A
+    };
+    let widest = (0..3).map(span).fold(0.0f64, f64::max);
+    assert!(
+        (10.0..30.0).contains(&widest),
+        "a pentaphosphate spanning two nucleotides is about twenty angstrom, not {widest:.1}"
+    );
+}
+
+/// **A record with no element column gives no element, rather than a guess.**
+///
+/// The column arrived in the 1996 format. A reader that fell back to the atom name would read
+/// `PA` as protactinium and `CA` as calcium where both are neither, and would do it silently —
+/// so this returns the empty string and lets the caller decide what a file that old means.
+#[test]
+fn a_record_too_short_for_the_element_column_says_nothing() {
+    const SHORT: &str = "\
+HETATM 3320  PA  AP5 A 215      18.089  46.955  20.531  1.00 17.77
+";
+    let atoms = Structure::ligand_from_pdb(SHORT, "AP5", Some('A'));
+    assert_eq!(
+        atoms.len(),
+        1,
+        "the coordinates are all there and were read"
+    );
+    assert_eq!(
+        atoms[0].element, "",
+        "an element was invented from the atom name"
+    );
 }

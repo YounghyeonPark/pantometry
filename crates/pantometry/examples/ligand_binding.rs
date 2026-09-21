@@ -52,9 +52,13 @@
 //! # The picture is a Ca trace, and says so
 //!
 //! `Structure` holds one atom per residue, so what the tube follows is the alpha-carbon chain and
-//! not a molecular surface: there are no side chains in this model to draw. The ligand has real
-//! atom positions and is drawn as balls, at one radius for all 57 — `ligand_from_pdb` hands back
-//! positions without elements, so a CPK colouring would be a claim the data cannot support.
+//! not a molecular surface: there are no side chains in this model to draw. That is the honest
+//! limit of a Ca network and the picture does not pretend otherwise.
+//!
+//! The **ligand** is not like that. It has real atom positions and, now that `ligand_from_pdb`
+//! carries the element column, real radii: 20 carbons, 10 nitrogens, 22 oxygens and 5 phosphorus,
+//! drawn at Bondi's 1.52 to 1.80 Å. It was 57 identical balls, which drew five phosphorus atoms
+//! the size of a carbon — a picture asserting something about the molecule that the data does not.
 //!
 //! # Release only, and why it is worth the seconds
 //!
@@ -63,7 +67,7 @@
 
 use pantometry::scene::Frame;
 use pantometry_core::Reading;
-use pantometry_protein::{correlation, Modes, Network, Structure};
+use pantometry_protein::{correlation, Atom, Modes, Network, Structure};
 use pantometry_units::Qty;
 
 mod common;
@@ -90,9 +94,28 @@ const SPRING: f64 = 1.0;
 const TUBE_RADIUS: f64 = 0.6 * A;
 /// How many sides the backbone's cross-section has.
 ///
-/// Six rather than sixteen because the wire format writes every vertex on every one of 48 frames,
-/// and the positions are where the file size goes -- the run prints both numbers. At this radius
-/// the cross-section is a few pixels across and the facets do not read.
+/// Six rather than sixteen because the wire format writes every panel out on every one of 48
+/// frames. At this radius the cross-section is a few pixels across and the facets do not read.
+///
+/// # Where the 18.2 MB actually goes, measured
+///
+/// "The positions are where the file size goes" stood here and is only half true:
+///
+/// | | of the file | changes between frames? |
+/// | --- | --- | --- |
+/// | backbone triangles | 38.8% | **no** |
+/// | backbone positions | 37.3% | yes |
+/// | backbone values | 8.9% | yes |
+/// | the whole molecule | 11.5% | **no** |
+///
+/// **Half the file is bytes repeated unchanged forty-eight times.** A triangle list is topology
+/// and never moves; the ligand is what the protein closes *on* and does not move either. A format
+/// where a panel could omit an array and mean "as the frame before" would cut 18.2 MB to about
+/// 9.3 — and it is deliberately not that, because every reader would become stateful and a frame
+/// that simply forgot an array would render as an empty mesh rather than as an error. That is a
+/// silent failure bought for a factor of two on a local artefact nothing ships, and halving
+/// `FRAMES` buys the same factor for nothing. The number is written down here so the next person
+/// weighing it does not have to measure it again.
 const TUBE_SIDES: usize = 6;
 /// How many samples of the spline each 3.8 A step becomes before the tube is swept along it.
 ///
@@ -102,13 +125,31 @@ const TUBE_SIDES: usize = 6;
 /// lozenges. The spline still passes through every measured atom; it only turns less between
 /// them, which the run checks to within a rounding.
 const TUBE_SMOOTH: usize = 3;
-/// The radius every ligand atom is drawn at.
+/// The radius each element is drawn at: Bondi's van der Waals radii, in metres.
 ///
-/// One radius for all 57, because `Structure::ligand_from_pdb` hands back positions and not
-/// elements -- there is no way from here to tell a phosphorus from a carbon, so this is a ball
-/// model at a common radius and not a CPK one, and saying otherwise would be the picture making
-/// a claim the data cannot support.
-const ATOM_RADIUS: f64 = 1.5 * A;
+/// **A drawing convention, which is why it is here and not in `pantometry-protein`.** A van der
+/// Waals radius is a property of an element and not a physics this workspace models -- nothing in
+/// the crate computes with it, and putting a periodic table in a crate that reads files would be
+/// the wrong crate growing the wrong thing.
+///
+/// This used to be one radius for all 57 atoms, because `ligand_from_pdb` handed back bare
+/// coordinates: five phosphorus atoms drawn the size of a carbon, which is a picture asserting
+/// something about the molecule that the data does not. The reader carries the element column
+/// now, and `the_ligand_is_the_molecule_its_formula_says` holds it against AP5A's own formula.
+const BONDI: [(&str, f64); 6] = [
+    ("C", 1.70 * A),
+    ("N", 1.55 * A),
+    ("O", 1.52 * A),
+    ("P", 1.80 * A),
+    ("S", 1.80 * A),
+    ("F", 1.47 * A),
+];
+/// What an element with no entry in [`BONDI`] is drawn at, and the run says when it uses this.
+///
+/// Carbon's, because a ligand is mostly carbon -- but a picture that silently drew an iron the
+/// size of a carbon would be the defect this change removed, coming back through the table
+/// instead of through the reader.
+const UNLISTED_RADIUS: f64 = 1.70 * A;
 /// How many times each ligand sphere is subdivided: 20 * 4^level triangles per atom.
 ///
 /// Zero -- the icosahedron itself. The molecule does not move and its 57 balls are a few pixels
@@ -130,6 +171,7 @@ fn main() {
     let open = chain_a(open_text, "4AKE");
     let closed = chain_a(closed_text, "1AKE");
     let ligand = Structure::ligand_from_pdb(closed_text, "AP5", Some('A'));
+    let ligand_at: Vec<[f64; 3]> = ligand.iter().map(|a| a.at).collect();
     println!(
         "  {:<34} {:>6} residues, {} of them in each copy",
         "adenylate kinase",
@@ -149,6 +191,41 @@ fn main() {
         40.0,
         80.0,
         "atoms",
+    );
+    // **What it is made of, and what that makes it look like.** The reader carries the element
+    // column now, so the molecule is drawn at Bondi radii rather than as 57 identical balls --
+    // and the test `the_ligand_is_the_molecule_its_formula_says` holds this tally against AP5A's
+    // own formula, `C20H29N10O22P5` minus the hydrogens a 1.9 A structure does not have.
+    let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for a in &ligand {
+        *tally.entry(a.element.as_str()).or_default() += 1;
+    }
+    let formula: String = tally
+        .iter()
+        .map(|(e, n)| format!("{e}{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let unlisted = ligand.iter().filter(|a| !bondi(&a.element).1).count();
+    println!(
+        "  {:<34} {:>6}  drawn at {:.2} to {:.2} A, {} not in the table",
+        "by element",
+        formula,
+        ligand
+            .iter()
+            .map(|a| bondi(&a.element).0 / A)
+            .fold(f64::MAX, f64::min),
+        ligand
+            .iter()
+            .map(|a| bondi(&a.element).0 / A)
+            .fold(0.0f64, f64::max),
+        unlisted
+    );
+    check_between(
+        "every atom is drawn at its own element's radius",
+        unlisted as f64,
+        0.0,
+        0.0,
+        "fell back to carbon's",
     );
 
     // Superposed **closed onto open**, because the network is built in the open structure's frame
@@ -296,7 +373,7 @@ fn main() {
     // well as two potentials, and this is about the potential.
     let bare = Network::new(&closed, Qty::from_si(CUTOFF), Qty::from_si(SPRING));
     let bound = Network::new(&closed, Qty::from_si(CUTOFF), Qty::from_si(SPRING))
-        .with_ligand(ligand.clone());
+        .with_ligand(ligand_at.clone());
     let m_bare = Modes::of(&bare);
     let m_complex = Modes::of(&bound);
     let m_after = Modes::of_the_protein(&bound);
@@ -398,7 +475,7 @@ fn main() {
 
     let nearest = |i: usize| {
         let p = closed.residues()[i].at;
-        ligand
+        ligand_at
             .iter()
             .map(|l| {
                 let d = [p[0] - l[0], p[1] - l[1], p[2] - l[2]];
@@ -553,8 +630,13 @@ fn main() {
 
     // The sphere begins as an icosahedron, whose area and volume are elementary too, and every
     // subdivision quarters what it is short of the sphere it is being pushed onto.
-    let ball = mesh::sphere([0.0, 0.0, 0.0], ATOM_RADIUS, 0, 0.0);
-    let (ico_area, ico_volume) = mesh::icosahedron_exactly(ATOM_RADIUS);
+    //
+    // At phosphorus's radius, because these check the *mesh* and any radius would do -- and if
+    // one has to be named, the largest of the ones actually drawn is the one whose triangles are
+    // biggest and whose roundings are worst.
+    let ball_radius = bondi("P").0;
+    let ball = mesh::sphere([0.0, 0.0, 0.0], ball_radius, 0, 0.0);
+    let (ico_area, ico_volume) = mesh::icosahedron_exactly(ball_radius);
     let floor = 4.0 * ball.faces.len() as f64 * f64::EPSILON;
     check(
         "the icosahedron's area",
@@ -592,8 +674,8 @@ fn main() {
     // closed. Neither is redundant and neither covers the other.
     let mut pair = ball.clone();
     pair.append(&mesh::sphere(
-        [4.0 * ATOM_RADIUS, 0.0, 0.0],
-        ATOM_RADIUS,
+        [4.0 * ball_radius, 0.0, 0.0],
+        ball_radius,
         0,
         0.0,
     ));
@@ -612,7 +694,7 @@ fn main() {
         "open edges",
     );
 
-    let sphere_area = 4.0 * std::f64::consts::PI * (ATOM_RADIUS / A).powi(2);
+    let sphere_area = 4.0 * std::f64::consts::PI * (ball_radius / A).powi(2);
     // The quarter-per-level is asymptotic in the subdivision's edge, and level 0's edge is about
     // as long as the radius itself -- nowhere near that regime. What pins level 0 is its own exact
     // area and volume, checked directly above; the rate is asked from level 1, where the edge
@@ -623,7 +705,7 @@ fn main() {
     // anywhere; the first is the tightest point in this section, 0.107 clear of the bound.
     let missing: Vec<f64> = (1..5)
         .map(|level| {
-            sphere_area - mesh::sphere([0.0, 0.0, 0.0], ATOM_RADIUS, level, 0.0).area() / (A * A)
+            sphere_area - mesh::sphere([0.0, 0.0, 0.0], ball_radius, level, 0.0).area() / (A * A)
         })
         .collect();
     for w in missing.windows(2) {
@@ -862,7 +944,7 @@ fn main() {
             "residues            {:>10} alpha carbons, {} ligand atoms\n",
             "trace               {:>10} points, spline x{} through every one\n",
             "tube                {:>10.2} A radius, {} sides, {} triangles\n",
-            "molecule            {:>10.2} A radius, level {}, {} triangles\n",
+            "molecule            {:>10} at Bondi radii, level {}, {} triangles\n",
             "tightest curve      {:>10.3} A, tube at {:.4} of folding\n",
             "closest approach    {:>10.2} A, tube {:.4} of the gap\n",
             "animation           {:>10} frames to {:.0} amplitudes; drawn at {} = {:.2}\n",
@@ -874,10 +956,10 @@ fn main() {
         TUBE_RADIUS / A,
         TUBE_SIDES,
         backbone.faces.len(),
-        ATOM_RADIUS / A,
+        formula,
         ATOM_LEVEL,
         ligand.len()
-            * mesh::sphere([0.0; 3], ATOM_RADIUS, ATOM_LEVEL, 0.0)
+            * mesh::sphere([0.0; 3], ball_radius, ATOM_LEVEL, 0.0)
                 .faces
                 .len(),
         TUBE_RADIUS / mesh::crowding(&trace, TUBE_RADIUS) / A,
@@ -889,42 +971,20 @@ fn main() {
         FIGURE_FRAME,
         excursion(FIGURE_FRAME),
     );
-    // **Writing the caption comes before checking it**, or the one command that fixes a stale
-    // figure is the one command the staleness blocks.
+    // **Writing the caption comes before checking it, and producing anything skips the check.**
+    // The recipe in the message below is retake, then write this file — and with a stale caption
+    // the *retake* died right here, so the one command that fixes a stale figure was the command
+    // the staleness blocked. Only the `.txt` arm was guarded against that, which is half of it: a
+    // run producing any artefact is a run refreshing the figure, and the compare belongs to the
+    // argument-less run, which is the one CI makes on every commit.
     if let Some(path) = common::output_path() {
         if path.ends_with(".txt") {
             common::write(&path, &caption);
             return;
         }
     }
-    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/protein-app.txt")
-        .canonicalize()
-        .ok();
-    match beside.as_deref().map(std::fs::read_to_string) {
-        Some(Ok(stored)) => {
-            // Carriage returns are the checkout's, not the geometry's: `core.autocrlf` rewrites
-            // the stored file and this string has none.
-            let flat = |t: &str| t.replace('\r', "");
-            assert_eq!(
-                flat(&stored),
-                flat(&caption),
-                "the solid has changed since `docs/protein-app.png` was taken. Retake it --\n  \
-                 cargo run --release --example ligand_binding closing.json\n  \
-                 cd app && cargo run --release -- view ../closing.json --frame {FIGURE_FRAME} \
-                 --snapshot ../docs/protein-app.png\n\
-                 -- and write this file with `--example ligand_binding docs/protein-app.txt`. \
-                 Editing the text alone would restore the green and leave the picture as stale \
-                 as it is."
-            );
-            println!("  {:<44} {:>12}", "the app figure's caption agrees", "yes");
-        }
-        // A checkout without `docs/` is not this example's business, and neither is a packaged
-        // crate. A *missing* file is a skip; a file that disagrees is a failure.
-        _ => println!(
-            "  {:<44} {:>12}",
-            "no docs/protein-app.txt beside this", "skipped"
-        ),
+    if common::output_path().is_none() {
+        compare_caption(&caption);
     }
 
     match common::output_path() {
@@ -947,6 +1007,42 @@ fn main() {
         }
         None => println!(
             "\n  .svg draws the figure, .json or .html the animation, .txt the figure's caption"
+        ),
+    }
+}
+
+/// The geometry `docs/protein-app.png` is a picture of, against what is stored beside it.
+///
+/// A *missing* file is a skip — a checkout without `docs/` is not this example's business, and
+/// neither is a packaged crate. A file that disagrees is a failure.
+fn compare_caption(caption: &str) {
+    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/protein-app.txt")
+        .canonicalize()
+        .ok();
+    match beside.as_deref().map(std::fs::read_to_string) {
+        Some(Ok(stored)) => {
+            // Carriage returns are the checkout's, not the geometry's: `core.autocrlf` rewrites
+            // the stored file and this string has none.
+            let flat = |t: &str| t.replace('\r', "");
+            assert_eq!(
+                flat(&stored),
+                flat(caption),
+                "the solid has changed since `docs/protein-app.png` was taken. Retake it --\n  \
+                 cargo run --release --example ligand_binding closing.json\n  \
+                 cd app && cargo run --release -- view ../closing.json --frame {FIGURE_FRAME} \
+                 --snapshot ../docs/protein-app.png\n\
+                 -- and write this file with `--example ligand_binding docs/protein-app.txt`. \
+                 Editing the text alone would restore the green and leave the picture as stale \
+                 as it is."
+            );
+            println!("  {:<44} {:>12}", "the app figure's caption agrees", "yes");
+        }
+        // A checkout without `docs/` is not this example's business, and neither is a packaged
+        // crate. A *missing* file is a skip; a file that disagrees is a failure.
+        _ => println!(
+            "  {:<44} {:>12}",
+            "no docs/protein-app.txt beside this", "skipped"
         ),
     }
 }
@@ -987,7 +1083,7 @@ fn excursion(frame: usize) -> f64 {
     REACH * (1.0 - phase.cos()) / 2.0
 }
 
-fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Frame> {
+fn closing(open: &Structure, closed: &Structure, ligand: &[Atom]) -> Vec<Frame> {
     use pantometry::scene::{Panel, PanelData, Placed};
 
     let start = open.superposed_onto(closed).expect("the same length");
@@ -1024,7 +1120,15 @@ fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Fra
     // -- so rebuilding 57 spheres on each of 48 frames would be the same arithmetic 2736 times.
     let mut molecule = mesh::Mesh::default();
     for atom in ligand {
-        molecule.append(&mesh::sphere(*atom, ATOM_RADIUS, ATOM_LEVEL, 1.0));
+        // **Each at its own element'''s radius.** Five phosphorus atoms at 1.80 A against
+        // carbon'''s 1.70 and oxygen'''s 1.52 is what a pentaphosphate looks like; one radius for
+        // all of them was a picture of a molecule this is not.
+        molecule.append(&mesh::sphere(
+            atom.at,
+            bondi(&atom.element).0,
+            ATOM_LEVEL,
+            1.0,
+        ));
     }
     (0..FRAMES)
         .map(|f| {
@@ -1153,6 +1257,18 @@ fn chain_a(text: &str, expect: &str) -> Structure {
         .expect("alpha carbons")
         .chain('A')
         .expect("a chain A")
+}
+
+/// The radius an element is drawn at, and whether [`BONDI`] knew it.
+///
+/// The second half is the point. An element with no entry is drawn at carbon's radius, which is
+/// a reasonable guess and a silent one -- so the caller prints what it fell back on, and a
+/// molecule containing a metal says so rather than showing it the size of a carbon.
+fn bondi(element: &str) -> (f64, bool) {
+    match BONDI.iter().find(|(name, _)| *name == element) {
+        Some((_, r)) => (*r, true),
+        None => (UNLISTED_RADIUS, false),
+    }
 }
 
 /// The enzyme along its sequence: how much each residue moves, free and bound, with the ligand's

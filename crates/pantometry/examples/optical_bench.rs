@@ -748,44 +748,21 @@ fn main() {
         flat_size(&flats[1]).0 * 1e3,
         flat_size(&flats[1]).1 * 1e3,
     );
-    // **Writing the caption comes before checking it**, or the one command that fixes a stale
-    // figure is the one command the staleness blocks.
+    // **Writing the caption comes before checking it, and producing anything skips the check.**
+    // The recipe in the message below is `bench.json`, then a snapshot, then this file — and with
+    // a stale caption the *first* of those died right here, so the one command that fixes a stale
+    // figure was the command the staleness blocked. Only the `.txt` arm was guarded against that,
+    // which is half of it: a run producing any artefact is a run refreshing the figure, and the
+    // compare belongs to the argument-less run, which is the one CI makes on every commit.
     if let Some(path) = common::output_path() {
         if path.ends_with(".txt") {
             common::write(&path, &caption);
             return;
         }
     }
-    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/bench-app.txt")
-        .canonicalize()
-        .ok();
-    match beside.as_deref().map(std::fs::read_to_string) {
-        Some(Ok(stored)) => {
-            // Carriage returns are the checkout's, not the geometry's: `core.autocrlf` rewrites
-            // the stored file and this string has none. The same flattening
-            // `the_screenshot_is_still_true` does, for the same reason.
-            let flat = |t: &str| t.replace('\r', "");
-            assert_eq!(
-                flat(&stored),
-                flat(&caption),
-                "the bench has changed since `docs/bench-app.png` was taken. Retake it --\n  \
-                 cargo run --release --example optical_bench bench.json\n  \
-                 cd app && cargo run --release -- view bench.json --snapshot ../docs/bench-app.ppm\n\
-                 -- and write this file with `--example optical_bench docs/bench-app.txt`. \
-                 Editing the text alone would restore the green and leave the picture as stale \
-                 as it is."
-            );
-            println!("  {:<34} {:>7}", "the app figure's caption agrees", "yes");
-        }
-        // A checkout without `docs/` is not this example's business, and neither is a packaged
-        // crate. A *missing* file is a skip; a file that disagrees is a failure.
-        _ => println!(
-            "  {:<34} {:>7}",
-            "no docs/bench-app.txt beside this", "skipped"
-        ),
+    if common::output_path().is_none() {
+        compare_caption(&caption);
     }
-
     // ================================================================ the deliverable
     if let Some(path) = common::output_path() {
         let frame = Frame {
@@ -1462,4 +1439,40 @@ fn rms_radius(spots: &[(f64, f64)]) -> f64 {
         .sum::<f64>()
         / n)
         .sqrt()
+}
+
+/// The geometry `docs/bench-app.png` is a picture of, against what is stored beside it.
+///
+/// A *missing* file is a skip -- a checkout without `docs/` is not this example's business, and
+/// neither is a packaged crate. A file that disagrees is a failure.
+fn compare_caption(caption: &str) {
+    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/bench-app.txt")
+        .canonicalize()
+        .ok();
+    match beside.as_deref().map(std::fs::read_to_string) {
+        Some(Ok(stored)) => {
+            // Carriage returns are the checkout's, not the geometry's: `core.autocrlf` rewrites
+            // the stored file and this string has none. The same flattening
+            // `the_screenshot_is_still_true` does, for the same reason.
+            let flat = |t: &str| t.replace('\r', "");
+            assert_eq!(
+                flat(&stored),
+                flat(caption),
+                "the bench has changed since `docs/bench-app.png` was taken. Retake it --\n  \
+                 cargo run --release --example optical_bench bench.json\n  \
+                 cd app && cargo run --release -- view bench.json --snapshot ../docs/bench-app.ppm\n\
+                 -- and write this file with `--example optical_bench docs/bench-app.txt`. \
+                 Editing the text alone would restore the green and leave the picture as stale \
+                 as it is."
+            );
+            println!("  {:<34} {:>7}", "the app figure's caption agrees", "yes");
+        }
+        // A checkout without `docs/` is not this example's business, and neither is a packaged
+        // crate. A *missing* file is a skip; a file that disagrees is a failure.
+        _ => println!(
+            "  {:<34} {:>7}",
+            "no docs/bench-app.txt beside this", "skipped"
+        ),
+    }
 }

@@ -121,6 +121,28 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// One atom of a ligand: where it is, and which element the file says it is.
+///
+/// Not a [`Residue`], which is one alpha carbon standing for a whole amino acid. A ligand is
+/// modelled atom by atom, and the two are different things however similar the fields look.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Atom {
+    /// Where it is, in metres.
+    pub at: [f64; 3],
+    /// The element, upper case, as columns 77-78 of the record spell it: `C`, `N`, `O`, `P`.
+    ///
+    /// **Taken from that column and not from the atom's name**, because the name is ambiguous in
+    /// exactly the cases that matter. `PA` in `1AKE` is the alpha *phosphorus* of a phosphate and
+    /// not protactinium; `CA` is a calcium ion in one file and an alpha carbon in the next. The
+    /// element column exists because the name cannot be read, and a reader that guesses from the
+    /// name is a reader that will be wrong about a metal one day and not say so.
+    ///
+    /// Empty when the record is too short to have the column, which is a pre-1996 file or a
+    /// hand-written one. A caller drawing by element gets to decide what that means; this will
+    /// not invent one.
+    pub element: String,
+}
+
 /// A protein as a list of alpha carbons.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Structure {
@@ -143,12 +165,17 @@ impl Structure {
     /// Hydrogens are not special-cased. A crystal structure at ordinary resolution has none, and
     /// one that does is a file whose author meant them to be there.
     ///
+    /// Each atom carries its [`element`](Atom::element), read from columns 77-78. It used to
+    /// return bare coordinates, and a caller drawing the molecule could then only draw every atom
+    /// the same size — which for `AP5A` means five phosphorus atoms the size of a carbon, a
+    /// picture asserting something about the molecule that the data does not.
+    ///
     /// Empty when nothing matched, which is a real answer: an apo structure has no ligand, and
     /// [`Network::with_ligand`](crate::Network::with_ligand) of nothing is the network it started
     /// as. A caller that asked for a group it expected to find should say so itself -- this
     /// cannot tell a typo from an apo form.
-    pub fn ligand_from_pdb(text: &str, name: &str, chain: Option<char>) -> Vec<[f64; 3]> {
-        let mut atoms = Vec::new();
+    pub fn ligand_from_pdb(text: &str, name: &str, chain: Option<char>) -> Vec<Atom> {
+        let mut atoms: Vec<Atom> = Vec::new();
         let mut seen_alt: Vec<(char, i32, String, char)> = Vec::new();
         for line in text.lines() {
             if line.starts_with("ENDMDL") {
@@ -177,8 +204,17 @@ impl Structure {
             seen_alt.push(first);
             let parse = |from: usize, to: usize| line[from..to].trim().parse::<f64>().ok();
             if let (Some(x), Some(y), Some(z)) = (parse(30, 38), parse(38, 46), parse(46, 54)) {
+                // Columns 77-78, and nothing else. A record too short to hold them gives an empty
+                // string rather than a guess off the atom name -- see `Atom::element`.
+                let element = line
+                    .get(76..78)
+                    .map(|e| e.trim().to_ascii_uppercase())
+                    .unwrap_or_default();
                 // Angstrom in the file, metres here, as everywhere in this crate.
-                atoms.push([x * 1e-10, y * 1e-10, z * 1e-10]);
+                atoms.push(Atom {
+                    at: [x * 1e-10, y * 1e-10, z * 1e-10],
+                    element,
+                });
             }
         }
         atoms

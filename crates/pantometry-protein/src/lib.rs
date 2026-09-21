@@ -82,7 +82,7 @@ use pantometry_units::{Length, LengthVec, Mass, Qty, Temperature, Time, BOLTZMAN
 
 pub use modes::{correlation, Modes};
 pub use network::Network;
-pub use structure::{ParseError, Residue, Structure};
+pub use structure::{Atom, ParseError, Residue, Structure};
 
 /// A structure moving along its own normal modes at a temperature.
 ///

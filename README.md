@@ -60,7 +60,11 @@ line cannot: the lids close **over** the molecule, and you can see them do it.*
 one of the 214 alpha carbons. Its radius is not a taste — the chain turns through six places where
 the radius of curvature is about 0.9 Å, and a tube wider than that passes through its own axis and
 renders as a bead, so the run measures the ratio and refuses above one. It is also checked closed,
-right-side-out, and clear of the places the chain folds back past itself.*
+right-side-out, and clear of the places the chain folds back past itself. The molecule is
+**C20 N10 O22 P5** at Bondi radii, and that formula is the check: AP5A is `C20H29N10O22P5`, a
+structure at this resolution has no hydrogens, and counted before the reader's
+alternate-location rule the same records come to `O28 P6` — sixty-four atoms, seven of them one
+atom modelled twice.*
 
 ## Install
 
