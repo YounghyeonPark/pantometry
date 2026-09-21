@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+pub mod mesh;
 pub mod svg;
 
 use std::path::Path;

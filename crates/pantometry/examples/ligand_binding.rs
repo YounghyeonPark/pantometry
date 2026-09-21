@@ -1,8 +1,9 @@
 //! A small molecule closes an enzyme, and what that does to the enzyme's motions.
 //!
 //! ```text
-//! cargo run --release --example ligand_binding            # numbers, checked
-//! cargo run --release --example ligand_binding lid.svg    # and the figure
+//! cargo run --release --example ligand_binding             # numbers, checked
+//! cargo run --release --example ligand_binding lid.svg     # and the figure
+//! cargo run --release --example ligand_binding close.json  # the closing, as a solid
 //! ```
 //!
 //! Adenylate kinase folds two lids over its substrates and opens again. Both ends of that motion
@@ -40,7 +41,20 @@
 //!   structure against the motion the enzyme is observed to perform. The model never sees the
 //!   closed structure. In `3n = 642` dimensions a random direction scores `1/√642 = 0.039`;
 //! - **where binding is felt**, against a null: the residues the ligand stiffens most should be the
-//!   ones near it, and "near" is measured rather than asserted.
+//!   ones near it, and "near" is measured rather than asserted;
+//! - **the solid itself**, because the animation is a mesh and a mesh is the one thing a picture
+//!   cannot check. A hole reads as shadow, an inside-out surface lights like any other, and a tube
+//!   that folds through itself renders as a bead. So the sweep is measured against the exact area
+//!   and volume of the shape it is — a regular prism, an icosahedron — the winding against the
+//!   *sign* of the enclosed volume, the rings against the radius they are supposed to keep, and
+//!   the path against the curve it follows.
+//!
+//! # The picture is a Ca trace, and says so
+//!
+//! `Structure` holds one atom per residue, so what the tube follows is the alpha-carbon chain and
+//! not a molecular surface: there are no side chains in this model to draw. The ligand has real
+//! atom positions and is drawn as balls, at one radius for all 57 — `ligand_from_pdb` hands back
+//! positions without elements, so a CPK colouring would be a claim the data cannot support.
 //!
 //! # Release only, and why it is worth the seconds
 //!
@@ -53,7 +67,7 @@ use pantometry_protein::{correlation, Modes, Network, Structure};
 use pantometry_units::Qty;
 
 mod common;
-use common::{check, check_between, heading};
+use common::{check, check_between, heading, mesh};
 
 /// Ångström, in metres.
 const A: f64 = 1e-10;
@@ -65,6 +79,43 @@ const CUTOFF: f64 = 15.0 * A;
 /// One newton per metre. The spring constant cancels out of every overlap and every ratio here,
 /// and sets the scale of nothing that is compared.
 const SPRING: f64 = 1.0;
+/// The radius the backbone is drawn at.
+///
+/// **Set by the chain's own curvature, not by taste.** A swept tube of radius r following a curve
+/// of radius R reaches its own axis when r reaches R, and this backbone turns through six places
+/// where R is about 0.9 A -- residues 10, 24, 41, 86, 129 and 149, against a median of 3.9 A over
+/// the whole chain. At 1.6 A the tube folded through itself at all six and rendered as a bead
+/// each time, with every other check still passing. The run measures the ratio and refuses above
+/// one, on every frame of the animation and not only on the structure at rest.
+const TUBE_RADIUS: f64 = 0.6 * A;
+/// How many sides the backbone's cross-section has.
+///
+/// Six rather than sixteen because the wire format writes every vertex on every one of 48 frames,
+/// and the positions are where the file size goes -- the run prints both numbers. At this radius
+/// the cross-section is a few pixels across and the facets do not read.
+const TUBE_SIDES: usize = 6;
+/// How many samples of the spline each 3.8 A step becomes before the tube is swept along it.
+///
+/// **This is the number that decides whether the chain reads as a chain.** A straight polyline
+/// through alpha carbons turns as much as 60 degrees in one step, and the miter widens the ring
+/// by one over cos of the half-angle exactly there -- so the picture came out as a row of flat
+/// lozenges. The spline still passes through every measured atom; it only turns less between
+/// them, which the run checks to within a rounding.
+const TUBE_SMOOTH: usize = 3;
+/// The radius every ligand atom is drawn at.
+///
+/// One radius for all 57, because `Structure::ligand_from_pdb` hands back positions and not
+/// elements -- there is no way from here to tell a phosphorus from a carbon, so this is a ball
+/// model at a common radius and not a CPK one, and saying otherwise would be the picture making
+/// a claim the data cannot support.
+const ATOM_RADIUS: f64 = 1.5 * A;
+/// How many times each ligand sphere is subdivided: 20 * 4^level triangles per atom.
+///
+/// Zero -- the icosahedron itself. The molecule does not move and its 57 balls are a few pixels
+/// across, but the wire format writes them out on all 48 frames regardless, so one subdivision
+/// would be 1710 extra points per frame for a roundness nothing can see. This is the same trade
+/// as `TUBE_SIDES` and it is decided by the same fact about the format.
+const ATOM_LEVEL: u32 = 0;
 
 fn main() {
     let open_text = include_str!("../../pantometry-protein/structures/4AKE.pdb");
@@ -433,6 +484,362 @@ fn main() {
         );
     }
 
+    // ======================================================= the shapes the picture is made of
+    heading("The solid, against the closed forms for the shapes it is made of");
+
+    // **Checked against the exact area and volume of the shape it *is*,** not against a second
+    // sweep. `PanelData::surface` says in its own documentation that the winding is the caller's
+    // to get right and is not checked there, and an inside-out solid renders as a surface either
+    // way -- so the *signed* volume is the only number here that can tell the two apart.
+    //
+    // A tube along a straight path is a right prism on a regular n-gon. Perimeter `2 n r
+    // sin(pi/n)`, cross-section `(n/2) r^2 sin(2 pi/n)`: elementary, and exact rather than a
+    // limit. Read again as n doubles, the same pair says how fast the polygon becomes the circle.
+    let straight = [[0.0, 0.0, 0.0], [0.0, 0.0, 10.0 * A]];
+    let round_area = 2.0 * std::f64::consts::PI * 2.0 * 10.0 + 2.0 * std::f64::consts::PI * 4.0;
+    let mut shortfall = Vec::new();
+    for sides in [8usize, 16, 32] {
+        let solid = mesh::tube(&straight, &[0.0, 0.0], 2.0 * A, sides);
+        let (area, volume) = mesh::straight_tube_exactly(2.0 * A, 10.0 * A, sides);
+        // N terms, one rounding of order eps each. The rigorous bound for a recursive sum of N
+        // positive terms is (N-1)*eps/2 and the realistic behaviour is a random walk at
+        // sqrt(N)*eps; measured here at 0.007 to 0.019 of this floor, so the 4x is slack and not
+        // a fit. **What it does not carry is cancellation**, and that is a property of these
+        // meshes rather than of the model: every solid checked against a closed form is built at
+        // the origin, where the volume's terms are all one sign and the measured condition number
+        // is 1.000. A mesh checked far from the origin would need the factor
+        // max|coordinate| / shortest edge on top -- 2.6e4 for this same straight tube at 1e4 A,
+        // where the volume check fails on a geometrically perfect mesh.
+        let floor = 4.0 * solid.faces.len() as f64 * f64::EPSILON;
+        check(
+            &format!("a {sides}-sided tube's area"),
+            solid.area() / (A * A),
+            area / (A * A),
+            floor,
+            "A^2",
+        );
+        check(
+            &format!("a {sides}-sided tube's volume"),
+            solid.volume() / (A * A * A),
+            volume / (A * A * A),
+            floor,
+            "A^3",
+        );
+        check_between(
+            &format!("a {sides}-sided tube is closed"),
+            solid.unshared_edges() as f64,
+            0.0,
+            0.0,
+            "open edges",
+        );
+        // **From the mesh, not from the formula.** This subtracted `straight_tube_exactly`'s
+        // area from a literal and called the result a check on the sweep: no mesh entered it, and
+        // a `tube` inflated 10% printed 3.9466 and 3.9865 bit for bit.
+        shortfall.push(round_area - solid.area() / (A * A));
+    }
+    // The n-gon's shortfall against the circle goes as 1/n^2, so each doubling quarters it. The
+    // shortfall is measured off the swept mesh, so a sweep built at the wrong radius has the
+    // wrong shortfall and loses the rate -- and `round_area` restating the radius and the length
+    // as literals is what makes that true rather than a coincidence of two formulas agreeing.
+    for w in shortfall.windows(2) {
+        check_between(
+            "and approaches the cylinder as 1/n^2",
+            w[0] / w[1],
+            3.7,
+            4.3,
+            "x per doubling",
+        );
+    }
+
+    // The sphere begins as an icosahedron, whose area and volume are elementary too, and every
+    // subdivision quarters what it is short of the sphere it is being pushed onto.
+    let ball = mesh::sphere([0.0, 0.0, 0.0], ATOM_RADIUS, 0, 0.0);
+    let (ico_area, ico_volume) = mesh::icosahedron_exactly(ATOM_RADIUS);
+    let floor = 4.0 * ball.faces.len() as f64 * f64::EPSILON;
+    check(
+        "the icosahedron's area",
+        ball.area() / (A * A),
+        ico_area / (A * A),
+        floor,
+        "A^2",
+    );
+    check(
+        "the icosahedron's volume",
+        ball.volume() / (A * A * A),
+        ico_volume / (A * A * A),
+        floor,
+        "A^3",
+    );
+    check_between(
+        "the icosahedron is closed",
+        ball.unshared_edges() as f64,
+        0.0,
+        0.0,
+        "open edges",
+    );
+    // **And `Mesh::append`, here rather than only in the animation.** It renumbers one mesh's
+    // triangles onto the end of another, and the molecule is 57 spheres joined that way -- but
+    // `closing` is the only caller and CI runs this example without an output path, so a version
+    // that forgot to renumber shipped 57 spheres all indexing the first one's twelve vertices
+    // and exited 0 twice.
+    //
+    // **The two checks catch different failures, and it is not the one I first wrote down.** A
+    // missing renumber does *not* collapse the volume: both face sets then enclose the first ball
+    // twice over, which is exactly the 2x expected, and the volume check passes. What sees it is
+    // the closed count -- every edge belongs to four triangles instead of two, measured at 30
+    // open edges. The volume is what sees an offset that is wrong rather than absent, where the
+    // triangles index real but wrong vertices and the geometry becomes garbage that is still
+    // closed. Neither is redundant and neither covers the other.
+    let mut pair = ball.clone();
+    pair.append(&mesh::sphere(
+        [4.0 * ATOM_RADIUS, 0.0, 0.0],
+        ATOM_RADIUS,
+        0,
+        0.0,
+    ));
+    check(
+        "two balls appended hold two balls",
+        pair.volume() / (A * A * A),
+        2.0 * ico_volume / (A * A * A),
+        2.0 * floor,
+        "A^3",
+    );
+    check_between(
+        "and the pair is still closed",
+        pair.unshared_edges() as f64,
+        0.0,
+        0.0,
+        "open edges",
+    );
+
+    let sphere_area = 4.0 * std::f64::consts::PI * (ATOM_RADIUS / A).powi(2);
+    // The quarter-per-level is asymptotic in the subdivision's edge, and level 0's edge is about
+    // as long as the radius itself -- nowhere near that regime. What pins level 0 is its own exact
+    // area and volume, checked directly above; the rate is asked from level 1, where the edge
+    // halves each time and nothing else changes.
+    //
+    // **The excluded ratio is 3.3226, and it is written here so nobody widens the range to admit
+    // it.** The retained ones run 3.8070, 3.9501, 3.9874 and march to 4 rather than sitting
+    // anywhere; the first is the tightest point in this section, 0.107 clear of the bound.
+    let missing: Vec<f64> = (1..5)
+        .map(|level| {
+            sphere_area - mesh::sphere([0.0, 0.0, 0.0], ATOM_RADIUS, level, 0.0).area() / (A * A)
+        })
+        .collect();
+    for w in missing.windows(2) {
+        check_between(
+            "and approaches the sphere as 1/4 a level",
+            w[0] / w[1],
+            3.7,
+            4.3,
+            "x per level",
+        );
+    }
+
+    // And the thing actually drawn. The backbone at rest, as a solid.
+    //
+    // **On the smoothed trace, because that is the path the sweep is given.** Every one of these
+    // checks would pass on the raw alpha-carbon polyline and say nothing about the mesh the
+    // animation writes -- the crowding in particular, which is the one that changes most when the
+    // steps get shorter.
+    let raw: Vec<[f64; 3]> = closed.residues().iter().map(|r| r.at).collect();
+    let (trace, _) = mesh::smoothed(&raw, &vec![0.0; raw.len()], TUBE_SMOOTH);
+    // A Catmull-Rom passes through its control points -- that is what makes it an interpolating
+    // spline rather than an approximating one, and it is the whole of this picture's claim to
+    // still be showing where the atoms are. Exactly, not nearly: sample `k * TUBE_SMOOTH` is
+    // control point `k` by construction, at `t = 0`, so any deviation is a bug and not a rounding.
+    let strayed = (0..raw.len())
+        .map(|k| {
+            let p = trace[k * TUBE_SMOOTH];
+            let d = [p[0] - raw[k][0], p[1] - raw[k][1], p[2] - raw[k][2]];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        })
+        .fold(0.0f64, f64::max);
+    // Not exactly zero, and the reason is worth the line. The spline is evaluated by Barry and
+    // Goldman's pyramid of lerps. At a control point the weights come out exactly 1 and 0 at
+    // every step but one: the second-to-last blends a point with *itself* at a weight strictly
+    // between, which is that point in arithmetic and that point plus three roundings in floating
+    // point. Worked through, that bounds the 3D deviation by 2.6 eps of a coordinate; the floor
+    // of 4 is above it with a cushion, and nothing else in the evaluation is lossy.
+    // **The quantity every absolute floor in this section is made of.** Both the spline's
+    // deviation and the ring's radius error are roundings at the ulp of a coordinate, so they
+    // scale with how far the structure sits from the origin -- 5.7e-9 m for this one -- and not
+    // with how big it is.
+    let magnitude = trace.iter().flatten().fold(0.0f64, |m, c| m.max(c.abs()));
+    check_between(
+        "the spline still passes through every atom",
+        strayed / (4.0 * f64::EPSILON * magnitude),
+        0.0,
+        1.0,
+        "x a floor of 4 roundings",
+    );
+    println!(
+        "  {:<44} {:>12} {:<8} from {} alpha carbons",
+        "the trace the sweep is given",
+        trace.len(),
+        "points",
+        raw.len()
+    );
+    let backbone = mesh::tube(&trace, &vec![0.0; trace.len()], TUBE_RADIUS, TUBE_SIDES);
+    let contour: f64 = trace
+        .windows(2)
+        .map(|w| {
+            let d = [w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2]];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        })
+        .sum();
+    println!(
+        "  {:<44} {:>12} {:<8} over {:.0} A of chain",
+        "the backbone tube",
+        backbone.faces.len(),
+        "triangles",
+        contour / A
+    );
+    // **A tube that folded through itself would pass every check above.** It is closed, its
+    // rings keep their radius, and it renders as a bead where the chain doubles back. What says
+    // it has not is the curvature: a tube of radius r following a curve of radius R closes on the
+    // inside of the bend and reaches its own axis when r reaches R.
+    // Printed as the curve itself rather than as the ratio on the raw polyline, because that
+    // number is not comparable: it is the same estimator on a 3.8 A sampling, and three points
+    // that far apart cannot resolve a radius of 1 A. Coarser sampling reporting a gentler curve
+    // is the grid talking, not the chain.
+    println!(
+        "  {:<44} {:>12.3} {:<8} against a median of {:.2} A along the chain",
+        "the tightest curve the chain takes",
+        TUBE_RADIUS / mesh::crowding(&trace, TUBE_RADIUS) / A,
+        "A",
+        median_curve(&trace) / A
+    );
+    check_between(
+        "the tube against the tightest curve it follows",
+        mesh::crowding(&trace, TUBE_RADIUS),
+        0.0,
+        1.0,
+        "x the radius of curvature",
+    );
+    check_between(
+        "the backbone tube is closed",
+        backbone.unshared_edges() as f64,
+        0.0,
+        0.0,
+        "open edges",
+    );
+    // **Constant radius about its own segment is what makes a tube a tube**, and it is the one
+    // property of a mitered sweep no picture can show: a tube pinched at every turn renders as a
+    // smooth solid and still counts zero open edges. Every ring vertex has to sit exactly
+    // `TUBE_RADIUS` from the line of the segment arriving at its point and from the line of the
+    // one leaving. Exact, so the floor is the arithmetic and nothing else -- a few roundings on
+    // numbers of order the protein's size.
+    let ring_error = |path: &[[f64; 3]]| {
+        let solid = mesh::tube(path, &vec![0.0; path.len()], TUBE_RADIUS, TUBE_SIDES);
+        let scale = path.iter().flatten().fold(0.0f64, |m, c| m.max(c.abs()));
+        mesh::worst_radius_error(path, &solid, TUBE_RADIUS, TUBE_SIDES)
+            / (8.0 * f64::EPSILON * scale)
+    };
+    let here = ring_error(&trace);
+    check_between(
+        "every ring keeps the tube's radius",
+        here,
+        0.0,
+        1.0,
+        "x a floor of 8 roundings",
+    );
+    // **And the floor is divided by the quantity the error is actually made of.** It was divided
+    // by the box extent, which is translation-invariant while the error is not: a rounding at the
+    // ulp of a coordinate grows with the distance from the origin, and this structure's happens
+    // to sit close enough that nothing failed. Move the same tube 1000 A -- the same shape, bit
+    // for bit, plus a shift -- and against the box extent it reads 18x worse and fails the line
+    // above, while against the coordinate magnitude it does not move at all.
+    let moved: Vec<[f64; 3]> = trace
+        .iter()
+        .map(|p| [p[0] + 1000.0 * A, p[1], p[2]])
+        .collect();
+    check_between(
+        "and the floor is tied to the right quantity",
+        ring_error(&moved) / here,
+        0.2,
+        5.0,
+        "x, a thousand angstroms away",
+    );
+    // **And the winding of the mesh that actually ships.** This was a `println!`, on the
+    // grounds that whether a bend conserves the straight tube's volume exactly is a claim I had
+    // not proved -- and it is not, the ratio is 0.9983. But the *sign* needs no theorem, and
+    // leaving it unasserted left the whole many-ring path uncovered: reversing every face of any
+    // tube past two rings flipped this number to -0.9983 and changed nothing else. Both runs
+    // exited 0, 48 inside-out frames were written, and neither the closed-edge count nor the
+    // radius invariant nor the crowding could see it -- a reversed triangle still leaves its
+    // edges shared by two. The range is wide because it is not a theorem; it is wide in the one
+    // direction that matters not at all.
+    let (_, straight_volume) = mesh::straight_tube_exactly(TUBE_RADIUS, contour, TUBE_SIDES);
+    check_between(
+        "the backbone tube is right-side-out",
+        backbone.volume() / straight_volume,
+        0.9,
+        1.1,
+        "x the straight tube of that length",
+    );
+
+    // **And the conformations the animation actually draws.** Every check above is aimed at the
+    // resting `closed` structure, and not one of the 48 frames is that structure: they are the
+    // open one displaced along its softest mode, and measured over all 48 they crowd at 0.698
+    // against the 0.671 under test here. `closing` asserts each frame as it builds it, but CI
+    // runs this example with no output path and therefore never calls it -- so the frames had
+    // nothing covering them.
+    //
+    // They can be checked from here for free. Crowding is a property of *shape*, and `closing`
+    // builds its frames in the closed structure's frame, which is a rigid motion of what
+    // `modes_open` gives here -- a rotated network has rotated modes. So the same excursion
+    // schedule, walked in both directions, is the same set of shapes, without the second
+    // eigenproblem `closing` pays for.
+    let worst = (0..FRAMES)
+        .flat_map(|f| [-1.0, 1.0].map(|sign| sign * excursion(f)))
+        .map(|steps| {
+            let displaced: Vec<[f64; 3]> = (0..open.len())
+                .map(|i| {
+                    let p = open.residues()[i].at;
+                    [
+                        p[0] + steps * amplitude * shape[3 * i],
+                        p[1] + steps * amplitude * shape[3 * i + 1],
+                        p[2] + steps * amplitude * shape[3 * i + 2],
+                    ]
+                })
+                .collect();
+            let (curve, _) = mesh::smoothed(&displaced, &vec![0.0; displaced.len()], TUBE_SMOOTH);
+            mesh::crowding(&curve, TUBE_RADIUS)
+        })
+        .fold(0.0f64, f64::max);
+    check_between(
+        "nor on any conformation the animation draws",
+        worst,
+        0.0,
+        1.0,
+        "x the radius of curvature",
+    );
+
+    // **And the one crowding is blind to.** Crowding is local: it asks whether the tube folds
+    // where the path bends. Two *straight* stretches far apart along the chain -- a helix packed
+    // against a sheet, which is what a protein is made of -- bend nowhere and can still pass
+    // within a tube's width of each other, and a tube that spanned that gap would fuse them into
+    // one body that is closed, right-side-out, keeps its radius and does not fold.
+    //
+    // Excluding samples within `APART` of each other excludes 10 A of path, which is eight times
+    // the tube's diameter and well inside what crowding already covers.
+    const APART: usize = 8;
+    let approach = mesh::nearest_approach(&trace, APART);
+    println!(
+        "  {:<44} {:>12.2} {:<8} between stretches {APART} samples apart or more",
+        "the chain's closest approach to itself",
+        approach / A,
+        "A"
+    );
+    check_between(
+        "and two stretches of chain do not fuse",
+        2.0 * TUBE_RADIUS / approach,
+        0.0,
+        1.0,
+        "x the gap",
+    );
+
     match common::output_path() {
         Some(path) if path.ends_with(".svg") => {
             common::write(&path, &draw(&closed, &before, &after, &nearest));
@@ -473,6 +880,16 @@ const REACH: f64 = 16.0;
 /// The amplitude is not thermal. Sixteen times the excursion this mode actually has at body
 /// temperature is a path being followed, not a motion being watched, and the caption says so --
 /// what is physical about it is the *direction*, which is the model's and is checked in `main`.
+/// Where along the mode frame `frame` sits, in thermal amplitudes: out and back as a cosine.
+///
+/// Shared with `main`, which walks the same schedule to check that no conformation this draws
+/// folds its tube through itself. Two copies of the formula would drift, and the one in `main`
+/// would then be checking shapes nothing renders.
+fn excursion(frame: usize) -> f64 {
+    let phase = std::f64::consts::TAU * frame as f64 / FRAMES as f64;
+    REACH * (1.0 - phase.cos()) / 2.0
+}
+
 fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Frame> {
     use pantometry::scene::{Panel, PanelData, Placed};
 
@@ -506,13 +923,19 @@ fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Fra
         }
     };
 
-    let ligand_points: Vec<[f64; 3]> = ligand.to_vec();
+    // Built once. The molecule is fixed in this frame -- it is the thing the protein closes on
+    // -- so rebuilding 57 spheres on each of 48 frames would be the same arithmetic 2736 times.
+    let mut molecule = mesh::Mesh::default();
+    for atom in ligand {
+        molecule.append(&mesh::sphere(*atom, ATOM_RADIUS, ATOM_LEVEL, 1.0));
+    }
     (0..FRAMES)
         .map(|f| {
             // Out and back, as a cosine, so the ends are still and the middle is quick -- which is
             // what a mode does and also what makes a loop read as a loop rather than a jump.
-            let phase = std::f64::consts::TAU * f as f64 / FRAMES as f64;
-            let steps = toward * REACH * (1.0 - phase.cos()) / 2.0;
+            // The schedule is `excursion` because `main` walks the same one to check the shapes
+            // this draws, and two copies of it would drift.
+            let steps = toward * excursion(f);
             let here: Vec<[f64; 3]> = (0..start.len())
                 .map(|i| {
                     let p = start.residues()[i].at;
@@ -533,35 +956,42 @@ fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Fra
             let rmsd = Structure::from_positions(here.clone())
                 .rmsd_to(closed)
                 .expect("the same length");
+            // **Asked of the conformation drawn, not of the one at rest.** A tube whose widest
+            // ring outreaches the step it sits on has folded through itself, and it renders as a
+            // bead rather than a chain while every other check still passes. `main` asks this of
+            // the resting structure; the lid swings 18 A from there, so each frame asks again.
+            let (curve, shaded) = mesh::smoothed(&here, &gone, TUBE_SMOOTH);
+            let crowding = mesh::crowding(&curve, TUBE_RADIUS);
+            assert!(
+                crowding < 1.0,
+                "frame {f}: the tube's widest ring reaches {crowding:.2}x the step it sits on, so \
+                 it has folded through itself -- smooth the trace further or thin the tube"
+            );
+            let skin = mesh::tube(&curve, &shaded, TUBE_RADIUS, TUBE_SIDES);
             Frame {
                 time_s: f as f64 / FRAMES as f64,
                 panels: vec![
-                    // **The backbone one segment at a time.** `PanelData::paths` colours a
-                    // *run*, not a vertex, so the whole chain as one run is one colour -- which
-                    // it was, and the snapshot said so: "in 1 shades". Each consecutive pair is
-                    // its own run now, valued by how far its two ends have come, and the lids are
-                    // what lights up.
+                    // **The backbone as a solid.** A line has no shape, and the thing this run
+                    // is about is a lid closing over a molecule -- which a wire cannot occlude,
+                    // cannot shade, and cannot show the near side of. The tube carries one value
+                    // per residue to every vertex of that residue's ring, so the colour is per
+                    // residue and the renderer's interpolation between rings is what makes it
+                    // smooth: no shading is invented here that the numbers do not have.
                     Panel {
                         name: "backbone".into(),
                         unit: "A moved",
                         place: Placed::HERE,
-                        data: PanelData::paths(
-                            (0..here.len() - 1).map(|i| vec![here[i], here[i + 1]]),
-                            (0..here.len() - 1)
-                                .map(|i| (gone[i] + gone[i + 1]) / 2.0)
-                                .collect(),
-                        ),
+                        data: PanelData::surface(skin.points, skin.faces, skin.values),
                     },
                     Panel {
                         name: "AP5A".into(),
-                        unit: "atoms",
+                        unit: "the molecule",
                         place: Placed::HERE,
-                        data: PanelData::Points {
-                            positions: ligand_points.clone(),
-                            values: vec![1.0; ligand_points.len()],
-                            bounds: bounds_of(&ligand_points),
-                            boxed: false,
-                        },
+                        data: PanelData::surface(
+                            molecule.points.clone(),
+                            molecule.faces.clone(),
+                            molecule.values.clone(),
+                        ),
                     },
                 ],
                 readings: vec![
@@ -579,16 +1009,39 @@ fn closing(open: &Structure, closed: &Structure, ligand: &[[f64; 3]]) -> Vec<Fra
         .collect()
 }
 
-/// The box a set of points occupies.
-fn bounds_of(points: &[[f64; 3]]) -> [f64; 6] {
-    let mut b = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
-    for p in points {
-        for a in 0..3 {
-            b[a] = b[a].min(p[a]);
-            b[a + 3] = b[a + 3].max(p[a]);
-        }
-    }
-    b
+/// The middle radius of curvature along a path, as a sense of how bent it is overall.
+///
+/// The tightest curve says whether the tube folds; the median says whether that tightest one is
+/// the chain or one bad turn in it.
+fn median_curve(path: &[[f64; 3]]) -> f64 {
+    let mut radii: Vec<f64> = (1..path.len() - 1)
+        .map(|i| {
+            let u = [
+                path[i][0] - path[i - 1][0],
+                path[i][1] - path[i - 1][1],
+                path[i][2] - path[i - 1][2],
+            ];
+            let v = [
+                path[i + 1][0] - path[i][0],
+                path[i + 1][1] - path[i][1],
+                path[i + 1][2] - path[i][2],
+            ];
+            let c = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let n = |a: [f64; 3]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+            let w = [u[0] + v[0], u[1] + v[1], u[2] + v[2]];
+            if n(c) == 0.0 {
+                f64::MAX
+            } else {
+                n(u) * n(v) * n(w) / (2.0 * n(c))
+            }
+        })
+        .collect();
+    radii.sort_by(|a, b| a.partial_cmp(b).expect("no NaN in a measured structure"));
+    radii[radii.len() / 2]
 }
 
 /// Chain A of an entry, checked to be the entry it says it is.
