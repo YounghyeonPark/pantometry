@@ -23,9 +23,10 @@ another implementation that might be wrong in the same direction. Where no close
 ![A cemented achromat drawn as the surfaces it is, three colours traced through the glass, and below them where each colour focuses against a singlet of the same power](docs/lens-achromat.svg)
 
 *`cargo run --release --example lens_spots -- lens.svg`. The three SVGs here are an example's
-output and every example checks itself against a closed form. The editor screenshot below is the
-one figure CI cannot take — it needs a display and a GPU — so a test holds the same frame through
-`--ui-dump` and fails when the picture goes stale.*
+output and every example checks itself against a closed form. The three screenshots are the
+figures CI cannot take — they need a GPU, and the editor's needs a display — so each carries a
+machine-readable record of what it is a picture *of*, and the thing that writes that record fails
+when the picture goes stale.*
 
 ![An optical bench in three dimensions: a doublet drawn as a solid of revolution, a fold mirror sized to the beam it carries, and three field angles folded through ninety degrees onto an image plane](docs/bench-3d.svg)
 
@@ -43,6 +44,23 @@ glass](docs/bench-app.png)
 **solid** here rather than an outline — 6 404 vertices and 12 288 triangles, every edge of each
 element shared by exactly two faces and every vertex still a point a ray lands on. A line behind it
 is hidden by it, which is a thing measured rather than looked at.*
+
+![Adenylate kinase closing over the inhibitor it binds: the backbone as a swept solid with the two
+lids lit where they have moved furthest, and AP5A as the balls they close
+over](docs/protein-app.png)
+
+*A different domain through the same viewer: `cargo run --release --example ligand_binding
+closing.json`, then `pantometry view closing.json`, where space plays it. The enzyme is walking
+its **own softest mode** — the model is shown only the open structure, and that one direction
+scores `0.799` against the motion the enzyme is observed to perform, where a direction that knew
+nothing would score `0.039` in 642 dimensions. What the picture adds to that number is the thing a
+line cannot: the lids close **over** the molecule, and you can see them do it.*
+
+*The backbone is a tube of 7 680 triangles swept along 640 spline samples that pass through every
+one of the 214 alpha carbons. Its radius is not a taste — the chain turns through six places where
+the radius of curvature is about 0.9 Å, and a tube wider than that passes through its own axis and
+renders as a bead, so the run measures the ratio and refuses above one. It is also checked closed,
+right-side-out, and clear of the places the chain folds back past itself.*
 
 ## Install
 

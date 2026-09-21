@@ -261,6 +261,42 @@ struct App {
     gpu: Option<Gpu>,
 }
 
+/// The scale bar's label: a round number of metres with the SI prefix that number is near.
+///
+/// **Plain formatting, not `magnitude`.** The length is a round number by construction — one, two
+/// or five times a decade — and the general formatter printed `5.0000 MM` for 5.
+///
+/// **And more than two prefixes, which is what it had.** Metres and millimetres, formatted to
+/// three decimals: everything below a micrometre came out as `0 MM`. A protein 4.5 nm across is
+/// the first thing this workspace has drawn small enough to show that, and it showed it on the
+/// figure going onto the front page — a legend reporting zero length for a real object, beside a
+/// library whose front page is about dimensions living in the type system.
+fn scale_label(metres: f64) -> String {
+    let round = |v: f64| {
+        let s = format!("{v:.3}");
+        let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+        if s.is_empty() {
+            "0".to_string()
+        } else {
+            s
+        }
+    };
+    // Micro is `U`, because the glyph lattice has no Greek and a letter every reader of a plot has
+    // seen stand in for it beats the box an unknown character now draws.
+    for (floor, per_metre, unit) in [
+        (1e3, 1e-3, "KM"),
+        (1.0, 1.0, "M"),
+        (1e-3, 1e3, "MM"),
+        (1e-6, 1e6, "UM"),
+        (1e-9, 1e9, "NM"),
+    ] {
+        if metres >= floor {
+            return format!("{} {unit}", round(metres * per_metre));
+        }
+    }
+    format!("{} PM", round(metres * 1e12))
+}
+
 struct Gpu {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -411,7 +447,16 @@ impl App {
             bx1 - crate::glyphs::width(&his) * em / aspect as f32,
             by0 - row - GAP,
         );
-        write(&mut lines, unit, (bx0 + bx1) * 0.5, by1 + 0.02);
+        // **Centred on the bar, and kept inside the frame.** The unit went in at the bar's
+        // midpoint used as a *left* edge, so a long one started halfway along the bar and ran off
+        // the canvas: the front page's bench render read `REFRACTIVE` and then the edge of the
+        // picture. That was true before the glyph table could spell the word, which is why
+        // nobody read it as clipping — it looked like the holes everything else had.
+        let span = |s: &str| crate::glyphs::width(s) * em / aspect as f32;
+        let left = ((bx0 + bx1) * 0.5 - span(unit) * 0.5)
+            .min(0.98 - span(unit))
+            .max(-0.98);
+        write(&mut lines, unit, left, by1 + 0.02);
 
         // **The scale bar**, bottom left: a round number of metres across the object, so a reader
         // knows whether they are looking at a die or a room.
@@ -435,23 +480,7 @@ impl App {
             for x in [sx, sx + across] {
                 quad(&mut tris, x, sy - 0.012, x + 0.004, sy + 0.02, ink);
             }
-            // **Plain, not `magnitude`.** The length is a round number by construction — one, two
-            // or five times a decade — and the general formatter printed `5.0000 MM` for 5.
-            let round = |v: f64| {
-                let s = format!("{v:.3}");
-                let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
-                if s.is_empty() {
-                    "0".to_string()
-                } else {
-                    s
-                }
-            };
-            let label = if nice < 1.0 {
-                format!("{} MM", round(nice * 1000.0))
-            } else {
-                format!("{} M", round(nice))
-            };
-            write(&mut lines, &label, sx, sy - row - GAP);
+            write(&mut lines, &scale_label(nice), sx, sy - row - GAP);
         }
 
         // The time, top left, because a frame index is not one.
@@ -1379,3 +1408,67 @@ fn fs(v: Out) -> @location(0) vec4<f32> {
     return vec4<f32>(v.colour, 1.0);
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::scale_label;
+
+    /// **The scale bar names a length at every size this workspace models.**
+    ///
+    /// It had metres and millimetres and three decimal places, so everything below a micrometre
+    /// printed `0 MM` — which is what the protein figure showed, 4.5 nm across, while it was
+    /// being put on the front page. A legend reporting zero length for a real object is worse
+    /// than no legend.
+    #[test]
+    fn the_scale_bar_names_a_length_at_every_size() {
+        // One, two and five times every decade from a picometre to a kilometre. The bar is
+        // snapped to that ladder before it is labelled, so these are the only values it is ever
+        // built from — an atom at one end and a room at the other.
+        for exponent in -12..=3 {
+            for mantissa in [1.0, 2.0, 5.0] {
+                let metres = mantissa * 10f64.powi(exponent);
+                let label = scale_label(metres);
+                let (number, unit) = label.split_once(' ').expect("a number and a unit");
+                let value: f64 = number.parse().expect("a number");
+                assert!(
+                    value > 0.0,
+                    "{metres:e} m is labelled {label:?}, which is no length at all"
+                );
+                // **And the number means what its unit says.** A prefix off by a thousand still
+                // prints a positive number, and that is the failure a reader cannot catch: the
+                // bar drawn one size and labelled another. Read back through its own unit, it has
+                // to give the metres it was made from.
+                let per_metre = match unit {
+                    "KM" => 1e-3,
+                    "M" => 1.0,
+                    "MM" => 1e3,
+                    "UM" => 1e6,
+                    "NM" => 1e9,
+                    "PM" => 1e12,
+                    other => panic!("{other:?} is not a unit this knows"),
+                };
+                let back = value / per_metre;
+                // The label carries three decimals of its own unit, so that is its resolution and
+                // the whole of what the round trip can lose.
+                assert!(
+                    (back - metres).abs() <= 5e-4 / per_metre,
+                    "{metres:e} m is labelled {label:?}, which reads back as {back:e}"
+                );
+            }
+        }
+    }
+
+    /// **Every unit the bar can print is one the glyph table can draw.** `UM` and `NM` were added
+    /// for this, and a unit whose letters render as gaps would read as `M` — metres — which is a
+    /// scale bar that lies by a factor of a million.
+    #[test]
+    fn every_unit_the_bar_prints_can_be_drawn() {
+        for exponent in -12..=3 {
+            let label = scale_label(10f64.powi(exponent));
+            assert!(
+                crate::glyphs::can_draw(&label),
+                "{label:?} has a character the glyph table draws as a box"
+            );
+        }
+    }
+}

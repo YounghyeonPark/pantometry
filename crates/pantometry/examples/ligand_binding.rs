@@ -840,6 +840,93 @@ fn main() {
         "x the gap",
     );
 
+    // ================================================================ the caption a machine reads
+    //
+    // **`docs/protein-app.png` is a photograph of a GPU.** CI has no adapter, so it is the third
+    // figure in this repository nothing in CI can refresh -- `docs/bench-app.png` and
+    // `docs/editor.png` are the other two, and `docs/README.md` spends a paragraph on why that
+    // matters: a picture nothing compares ages in silence, and every change to the thing it shows
+    // leaves it a little more wrong.
+    //
+    // So the geometry the picture is of is written down beside it, and compared here, on the
+    // argument-less invocation CI makes of every example on every commit. Every knob that decides
+    // what the frame looks like is in it -- the radius, the sides, the smoothing, the atom radius
+    // and its subdivision, how many frames there are and how far out they go -- so moving one
+    // turns this example red instead of leaving the picture quietly wrong.
+    //
+    // **It sees no pixels**, which is the same trade the other two captions make. A change to the
+    // shading, the colour scale or the camera moves nothing here. What it holds is the failure
+    // that was actually coming.
+    let caption = format!(
+        concat!(
+            "residues            {:>10} alpha carbons, {} ligand atoms\n",
+            "trace               {:>10} points, spline x{} through every one\n",
+            "tube                {:>10.2} A radius, {} sides, {} triangles\n",
+            "molecule            {:>10.2} A radius, level {}, {} triangles\n",
+            "tightest curve      {:>10.3} A, tube at {:.4} of folding\n",
+            "closest approach    {:>10.2} A, tube {:.4} of the gap\n",
+            "animation           {:>10} frames to {:.0} amplitudes; drawn at {} = {:.2}\n",
+        ),
+        closed.len(),
+        ligand.len(),
+        trace.len(),
+        TUBE_SMOOTH,
+        TUBE_RADIUS / A,
+        TUBE_SIDES,
+        backbone.faces.len(),
+        ATOM_RADIUS / A,
+        ATOM_LEVEL,
+        ligand.len()
+            * mesh::sphere([0.0; 3], ATOM_RADIUS, ATOM_LEVEL, 0.0)
+                .faces
+                .len(),
+        TUBE_RADIUS / mesh::crowding(&trace, TUBE_RADIUS) / A,
+        mesh::crowding(&trace, TUBE_RADIUS),
+        approach / A,
+        2.0 * TUBE_RADIUS / approach,
+        FRAMES,
+        REACH,
+        FIGURE_FRAME,
+        excursion(FIGURE_FRAME),
+    );
+    // **Writing the caption comes before checking it**, or the one command that fixes a stale
+    // figure is the one command the staleness blocks.
+    if let Some(path) = common::output_path() {
+        if path.ends_with(".txt") {
+            common::write(&path, &caption);
+            return;
+        }
+    }
+    let beside = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/protein-app.txt")
+        .canonicalize()
+        .ok();
+    match beside.as_deref().map(std::fs::read_to_string) {
+        Some(Ok(stored)) => {
+            // Carriage returns are the checkout's, not the geometry's: `core.autocrlf` rewrites
+            // the stored file and this string has none.
+            let flat = |t: &str| t.replace('\r', "");
+            assert_eq!(
+                flat(&stored),
+                flat(&caption),
+                "the solid has changed since `docs/protein-app.png` was taken. Retake it --\n  \
+                 cargo run --release --example ligand_binding closing.json\n  \
+                 cd app && cargo run --release -- view ../closing.json --frame {FIGURE_FRAME} \
+                 --snapshot ../docs/protein-app.png\n\
+                 -- and write this file with `--example ligand_binding docs/protein-app.txt`. \
+                 Editing the text alone would restore the green and leave the picture as stale \
+                 as it is."
+            );
+            println!("  {:<44} {:>12}", "the app figure's caption agrees", "yes");
+        }
+        // A checkout without `docs/` is not this example's business, and neither is a packaged
+        // crate. A *missing* file is a skip; a file that disagrees is a failure.
+        _ => println!(
+            "  {:<44} {:>12}",
+            "no docs/protein-app.txt beside this", "skipped"
+        ),
+    }
+
     match common::output_path() {
         Some(path) if path.ends_with(".svg") => {
             common::write(&path, &draw(&closed, &before, &after, &nearest));
@@ -858,12 +945,22 @@ fn main() {
                 frames.len()
             );
         }
-        None => println!("\n  a name ending .svg draws the figure, .json or .html the animation"),
+        None => println!(
+            "\n  .svg draws the figure, .json or .html the animation, .txt the figure's caption"
+        ),
     }
 }
 
 /// How many frames the closing animation holds: out along the mode and back.
 const FRAMES: usize = 48;
+/// Which frame `docs/protein-app.png` is of.
+///
+/// Halfway round the cosine, which is the closest the walk comes to the closed structure and the
+/// frame where both lids are furthest from where they started -- so it is the one frame that
+/// carries the whole run in a still. Named here rather than written into the caption and the
+/// retake command separately, because those two disagreeing is how a figure of one frame comes to
+/// claim it is of another.
+const FIGURE_FRAME: usize = FRAMES / 2;
 /// How far out it goes, in thermal amplitudes of the softest mode.
 ///
 /// Where the walk in `main` measures its closest approach to the closed structure. Past it the
