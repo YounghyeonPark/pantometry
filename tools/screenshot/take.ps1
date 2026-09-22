@@ -110,7 +110,11 @@ finally {
 # Told that the child speaks UTF-8, it reads them back as they were written.
 $was = [Console]::OutputEncoding
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+# **The caption follows -Out.** This wrote `..\docs\editor.txt` whatever -Out said, so taking a
+# picture of any other scene silently replaced the committed caption for this one -- the picture
+# and its caption then described different scenes, and only the guard test would have said so.
+$caption = [System.IO.Path]::ChangeExtension($Out, ".txt")
 $dump = & $exe --ui-dump $Scene --ran | Out-String
 [Console]::OutputEncoding = $was
-[System.IO.File]::WriteAllText((Join-Path (Get-Location) "..\docs\editor.txt"), $dump, (New-Object System.Text.UTF8Encoding $false))
-"wrote ..\docs\editor.txt"
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) $caption), $dump, (New-Object System.Text.UTF8Encoding $false))
+"wrote $caption"

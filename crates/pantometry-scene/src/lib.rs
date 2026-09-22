@@ -767,14 +767,45 @@ fn points(name: &str, bodies: &dyn pantometry_core::Bodies, pose: Pose) -> Panel
             )
         }
         None => {
-            // Measured, and widened over the run later. Nothing physical sits at this edge.
-            let r = positions
-                .iter()
-                .flat_map(|p| p.iter())
-                .fold(0.0f64, |m, v| m.max(v.abs()))
-                * 1.2;
-            let r = if r > 0.0 { r } else { 1.0 };
-            ([-r, -r, -r, r, r, r], false)
+            // **The box the bodies are in, not a cube about the origin.**
+            //
+            // This was `max|coordinate| * 1.2` on every axis, which is the right box for a set
+            // centred on the origin and much too large for anything that is not: the half-side is
+            // driven by the distance to the *origin* rather than by the extent about the centre.
+            // Crambin's coordinates come out of a crystal file and sit about 10 Å off it, so 46
+            // atoms spanning 2.1 x 1.7 x 2.5 nm declared a **5.37 nm cube** — seventeen times the
+            // volume — and a viewer framing that drew the protein at a sixth of the width with
+            // the rest of the picture empty.
+            //
+            // Per axis, measured, with the same 20% margin. Nothing physical sits at this edge,
+            // and the run's own frames are unioned over it later.
+            let mut lo = [f64::MAX; 3];
+            let mut hi = [f64::MIN; 3];
+            for p in &positions {
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+            }
+            if positions.is_empty() {
+                ([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], false)
+            } else {
+                // One margin for all three, from the largest side: a per-axis margin would make a
+                // flat set's thin axis vanish, and a box is a box.
+                let margin = (0..3).map(|a| hi[a] - lo[a]).fold(0.0f64, f64::max) * 0.1;
+                let margin = if margin > 0.0 { margin } else { 1.0 };
+                (
+                    [
+                        lo[0] - margin,
+                        lo[1] - margin,
+                        lo[2] - margin,
+                        hi[0] + margin,
+                        hi[1] + margin,
+                        hi[2] + margin,
+                    ],
+                    false,
+                )
+            }
         }
     };
     Panel {

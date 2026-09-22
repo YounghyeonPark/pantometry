@@ -1,0 +1,73 @@
+size=1500x950
+texts=65
+elided=1
+cut=0
+overlap=0
+unwritable=0
+callbacks=1
+viewport=698,52 474x870
+      12     4    19  File
+      47     4    22  Edit
+      85     4    28  View
+     128     4    46  Window
+     190     4    43  Domain
+     249     4    22  Run
+     287     4    36  Watch
+       8    24   261  31-a-protein-shaking-at-body-temperature.json
+     295    26    19  run
+     330    26    32  verify
+     392    26    28  deep
+     446    26    42  fit view
+     518    26    10  |<
+     544    26     7  <
+     567    26    22  play
+     605    26     7  >
+     628    26    10  >|
+     268    46   408  crambin at body temperature, moving along the collective modes its own fold has: 1 domain(s), 0.000 s in 16 frames
+       8    48    47  Outliner
+     230    48    22  solo
+    1188    48    52  Inspector
+     933    60   231  crambin softest mode 2.1837e11 Hz
+     975    74   189  crambin spread 5.7185e-11 m
+    1188    76   297  nothing selected — pick a row in the outliner, or click something in the viewport
+     268    77   257  note: crambin: 46 residues, 688 springs at 15 A
+      54    78   157  crambin at body temperature, moving along the collective modes its own fold has: 1 domain(s), 0.000 s in 16 frames
+     222    79    30  Scene
+     933    88   231  crambin displacement 5.2996e-11 m
+      66    99    22  Run
+     222   100    30  Group
+     975   102   189  crambin energy 5.6523e-19 J
+     272   105   406  {\n  "title": "crambin at body temperature, moving along the collective modes its own fold has",\n  "duration_s": 2e-11,\n  "frames": 16,\n  "domains": [\n    {\n      "kind": "protein",\n      "name": "crambin",\n      "pdb": "structures/1CRN.pdb",\n      "cutoff_a": 15.0,\n      "stiffness_n_per_m": 0.695,\n      "temperature_c": 37.0,\n      "seed": 20260914\n    }\n  ]\n}
+     961   116   203  crambin temperature 37.0000 C
+      70   120    45  crambin
+     216   121    36  Bodies
+     975   130   189  crambin rigid modes 6.0000
+      66   141    50  Readings
+     222   142    30  Group
+     926   144   238  crambin mode separation 1.4020e14
+      78   162    45  crambin
+     222   163    30  Group
+      82   183    74  softest mode
+     216   184    36  Scalar
+      82   204    37  spread
+     216   205    36  Scalar
+      82   225    74  displacement
+     216   226    36  Scalar
+      82   246    39  energy
+     216   247    36  Scalar
+      82   267    72  temperature
+     216   268    36  Scalar
+      82   288    65  rigid modes
+     216   289    36  Scalar
+      82   309    93  mode separation
+     216   310    36  Scalar
+     706   780   180  0 triangles, 0 lines, 0 paints
+     949   808    66  crambin / m
+    1023   821    60  3.9674e-11
+    1096   821    60  9.5054e-11
+     719   838    48  0.001 um
+     706   879    89  t = 2.0000e-11 s
+     827   898    14  16
+     862   898    34  frame
+       8   932    80  ran: 17 frames
+    1398   932    94  watching the file

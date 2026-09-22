@@ -3824,15 +3824,41 @@ fn colour_bar(
         );
     }
     let font = egui::FontId::monospace(10.0);
-    for (u, align) in [
-        (0.0, egui::Align2::LEFT_TOP),
-        (0.5, egui::Align2::CENTER_TOP),
-        (1.0, egui::Align2::RIGHT_TOP),
-    ] {
+    // **The middle label only when all three fit.** They went in at 0, a half and 1 with no
+    // regard for how wide they are: `303.58 314.59 325.59` clears on a 120-point bar and
+    // `3.9674e-11 6.1364e-11 8.1054e-11` does not — it drew as `3.96746.13648.1054e-11`, three
+    // numbers on top of one another, and a reader has no way to tell that from one long number.
+    // The ends are what a bar is for and stay; the middle is a convenience and goes.
+    let label_of = |u: f64| editor_core::magnitude(editor_core::bar_value(u, scale));
+    let span = |s: &str| {
+        painter
+            .layout_no_wrap(s.to_string(), font.clone(), visuals.weak_text_color())
+            .rect
+            .width()
+    };
+    // **The condition is that they do not overlap, exactly.** The left label starts at the bar's
+    // left end, the right one ends at its right, and the middle is centred — so the middle clears
+    // both when `w >= 2*max(left, right) + middle`, and not otherwise. A first attempt demanded a
+    // gap of two characters on each side as well, which dropped the *bracket* figure's middle
+    // label where it had always fitted: `texts=66` became `65` and the guard said so.
+    let room = w >= 2.0 * span(&label_of(0.0)).max(span(&label_of(1.0))) + span(&label_of(0.5));
+    let places: &[(f64, egui::Align2)] = if room {
+        &[
+            (0.0, egui::Align2::LEFT_TOP),
+            (0.5, egui::Align2::CENTER_TOP),
+            (1.0, egui::Align2::RIGHT_TOP),
+        ]
+    } else {
+        &[
+            (0.0, egui::Align2::LEFT_TOP),
+            (1.0, egui::Align2::RIGHT_TOP),
+        ]
+    };
+    for (u, align) in places {
         painter.text(
-            egui::pos2(x0 + (u as f32) * w, y + 11.0),
-            align,
-            editor_core::magnitude(editor_core::bar_value(u, scale)),
+            egui::pos2(x0 + (*u as f32) * w, y + 11.0),
+            *align,
+            label_of(*u),
             font.clone(),
             visuals.weak_text_color(),
         );

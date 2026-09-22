@@ -1,14 +1,16 @@
-//! **`docs/editor.png` is the one figure no command can refresh, so nothing noticed it ageing.**
+//! **The editor's figures are photographs of a window, and no command in CI can retake them.**
 //!
-//! The other two are an example's output — `cargo run --example lens_spots -- docs/lens-achromat.svg`
-//! — and CI runs those examples on every commit, so a figure that stopped being true would take a
-//! failing example with it. The editor's is a photograph of a window. It needs a display and a GPU,
-//! CI has neither, and every change to the interface since it was taken would have left it quietly
-//! wrong: the toolbar it shows, the seven menus, the bands along the bottom of the viewport.
+//! The three SVGs on the front page are an example's output — `cargo run --example lens_spots --
+//! docs/lens-achromat.svg` — and CI runs those examples on every commit, so a figure that stopped
+//! being true would take a failing example with it. The editor's need a display and a GPU, CI has
+//! neither, and every change to the interface since they were taken would have left them quietly
+//! wrong: the toolbar they show, the seven menus, the bands along the bottom of the viewport.
 //!
-//! So the picture has a caption that is machine-readable. `tools/screenshot/take.ps1` writes both:
-//! the PNG, and `docs/editor.txt` — the same frame through `--ui-dump`, which is the same egui
-//! layout with no window and no GPU. This regenerates that text and compares it.
+//! So each picture has a caption that is machine-readable. `tools/screenshot/take.ps1` writes
+//! both: the PNG, and the `.txt` beside it — the same frame through `--ui-dump`, which is the same
+//! egui layout with no window and no GPU. This regenerates that text and compares it, for **both**
+//! figures: the bracket, which is a field and a mesher, and the protein, which is bodies and a
+//! different set of readings.
 //!
 //! # What this can and cannot say
 //!
@@ -28,29 +30,47 @@
 #![cfg(not(target_family = "wasm"))]
 
 /// The scene the picture is of, from this crate's manifest.
-fn scene() -> std::path::PathBuf {
+fn scene(file: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("pantometry-app has a parent")
-        .join("pantometry-world/scenes/29-a-designed-bracket-becomes-cells.json")
+        .join("pantometry-world/scenes")
+        .join(file)
 }
 
-/// **The frame the screenshot shows is the frame the editor draws.**
+/// **Both editor figures, because there are two of them now.**
+///
+/// `docs/editor.png` is the bracket, which is about the mesher and a field; `docs/editor-protein.png`
+/// is a protein, which is about bodies and a different set of readings. A guard written for one of
+/// them by name is a guard the second figure quietly does not have.
 #[test]
-fn the_screenshot_shows_the_editor_as_it_is() {
+fn the_screenshots_show_the_editor_as_it_is() {
+    for (file, stem) in [
+        ("29-a-designed-bracket-becomes-cells.json", "editor"),
+        (
+            "31-a-protein-shaking-at-body-temperature.json",
+            "editor-protein",
+        ),
+    ] {
+        holds(file, stem);
+    }
+}
+
+/// One figure against a fresh `--ui-dump` of the scene it is of.
+fn holds(file: &str, stem: &str) {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
         .expect("app/pantometry-app has two ancestors")
         .to_path_buf();
-    let Ok(stored) = std::fs::read_to_string(repo.join("docs/editor.txt")) else {
+    let Ok(stored) = std::fs::read_to_string(repo.join(format!("docs/{stem}.txt"))) else {
         // A checkout without the figure is not this test's business — `docs/` is documentation and
         // a packaging arrangement that dropped it is somebody else's problem.
         return;
     };
     assert!(
-        repo.join("docs/editor.png").is_file(),
-        "docs/editor.txt is here and docs/editor.png is not — the caption outlived its picture"
+        repo.join(format!("docs/{stem}.png")).is_file(),
+        "docs/{stem}.txt is here and docs/{stem}.png is not — the caption outlived its picture"
     );
 
     let mut bin = std::env::current_exe().expect("the test binary knows where it is");
@@ -60,7 +80,7 @@ fn the_screenshot_shows_the_editor_as_it_is() {
     }
     let out =
         std::process::Command::new(bin.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(["--ui-dump", &scene().to_string_lossy(), "--ran"])
+            .args(["--ui-dump", &scene(file).to_string_lossy(), "--ran"])
             .output()
             .expect("the binary runs");
     assert!(
@@ -92,11 +112,11 @@ fn the_screenshot_shows_the_editor_as_it_is() {
             .join("\n")
     };
     panic!(
-        "the editor's frame has changed since `docs/editor.png` was taken, from line {}:\n\
-         \n  docs/editor.txt says\n{}\n\n  the editor now draws\n{}\n\n\
-         Retake the picture — `cd app && powershell -File ../tools/screenshot/take.ps1` — which \
-         writes both files. Editing `editor.txt` alone would restore this green and leave the PNG \
-         as stale as it is.",
+        "the editor's frame has changed since docs/{stem}.png was taken, from line {}:\n\
+         \n  docs/{stem}.txt says\n{}\n\n  the editor now draws\n{}\n\n\
+         Retake it from app/ with `powershell -File ../tools/screenshot/take.ps1 -Scene \
+         pantometry-world/scenes/{file} -Out ..\\docs\\{stem}.png`, which writes both files. \
+         Editing the text alone would restore this green and leave the PNG as stale as it is.",
         at + 1,
         show(&stored),
         show(&fresh)

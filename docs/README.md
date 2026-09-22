@@ -1,9 +1,9 @@
 # Figures
 
-Six. Three are pictures the library draws of itself: the output of an example that CI runs on
+Seven. Three are pictures the library draws of itself: the output of an example that CI runs on
 every commit, and each example is a closed-form check rather than a demonstration that something
 did not crash — so the claim in a caption is guarded where it is made, by the example, and not
-here. The other three need a GPU or a display, which CI has neither of, and each carries a
+here. The other four need a GPU or a display, which CI has neither of, and each carries a
 machine-readable caption instead for the reason set out below.
 
 **CI runs the example and not the picture.** It passes no output path, so the committed SVG is
@@ -24,8 +24,8 @@ gives `bench.html`, which rotates, and `bench.gltf`, which opens in somebody's r
 can show neither, and a still projected the way the HTML viewer projects is the nearest thing that
 travels.
 
-`editor.png`, `bench-app.png` and `protein-app.gif` are the three that are not an example's
-output. The first is the editor's own window, taken by
+`editor.png`, `editor-protein.png`, `bench-app.png` and `protein-app.gif` are the four that are
+not an example's output. The first two are the editor's own window, taken by
 [`tools/screenshot/take.ps1`](../tools/screenshot/README.md); the other two are the viewer shading
 a run, which needs a GPU and no display:
 
@@ -66,7 +66,15 @@ making.
 cd app
 cargo build --release --bin pantometry
 powershell -File ../tools/screenshot/take.ps1
+powershell -File ../tools/screenshot/take.ps1 `
+  -Scene pantometry-world/scenes/31-a-protein-shaking-at-body-temperature.json `
+  -Out ..\docs\editor-protein.png
 ```
+
+**The caption follows `-Out`.** It wrote `docs/editor.txt` whatever `-Out` said, so taking a
+picture of a second scene silently replaced the first one's caption — the picture and the text
+then described different scenes, and only the guard said so. It did, twice, while this second
+figure was being taken.
 
 **It needs a display, which is why CI cannot refresh it — and why it has a caption a machine can
 read.** The three figures above come from examples CI runs on every commit, so one that stopped being
@@ -81,8 +89,8 @@ nothing in the dump. What it holds is the failure that was actually coming.
 That is also how to refresh them. They are the one place in this repository where generated output
 is tracked on purpose: `.gitignore` still refuses assets at the root, which is where a run leaves
 them, and the rule those two lines exist for — a `git add -A` that put a 302 KB filmstrip and a
-927 KB frame dump into history — is untouched. The three SVGs are 17, 52 and 40 KB, and of the
-three renders two are 43 and 176 KB.
+927 KB frame dump into history — is untouched. The three SVGs are 17, 52 and 40 KB, and the two
+stills that are not the animation are 43 and 176 KB, with the editor's pair at 176 and 139.
 
 **The animation is 2.08 MB and that is the largest thing in this repository by a wide margin**, so
 it is worth saying what it buys and what it would take to shrink it. It is forty-eight frames of

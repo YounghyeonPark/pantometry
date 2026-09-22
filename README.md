@@ -70,6 +70,16 @@ structure at this resolution has no hydrogens, and counted before the reader's
 alternate-location rule the same records come to `O28 P6` — sixty-four atoms, seven of them one
 atom modelled twice.*
 
+![The editor open on the same physics: the scene as JSON on the left, crambin drawn as bodies in a
+shaded viewport, and the seven numbers the run reported down the right](docs/editor-protein.png)
+
+*And the editor, on a protein of its own: `pantometry edit
+31-a-protein-shaking-at-body-temperature.json --run`. The scene is the text — a PDB file, a cutoff,
+a stiffness and a temperature — and everything else is what running it produced. The seven
+readings on the right are the model answering for itself: **six** rigid modes, which is how many a
+body with nothing holding it has, and a mode separation of 1.4e14 saying the softest motion is
+well clear of the rest.*
+
 ## Install
 
 ```sh
