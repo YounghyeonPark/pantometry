@@ -299,6 +299,14 @@ struct App {
     camera: Camera,
     /// The run-wide range the shading is measured against.
     span: (f64, f64),
+    /// The longest side of the box the camera was fitted to, over the **whole run**.
+    ///
+    /// **The scale bar's denominator, and it used to be this frame's box.** The camera is fitted
+    /// once over every frame, so metres-per-pixel is fixed; a bar sized by the frame's own box is
+    /// therefore the wrong length by the ratio of the two, and says so nowhere. Measured on the
+    /// committed animation before this field existed: a bar labelled `2 NM` ran 108 px at the
+    /// ends of the swing and 119 in the middle.
+    widest: f64,
     frame: usize,
     /// Whether a legend is drawn over the picture.
     ///
@@ -328,6 +336,36 @@ fn numbered(path: &str, frame: usize) -> String {
         }
         None => format!("{path}-{frame:03}"),
     }
+}
+
+/// A round number of metres, and how much of the screen's half-width it covers.
+///
+/// **It takes the run's longest side and nothing else**, which is the point. The camera is fitted
+/// once over every frame of the run, so metres-per-pixel is fixed for the whole animation; the
+/// bar used to divide by *this frame's* bounding box, which made it the wrong length by the ratio
+/// of the two in every frame. Measured on the committed protein animation before this existed: a
+/// bar labelled `2 NM` ran 108 px at the ends of the swing and 119 in the middle — 1.102, the
+/// inverse of the frames' own boxes at 1.100. A ruler that changes length is not a ruler, and
+/// nothing about the picture said so.
+///
+/// A function that cannot be handed a frame's box cannot be given the wrong one.
+///
+/// The length is a round fraction of the *object* rather than of the screen, because the camera's
+/// zoom is not in the run file and the object's size is. `None` when there is nothing to measure.
+fn scale_bar(widest: f64) -> Option<(f64, f32)> {
+    if !widest.is_finite() || widest <= 0.0 {
+        return None;
+    }
+    let raw = widest / 3.0;
+    let decade = 10f64.powf(raw.log10().floor());
+    let nice = [1.0, 2.0, 5.0, 10.0]
+        .into_iter()
+        .map(|m| m * decade)
+        .find(|n| *n >= raw)
+        .unwrap_or(decade);
+    // The framing puts the subject one unit across, so a length in metres is that fraction of the
+    // subject and the camera's own scale carries it to the screen.
+    Some((nice, (nice / widest) as f32 * 0.5))
 }
 
 /// The scale bar's label: a round number of metres with the SI prefix that number is near.
@@ -411,6 +449,9 @@ impl App {
             panel,
             framing,
             span,
+            widest: (whole[3] - whole[0])
+                .max(whole[4] - whole[1])
+                .max(whole[5] - whole[2]),
             camera,
             legend: true,
             frame: 0,
@@ -441,9 +482,12 @@ impl App {
             return (Vec::new(), Vec::new());
         };
         let (lo, hi) = self.span;
-        if !lo.is_finite() || !hi.is_finite() || hi <= lo {
-            return (Vec::new(), Vec::new());
-        }
+        // **A flat colour range skips the colour bar and nothing else.** This returned an *empty
+        // legend* on `hi <= lo` — no scale bar, no clock, nothing — and the reasoning only ever
+        // held for the colour bar: a run whose values never change has no scale to draw, and has
+        // a size and a time like any other run. What it looked like was a picture with no ruler,
+        // which is the thing the legend exists to stop.
+        let shading = lo.is_finite() && hi.is_finite() && hi > lo;
         let (mut tris, mut lines) = (Vec::new(), Vec::new());
 
         // Everything here is normalised device coordinates: x and y run -1..1, and the depth is
@@ -480,70 +524,64 @@ impl App {
 
         // **The colour bar**, bottom right, in the same steps the editor uses.
         let scale = Some((lo, hi));
-        // Clear of the bottom edge: a label whose descender is off the canvas is a label
-        // a reader distrusts, and the first attempt put both rows there.
-        let (bx0, bx1, by0, by1) = (0.34f32, 0.94, -0.80, -0.755);
-        let steps = 96;
-        for i in 0..steps {
-            let u = i as f64 / (steps - 1) as f64;
-            let [r, g, b] = editor_core::value_colour(editor_core::bar_value(u, scale), scale);
-            let x0 = bx0 + (bx1 - bx0) * i as f32 / steps as f32;
-            let x1 = bx0 + (bx1 - bx0) * (i + 1) as f32 / steps as f32;
-            quad(
-                &mut tris,
-                x0,
-                by0,
-                x1,
-                by1,
-                [
-                    (r as f32 / 255.0).powf(2.2),
-                    (g as f32 / 255.0).powf(2.2),
-                    (b as f32 / 255.0).powf(2.2),
-                ],
+        if shading {
+            // Clear of the bottom edge: a label whose descender is off the canvas is a label
+            // a reader distrusts, and the first attempt put both rows there.
+            let (bx0, bx1, by0, by1) = (0.34f32, 0.94, -0.80, -0.755);
+            let steps = 96;
+            for i in 0..steps {
+                let u = i as f64 / (steps - 1) as f64;
+                let [r, g, b] = editor_core::value_colour(editor_core::bar_value(u, scale), scale);
+                let x0 = bx0 + (bx1 - bx0) * i as f32 / steps as f32;
+                let x1 = bx0 + (bx1 - bx0) * (i + 1) as f32 / steps as f32;
+                quad(
+                    &mut tris,
+                    x0,
+                    by0,
+                    x1,
+                    by1,
+                    [
+                        (r as f32 / 255.0).powf(2.2),
+                        (g as f32 / 255.0).powf(2.2),
+                        (b as f32 / 255.0).powf(2.2),
+                    ],
+                );
+            }
+            let unit = panel.unit();
+            write(
+                &mut lines,
+                &editor_core::magnitude(lo),
+                bx0,
+                by0 - row - GAP,
             );
+            let his = editor_core::magnitude(hi);
+            write(
+                &mut lines,
+                &his,
+                bx1 - crate::glyphs::width(&his) * em / aspect as f32,
+                by0 - row - GAP,
+            );
+            // **Centred on the bar, and kept inside the frame.** The unit went in at the bar's
+            // midpoint used as a *left* edge, so a long one started halfway along the bar and ran off
+            // the canvas: the front page's bench render read `REFRACTIVE` and then the edge of the
+            // picture. That was true before the glyph table could spell the word, which is why
+            // nobody read it as clipping — it looked like the holes everything else had.
+            let span = |s: &str| crate::glyphs::width(s) * em / aspect as f32;
+            let left = ((bx0 + bx1) * 0.5 - span(unit) * 0.5)
+                .min(0.98 - span(unit))
+                .max(-0.98);
+            write(&mut lines, unit, left, by1 + 0.02);
         }
-        let unit = panel.unit();
-        write(
-            &mut lines,
-            &editor_core::magnitude(lo),
-            bx0,
-            by0 - row - GAP,
-        );
-        let his = editor_core::magnitude(hi);
-        write(
-            &mut lines,
-            &his,
-            bx1 - crate::glyphs::width(&his) * em / aspect as f32,
-            by0 - row - GAP,
-        );
-        // **Centred on the bar, and kept inside the frame.** The unit went in at the bar's
-        // midpoint used as a *left* edge, so a long one started halfway along the bar and ran off
-        // the canvas: the front page's bench render read `REFRACTIVE` and then the edge of the
-        // picture. That was true before the glyph table could spell the word, which is why
-        // nobody read it as clipping — it looked like the holes everything else had.
-        let span = |s: &str| crate::glyphs::width(s) * em / aspect as f32;
-        let left = ((bx0 + bx1) * 0.5 - span(unit) * 0.5)
-            .min(0.98 - span(unit))
-            .max(-0.98);
-        write(&mut lines, unit, left, by1 + 0.02);
 
         // **The scale bar**, bottom left: a round number of metres across the object, so a reader
         // knows whether they are looking at a die or a room.
-        let b = panel.world_bounds();
-        let widest = (b[3] - b[0]).max(b[4] - b[1]).max(b[5] - b[2]);
-        if widest > 0.0 {
-            // A round fraction of the object rather than of the screen: the camera's zoom is not
-            // in the file and the object's size is.
-            let raw = widest / 3.0;
-            let decade = 10f64.powf(raw.log10().floor());
-            let nice = [1.0, 2.0, 5.0, 10.0]
-                .into_iter()
-                .map(|m| m * decade)
-                .find(|n| *n >= raw)
-                .unwrap_or(decade);
-            // The framing puts the subject one unit across, so a length in metres is that fraction
-            // of the subject and the camera's own scale carries it to the screen.
-            let across = (nice / widest) as f32 * 0.5;
+        //
+        // **From the run's box and not this frame's**, which is the whole of what `scale_bar`
+        // takes and the reason it takes only that: the camera is fitted once over every frame, so
+        // a bar sized by a frame's own contents is the wrong length by the ratio between them and
+        // looks exactly like a bar. The colour scale learned this first — `Run::scale_of`, twenty
+        // lines above — and the ruler did not.
+        if let Some((nice, across)) = scale_bar(self.widest) {
             let (sx, sy) = (-0.94f32, -0.79);
             quad(&mut tris, sx, sy, sx + across, sy + 0.008, ink);
             for x in [sx, sx + across] {
@@ -560,6 +598,105 @@ impl App {
             -0.94,
             1.0 - row - 0.02,
         );
+
+        // **What the run measured, under the clock.** A run carries `readings` — the numbers the
+        // simulation took, frame by frame — and this file did not contain the word. So a window
+        // showing a protein closing over a molecule could not say how far it had closed, with the
+        // number sitting in the file it had open. The editor drew them and the viewer dropped
+        // them, which is the shape of a picture that is a gradient rather than a reading.
+        //
+        // Smaller than the rest of the legend, because a label like `the furthest residue has
+        // moved` is 38 characters and at the legend's own size that is three quarters of the
+        // canvas. Measured, and the value is right-aligned to a column so the digits line up
+        // rather than wandering with the label.
+        let small = em * 0.72;
+        let readings = self
+            .run
+            .frames
+            .get(self.frame)
+            .map_or(&[][..], |f| &f.readings);
+        // **The column is the widest label in the frame, not a constant.** It was -0.20, chosen
+        // by eye, and `the furthest residue has moved` runs past it — so its value landed on top
+        // of its own label and the picture read `M(+)VE(+)77(+)` where a number should be. The
+        // legend knows how wide a string is; it had not been asked.
+        let wide = |s: &str| crate::glyphs::width(s) * small / aspect as f32;
+        let widest_value = readings
+            .iter()
+            .map(|r| wide(&format!("{} {}", editor_core::magnitude(r.value), r.unit)))
+            .fold(0.0f32, f32::max);
+        // **Clamped so the value stays on the canvas.** A column placed purely by the label runs
+        // the number off the right-hand edge as soon as a label is long enough, and a number that
+        // is not there looks exactly like a number that is short. If the two cannot both fit they
+        // overlap, which is ugly and visible; going off the edge is neither.
+        let column = (-0.94
+            + readings
+                .iter()
+                .map(|r| wide(&r.label.to_ascii_uppercase()))
+                .fold(0.0f32, f32::max)
+            + wide("  "))
+        .min(0.94 - widest_value);
+        let mut line = 1.0 - row - 0.02 - crate::glyphs::HEIGHT * small - GAP;
+        // **A label longer than its column is cut, and says it was.** Sixty-nine characters runs
+        // past the right-hand edge of the canvas, where the part that is missing looks like a
+        // label that was simply shorter. Two dots is the difference between a legend that lost
+        // something and a legend that says it did.
+        let room = column - (-0.94) - wide(" ");
+        let fitted = |s: &str| {
+            if wide(s) <= room {
+                return s.to_string();
+            }
+            let mut cut = String::new();
+            for c in s.chars() {
+                if wide(&format!("{cut}{c}..")) > room {
+                    break;
+                }
+                cut.push(c);
+            }
+            format!("{cut}..")
+        };
+        for r in readings {
+            let label = fitted(&r.label.to_ascii_uppercase());
+            let value = format!("{} {}", editor_core::magnitude(r.value), r.unit);
+            for (s, x) in [(&label, -0.94f32), (&value, column)] {
+                for (ax, ay, bx, by) in crate::glyphs::text(s) {
+                    lines.push(Vertex {
+                        position: [x + ax * small / aspect as f32, line + ay * small, NEAR],
+                        colour: ink,
+                    });
+                    lines.push(Vertex {
+                        position: [x + bx * small / aspect as f32, line + by * small, NEAR],
+                        colour: ink,
+                    });
+                }
+            }
+            line -= crate::glyphs::HEIGHT * small + GAP * 0.5;
+        }
+
+        // **How to drive it, in the window.** These went to stdout, where a person looking at the
+        // picture is not. It is most of what there is to know about using this, and a screenshot
+        // that does not carry it teaches nothing about the application it is a screenshot of.
+        //
+        // Top right, in two lines, because the corners are taken: the scale bar is bottom left and
+        // the colour bar bottom right. One line of all four is 52 characters, which at this size
+        // is three quarters of the canvas and ran off the edge — the first attempt drew it across
+        // both bars and lost `ARROWS SCRUB` past the right-hand side.
+        for (k, hint) in ["DRAG ROTATE   SCROLL ZOOM", "SPACE PLAY   ARROWS SCRUB"]
+            .into_iter()
+            .enumerate()
+        {
+            let at = 0.94 - wide(hint);
+            let y = 1.0 - row - 0.02 - (crate::glyphs::HEIGHT * small + GAP * 0.5) * k as f32;
+            for (ax, ay, bx, by) in crate::glyphs::text(hint) {
+                lines.push(Vertex {
+                    position: [at + ax * small / aspect as f32, y + ay * small, NEAR],
+                    colour: ink,
+                });
+                lines.push(Vertex {
+                    position: [at + bx * small / aspect as f32, y + by * small, NEAR],
+                    colour: ink,
+                });
+            }
+        }
         (tris, lines)
     }
 
@@ -1527,7 +1664,52 @@ fn fs(v: Out) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{numbered, scale_label};
+    use super::{numbered, scale_bar, scale_label};
+
+    /// **The bar is the length its label says, and the label is a round number.**
+    ///
+    /// The test written for this before checked that the *label* named a positive length. It did,
+    /// in every frame of an animation where the bar itself ran 108 px at one end of the swing and
+    /// 119 in the middle under an unchanged `2 NM` -- because the bar divided by the frame's box
+    /// while the camera divided by the run's. A label is not a length.
+    #[test]
+    fn the_bar_covers_the_metres_it_names() {
+        for exponent in -11..=3 {
+            for mantissa in [1.0, 1.7, 3.0, 4.9, 7.3, 9.9] {
+                let widest = mantissa * 10f64.powi(exponent);
+                let (nice, across) = scale_bar(widest).expect("a box has a bar");
+                // The framing puts the subject one unit across, so half the screen is half the
+                // subject: the bar covers `nice` metres exactly when this identity holds. The
+                // fraction is an f32, so the floor is that type's epsilon and not f64's.
+                let covered = across as f64 * widest * 2.0;
+                assert!(
+                    (covered - nice).abs() <= 8.0 * f32::EPSILON as f64 * nice,
+                    "a bar of {across} covers {covered:e} m on a {widest:e} m box, labelled {nice:e}"
+                );
+                // And the number on it is one, two or five times a decade -- a ruler nobody has
+                // to divide in their head.
+                let mantissa_of = nice / 10f64.powf(nice.log10().floor());
+                assert!(
+                    [1.0, 2.0, 5.0, 10.0]
+                        .iter()
+                        .any(|m| (m - mantissa_of).abs() < 1e-9),
+                    "{nice:e} is not a round number"
+                );
+                // It has to be a readable fraction of the picture: a bar the width of the screen
+                // measures nothing and one a pixel long measures nothing either.
+                assert!(
+                    (0.05..=0.60).contains(&across),
+                    "a {widest:e} m box gives a bar {across} of the half-width"
+                );
+            }
+        }
+        assert!(
+            scale_bar(0.0).is_none(),
+            "nothing to measure is not a bar of zero"
+        );
+        assert!(scale_bar(f64::NAN).is_none());
+        assert!(scale_bar(f64::INFINITY).is_none());
+    }
 
     /// **A sequence numbers before the extension, and the dot it finds is the extension's.**
     ///

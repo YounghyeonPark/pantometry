@@ -51,7 +51,9 @@ over](docs/protein-app.gif)
 
 *A different domain through the same viewer, and the one figure here that moves: `cargo run
 --release --example ligand_binding closing.json`, then `pantometry view closing.json`, where space
-plays it. All forty-eight frames are above. The enzyme is walking its **own softest mode** — the
+plays it. **This is the window** — all forty-eight frames of it, carrying what the run measured as
+it goes and what the keys do, because a picture of an application that says neither is a picture
+of a shape. The enzyme is walking its **own softest mode** — the
 model is shown only the open structure, and that one direction scores `0.799` against the motion
 the enzyme is observed to perform, where a direction that knew nothing would score `0.039` in 642
 dimensions. What the animation adds to that number is the thing no still can: the lids close
