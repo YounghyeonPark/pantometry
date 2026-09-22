@@ -383,6 +383,18 @@ impl Fluid {
 /// The one implementor with a `cell`, and it is not decoration: an atom leaving one face enters
 /// the opposite one, so that box is a boundary condition. Drawing it is drawing physics, which
 /// is exactly the distinction `Bodies::cell` exists to draw.
+impl Fluid {
+    /// Whether this fluid is in reduced units -- `sigma = epsilon = 1` -- rather than in a real
+    /// gas'''s.
+    ///
+    /// **Exactly one, not nearly.** `LennardJones::reduced()` writes literal `1.0`s, and a real
+    /// gas'''s sigma is of the order of `3e-10`; there is nothing in between that anyone builds, so
+    /// a tolerance here would be a choice about how close to a metre an atom is allowed to be.
+    pub fn is_reduced(&self) -> bool {
+        self.potential.sigma == 1.0 && self.potential.epsilon == 1.0
+    }
+}
+
 impl Bodies for Fluid {
     fn count(&self) -> usize {
         Fluid::count(self)
@@ -393,8 +405,24 @@ impl Bodies for Fluid {
     fn value(&self, i: usize) -> f64 {
         self.velocity(i).length()
     }
+    /// `m/s` when this fluid has a real `σ` and `ε`, and **`sigma/tau` when it does not.**
+    ///
+    /// A fluid built from [`LennardJones::reduced`](crate::LennardJones::reduced) has `σ = ε = 1`,
+    /// so every length it reports is a number of `σ` and every speed a number of `√(ε/m)` — and
+    /// saying `m/s` about those is the file claiming a unit it does not have. The shipped fluid
+    /// scene declared a box `5.0388 m` across for 108 atoms spanning 1.7 nanometres, and a viewer
+    /// drew it under a scale bar reading `2 M`: the bar was right about the numbers it was given.
+    ///
+    /// **Reduced is a legitimate thing to be** — it is how a paper's state point is reproduced and
+    /// how this crate's own tests are written — so the answer is to say so, not to refuse it. A
+    /// substance that is a real gas is `σ` of the order of an ångström; one that is exactly 1 m is
+    /// nobody's atom.
     fn value_unit(&self) -> &'static str {
-        "m/s"
+        if self.is_reduced() {
+            "sigma/tau"
+        } else {
+            "m/s"
+        }
     }
     fn cell(&self) -> Option<(LengthVec, LengthVec)> {
         let l = self.bounds().length;

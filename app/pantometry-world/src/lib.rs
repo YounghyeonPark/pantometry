@@ -1115,6 +1115,21 @@ pub enum DomainSpec {
         /// If set, a Langevin bath holds it at this reduced temperature.
         #[serde(default)]
         thermostat_t: Option<f64>,
+        /// Which gas this is, one of `pantometry_molecular::substance::NAMES`.
+        ///
+        /// **Absent leaves the run in reduced units, and the run then says so.** A
+        /// Lennard-Jones fluid with no substance has `σ = ε = m = 1`, so every length it reports
+        /// is a number of `σ` — and this format's positions are metres. The shipped scene
+        /// declared a box `5.0388 m` across for 108 atoms spanning 1.7 nanometres, under a
+        /// viewer's scale bar reading `2 M`.
+        ///
+        /// Naming a gas settles every unit at once: `σ` the length, `ε/k_B` the temperature,
+        /// `σ√(m/ε)` the time. Leaving it out is still allowed, because reproducing a paper's
+        /// reduced state point is what this domain is for — but then the panel's unit says
+        /// `sigma` rather than `m`, which is the difference between a run that is dimensionless
+        /// and a run that is wrong.
+        #[serde(default)]
+        substance: Option<String>,
         /// Seed. Nothing here consults a clock.
         seed: u64,
     },
@@ -2417,20 +2432,50 @@ impl DomainSpec {
                 density,
                 temperature,
                 thermostat_t,
+                substance,
                 seed,
             } => {
-                let lj = LennardJones::reduced();
-                let fluid = Fluid::lattice(
-                    name.clone(),
-                    lj,
-                    pantometry_molecular::unit_mass(),
-                    *cells,
-                    *density,
-                )
-                .thermalised(
-                    pantometry_molecular::temperature_from_reduced(*temperature, &lj),
-                    *seed,
-                );
+                // **A named gas settles every unit; no name leaves them reduced.** `reduced()` is
+                // `sigma = epsilon = m = 1`, which is right for a paper's state point and writes a
+                // number of sigma into a field whose unit is the metre.
+                let gas = match substance {
+                    Some(want) => {
+                        Some(pantometry_molecular::Substance::named(want).ok_or_else(|| {
+                            format!(
+                                "{name}: no substance called {want:?}; this potential describes \
+                                 {}",
+                                pantometry_molecular::substance::NAMES.join(", ")
+                            )
+                        })?)
+                    }
+                    None => None,
+                };
+                let (lj, mass) = match gas {
+                    Some(g) => (
+                        LennardJones {
+                            epsilon: g.epsilon(),
+                            sigma: g.sigma,
+                            // The same 2.5 sigma the reduced one uses, in metres.
+                            cutoff: 2.5 * g.sigma,
+                        },
+                        Mass::from_si(g.mass),
+                    ),
+                    None => (LennardJones::reduced(), pantometry_molecular::unit_mass()),
+                };
+                // **The density is reduced too, and converting the potential alone is not
+                // enough.** `density` in a scene is rho-star, atoms per cubic sigma; the box
+                // builder takes atoms per cubic metre. Giving it 0.8442 with a real sigma put 32
+                // argon atoms in a box 3.36 *metres* across and asked the cell list for four
+                // billion cells a side, which is where this was caught.
+                let number_density = match gas {
+                    Some(g) => *density / (g.sigma * g.sigma * g.sigma),
+                    None => *density,
+                };
+                let fluid = Fluid::lattice(name.clone(), lj, mass, *cells, number_density)
+                    .thermalised(
+                        pantometry_molecular::temperature_from_reduced(*temperature, &lj),
+                        *seed,
+                    );
                 Box::new(match thermostat_t {
                     Some(t) => fluid.with_thermostat(Thermostat::Langevin {
                         target: pantometry_molecular::temperature_from_reduced(*t, &lj),

@@ -46,6 +46,7 @@ pub mod box_;
 pub mod fluid;
 pub mod potential;
 pub mod rdf;
+pub mod substance;
 
 pub use box_::{CellList, PeriodicBox};
 pub use fluid::{
@@ -54,3 +55,4 @@ pub use fluid::{
 };
 pub use potential::{LennardJones, Pair};
 pub use rdf::{fcc_shells, RadialDistribution};
+pub use substance::Substance;
