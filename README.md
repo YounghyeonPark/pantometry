@@ -45,16 +45,18 @@ glass](docs/bench-app.png)
 element shared by exactly two faces and every vertex still a point a ray lands on. A line behind it
 is hidden by it, which is a thing measured rather than looked at.*
 
-![Adenylate kinase closing over the inhibitor it binds: the backbone as a swept solid with the two
-lids lit where they have moved furthest, and AP5A as the balls they close
-over](docs/protein-app.png)
+![Adenylate kinase closing over the inhibitor it binds and opening again: the backbone as a swept
+solid, the two lids lighting up as they swing, and AP5A as the balls they close
+over](docs/protein-app.gif)
 
-*A different domain through the same viewer: `cargo run --release --example ligand_binding
-closing.json`, then `pantometry view closing.json`, where space plays it. The enzyme is walking
-its **own softest mode** — the model is shown only the open structure, and that one direction
-scores `0.799` against the motion the enzyme is observed to perform, where a direction that knew
-nothing would score `0.039` in 642 dimensions. What the picture adds to that number is the thing a
-line cannot: the lids close **over** the molecule, and you can see them do it.*
+*A different domain through the same viewer, and the one figure here that moves: `cargo run
+--release --example ligand_binding closing.json`, then `pantometry view closing.json`, where space
+plays it. All forty-eight frames are above. The enzyme is walking its **own softest mode** — the
+model is shown only the open structure, and that one direction scores `0.799` against the motion
+the enzyme is observed to perform, where a direction that knew nothing would score `0.039` in 642
+dimensions. What the animation adds to that number is the thing no still can: the lids close
+**over** the molecule, and then leave again, because a harmonic direction is a straight line
+through a curved path and only goes so far — 7.13 Å from the closed form down to 4.29 and back.*
 
 *The backbone is a tube of 7 680 triangles swept along 640 spline samples that pass through every
 one of the 214 alpha carbons. Its radius is not a taste — the chain turns through six places where

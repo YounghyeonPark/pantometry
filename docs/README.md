@@ -24,7 +24,7 @@ gives `bench.html`, which rotates, and `bench.gltf`, which opens in somebody's r
 can show neither, and a still projected the way the HTML viewer projects is the nearest thing that
 travels.
 
-`editor.png`, `bench-app.png` and `protein-app.png` are the three that are not an example's
+`editor.png`, `bench-app.png` and `protein-app.gif` are the three that are not an example's
 output. The first is the editor's own window, taken by
 [`tools/screenshot/take.ps1`](../tools/screenshot/README.md); the other two are the viewer shading
 a run, which needs a GPU and no display:
@@ -34,23 +34,29 @@ cargo run --release --example optical_bench bench.json
 cd app && cargo run --release -- view bench.json --snapshot ../docs/bench-app.png
 ```
 
-`protein-app.png` is the third, and the same two commands with a frame number, because the run it
-is a frame of is an animation:
+`protein-app.gif` is the third, and the same two commands, because the run it shows is an
+animation and so is it:
 
 ```sh
 cargo run --release --example ligand_binding closing.json
-cd app && cargo run --release -- view ../closing.json --frame 24 --snapshot ../docs/protein-app.png
+cd app && cargo run --release -- view ../closing.json --all-frames --snapshot ../docs/protein-app.gif
 ```
 
-`--snapshot` writes a PNG when the path says `.png` and a PPM otherwise, so nothing converts
-anything.
+**`--all-frames` exists because of this figure**, and not only to save time. One invocation per
+frame reparses the run and brings up a GPU each time — measured at 20 s a frame against an 18.2 MB
+run, so forty-eight of them is sixteen minutes and a shell loop. Every other figure on this page
+is refreshed by a command; a figure refreshed by a recipe is the one that goes stale. A path
+ending `.gif` collects the frames and writes the animation instead of numbering PNGs.
+
+`--snapshot` writes a PNG when the path says `.png`, a GIF when it says `.gif` and `--all-frames`
+is given, and a PPM otherwise, so nothing converts anything.
 
 **Each has a caption a machine can read, for the reason the editor's does.** `bench-app.txt` is
 the geometry the render is *of*: the two radii, the mesh counts, and the size of each flat.
 `protein-app.txt` is the same for the protein: the trace and tube counts, the tightest curve the
 chain takes, the closest the chain comes to itself, and every constant that decides what the frame
-looks like — the radius, the sides, the smoothing, the atom radius and its subdivision, how many
-frames there are, how far out they go and which one was photographed. Each is written and compared
+looks like — the radius, the sides, the smoothing, the atom radii and their subdivision, and how
+many frames there are and how far out they go. Each is written and compared
 by its own example on the argument-less run, which is the run CI makes of every example on every
 commit -- so a scene that changed under its picture fails the example rather than ageing quietly.
 Neither sees any pixels, which is the same trade the editor's dump makes and the same one worth
@@ -75,8 +81,16 @@ nothing in the dump. What it holds is the failure that was actually coming.
 That is also how to refresh them. They are the one place in this repository where generated output
 is tracked on purpose: `.gitignore` still refuses assets at the root, which is where a run leaves
 them, and the rule those two lines exist for — a `git add -A` that put a 302 KB filmstrip and a
-927 KB frame dump into history — is untouched. The three SVGs are 17, 52 and 40 KB, the three
-renders 43, 81 and 176, and all six are documentation.
+927 KB frame dump into history — is untouched. The three SVGs are 17, 52 and 40 KB, and of the
+three renders two are 43 and 176 KB.
+
+**The animation is 2.08 MB and that is the largest thing in this repository by a wide margin**, so
+it is worth saying what it buys and what it would take to shrink it. It is forty-eight frames of
+1100x720, and `image`'s GIF encoder writes each one whole: it does not difference against the
+frame before, which on a run that is mostly unchanging background is where the bytes are. Assembled
+outside with a global palette and frame differencing the same forty-eight frames come to 1.21 MB,
+measured — so the 0.87 MB is the price of not owning a differencing GIF encoder, and of the figure
+being refreshable by the same one command as its siblings rather than by a tool that is not here.
 
 They render on GitHub. They do not render on crates.io, which only shows images at absolute
 `https` URLs, and `raw.githubusercontent.com` serves SVG as text rather than as an image — so

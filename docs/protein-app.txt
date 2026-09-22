@@ -4,4 +4,4 @@ tube                      0.60 A radius, 6 sides, 7680 triangles
 molecule            C20 N10 O22 P5 at Bondi radii, level 0, 1140 triangles
 tightest curve           0.894 A, tube at 0.6713 of folding
 closest approach          3.57 A, tube 0.3361 of the gap
-animation                   48 frames to 16 amplitudes; drawn at 24 = 16.00
+animation                   48 frames to 16 amplitudes, out and back as a cosine

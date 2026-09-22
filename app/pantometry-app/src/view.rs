@@ -86,7 +86,9 @@ pub fn run(args: &[String]) -> i32 {
     let path = match args.first() {
         Some(p) => p.clone(),
         None => {
-            eprintln!("usage: pantometry view <run.json> [--snapshot out.ppm]");
+            eprintln!(
+                "usage: pantometry view <run.json> [--snapshot out.png [--frame N | --all-frames]]"
+            );
             eprintln!("  produced by `pantometry run <scene> out.json`, or by any run that calls");
             eprintln!("  pantometry_view::to_json");
             return 2;
@@ -164,10 +166,33 @@ pub fn run(args: &[String]) -> i32 {
         // cropping is the point — the camera fits the panel's bounds, and a one-dimensional bar
         // is a hairline in a frame that is otherwise background.
         let tile = rest.contains(&"--thumbnail");
+        // **Every frame, from one load.** A forty-eight frame run written by forty-eight
+        // invocations reparses the file and brings up a GPU each time: measured at 20 s a frame
+        // against an 18.2 MB run, which is sixteen minutes. `docs/README.md` gives every figure a
+        // command that refreshes it, and a figure whose command is a sixteen-minute shell loop is
+        // a figure that ages quietly — which is the thing that page exists to argue against.
+        let every = rest.contains(&"--all-frames");
+        // **A `.gif` path collects instead of writing.** One command for a figure that moves:
+        // the alternative is forty-eight numbered PNGs and an assembly step that lives somewhere
+        // else, which is a figure refreshed by a recipe rather than by a command — and those are
+        // the ones that go stale.
+        let animate = every && out.to_ascii_lowercase().ends_with(".gif");
+        let mut collected: Vec<Vec<u8>> = Vec::new();
+        let mut size = (0u32, 0u32);
         let mut app = App::new(run, panel);
         app.frame = at;
         app.legend = !tile;
-        println!("  snapshot of frame {at} of {}", app.run.frames.len());
+        let count = app.run.frames.len();
+        let wanted: Vec<usize> = if every {
+            (0..count).collect()
+        } else {
+            vec![at]
+        };
+        if every {
+            println!("  every one of {count} frames, from one load");
+        } else {
+            println!("  snapshot of frame {at} of {count}");
+        }
         // Rendered three times the tile and averaged down, because a marker one pixel wide
         // vanishes under nearest-neighbour and a tile is not where to discover that.
         let (rw, rh) = if tile {
@@ -175,60 +200,87 @@ pub fn run(args: &[String]) -> i32 {
         } else {
             (1100, 720)
         };
-        match app.snapshot(rw, rh) {
-            Ok(pixels) => {
-                let (pw, ph, pixels) = if tile {
-                    let (cw, ch, cropped) = crop_to_content(rw, rh, &pixels);
-                    (THUMB.0, THUMB.1, shrink(cw, ch, &cropped, THUMB.0, THUMB.1))
-                } else {
-                    (rw, rh, pixels)
-                };
-                write_image(&out, pw, ph, &pixels);
-                // **Compared against the corner pixel, not against a constant.** The target is
-                // sRGB, so the clear colour is stored far brighter than the linear number the
-                // pass was given — 56,66,77 rather than 10,14,19. A fixed threshold called every
-                // pixel in the image a line and reported 100%, which is exactly the kind of
-                // "measurement" a renderer check exists to avoid.
-                let background = [pixels[0], pixels[1], pixels[2]];
-                // `as_chunks` rather than `chunks_exact`: each pixel is a `[u8; 4]` by type, which
-                // is what it is. This workspace has no MSRV to keep it off — see the note beside
-                // the same call in `pantometry-gpu`.
-                let (rgba, _) = pixels.as_chunks::<4>();
-                let lit = rgba.iter().filter(|p| p[..3] != background).count();
-                let mut shades: Vec<[u8; 3]> = Vec::new();
-                for p in rgba {
-                    let c = [p[0], p[1], p[2]];
-                    if c != background && !shades.contains(&c) {
-                        shades.push(c);
+        for at in wanted {
+            app.frame = at;
+            let out = if every {
+                numbered(&out, at)
+            } else {
+                out.clone()
+            };
+            match app.snapshot(rw, rh) {
+                Ok(pixels) => {
+                    let (pw, ph, pixels) = if tile {
+                        let (cw, ch, cropped) = crop_to_content(rw, rh, &pixels);
+                        (THUMB.0, THUMB.1, shrink(cw, ch, &cropped, THUMB.0, THUMB.1))
+                    } else {
+                        (rw, rh, pixels)
+                    };
+                    if animate {
+                        collected.push(pixels.clone());
+                    } else {
+                        write_image(&out, pw, ph, &pixels);
+                    }
+                    // **Compared against the corner pixel, not against a constant.** The target is
+                    // sRGB, so the clear colour is stored far brighter than the linear number the
+                    // pass was given — 56,66,77 rather than 10,14,19. A fixed threshold called every
+                    // pixel in the image a line and reported 100%, which is exactly the kind of
+                    // "measurement" a renderer check exists to avoid.
+                    let background = [pixels[0], pixels[1], pixels[2]];
+                    // `as_chunks` rather than `chunks_exact`: each pixel is a `[u8; 4]` by type, which
+                    // is what it is. This workspace has no MSRV to keep it off — see the note beside
+                    // the same call in `pantometry-gpu`.
+                    let (rgba, _) = pixels.as_chunks::<4>();
+                    let lit = rgba.iter().filter(|p| p[..3] != background).count();
+                    let mut shades: Vec<[u8; 3]> = Vec::new();
+                    for p in rgba {
+                        let c = [p[0], p[1], p[2]];
+                        if c != background && !shades.contains(&c) {
+                            shades.push(c);
+                        }
+                    }
+                    // **The image's own size, not the default one.** `lit` is counted over
+                    // `pixels`, which under `--thumbnail` is 240x156 and not 1100x720 — so a tile
+                    // lighting 173 of its 37 440 was reported as "173 of 792000 (0.02%)", a fifth of
+                    // a percent read as a fiftieth. The count was right and the denominator was a
+                    // constant from before there was a second size.
+                    let all = pw as u64 * ph as u64;
+                    if animate {
+                        println!(
+                        "  frame {at}: {lit} of {all} pixels carry a line ({:.2}%), in {} shades",
+                        100.0 * lit as f64 / all as f64,
+                        shades.len()
+                    );
+                    } else {
+                        println!(
+                        "  wrote {out} — {lit} of {all} pixels carry a line ({:.2}%), in {} shades",
+                        100.0 * lit as f64 / all as f64,
+                        shades.len()
+                    );
+                    }
+                    size = (pw, ph);
+                    // **What is in the picture, in numbers.** A shaded solid says where the hot end is
+                    // and cannot say whether it is 119 °C or 1190; the size of a thing on screen is
+                    // whatever the camera chose; and a frame index is not a time. All three are known
+                    // here and none of them was printed, so a person with the file still had to open
+                    // the run to read its own picture.
+                    // **Per frame, because an empty one in the middle is the failure that hides.**
+                    // A run whose renderer stopped working on frame 31 writes thirty good pictures
+                    // and seventeen of nothing, and a check at the end sees only the last.
+                    if lit == 0 {
+                        eprintln!("  nothing was drawn");
+                        std::process::exit(1);
                     }
                 }
-                // **The image's own size, not the default one.** `lit` is counted over
-                // `pixels`, which under `--thumbnail` is 240x156 and not 1100x720 — so a tile
-                // lighting 173 of its 37 440 was reported as "173 of 792000 (0.02%)", a fifth of
-                // a percent read as a fiftieth. The count was right and the denominator was a
-                // constant from before there was a second size.
-                let all = pw as u64 * ph as u64;
-                println!(
-                    "  wrote {out} — {lit} of {all} pixels carry a line ({:.2}%), in {} shades",
-                    100.0 * lit as f64 / all as f64,
-                    shades.len()
-                );
-                // **What is in the picture, in numbers.** A shaded solid says where the hot end is
-                // and cannot say whether it is 119 °C or 1190; the size of a thing on screen is
-                // whatever the camera chose; and a frame index is not a time. All three are known
-                // here and none of them was printed, so a person with the file still had to open
-                // the run to read its own picture.
-                app.describe();
-                if lit == 0 {
-                    eprintln!("  nothing was drawn");
-                    std::process::exit(1);
+                Err(e) => {
+                    eprintln!("  no GPU available for a snapshot: {e}");
+                    std::process::exit(3);
                 }
             }
-            Err(e) => {
-                eprintln!("  no GPU available for a snapshot: {e}");
-                std::process::exit(3);
-            }
         }
+        if animate {
+            write_gif(&out, size.0, size.1, &collected, GIF_CENTISECONDS);
+        }
+        app.describe();
         return 0;
     }
 
@@ -259,6 +311,23 @@ struct App {
     playing: bool,
     dragging: Option<(f64, f64)>,
     gpu: Option<Gpu>,
+}
+
+/// `out.png` and frame 7 give `out-007.png`, so a sequence sorts and globs in frame order.
+///
+/// **The dot has to be after the last separator.** `../docs/out.png` holds dots in its `..` as
+/// well, and splitting on the last one anywhere would have written `.` beside `./docs/out-007`
+/// — a file in the wrong directory under a name nothing would look for. Three digits because a
+/// run with a thousand frames is a different problem than this.
+fn numbered(path: &str, frame: usize) -> String {
+    let after = path.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    match path[after..].rfind('.') {
+        Some(dot) => {
+            let at = after + dot;
+            format!("{}-{frame:03}{}", &path[..at], &path[at..])
+        }
+        None => format!("{path}-{frame:03}"),
+    }
 }
 
 /// The scale bar's label: a round number of metres with the SI prefix that number is near.
@@ -1204,6 +1273,53 @@ fn shrink(w: u32, h: u32, rgba: &[u8], tw: u32, th: u32) -> Vec<u8> {
 /// which is why the snapshot started there. PNG is what a picture that goes anywhere else has to
 /// be, and `image` is already in this binary's tree through `eframe` — declaring it added no crate
 /// to the lockfile, which is the only reason it is here.
+/// How long each frame of a written GIF is shown, in hundredths of a second.
+///
+/// Six, so a forty-eight frame run loops in 2.9 s. The GIF format counts in centiseconds and
+/// nothing rounder is close: five is 2.4 s and reads as a twitch, ten is 4.8 s and reads as a
+/// slideshow.
+const GIF_CENTISECONDS: u32 = 6;
+
+/// Every frame as one looping GIF.
+///
+/// **The encoder quantises each frame on its own**, which is the format's doing and not a choice
+/// here: a GIF frame carries at most 256 colours. On a run like this one — a flat background and
+/// a smoothly shaded solid — that is invisible at the sizes these are looked at, and the
+/// alternative is a palette built across the whole run, which is a colour quantiser this
+/// workspace would then own and test.
+fn write_gif(path: &str, width: u32, height: u32, frames: &[Vec<u8>], centiseconds: u32) {
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("  cannot write {path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut encoder = image::codecs::gif::GifEncoder::new(std::io::BufWriter::new(file));
+    if let Err(e) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) {
+        eprintln!("  cannot write {path}: {e}");
+        std::process::exit(1);
+    }
+    for (i, rgba) in frames.iter().enumerate() {
+        let Some(buffer) = image::RgbaImage::from_raw(width, height, rgba.clone()) else {
+            eprintln!("  frame {i} is not {width}x{height}");
+            std::process::exit(1);
+        };
+        let delay = image::Delay::from_numer_denom_ms(centiseconds * 10, 1);
+        if let Err(e) = encoder.encode_frame(image::Frame::from_parts(buffer, 0, 0, delay)) {
+            eprintln!("  cannot write frame {i} of {path}: {e}");
+            std::process::exit(1);
+        }
+    }
+    drop(encoder);
+    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    println!(
+        "  wrote {path} — {} frames at {centiseconds} centiseconds, {:.2} MB",
+        frames.len(),
+        bytes as f64 / 1_048_576.0
+    );
+}
+
 fn write_image(path: &str, width: u32, height: u32, rgba: &[u8]) {
     let png = std::path::Path::new(path)
         .extension()
@@ -1411,7 +1527,35 @@ fn fs(v: Out) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::scale_label;
+    use super::{numbered, scale_label};
+
+    /// **A sequence numbers before the extension, and the dot it finds is the extension's.**
+    ///
+    /// `../docs/out.png` carries dots in its `..` too. Splitting on the last dot anywhere would
+    /// have written `.` beside `./docs/out-007` -- a file in the wrong directory under a name
+    /// nothing would go looking for, and nothing about the run would have said so.
+    #[test]
+    fn a_frame_is_numbered_before_its_extension() {
+        assert_eq!(numbered("out.png", 7), "out-007.png");
+        assert_eq!(numbered("../docs/out.png", 7), "../docs/out-007.png");
+        assert_eq!(numbered(r"..\docs\out.png", 7), r"..\docs\out-007.png");
+        // No extension at all: the number goes on the end rather than inventing one.
+        assert_eq!(numbered("../out", 7), "../out-007");
+        assert_eq!(numbered("frames/f", 0), "frames/f-000");
+        // And the order is the frame order, which is the whole reason for three digits.
+        let mut names: Vec<String> = [9usize, 10, 100, 1]
+            .iter()
+            .map(|f| numbered("a.png", *f))
+            .collect();
+        let sorted = {
+            let mut c = names.clone();
+            c.sort();
+            c
+        };
+        names.sort_by_key(|n| n.clone());
+        assert_eq!(names, sorted);
+        assert_eq!(sorted[0], "a-001.png");
+    }
 
     /// **The scale bar names a length at every size this workspace models.**
     ///

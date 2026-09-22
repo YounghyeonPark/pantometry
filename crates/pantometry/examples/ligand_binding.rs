@@ -924,7 +924,8 @@ fn main() {
 
     // ================================================================ the caption a machine reads
     //
-    // **`docs/protein-app.png` is a photograph of a GPU.** CI has no adapter, so it is the third
+    // **`docs/protein-app.gif` is a photograph of a GPU, forty-eight times.** CI has no adapter,
+    // so it is the third
     // figure in this repository nothing in CI can refresh -- `docs/bench-app.png` and
     // `docs/editor.png` are the other two, and `docs/README.md` spends a paragraph on why that
     // matters: a picture nothing compares ages in silence, and every change to the thing it shows
@@ -947,7 +948,7 @@ fn main() {
             "molecule            {:>10} at Bondi radii, level {}, {} triangles\n",
             "tightest curve      {:>10.3} A, tube at {:.4} of folding\n",
             "closest approach    {:>10.2} A, tube {:.4} of the gap\n",
-            "animation           {:>10} frames to {:.0} amplitudes; drawn at {} = {:.2}\n",
+            "animation           {:>10} frames to {:.0} amplitudes, out and back as a cosine\n",
         ),
         closed.len(),
         ligand.len(),
@@ -968,8 +969,6 @@ fn main() {
         2.0 * TUBE_RADIUS / approach,
         FRAMES,
         REACH,
-        FIGURE_FRAME,
-        excursion(FIGURE_FRAME),
     );
     // **Writing the caption comes before checking it, and producing anything skips the check.**
     // The recipe in the message below is retake, then write this file — and with a stale caption
@@ -1011,7 +1010,7 @@ fn main() {
     }
 }
 
-/// The geometry `docs/protein-app.png` is a picture of, against what is stored beside it.
+/// The geometry `docs/protein-app.gif` is a picture of, against what is stored beside it.
 ///
 /// A *missing* file is a skip — a checkout without `docs/` is not this example's business, and
 /// neither is a packaged crate. A file that disagrees is a failure.
@@ -1028,10 +1027,10 @@ fn compare_caption(caption: &str) {
             assert_eq!(
                 flat(&stored),
                 flat(caption),
-                "the solid has changed since `docs/protein-app.png` was taken. Retake it --\n  \
+                "the solid has changed since `docs/protein-app.gif` was made. Remake it --\n  \
                  cargo run --release --example ligand_binding closing.json\n  \
-                 cd app && cargo run --release -- view ../closing.json --frame {FIGURE_FRAME} \
-                 --snapshot ../docs/protein-app.png\n\
+                 cd app && cargo run --release -- view ../closing.json --all-frames \
+                 --snapshot ../docs/protein-app.gif\n\
                  -- and write this file with `--example ligand_binding docs/protein-app.txt`. \
                  Editing the text alone would restore the green and leave the picture as stale \
                  as it is."
@@ -1049,14 +1048,6 @@ fn compare_caption(caption: &str) {
 
 /// How many frames the closing animation holds: out along the mode and back.
 const FRAMES: usize = 48;
-/// Which frame `docs/protein-app.png` is of.
-///
-/// Halfway round the cosine, which is the closest the walk comes to the closed structure and the
-/// frame where both lids are furthest from where they started -- so it is the one frame that
-/// carries the whole run in a still. Named here rather than written into the caption and the
-/// retake command separately, because those two disagreeing is how a figure of one frame comes to
-/// claim it is of another.
-const FIGURE_FRAME: usize = FRAMES / 2;
 /// How far out it goes, in thermal amplitudes of the softest mode.
 ///
 /// Where the walk in `main` measures its closest approach to the closed structure. Past it the
