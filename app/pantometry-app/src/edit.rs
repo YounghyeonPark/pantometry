@@ -2724,7 +2724,10 @@ impl App {
                     }
                 }
                 viewer_core::Panel::Points {
-                    positions, values, ..
+                    positions,
+                    values,
+                    bonds,
+                    ..
                 } => {
                     let pts = panel.placed_positions();
                     if pts.is_empty() {
@@ -2757,6 +2760,34 @@ impl App {
                         solid
                             .indices
                             .extend(sphere.indices.iter().map(|k| base + k));
+                    }
+                    // **What joins them, from the file.** A protein arrived here as one sphere
+                    // per residue and nothing between them, which reads as a bunch of grapes
+                    // rather than as a chain -- and this painter is not the viewer's, so fixing
+                    // `viewer_core::segments` left the editor exactly as it was. Two places draw
+                    // the same panel, and the second is always the one that gets forgotten: the
+                    // colour bar's overlapping labels were fixed here first and found in the
+                    // viewer afterwards, the same way round.
+                    for pair in bonds.as_chunks::<2>().0 {
+                        let (a, b) = (pair[0] as usize, pair[1] as usize);
+                        let (Some(from), Some(to)) = (pts.get(a), pts.get(b)) else {
+                            continue;
+                        };
+                        // Each half in its own end'''s colour, so a bond between a mobile residue
+                        // and a still one reads as the gradient it is.
+                        let mid = [
+                            (from[0] + to[0]) / 2.0,
+                            (from[1] + to[1]) / 2.0,
+                            (from[2] + to[2]) / 2.0,
+                        ];
+                        for (p, q, v) in [(*from, mid, values[a]), (mid, *to, values[b])] {
+                            let colour = colouring.linear(v);
+                            let base = lines.vertices();
+                            lines.push(framing.local(p), [0.0, 0.0, 1.0], colour);
+                            lines.push(framing.local(q), [0.0, 0.0, 1.0], colour);
+                            lines.indices.push(base);
+                            lines.indices.push(base + 1);
+                        }
                     }
                 }
                 // **The shaded pass, from a panel rather than from a field.** Until now the

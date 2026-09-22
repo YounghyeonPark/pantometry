@@ -338,6 +338,26 @@ fn numbered(path: &str, frame: usize) -> String {
     }
 }
 
+/// The size to draw a colour bar's two end labels at, so they do not run through each other.
+///
+/// `ends` is their combined width in glyph-lattice units, `bar` the bar's width in normalised
+/// device coordinates, `em` the legend's own size and `aspect` the canvas's.
+///
+/// **Shrinks rather than drops.** The editor's colour bar carries three labels and can lose its
+/// middle one; a bar has only two ends and a bar showing one of them is not a scale. Never grows:
+/// a short pair is drawn at the legend's size like everything else, because a bar whose numbers
+/// changed size with their own length would read as two different kinds of label.
+///
+/// One character of clear air between them, so the two read as two.
+fn ends_that_fit(ends: f32, bar: f32, em: f32, aspect: f32) -> f32 {
+    let want = (ends + crate::glyphs::width("0")) * em / aspect;
+    if want <= bar || want <= 0.0 {
+        em
+    } else {
+        em * bar / want
+    }
+}
+
 /// A round number of metres, and how much of the screen's half-width it covers.
 ///
 /// **It takes the run's longest side and nothing else**, which is the point. The camera is fitted
@@ -548,17 +568,32 @@ impl App {
                 );
             }
             let unit = panel.unit();
-            write(
-                &mut lines,
-                &editor_core::magnitude(lo),
-                bx0,
-                by0 - row - GAP,
-            );
-            let his = editor_core::magnitude(hi);
-            write(
+            // **Both ends, at a size that fits between them.** They went in at the legend's own
+            // size with no regard for how wide they are: `3.9674E-11` and `9.5054E-11` want 0.79
+            // of the canvas at the two ends of a bar 0.60 wide, and came out as
+            // `3.9674E-5054E-11` — two numbers through each other, which a reader cannot tell
+            // from one. The editor's colour bar had the same defect and drops its *middle* label;
+            // here there is no middle to drop, because a bar showing one end is not a scale.
+            let (los, his) = (editor_core::magnitude(lo), editor_core::magnitude(hi));
+            let ends = crate::glyphs::width(&los) + crate::glyphs::width(&his);
+            let fits = ends_that_fit(ends, bx1 - bx0, em, aspect as f32);
+            let small = |v: &mut Vec<Vertex>, s: &str, x: f32, y: f32| {
+                for (ax, ay, bx, by) in crate::glyphs::text(s) {
+                    v.push(Vertex {
+                        position: [x + ax * fits / aspect as f32, y + ay * fits, NEAR],
+                        colour: ink,
+                    });
+                    v.push(Vertex {
+                        position: [x + bx * fits / aspect as f32, y + by * fits, NEAR],
+                        colour: ink,
+                    });
+                }
+            };
+            small(&mut lines, &los, bx0, by0 - row - GAP);
+            small(
                 &mut lines,
                 &his,
-                bx1 - crate::glyphs::width(&his) * em / aspect as f32,
+                bx1 - crate::glyphs::width(&his) * fits / aspect as f32,
                 by0 - row - GAP,
             );
             // **Centred on the bar, and kept inside the frame.** The unit went in at the bar's
@@ -1664,7 +1699,37 @@ fn fs(v: Out) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{numbered, scale_bar, scale_label};
+    use super::{ends_that_fit, numbered, scale_bar, scale_label};
+
+    /// **A colour bar's two ends do not run through each other, at any width they need.**
+    ///
+    /// They were drawn at the legend'''s own size whatever they said, so `3.9674E-11` and
+    /// `9.5054E-11` at the ends of a 0.60-wide bar -- which want 0.79 between them -- came out as
+    /// `3.9674E-5054E-11`. Two numbers through each other read as one, and nothing about the
+    /// picture says otherwise. The editor'''s colour bar had the same defect and was fixed first;
+    /// this is the second implementation, and finding it only after fixing the first is the
+    /// argument for this test rather than for that one.
+    #[test]
+    fn a_colour_bars_two_ends_always_fit_between_them() {
+        let (em, aspect, bar) = (0.011f32, 1100.0 / 720.0, 0.60f32);
+        // Every pair the formatter can produce, from a short integer to a long exponent.
+        for ends in [4.0f32, 12.0, 40.0, 110.0, 220.0, 400.0] {
+            let fits = ends_that_fit(ends, bar, em, aspect);
+            let taken = (ends + crate::glyphs::width("0")) * fits / aspect;
+            assert!(
+                taken <= bar + 8.0 * f32::EPSILON * bar,
+                "labels {ends} lattice units wide take {taken} of a {bar} bar at {fits}"
+            );
+            assert!(fits > 0.0, "a label drawn at {fits} is not drawn");
+            assert!(
+                fits <= em,
+                "{fits} is larger than the legend'''s own {em}: a short pair should not grow"
+            );
+        }
+        // A pair that already fits is left alone, so the numbers on most bars are the size every
+        // other label on the picture is.
+        assert_eq!(ends_that_fit(12.0, bar, em, aspect), em);
+    }
 
     /// **The bar is the length its label says, and the label is a round number.**
     ///

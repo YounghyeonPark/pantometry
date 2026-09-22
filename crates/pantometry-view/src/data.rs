@@ -174,6 +174,8 @@ pub fn to_json(title: &str, frames: &[Frame]) -> String {
                     values,
                     bounds,
                     boxed,
+                    labels,
+                    bonds,
                 } => {
                     let flat: Vec<f64> = positions.iter().flatten().copied().collect();
                     out.push_str(&format!(
@@ -183,6 +185,25 @@ pub fn to_json(title: &str, frames: &[Frame]) -> String {
                         numbers(&flat),
                         numbers(values)
                     ));
+                    // **Written only when there is something to write.** A domain whose bodies
+                    // have no name outside their order — an orbit, a falling ball — says nothing,
+                    // and an empty array in every such file would be a field that means "no" and
+                    // looks like "not yet". A reader takes the absence as the absence.
+                    if !labels.is_empty() {
+                        let quoted: Vec<String> = labels.iter().map(|l| quote(l)).collect();
+                        out.push_str(&format!(", \"labels\": [{}]", quoted.join(",")));
+                    }
+                    if !bonds.is_empty() {
+                        let pairs: Vec<u32> = bonds.iter().flatten().copied().collect();
+                        out.push_str(&format!(
+                            ", \"bonds\": [{}]",
+                            pairs
+                                .iter()
+                                .map(|b| b.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        ));
+                    }
                 }
             }
             out.push_str(if pi + 1 == frame.panels.len() {

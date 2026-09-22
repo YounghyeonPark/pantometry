@@ -53,6 +53,8 @@ fn run() -> Vec<Frame> {
                             values: vec![1.0, 2.0 + t],
                             bounds: [0.0, 0.0, 0.0, 3.0, 1.0, 1.0],
                             boxed: false,
+                            labels: Vec::new(),
+                            bonds: Vec::new(),
                         },
                     },
                     Panel {

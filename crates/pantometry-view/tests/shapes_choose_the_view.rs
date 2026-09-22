@@ -109,6 +109,8 @@ fn frames() -> Vec<Frame> {
                             values: vec![t * 12.0, 2.0],
                             bounds: [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0],
                             boxed: true,
+                            labels: Vec::new(),
+                            bonds: Vec::new(),
                         },
                     },
                 ],

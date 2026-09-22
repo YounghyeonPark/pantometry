@@ -2309,13 +2309,19 @@ impl DomainSpec {
                     structure.len(),
                     network.springs()
                 ));
-                Box::new(pantometry::protein::Protein::new(
-                    name.clone(),
-                    &network,
-                    Temperature::from_si(temperature_c + 273.15),
-                    Mass::from_si(mass_da * 1.660_539_068_92e-27),
-                    *seed,
-                ))
+                // **With the residues**, so the run says which body is which and where the
+                // chain breaks. Without it a protein reaches a file as anonymous points and
+                // nothing in it can be matched against the entry it was read from.
+                Box::new(
+                    pantometry::protein::Protein::new(
+                        name.clone(),
+                        &network,
+                        Temperature::from_si(temperature_c + 273.15),
+                        Mass::from_si(mass_da * 1.660_539_068_92e-27),
+                        *seed,
+                    )
+                    .with_residues(&structure),
+                )
             }
             DomainSpec::Beam {
                 name,

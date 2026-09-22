@@ -152,6 +152,9 @@ fn draw(p: &Panel, x0: f64, y0: f64, size: f64, extent: f64) -> String {
             values,
             bounds,
             boxed,
+            // A thumbnail is a few hundred pixels across: a label would be unreadable and a bond
+            // a pixel long. What a filmstrip is for is telling one frame from the next.
+            ..
         } => scatter(positions, values, bounds, *boxed, x0, y0, size, extent),
         // A thumbnail is a few hundred pixels across and a filled solid at that size is a blob
         // with a colour. Its edges say what shape it is, which is what a strip of frames is read

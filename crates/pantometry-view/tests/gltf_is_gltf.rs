@@ -35,6 +35,8 @@ fn frame() -> Frame {
                     values: vec![1.0, 9.0],
                     bounds: [-1.0, -1.0, -1.0, 4.0, 2.0, 1.0],
                     boxed: true,
+                    labels: Vec::new(),
+                    bonds: Vec::new(),
                 },
             },
             Panel {

@@ -280,6 +280,21 @@ pub enum Panel {
         /// One per body.
         #[serde(deserialize_with = "holes_are_nan")]
         values: Vec<f64>,
+        /// What each body **is**, when the domain could say — `A:12:GLY` for a residue.
+        ///
+        /// **Optional, and absent means absent.** Most domains have no name for their bodies
+        /// beyond their order — the third planet in an orbit is the third planet — and a run
+        /// written before this key had none at all. Empty reads as "this run does not say",
+        /// which is different from "these bodies have no identity".
+        #[serde(default)]
+        labels: Vec<String>,
+        /// Flattened index pairs: bodies `bonds[2k]` and `bonds[2k+1]` are joined.
+        ///
+        /// **Flat, like `positions`**, because the wire format writes numbers and not tuples.
+        /// Empty for bodies that are not joined, which is most of them. A protein's backbone is
+        /// here, broken where its residue numbering breaks.
+        #[serde(default)]
+        bonds: Vec<u32>,
     },
     /// Runs of connected points — rays, trajectories, field lines.
     Paths {
@@ -1041,9 +1056,10 @@ pub fn segments(
     let shade_of = |v: f64| ((v - lo) / width).clamp(0.0, 1.0);
 
     if let Panel::Points { values, .. } = panel {
-        for (at, v) in panel.placed_positions().into_iter().zip(values) {
+        let placed = panel.placed_positions();
+        for (at, v) in placed.iter().zip(values) {
             if v.is_finite() {
-                cross(at, shade_of(*v));
+                cross(*at, shade_of(*v));
             }
         }
     }
@@ -1099,6 +1115,46 @@ pub fn segments(
             }
         }
     }
+    // **What joins the bodies, from the file.** A run carrying a protein said only "here are
+    // forty-six points", and a picture of that is forty-six separate balls -- grapes, not a
+    // chain. The connectivity is in the wire format now, so the chain is drawn from the data
+    // rather than guessed from how close two bodies happen to be.
+    //
+    // Here rather than in the branch above because `cross` borrows `out` for as long as it is
+    // callable. The order does not matter: the whole list is depth-sorted below.
+    if let Panel::Points { values, bonds, .. } = panel {
+        let placed = panel.placed_positions();
+        // whole list is depth-sorted at the end.
+        for pair in bonds.as_chunks::<2>().0 {
+            let (a, b) = (pair[0] as usize, pair[1] as usize);
+            // A bond naming a body that is not there is refused where the panel is built. A run
+            // somebody else wrote is not somebody this trusts, so it is checked again here.
+            let (Some(from), Some(to)) = (placed.get(a), placed.get(b)) else {
+                continue;
+            };
+            let (Some(va), Some(vb)) = (values.get(a).copied(), values.get(b).copied()) else {
+                continue;
+            };
+            if !va.is_finite() || !vb.is_finite() {
+                continue;
+            }
+            // Each half in its own end's colour, so a bond between a mobile residue and a still
+            // one reads as the gradient it is rather than as one or the other.
+            let mid = [
+                (from[0] + to[0]) / 2.0,
+                (from[1] + to[1]) / 2.0,
+                (from[2] + to[2]) / 2.0,
+            ];
+            for (p, q, v) in [(*from, mid, va), (mid, *to, vb)] {
+                out.push(Segment {
+                    from: camera.project(p, framing, aspect),
+                    to: camera.project(q, framing, aspect),
+                    shade: shade_of(v),
+                });
+            }
+        }
+    }
+
     out.sort_by(|a, b| {
         let (da, db) = (a.from.depth + a.to.depth, b.from.depth + b.to.depth);
         db.total_cmp(&da)

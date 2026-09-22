@@ -115,6 +115,9 @@ pub struct Protein {
     fluctuation: Vec<f64>,
     temperature: f64,
     energy: f64,
+    /// Chain, number and name per body, when a caller supplied them through
+    /// [`Protein::with_residues`]. Empty otherwise, and then the bodies are anonymous.
+    residues: Vec<(char, i32, String)>,
 }
 
 impl Protein {
@@ -167,6 +170,9 @@ impl Protein {
             at: rest.clone(),
             rest,
             fluctuation: modes.fluctuations(temperature),
+            // Anonymous until a caller says otherwise: `Network` keeps geometry and not identity,
+            // so this is the only honest default.
+            residues: Vec::new(),
             modes,
             amplitude,
             omega,
@@ -218,9 +224,81 @@ impl Protein {
     }
 }
 
+/// The furthest apart two bonded alpha carbons are, in metres.
+///
+/// A trans peptide puts them 3.80 Å apart and a cis one 2.93; 4.5 Å is clear of both and well
+/// inside the 6-plus Å that any non-adjacent pair sits at. It is the backstop for a file whose
+/// numbering says two residues are adjacent when the density between them was never modelled.
+pub const PEPTIDE_REACH: f64 = 4.5e-10;
+
+impl Protein {
+    /// Carry the residues' identity, so a run can say which body is which.
+    ///
+    /// **Without this a protein reaches a file as anonymous points.** [`Network`] is built from a
+    /// [`Structure`] and keeps only its geometry, so by the time a `Protein` exists the chain
+    /// letters, the numbering and the residue names are gone — and a run holding forty-six points
+    /// and forty-six numbers cannot be matched against the entry it came from, against a
+    /// crystallographer's temperature factors, or against a second structure. That is the
+    /// difference between a picture and a measurement, and it is why this exists rather than
+    /// `new` simply taking the structure: `Protein::new` is published and its shape is somebody
+    /// else's now.
+    ///
+    /// The backbone comes out as [`Bodies::bonds`]. Two residues are joined when they are in the
+    /// **same chain**, numbered **one apart**, and their alpha carbons are within
+    /// [`PEPTIDE_REACH`] of each other. All three, because each covers what the others miss: a
+    /// disordered loop leaves a gap the numbering shows and the distance may not, two fragments
+    /// that end near each other are close without being joined, and a file numbered with
+    /// insertion codes repeats a number where the chain does continue. The failure this prefers
+    /// is a **missing** bond, which is visible in a picture, over a drawn one nobody measured.
+    ///
+    /// # Panics
+    ///
+    /// If `structure` is not the length this was built from — labelling bodies from a different
+    /// structure names every one of them wrongly and says nothing about it.
+    pub fn with_residues(mut self, structure: &Structure) -> Protein {
+        assert_eq!(
+            structure.len(),
+            self.at.len(),
+            "labelling {} bodies from a structure of {} would name every one of them wrongly",
+            self.at.len(),
+            structure.len()
+        );
+        self.residues = structure
+            .residues()
+            .iter()
+            .map(|r| (r.chain, r.number, r.name.clone()))
+            .collect();
+        self
+    }
+}
+
 impl Bodies for Protein {
     fn count(&self) -> usize {
         self.at.len()
+    }
+
+    /// `A:12:GLY` — chain, number, name, as the file spells them.
+    fn label(&self, i: usize) -> Option<String> {
+        self.residues
+            .get(i)
+            .map(|(chain, number, name)| format!("{chain}:{number}:{name}"))
+    }
+
+    /// The backbone, broken where the chain is. See [`Protein::with_residues`].
+    fn bonds(&self) -> Vec<[u32; 2]> {
+        self.residues
+            .windows(2)
+            .enumerate()
+            .filter(|(i, pair)| {
+                let (a, b) = (&pair[0], &pair[1]);
+                let (p, q) = (self.rest[*i], self.rest[i + 1]);
+                let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+                a.0 == b.0
+                    && b.1 == a.1 + 1
+                    && (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= PEPTIDE_REACH
+            })
+            .map(|(i, _)| [i as u32, i as u32 + 1])
+            .collect()
     }
 
     fn position(&self, i: usize) -> LengthVec {

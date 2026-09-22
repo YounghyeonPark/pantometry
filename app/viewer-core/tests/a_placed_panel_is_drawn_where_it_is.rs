@@ -282,6 +282,8 @@ fn bodies(place: Placed) -> Panel {
         bounds: [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
         positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0],
         values: vec![1.0, 2.0, 3.0, 4.0],
+        labels: Vec::new(),
+        bonds: Vec::new(),
     }
 }
 

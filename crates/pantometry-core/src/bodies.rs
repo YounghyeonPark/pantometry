@@ -61,4 +61,34 @@ pub trait Bodies {
     fn cell(&self) -> Option<(LengthVec, LengthVec)> {
         None
     }
+
+    /// What body `i` **is**, for a reader matching it against something this run did not produce.
+    ///
+    /// **Index is identity within a run and says nothing outside it.** A file holding forty-six
+    /// points and forty-six numbers is a point cloud: nothing in it can be matched against a
+    /// crystallographer's temperature factors, against a second structure, or against the entry it
+    /// was read from. `pantometry-protein` knows each residue's chain, number and name and had
+    /// nowhere to put them, so a protein arrived in a run as arithmetic about anonymous points —
+    /// which is a picture and not a measurement.
+    ///
+    /// `None` for a domain whose bodies have no name outside their order, which is most of them:
+    /// the third planet in an orbit is the third planet.
+    fn label(&self, _i: usize) -> Option<String> {
+        None
+    }
+
+    /// Which bodies are bonded, as index pairs into `0..count()`.
+    ///
+    /// **Pairs and not runs**, because a molecule's bonds are not one chain: a ligand branches, a
+    /// protein has several chains and a disulphide joins two residues that are nowhere near each
+    /// other in sequence. A backbone is then 45 pairs for a 46-residue protein, which is nothing.
+    ///
+    /// A domain that returns these is promising they are **real** — that the two bodies are joined
+    /// in the thing being modelled. A chain read out of a file breaks where its residue numbering
+    /// does, and bonding across that gap draws a bond nobody measured.
+    ///
+    /// Empty for bodies that are not joined to each other, which is most of them.
+    fn bonds(&self) -> Vec<[u32; 2]> {
+        Vec::new()
+    }
 }

@@ -455,6 +455,20 @@ pub enum PanelData {
         bounds: [f64; 6],
         /// Whether that box is a **real wall** — a periodic cell — rather than a drawing margin.
         boxed: bool,
+        /// What each body **is**, when the domain can say — `A:12:GLY` for a residue.
+        ///
+        /// **This is the difference between a picture and a measurement.** Without it a run
+        /// holding a protein is a point cloud: nothing in the file can be matched against the
+        /// entry it was read from, against a crystallographer's temperature factors, or against a
+        /// second structure. Empty when the domain has no name for its bodies beyond their order,
+        /// and one per body otherwise — see [`Bodies::label`](pantometry_core::Bodies::label).
+        labels: Vec<String>,
+        /// Which bodies are joined, as index pairs into `positions`.
+        ///
+        /// Empty for bodies that are not joined. A protein's backbone is here, **broken where its
+        /// residue numbering breaks**, because a bond drawn across a gap in a crystal structure is
+        /// a bond nobody measured. See [`Bodies::bonds`](pantometry_core::Bodies::bonds).
+        bonds: Vec<[u32; 2]>,
     },
 }
 
@@ -813,6 +827,40 @@ fn points(name: &str, bodies: &dyn pantometry_core::Bodies, pose: Pose) -> Panel
         unit: bodies.value_unit(),
         place: Placed::of(pose),
         data: PanelData::Points {
+            // **What the bodies are, and which of them are joined.** A domain that has nothing to
+            // say gives nothing — `Bodies::label` and `Bodies::bonds` default to none — and one
+            // that does had nowhere to put it until this existed. A protein arrived here as
+            // anonymous points with a number each, which is arithmetic about a point cloud.
+            labels: {
+                let named: Vec<String> = (0..bodies.count())
+                    .map(|i| bodies.label(i).unwrap_or_default())
+                    .collect();
+                // All or nothing: a half-labelled set is worse than an unlabelled one, because a
+                // reader matching on the labels silently loses the bodies that have none.
+                if named.iter().all(|s| s.is_empty()) {
+                    Vec::new()
+                } else {
+                    named
+                }
+            },
+            bonds: {
+                let joined = bodies.bonds();
+                // **A bond has to name bodies that exist**, and this is the only place that can
+                // say so: past here it is a pair of numbers in a file. The same rule
+                // `PanelData::surface` applies to a triangle, for the same reason.
+                if let Some(bad) = joined
+                    .iter()
+                    .flatten()
+                    .find(|&&b| b as usize >= positions.len())
+                {
+                    panic!(
+                        "a bond names body {bad} of {} in `{name}` — a bond to a body that is not \
+                         there is not a measurement",
+                        positions.len()
+                    );
+                }
+                joined
+            },
             positions,
             values,
             bounds,

@@ -299,6 +299,10 @@ fn json(frames: &[Frame], drawing: &crate::mesh::Drawing) -> String {
                     values,
                     bounds,
                     boxed,
+                    // The report'''s viewer draws bodies and not yet what joins them. The wire
+                    // format carries both now, so this is a thing not drawn rather than a thing
+                    // not written -- and the JSON beside it has them for anybody who wants them.
+                    ..
                 } => {
                     let flat: Vec<f64> = positions.iter().flatten().copied().collect();
                     out.push_str(&format!(
