@@ -35,12 +35,22 @@ const MM: f64 = 1e-3;
 
 /// Six significant figures, which is what `%g` writes and what the committed files therefore hold.
 ///
-/// A coordinate carries a relative error up to `5e-7`, and a volume is a product of three of them,
-/// so `1.5e-6` is the most this rounding can produce. **`1e-5` is about seven times that** and is
-/// far tighter than any real defect: a wrong height, a dropped fin or an inside-out cap moves
-/// these by per cent, not by parts per million. Four of the six parts have integer coordinates and
-/// are exact; the rod and the pipe are the ones this bound is for.
-const ROUNDING: f64 = 1e-5;
+/// **Derived, and the first derivation of it was wrong.** Six significant figures is a half-ulp of
+/// `5e-6` relative when the mantissa is just above 1 and `5e-7` when it is just below 10, so the
+/// worst case per coordinate is `5e-6` and not the `5e-7` this said. A volume is a product of
+/// three lengths, which takes it to `1.5e-5`; and the **pipe's cross-section is a difference of
+/// two nearly equal polygon areas**, `310.58 - 152.19`, which amplifies it by
+/// `(A_out + A_in) / (A_out - A_in) = 2.92` to `2.9e-5`.
+///
+/// `1e-4` is about three times the worst the file format can produce and fifteen times the worst
+/// measured, which is the pipe's volume at `6.8e-6`. It is still a hundred times tighter than the
+/// smallest defect any sabotage of this library has produced — the rod one per cent long, at
+/// `1e-2`. Four of the six parts have integer coordinates and are exact.
+///
+/// The old value, `1e-5`, sat **below** what the format can do: the parts happened to land inside
+/// it, and moving them to the origin moved the pipe from `2.0e-7` to `6.8e-6` for no reason but
+/// the rounding of a different coordinate.
+const ROUNDING: f64 = 1e-4;
 
 fn part(name: &str) -> Mesh {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -151,6 +161,21 @@ fn every_part_is_the_shape_it_claims_to_be() {
             (a - want_a).abs() < ROUNDING * want_a,
             "{name}'s area is {a:.6} mm2 and its profile says {want_a:.6}"
         );
+        // **Its lowest corner is the origin**, which is the check that was missing and the one
+        // that matters for using a part at all. `Voxels::onto` reads an STL's coordinates as
+        // absolute positions and a `block` domain's grid starts at the origin, so a solid drawn
+        // around the origin reaches outside its grid and the build refuses it. The rod and the
+        // pipe shipped that way: volume, area and the closed-edge count are all
+        // translation-invariant, so none of the three assertions above could see it, and it took
+        // `a_dropped_file_becomes_a_domain` building a scene to find it.
+        let (low, _) = mesh.bounds().expect("a closed part has bounds");
+        let low = low.to_si();
+        for (axis, at) in [("x", low.x), ("y", low.y), ("z", low.z)] {
+            assert!(
+                at.abs() < 1e-12,
+                "{name} starts at {at:e} m on {axis} rather than at the origin, so a block domain                  would refuse it for reaching outside its own grid"
+            );
+        }
         // A pin and not a closed form: how many triangles a profile needs is the generator's
         // choice, and this is here so that changing it is deliberate.
         assert_eq!(

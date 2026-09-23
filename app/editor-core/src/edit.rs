@@ -605,6 +605,27 @@ pub fn add_domain(text: &str, kind: &str) -> Result<String, String> {
         .find(|t| t.kind == kind)
         .map(|t| t.json)
         .ok_or_else(|| format!("no template for a {kind}"))?;
+    add_domain_json(text, template)
+}
+
+/// Splice a domain into the scene's `domains` array, renaming it away from the names in use.
+///
+/// [`add_domain`] is this with a template looked up by kind, and [`asset_domain`] is the other
+/// caller: a file somebody dropped on the window becomes a domain that is not any template's.
+/// The base name is the one the domain arrives carrying, so a `rod.stl` stays a domain called
+/// `rod` unless the scene already has one, and then it is `rod 2` for the reason the kinds are.
+///
+/// Fails when either side does not parse, when the scene has no `domains`, or when the domain
+/// arrives without a `name` — there would be nothing to rename, and a domain with no name is
+/// refused by the format one step later anyway.
+pub fn add_domain_json(text: &str, domain: &str) -> Result<String, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(domain).map_err(|e| format!("this domain does not parse: {e}"))?;
+    let base = parsed
+        .get("name")
+        .and_then(|n| n.as_str())
+        .ok_or_else(|| "a domain has to arrive with a `name` to be renamed from".to_string())?
+        .to_string();
 
     let root: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
@@ -617,13 +638,13 @@ pub fn add_domain(text: &str, kind: &str) -> Result<String, String> {
         .iter()
         .filter_map(|d| d.get("name").and_then(|n| n.as_str()))
         .collect();
-    let mut name = kind.to_string();
+    let mut name = base.clone();
     let mut n = 1;
     while taken.contains(&name.as_str()) {
         n += 1;
-        name = format!("{kind} {n}");
+        name = format!("{base} {n}");
     }
-    let template = set_text(template, "/name", &name)?;
+    let domain = set_text(domain, "/name", &name)?;
 
     // Where the last element starts on its line, so the new one lines up with it rather than
     // with the margin. A scene written by hand keeps its shape when the editor adds to it.
@@ -632,7 +653,7 @@ pub fn add_domain(text: &str, kind: &str) -> Result<String, String> {
         0 => {
             // `[]` or `[ ]`: put the element between the brackets and let the one-line form be.
             let inner = array.start + 1..array.end - 1;
-            Ok(splice(text, inner, &format!(" {template} ")))
+            Ok(splice(text, inner, &format!(" {domain} ")))
         }
         last => {
             let end = value_span(text, &format!("/domains/{}", last - 1))
@@ -641,9 +662,95 @@ pub fn add_domain(text: &str, kind: &str) -> Result<String, String> {
             Ok(splice(
                 text,
                 end.end..end.end,
-                &format!(",\n{indent}{template}"),
+                &format!(",\n{indent}{domain}"),
             ))
         }
+    }
+}
+
+/// How many cells a dropped part's grid may use.
+///
+/// Two million, which is what `pantometry fit` defaults to and what the web shell passes when the
+/// page does not say. A drop that proposed a different grid from the command that exists for
+/// proposing grids would be a second opinion nobody asked for.
+const ASSET_BUDGET_CELLS: usize = 2_000_000;
+
+/// What a dropped part is made of until somebody says otherwise — the same default as both.
+const ASSET_MATERIAL: &str = "aluminium";
+
+/// The domain a dropped file becomes, ready for [`add_domain_json`].
+///
+/// **The extension decides the kind, because only two kinds in the scene format take a file at
+/// all.** A `block` reads STL geometry through its `parts` and a `protein` reads a PDB; the other
+/// nineteen are numbers, and there is nothing for a file to become. Anything else is refused by
+/// name rather than guessed at.
+///
+/// # A part arrives on a grid that holds it
+///
+/// A `block` needs `cells` and `cell_mm` and neither can be defaulted: too coarse and the part
+/// voxelises to no cells, which the builder refuses; too fine and the scene is a grid nobody can
+/// run. `fit::propose` measures a ladder against the geometry's own thinnest dimension and
+/// `recommended` picks a row, which is the path `pantometry fit` takes — so a dropped part lands
+/// on the grid the CLI would have recommended for it instead of on a round number.
+///
+/// The `block` template cannot be used for this. It is a solid of one `material` with no `parts`
+/// array at all, so `set_text` aimed at `/parts/0/stl` would find nothing and refuse, which is
+/// the check working rather than failing.
+///
+/// # A part has to be drawn in the positive octant
+///
+/// A `block` domain's grid starts at the origin, and `Voxels::onto` reads an STL's coordinates as
+/// absolute positions -- which is what lets an assembly of several files keep its relative
+/// placement. A solid modelled about its own centre therefore reaches outside its grid, and it is
+/// **refused rather than cropped**. Nothing here can fix that: the grid has no origin key, and
+/// guessing a `poses` entry would move somebody's geometry without being asked. What the drop does
+/// is fit the grid to the extent, which is the same wherever the part is drawn; the build's own
+/// refusal names both boxes. `a_dropped_file_becomes_a_domain` records it.
+///
+/// # The name is the file's stem
+///
+/// `rod.stl` becomes a domain called `rod`, and the directory is dropped. The name is written
+/// through `serde_json`, so a path with a quote or a backslash in it — which a Windows path
+/// has — comes out as valid JSON rather than as a scene that stops parsing.
+pub fn asset_domain(file: &str, bytes: &[u8]) -> Result<String, String> {
+    let stem = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    let stem = stem.rsplit_once('.').map(|(s, _)| s).unwrap_or(stem);
+    let quoted = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    let lower = file.to_ascii_lowercase();
+
+    if lower.ends_with(".stl") {
+        let mesh = pantometry::shape::Mesh::from_stl(bytes).map_err(|e| format!("{file}: {e}"))?;
+        let fit = pantometry_world::fit::propose(&[(file.to_string(), mesh)], ASSET_BUDGET_CELLS)
+            .map_err(|e| format!("{file}: {e}"))?;
+        let candidate = fit.recommended(0.5).ok_or_else(|| {
+            format!("{file}: no grid under {ASSET_BUDGET_CELLS} cells resolves this part")
+        })?;
+        Ok(format!(
+            "{{ \"kind\": \"block\", \"name\": {}, \"cells\": [{}, {}, {}], \"cell_mm\": {:.4}, \
+             \"initial_c\": 20.0, \"parts\": [ {{ \"stl\": {}, \"material\": {} }} ] }}",
+            quoted(stem),
+            candidate.counts.0,
+            candidate.counts.1,
+            candidate.counts.2,
+            candidate.cell_m * 1e3,
+            quoted(file),
+            quoted(ASSET_MATERIAL),
+        ))
+    } else if lower.ends_with(".pdb") {
+        // The protein template already carries a `pdb` key, so this one is a substitution and
+        // not a construction. Which is the difference between the two halves of this function.
+        let template = pantometry_world::templates::TEMPLATES
+            .iter()
+            .find(|t| t.kind == "protein")
+            .map(|t| t.json)
+            .ok_or_else(|| "no template for a protein".to_string())?;
+        let with_file = set_text(template, "/pdb", file)?;
+        set_text(&with_file, "/name", stem)
+    } else {
+        Err(format!(
+            "{file}: a scene reads a file for two kinds of domain — an .stl for a block and a \
+             .pdb for a protein — and this is neither"
+        ))
     }
 }
 

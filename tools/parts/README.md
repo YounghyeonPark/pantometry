@@ -27,16 +27,30 @@ area   = 2 * cross_section + perimeter * height
 | part | what it is | mm | triangles | volume mm³ | area mm² |
 | --- | --- | --- | --- | --- | --- |
 | `plate` | a flat slab | 60 × 40 × 5 | 12 | 12 000 | 5 800 |
-| `rod` | a round bar, 24 facets | ⌀16 × 60 | 92 | 11 926.38 | 3 404.87 |
+| `rod` | a round bar, 24 facets | ⌀16 × 60 | 92 | 11 926.40 | 3 404.87 |
 | `wedge` | a right triangular prism | 40 × 20 × 30 | 8 | 12 000 | 3 941.64 |
 | `l-bracket` | two arms, inner corner chamfered | 50 × 50 × 20 | 24 | 33 000 | 7 182.84 |
 | `heat-sink` | a base with five fins | 60 × 20 × 30 | 92 | 21 600 | 10 080 |
-| `pipe` | a hollow tube, 24 facets | ⌀20/⌀14 × 50 | 192 | 7 919.86 | 5 642.26 |
+| `pipe` | a hollow tube, 24 facets | ⌀20/⌀14 × 50 | 192 | 7 919.92 | 5 642.27 |
 
-59.9 KiB in total. `a_part_is_the_shape_it_claims_to_be` holds every one of them against the
+58.5 KiB in total. `a_part_is_the_shape_it_claims_to_be` holds every one of them against the
 arithmetic above, plus two things a volume alone cannot say: that every edge is shared by exactly
 two triangles, and that the volume is **positive** rather than merely close in magnitude, since an
 inside-out export is a real defect and the sign is the only check that sees it.
+
+## Every one of them starts at the origin, and two of them did not
+
+That is a requirement and not a convention. A `block` domain's grid starts at the origin and
+`Voxels::onto` reads an STL's coordinates as absolute positions -- which is what lets an assembly
+of several files keep its relative placement -- so a solid drawn about its own centre reaches
+outside its grid, and it is **refused rather than cropped**.
+
+The hand-made bracket happened to be drawn that way and nothing said why. `rod` and `pipe` are
+built from `polygon()`, which is centred, and they **shipped as two solids no scene could use**.
+Volume, area and the closed-edge count are all translation-invariant, so none of the three checks
+above could see it; it took `a_dropped_file_becomes_a_domain` building a scene around one.
+`to_origin` is applied to every part in `main` now, so a new one cannot forget, and the test
+asserts the low corner.
 
 **The rod and the pipe are polygons and not circles**, so `πr²` is not their closed form and
 `(n/2)r² sin(2π/n)` is. A 24-gon is **1.1384 %** under its circle, which is a per-cent effect and
@@ -44,10 +58,16 @@ not a rounding one. That shortfall is checked against the expansion of `sin x / 
 1.1384 % and the third is `6.4e-8` — so the polygon formula is held against something that is not
 the polygon formula.
 
-The tolerance is `1e-5` relative and it comes from `%g`: six significant figures on a coordinate is
-`5e-7`, a volume is a product of three of them, so `1.5e-6` is the most the file format can
-contribute. The rod is measured `2.6e-7` off. Four of the six have integer coordinates and are
-exact.
+The tolerance is `1e-4` relative, and the first derivation of it was wrong. Six significant figures
+is a half-ulp of `5e-6` when the mantissa is just above 1 and `5e-7` when it is just below 10, so
+the worst per coordinate is **`5e-6`** and not the `5e-7` first written. A volume is a product of
+three lengths, taking it to `1.5e-5`, and the **pipe's cross-section is a difference of two nearly
+equal polygon areas** -- `310.58 - 152.19` -- which amplifies it by `2.92` to `2.9e-5`. The worst
+measured is the pipe's volume at `6.8e-6`; four of the six have integer coordinates and are exact.
+
+That the first bound was too tight showed up by accident: moving the parts to the origin changed
+nothing about them but which coordinates `%g` was rounding, and the pipe went from `2.0e-7` to
+`6.8e-6` -- most of the way to a bound that was supposed to have sevenfold headroom.
 
 ## A fan gets the volume exactly right and the area wrong
 

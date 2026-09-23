@@ -151,6 +151,26 @@ def extrude_ring(outer, inner, height):
     return tris
 
 
+def to_origin(tris):
+    """Move a solid so its lowest corner sits at the origin.
+
+    **A `block` domain's grid starts at the origin.** `Voxels::onto` reads an STL's coordinates as
+    absolute positions -- that is what lets an assembly of several files keep its relative
+    placement -- and a mesh reaching outside the grid is *refused* rather than cropped, because a
+    part with its corner missing runs and audits and answers about a different shape.
+
+    The hand-made bracket was drawn in the positive octant and nothing said why. `rod` and `pipe`
+    are built from `polygon()`, which is centred, and they shipped as two solids no scene could
+    use: the volume, the area and the closed-edge count are all translation-invariant and none of
+    them can see it. `a_dropped_file_becomes_a_domain` is what found it, by building a scene.
+    """
+    lo = [min(v[i] for t in tris for v in t) for i in range(3)]
+    return [
+        tuple(tuple(v[i] - lo[i] for i in range(3)) for v in t)
+        for t in tris
+    ]
+
+
 def polygon(sides, radius, turn=0.0):
     """A regular polygon, counter-clockwise, circumradius `radius`."""
     return [
@@ -265,7 +285,7 @@ def main():
         before = None
         if os.path.exists(path):
             before = io.open(path, 'rb').read()
-        n = write_stl(path, name.replace('-', '_'), tris)
+        n = write_stl(path, name.replace('-', '_'), to_origin(tris))
         after = io.open(path, 'rb').read()
         state = 'new'
         if before is not None:
