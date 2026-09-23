@@ -23,14 +23,34 @@ use pantometry_molecular::substance::{
 };
 use pantometry_molecular::Substance;
 
+/// The band the model's own error is allowed to occupy, as a fraction.
+///
+/// Shared by the test that holds the catalogue inside it and by the one that measures what it lets
+/// through, so tightening it cannot quietly leave the second one asserting nothing.
+const MODEL_BAND: f64 = 0.05;
+
+/// The two residuals of a substance's predicted triple point, **signed**, as fractions.
+///
+/// Signed because the sign is half of what they say. Argon's density sits *below* the measurement
+/// and krypton's *above*, and that is the measurement which says no single correction to
+/// `LJ_TRIPLE_DENSITY` exists: one constant cannot move both towards zero. The best single value
+/// across the two, 0.8325, takes argon from 0.39% to 1.27% to take krypton from 2.21% to 1.31% --
+/// a redistribution rather than a correction, and the reason this file has never had one.
+fn residuals(s: &Substance) -> (f64, f64) {
+    (
+        (s.temperature(LJ_TRIPLE_T) - s.triple_point_k) / s.triple_point_k,
+        (s.density(LJ_TRIPLE_DENSITY) - s.triple_point_density) / s.triple_point_density,
+    )
+}
+
 /// **Every gas's own triple point, from its fitted parameters and the model's.**
 #[test]
 fn the_parameters_predict_each_gases_triple_point() {
     for s in CATALOGUE {
         let temperature = s.temperature(LJ_TRIPLE_T);
         let density = s.density(LJ_TRIPLE_DENSITY);
-        let dt = (temperature - s.triple_point_k).abs() / s.triple_point_k;
-        let dd = (density - s.triple_point_density).abs() / s.triple_point_density;
+        let (signed_t, signed_d) = residuals(&s);
+        let (dt, dd) = (signed_t.abs(), signed_d.abs());
         println!(
             "  {:<8} T {:>7.2} K against {:>7.2} ({:>5.2}%)   rho {:>7.0} against {:>7.0} ({:>5.2}%)",
             s.name,
@@ -42,10 +62,14 @@ fn the_parameters_predict_each_gases_triple_point() {
             100.0 * dd
         );
         // **Five per cent**, which is the size of the disagreement between the model's triple
-        // point and a real one across this whole column. A transcription error in `σ` or `ε` — a
-        // digit, a unit, a gas — is tens of per cent or more, and every one of those fails here.
+        // point and a real one across this whole column. It catches the gross transcription
+        // errors and **not** a slipped digit: this comment used to say that "a digit, a unit, a
+        // gas" was "tens of per cent or more, and every one of those fails here", and two of the
+        // three are. A digit is 4.24%, measured in
+        // `a_slipped_digit_passes_the_band_that_holds_the_model`, and the pinned residuals in
+        // `each_gases_residual_is_where_it_was_left` are what catches that instead.
         assert!(
-            dt < 0.05,
+            dt < MODEL_BAND,
             "{}'s parameters put its triple point at {temperature:.2} K, {:.1}% from the measured \
              {:.2} K",
             s.name,
@@ -55,7 +79,7 @@ fn the_parameters_predict_each_gases_triple_point() {
         // The density is the sharper of the two, because it depends on `σ³`: a one per cent error
         // in the length shows here as three.
         assert!(
-            dd < 0.05,
+            dd < MODEL_BAND,
             "{}'s parameters put its triple-point liquid at {density:.0} kg/m³, {:.1}% from the \
              measured {:.0}",
             s.name,
@@ -201,6 +225,110 @@ fn a_substance_is_found_by_name_or_not_at_all() {
             Substance::named(s.name).is_none(),
             "{} is measured in this file and is not offered to a scene",
             s.name
+        );
+    }
+}
+
+/// **A slipped digit in `σ` passes the five per cent band**, which is why the residuals are pinned.
+///
+/// `3.405` written as `3.450`, the last two digits transposed, is the likeliest transcription
+/// error a table of four-figure lengths can suffer, and it moves argon's triple-point density by
+/// **4.24%** against a bound of 5%. The two errors the bound does catch are measured beside it, so
+/// the claim that replaced "a digit, a unit, a gas is tens of per cent or more" is itself a
+/// measurement rather than a second sentence.
+#[test]
+fn a_slipped_digit_passes_the_band_that_holds_the_model() {
+    let argon = Substance::named("argon").expect("argon is in the catalogue");
+    let mut slipped = argon;
+    slipped.sigma = 3.450e-10;
+    let (_, d) = residuals(&slipped);
+    println!(
+        "  sigma 3.405 -> 3.450 moves the density residual to {:+.2}%",
+        100.0 * d
+    );
+    assert!(
+        d.abs() < MODEL_BAND,
+        "a transposed digit is {:.2}% and the band is {:.0}%. If this now fails the band has been \
+         tightened past a transposition, and the pinned residuals may no longer be the only thing \
+         catching one -- check that before deleting anything",
+        100.0 * d.abs(),
+        100.0 * MODEL_BAND
+    );
+
+    // The two the old comment was right about, so what replaced it is held to the same standard.
+    let mut wrong_gas = argon;
+    wrong_gas.sigma = 4.10e-10;
+    let mut wrong_unit = argon;
+    wrong_unit.sigma = 3.405e-9;
+    for (what, s) in [
+        ("xenon's length on argon", wrong_gas),
+        ("nanometres for angstroms", wrong_unit),
+    ] {
+        let (_, d) = residuals(&s);
+        println!("  {what} moves it to {:+.1}%", 100.0 * d);
+        assert!(
+            d.abs() > MODEL_BAND,
+            "{what} is {:.1}% and is the size of error this bound exists to catch",
+            100.0 * d.abs()
+        );
+    }
+}
+
+/// **Each gas's residual is where it was left**, which is what catches the digit the band cannot.
+///
+/// Not a closed form, and not a claim that the parameters are right --
+/// `the_parameters_predict_each_gases_triple_point` is that. This is a pin, of the kind the
+/// determinism digest is: the residual is a deterministic function of six `f64` constants in
+/// `substance.rs`, nothing samples and nothing consults anything, so **any** edit to `σ`, `ε`, the
+/// mass or either measured value moves it and has to be re-recorded by somebody who looked at the
+/// new number.
+///
+/// # Where the tolerance comes from
+///
+/// `1e-6` on a fraction, and it traces to the precision the parameters are quoted at. The smallest
+/// change any of them can suffer is one digit in its last place: argon's `σ` is `3.405` to
+/// `0.001 Å`, which is `8.8e-4` in the density residual, and its `ε/k` is `119.8` to `0.1`, which
+/// is `8.3e-4` in the temperature one. The bound is **eight hundred times tighter than the
+/// smallest transcription error this file can hold**, and far looser than the arithmetic's own
+/// reproducibility, which is exact.
+#[test]
+fn each_gases_residual_is_where_it_was_left() {
+    // Printed by the code and copied back, not computed alongside it -- a second implementation of
+    // the same arithmetic would agree with a wrong one.
+    const RECORDED: [(&str, f64, f64); 2] = [
+        ("argon", -0.007_979_955, -0.003_901_637),
+        ("krypton", -0.016_963_206, 0.022_141_977),
+    ];
+    assert_eq!(
+        RECORDED.len(),
+        CATALOGUE.len(),
+        "a gas was added to the catalogue without a pinned residual, so nothing here would have \
+         noticed its parameters being wrong by less than the model's own error"
+    );
+    for (name, want_t, want_d) in RECORDED {
+        let s = Substance::named(name).unwrap_or_else(|| panic!("{name} is in the catalogue"));
+        let (t, d) = residuals(&s);
+        println!(
+            "  {name:<8} T {:+.5}% (pinned {:+.5}%)   rho {:+.5}% (pinned {:+.5}%)",
+            100.0 * t,
+            100.0 * want_t,
+            100.0 * d,
+            100.0 * want_d
+        );
+        assert!(
+            (t - want_t).abs() < 1e-6,
+            "{name}'s triple-point temperature residual is {:+.6}% and was pinned at {:+.6}%. A \
+             parameter moved: the new number is to be looked at, not re-pinned",
+            100.0 * t,
+            100.0 * want_t
+        );
+        assert!(
+            (d - want_d).abs() < 1e-6,
+            "{name}'s triple-point density residual is {:+.6}% and was pinned at {:+.6}%. Either \
+             sigma moved -- it enters cubed, so a slipped length shows up here three times over \
+             -- or the measurement it is compared against did",
+            100.0 * d,
+            100.0 * want_d
         );
     }
 }

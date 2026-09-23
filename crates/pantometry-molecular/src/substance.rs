@@ -46,10 +46,11 @@
 //! # What checks them, and what the check is worth
 //!
 //! `σ` and `ε` are fitted to a gas's **second virial coefficient and viscosity**. The Lennard-Jones
-//! model's own triple point is a simulation result for the potential, known to three figures:
-//! `T* = 0.694`, `ρ* = 0.84`. Those two facts together predict each gas's triple point — and a gas's
-//! triple point is measured by putting it in a cell and watching it, which has nothing to do with
-//! either fit.
+//! model's own triple point is a simulation result for the potential: `T* = 0.694`, `ρ* = 0.84`.
+//! Those two facts together predict each gas's triple point — and a gas's triple point is measured
+//! by putting it in a cell and watching it, which has nothing to do with either fit. How well the
+//! simulation result itself is known is not something this file can cite, so what follows is read
+//! as two determinations agreeing and not as a bound on either.
 //!
 //! | | predicted | measured | out by |
 //! | --- | --- | --- | --- |
@@ -59,6 +60,15 @@
 //! `the_parameters_predict_each_gases_triple_point` holds both shipped gases against both
 //! numbers, and `a_gas_this_model_cannot_describe` holds the two that are out against the same
 //! arithmetic, so the boundary of the catalogue is a measurement anybody can re-run.
+//!
+//! # What that bound does not catch, and what does
+//!
+//! Five per cent has to be wide enough for the model, which leaves it too wide for a typo. `3.405`
+//! written as `3.450` — two digits transposed — moves argon's triple-point density **4.24%**, and
+//! passes. A gas's length on another gas is 43% and nanometres for ångströms is 99.9%, so those
+//! fail; a digit does not. `each_gases_residual_is_where_it_was_left` pins each residual to the
+//! value measured here, which is not a claim that the parameters are right — the paragraph above is
+//! that — but a guarantee that an edit to one cannot pass unlooked-at.
 //!
 //! **And the same arithmetic says where the model stops.** The critical temperature comes out
 //! `T*_c = 1.316` times `ε/k_B`, which for argon is 157.6 K against a measured 150.7 K — **4.6%
