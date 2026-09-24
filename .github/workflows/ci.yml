@@ -371,9 +371,18 @@ jobs:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
       - name: install wasmtime
+        # **A step that proves it worked.** On 2026-09-23 the installer resolved "the latest
+        # version" to the literal string `{`, printed "Error: Could not download Wasmtime version
+        # '{'", and this step reported success: the default shell is `bash -e` without
+        # `pipefail`, so only the last command of `curl | bash` counted. The failure surfaced two
+        # steps later as "could not execute process wasmtime ... No such file or directory",
+        # which reads like a test that forgot its wasm `cfg`. `pipefail` makes the installer's own
+        # exit code count, and `--version` fails here whatever the installer claimed.
         run: |
+          set -o pipefail
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          "$HOME/.wasmtime/bin/wasmtime" --version
       - name: cargo test --target wasm32-wasip1
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime

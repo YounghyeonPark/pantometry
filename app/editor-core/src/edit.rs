@@ -678,6 +678,14 @@ const ASSET_BUDGET_CELLS: usize = 2_000_000;
 /// What a dropped part is made of until somebody says otherwise — the same default as both.
 const ASSET_MATERIAL: &str = "aluminium";
 
+/// The file extensions a scene can read, lowercase and without the dot.
+///
+/// **One list, so a browser cannot offer a file the drop refuses.** A panel listing `.obj` beside
+/// `.stl` would be a row that looks like the others and fails when used, which is the shape of
+/// silent failure this workspace keeps finding. `a_dropped_file_becomes_a_domain` holds the two
+/// ends together: everything in here is accepted, and everything accepted is in here.
+pub const ASSET_EXTENSIONS: [&str; 2] = ["stl", "pdb"];
+
 /// The domain a dropped file becomes, ready for [`add_domain_json`].
 ///
 /// **The extension decides the kind, because only two kinds in the scene format take a file at

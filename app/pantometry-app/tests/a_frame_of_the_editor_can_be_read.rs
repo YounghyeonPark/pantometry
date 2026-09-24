@@ -314,12 +314,29 @@ fn a_dropped_panel_says_so_rather_than_vanishing() {
     // that is too narrow.
     let wide = dump(&[&scene(), "--width", "1500"]);
     let narrow = dump(&[&scene(), "--width", "500"]);
-    assert!(wide.contains("Inspector"), "no inspector at 1500:\n{wide}");
+    let note = narrow
+        .lines()
+        .find(|l| l.contains(" hidden — "))
+        .unwrap_or_else(|| panic!("no panel was said to be hidden at 500:\n{narrow}"));
+    // **Every panel that is gone, named.** This asserted `the inspector hidden` alone, which was
+    // the right question while the inspector went first. The assets go first now, the note named
+    // them and only them, and the inspector left without a word at the very width this guards —
+    // the test caught it. So the assertion is generalised rather than repointed: whichever of the
+    // headings is on screen at 1500 and absent at 500 has to be in the note.
+    for (heading, called) in [
+        ("Inspector", "the inspector"),
+        ("Assets", "the assets"),
+        ("Outliner", "the outliner"),
+    ] {
+        assert!(wide.contains(heading), "no {heading} at 1500:\n{wide}");
+        if !narrow.contains(heading) {
+            assert!(
+                note.contains(called),
+                "{called} went at 500 and the note does not say so: {note}"
+            );
+        }
+    }
     assert!(!narrow.contains("Inspector"), "the inspector fits at 500?");
-    assert!(
-        narrow.contains("the inspector hidden"),
-        "the inspector left without a word:\n{narrow}"
-    );
 }
 
 #[test]

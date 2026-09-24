@@ -44,6 +44,7 @@ pub mod edit;
 pub use edit::{
     add_domain, add_domain_json, asset_domain, domain_named, drag_along_axis, editable, pose_of,
     remove_domain, set_number, set_pose, set_text, set_turn, turn_of, Editable, Value,
+    ASSET_EXTENSIONS,
 };
 
 /// A starting example of every domain the format defines, re-exported so a shell talks to this

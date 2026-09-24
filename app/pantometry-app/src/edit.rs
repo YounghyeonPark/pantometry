@@ -501,6 +501,9 @@ pub const TEXT_MIN: f32 = 240.0;
 /// The narrowest useful inspector: a label and a number-drag side by side.
 pub const INSPECTOR_MIN: f32 = 200.0;
 
+/// The narrowest useful asset panel: a file name and the button that adds it, side by side.
+pub const ASSETS_MIN: f32 = 190.0;
+
 /// What a side panel costs beyond its own width: the gap egui leaves beside it.
 ///
 /// Read from the style rather than written down — it is egui's number, not this program's, and
@@ -516,21 +519,34 @@ fn panel_gap() -> f32 {
 /// What the panels do at a given window width, as one line.
 ///
 /// The `--layout-at` subcommand's whole body. `panels_that_fit` is a method on `App` because it
-/// reads the `show_*` flags; this asks it with all three on, which is the state a reader starts in
+/// reads the `show_*` flags; this asks it with all four on, which is the state a reader starts in
 /// and the only one where the fitting has anything to decide.
+///
+/// **The widths come from the constants now.** They were written out as `170.0`, `240.0` and
+/// `200.0` here, a second copy of `OUTLINER_MIN`, `TEXT_MIN` and `INSPECTOR_MIN` — so adding a
+/// fourth panel would have left this reporting a viewport 190 points wider than the one the
+/// program lays out, and the test that reads `view=` would have gone on passing. That is the
+/// defect `the_viewport_always_has_room` documents itself having had.
 pub fn layout_at(width: f32) -> String {
     let app = App::new(None);
     let (fits, dropped) = app.panels_that_fit(width);
-    let taken = (if fits.outliner { 170.0 } else { 0.0 })
-        + (if fits.text { 240.0 } else { 0.0 })
-        + (if fits.inspector { 200.0 } else { 0.0 });
+    let taken = (if fits.outliner { OUTLINER_MIN } else { 0.0 })
+        + (if fits.text { TEXT_MIN } else { 0.0 })
+        + (if fits.inspector { INSPECTOR_MIN } else { 0.0 })
+        + (if fits.assets { ASSETS_MIN } else { 0.0 });
+    let on = |b: bool| if b { "on" } else { "off" };
     format!(
-        "width={width} view={} outliner={} text={} inspector={} dropped={}",
+        "width={width} view={} outliner={} text={} inspector={} assets={} dropped={}",
         width - taken,
-        if fits.outliner { "on" } else { "off" },
-        if fits.text { "on" } else { "off" },
-        if fits.inspector { "on" } else { "off" },
-        dropped.unwrap_or("none"),
+        on(fits.outliner),
+        on(fits.text),
+        on(fits.inspector),
+        on(fits.assets),
+        if dropped.is_empty() {
+            "none".to_string()
+        } else {
+            dropped.join(", ")
+        },
     )
 }
 
@@ -543,6 +559,7 @@ struct Panels {
     outliner: bool,
     text: bool,
     inspector: bool,
+    assets: bool,
 }
 
 /// One thing the cursor can be over in the shaded view, with its readout already written.
@@ -783,6 +800,16 @@ struct App {
     show_outliner: bool,
     show_inspector: bool,
     show_text: bool,
+    show_assets: bool,
+    /// What `panels_that_fit` last reported hiding, so the note is said once and not per paint.
+    squeezed_was: Vec<&'static str>,
+    /// The files beside the scene that a domain could read, as paths relative to it.
+    ///
+    /// Read from disk rather than embedded, because what belongs in this list is what *this*
+    /// scene can name: a `parts/rod.stl` in the panel has to be a `parts/rod.stl` the build can
+    /// open, and `Beside` resolves exactly that. A shipped binary carries no scenes directory,
+    /// which is why the preset tiles are embedded and these are not.
+    assets: Vec<String>,
 }
 
 impl App {
@@ -804,6 +831,7 @@ impl App {
         };
         let checked = editor_core::check(&text, &Beside::of(&path));
         let known_mtime = mtime_of(&path);
+        let scanned = path.clone();
         App {
             history: editor_core::edit::History::new(text.clone()),
             text,
@@ -849,6 +877,9 @@ impl App {
             show_outliner: true,
             show_inspector: true,
             show_text: true,
+            show_assets: true,
+            squeezed_was: Vec::new(),
+            assets: assets_beside(&scanned),
         }
     }
 
@@ -873,6 +904,7 @@ impl App {
         self.dirty = true;
         self.known_mtime = None;
         self.recheck();
+        self.rescan_assets();
         self.needs_fit = true;
         self.start = false;
         self.choosing = None;
@@ -1476,6 +1508,7 @@ impl App {
                     ui.checkbox(&mut self.show_outliner, "Outliner");
                     ui.checkbox(&mut self.show_inspector, "Inspector");
                     ui.checkbox(&mut self.show_text, "Scene text");
+                    ui.checkbox(&mut self.show_assets, "Assets");
                 });
                 ui.menu_button("Domain", |ui| {
                     let mut wanted: Option<&str> = None;
@@ -1842,9 +1875,15 @@ impl App {
         // and the status bar says which one went. Their `show_*` flags are untouched, so widening
         // the window brings the panel back without anybody having to find the menu item again.
         let (fits, squeezed) = self.panels_that_fit(ctx.screen_rect().width());
-        if let Some(dropped) = squeezed {
-            self.status =
-                format!("{dropped} hidden — the window is too narrow for it and the view");
+        // **Only when it changes.** This ran every paint, so at any width where something is
+        // squeezed the status bar could say nothing else: an "added parts/rod.stl" was overwritten
+        // in the frame it appeared in. It was survivable while the first panel went at 950 points
+        // and is not now the assets go at 1150, which is most windows.
+        if squeezed != self.squeezed_was {
+            if let Some(note) = squeezed_note(&squeezed) {
+                self.status = note;
+            }
+            self.squeezed_was = squeezed;
         }
         // Each panel's ceiling is its minimum plus its share of what is over the floor, so the
         // three of them together can never take the viewport below `VIEWPORT_FLOOR`.
@@ -1922,10 +1961,100 @@ impl App {
             self.verify_open = open;
         }
 
+        // Declared after the other left panels so it sits **against the viewport**: the drag
+        // that adds a part crosses one boundary rather than three.
+        if fits.assets {
+            let most = cap(ASSETS_MIN, 300.0);
+            egui::SidePanel::left("assets")
+                .resizable(true)
+                .default_width(220.0)
+                .width_range(ASSETS_MIN..=most)
+                .show(ctx, |ui| self.assets_panel(ui));
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.viewport(ui);
+            // The viewport is the drop target. `dnd_drop_zone` gives back whatever was released
+            // over it, and the borrow of `self` inside the closure ends before it is read.
+            let (_, dropped) =
+                ui.dnd_drop_zone::<String, _>(egui::Frame::default(), |ui| self.viewport(ui));
+            if let Some(name) = dropped {
+                self.add_asset(&name);
+            }
         });
     }
+}
+
+/// What the status bar says when panels have gone for want of room, or `None` when none have.
+///
+/// Every panel is named. One is "hidden — the window is too narrow for it and the view", which is
+/// the sentence this has always said; several are listed and the pronoun follows them.
+pub fn squeezed_note(dropped: &[&str]) -> Option<String> {
+    let (last, rest) = dropped.split_last()?;
+    if rest.is_empty() {
+        return Some(format!(
+            "{last} hidden — the window is too narrow for it and the view"
+        ));
+    }
+    Some(format!(
+        "{} and {last} hidden — the window is too narrow for them and the view",
+        rest.join(", ")
+    ))
+}
+
+/// Every file beside `scene` that a domain could read, as paths relative to the scene.
+///
+/// The scene's own directory and one level below it, which is where the shipped scenes keep
+/// theirs — `parts/` and `structures/`. Sorted, so the panel does not reorder itself between
+/// frames on a filesystem that does not promise an order.
+///
+/// **The extensions come from `editor_core::ASSET_EXTENSIONS`** rather than from a list here. A
+/// panel offering a file the drop refuses would be a row that looks like the others and fails
+/// when used, and two lists is how that happens.
+pub fn assets_beside(scene: &str) -> Vec<String> {
+    fn gather(out: &mut Vec<String>, prefix: &str, at: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !editor_core::ASSET_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                out.push(format!("{prefix}{name}"));
+            }
+        }
+    }
+
+    let dir = match std::path::Path::new(scene).parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let mut out = Vec::new();
+    gather(&mut out, "", &dir);
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut subs: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        subs.sort();
+        for sub in subs {
+            if let Some(name) = sub.file_name().and_then(|n| n.to_str()) {
+                // A forward slash, whatever this platform writes: the string goes into a scene,
+                // and a scene with a backslash in a path is a scene that opens on one machine.
+                gather(&mut out, &format!("{name}/"), &sub);
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 impl App {
@@ -1938,6 +2067,7 @@ impl App {
                 self.dirty = false;
                 self.known_mtime = mtime_of(&self.path);
                 self.recheck();
+                self.rescan_assets();
                 self.needs_fit = true;
                 self.status = format!("loaded {}", self.path);
                 true
@@ -1995,6 +2125,116 @@ impl App {
     }
 
     /// The outliner: what is in this scene, as a tree you can select, hide and collapse.
+    /// The asset panel: the files beside this scene that a domain could read.
+    ///
+    /// **A row is draggable and it is also a button.** The drag is what an asset browser is for.
+    /// The button is what a check can reach: a drag is a press, a movement and a release, and
+    /// `--ui-dump` drives one point at a time, so a feature reachable only by dragging is a
+    /// feature nothing here can say still works. Both call the same [`App::add_asset`].
+    fn assets_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Assets").strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("rescan")
+                    .on_hover_text("read the scene's folder again")
+                    .clicked()
+                {
+                    self.rescan_assets();
+                }
+            });
+        });
+        ui.separator();
+
+        if self.assets.is_empty() {
+            // **Where it looked and what for.** A panel that renders empty and says nothing is
+            // indistinguishable from one that is broken, and that is this workspace's oldest
+            // defect rather than a hypothetical one.
+            let dir = std::path::Path::new(&self.path)
+                .parent()
+                .map(|d| d.display().to_string())
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| ".".to_string());
+            ui.weak(format!(
+                "no .{} beside {dir}",
+                editor_core::ASSET_EXTENSIONS.join(" or .")
+            ));
+            return;
+        }
+
+        // Cloned so a row can call back into `self`: a handful of short strings, once a frame.
+        let names = self.assets.clone();
+        let mut wanted: Option<String> = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for name in &names {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("+")
+                            .on_hover_text("add it to the scene")
+                            .clicked()
+                        {
+                            wanted = Some(name.clone());
+                        }
+                        ui.dnd_drag_source(
+                            egui::Id::new(("asset", name.as_str())),
+                            name.clone(),
+                            |ui| {
+                                ui.label(egui::RichText::new(name).monospace().size(11.0));
+                            },
+                        )
+                        .response
+                        .on_hover_text("drag onto the view, or press +");
+                    });
+                }
+            });
+        if let Some(name) = wanted {
+            self.add_asset(&name);
+        }
+    }
+
+    /// Read the scene's folder again. Called where the path changes, not every frame: this is a
+    /// directory listing and the editor draws sixty of them a second.
+    fn rescan_assets(&mut self) {
+        self.assets = assets_beside(&self.path);
+    }
+
+    /// Add `relative` to the scene as whatever its extension says it is, and recheck.
+    ///
+    /// The file is read from beside the scene, which is the same place `Beside` will look when the
+    /// build opens it — so a row that adds cleanly is a row the build can resolve. A failure at
+    /// either step leaves the text alone and says why in the status bar, for the reason the
+    /// inspector's splices do: a half-applied edit is the worst outcome available here.
+    fn add_asset(&mut self, relative: &str) {
+        let dir = std::path::Path::new(&self.path)
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_default();
+        let full = dir.join(relative);
+        let bytes = match std::fs::read(&full) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("{}: {e}", full.display());
+                return;
+            }
+        };
+        match editor_core::asset_domain(relative, &bytes)
+            .and_then(|domain| editor_core::add_domain_json(&self.text, &domain))
+        {
+            Ok(text) => {
+                self.history.commit(self.text.clone());
+                self.text = text;
+                self.history.commit(self.text.clone());
+                self.dirty = true;
+                self.recheck();
+                self.needs_fit = true;
+                self.status = format!("added {relative}");
+            }
+            Err(why) => self.status = why,
+        }
+    }
+
     fn outliner(&mut self, ui: &mut egui::Ui, tree: &editor_core::Tree) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Outliner").strong());
@@ -2872,12 +3112,13 @@ impl App {
     ///
     /// Widths are the minimums the panels are held to below; [`VIEWPORT_FLOOR`] is what the
     /// viewport must keep.
-    fn panels_that_fit(&self, width: f32) -> (Panels, Option<&'static str>) {
+    fn panels_that_fit(&self, width: f32) -> (Panels, Vec<&'static str>) {
         const FLOOR: f32 = VIEWPORT_FLOOR;
         let mut fits = Panels {
             outliner: self.show_outliner,
             text: self.show_text,
             inspector: self.show_inspector,
+            assets: self.show_assets,
         };
         // The viewport has a gap of its own, on the side no panel is against: with one panel up
         // the chrome measured 16 points, not 8, and the viewport settled at 272 against a floor
@@ -2891,25 +3132,38 @@ impl App {
                 } else {
                     0.0
                 })
+                + (if p.assets { ASSETS_MIN + gap } else { 0.0 })
         };
-        let mut dropped = None;
+        // **Every panel that went, in the order it went.** This was an `Option` holding the first,
+        // which was right while the first was the inspector and the test that guards this asked
+        // after the inspector. With the assets going first it named them alone at 500 points —
+        // where the assets, the inspector and the scene text had all gone — and the inspector
+        // left without a word, which is the silent failure that test exists for.
+        let mut dropped = Vec::new();
 
         // **Three steps, written out.** Least useful first for somebody looking at a picture: the
         // inspector describes the selection, which the viewport is already showing; the text is the
         // scene, which is not what a view is for; the outliner is how you *choose* what to look at,
         // so it goes last. A loop over closures here was a type clippy refused and three constants
         // nobody can get wrong quietly are what the twelve edges of a box are written out for.
+        // **The assets go first**, for the reason the order below is written out: this is a
+        // palette of files to add, and somebody looking at a picture needs it least of the four.
+        // It is also the only one of them that says nothing about the scene that is open.
+        if width - taken(&fits) < FLOOR && fits.assets {
+            fits.assets = false;
+            dropped.push("the assets");
+        }
         if width - taken(&fits) < FLOOR && fits.inspector {
             fits.inspector = false;
-            dropped = Some("the inspector");
+            dropped.push("the inspector");
         }
         if width - taken(&fits) < FLOOR && fits.text {
             fits.text = false;
-            dropped = dropped.or(Some("the scene text"));
+            dropped.push("the scene text");
         }
         if width - taken(&fits) < FLOOR && fits.outliner {
             fits.outliner = false;
-            dropped = dropped.or(Some("the outliner"));
+            dropped.push("the outliner");
         }
         (fits, dropped)
     }
@@ -2932,9 +3186,12 @@ impl App {
     fn panel_budget(&self, width: f32, fits: &Panels) -> f32 {
         let mins = (if fits.outliner { OUTLINER_MIN } else { 0.0 })
             + (if fits.text { TEXT_MIN } else { 0.0 })
-            + (if fits.inspector { INSPECTOR_MIN } else { 0.0 });
-        let shown =
-            usize::from(fits.outliner) + usize::from(fits.text) + usize::from(fits.inspector);
+            + (if fits.inspector { INSPECTOR_MIN } else { 0.0 })
+            + (if fits.assets { ASSETS_MIN } else { 0.0 });
+        let shown = usize::from(fits.outliner)
+            + usize::from(fits.text)
+            + usize::from(fits.inspector)
+            + usize::from(fits.assets);
         if shown == 0 {
             return 0.0;
         }
