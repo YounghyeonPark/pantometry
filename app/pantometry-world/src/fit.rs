@@ -226,12 +226,30 @@ pub fn propose(parts: &[(String, Mesh)], budget_cells: usize) -> Result<Fit, Str
     for step in 0..12u32 {
         // Cells across the thinnest feature: 1, 2, 4, 8 …
         let across = 1u32 << step;
-        let cell = thinnest / across as f64;
-        let counts = (
-            ((extent[0] / cell).ceil() as usize).max(1),
-            ((extent[1] / cell).ceil() as usize).max(1),
-            ((extent[2] / cell).ceil() as usize).max(1),
-        );
+        // **The cell a scene will be written with, not the one the arithmetic suggests.** A
+        // fragment states `cell_mm` to four decimals, and this used to measure the exact
+        // `thinnest / across` and let the writer round it afterwards — so the table described a
+        // grid that was never written and the scene got one that was never measured. On the
+        // thinnest axis the grid fills the part with no slack by construction, and a cell rounded
+        // *down* left it short: of twelve bricks at the origin with four-decimal sides, **five**
+        // were refused, pasted as `fit` recommended them. Rounded **up** here, the thinnest
+        // feature still gets `across` cells, and every row below is the grid a scene gets.
+        let cell_mm = (thinnest * 1e3 / across as f64 * 1e4).ceil() / 1e4;
+        let dx = Length::mm(cell_mm);
+        let cell = dx.to_si();
+        // And the counts by the builder's own arithmetic, `origin + n × cell` against the parts'
+        // far side, which is the comparison `Voxels::onto` refuses on. `ceil(extent / cell)` is
+        // the same number except where a division lands a hair above an integer and asks for a
+        // cell nobody needs, or a hair below and asks for one too few; starting under and counting
+        // up gives the smallest grid that holds the parts as the build will judge it.
+        let count = |axis: usize| {
+            let mut n = ((extent[axis] / cell).floor() as usize).max(1);
+            while lo[axis] + n as f64 * cell < hi[axis] {
+                n += 1;
+            }
+            n
+        };
+        let counts = (count(0), count(1), count(2));
         let total = counts.0.saturating_mul(counts.1).saturating_mul(counts.2);
         if total > budget_cells {
             stopped = format!(
@@ -242,8 +260,8 @@ pub fn propose(parts: &[(String, Mesh)], budget_cells: usize) -> Result<Fit, Str
         }
         let mut measured = Vec::new();
         for (name, mesh) in parts {
-            let voxels = Voxels::onto(mesh, origin, counts, Length::from_si(cell))
-                .map_err(|e| format!("{name}: {e}"))?;
+            let voxels =
+                Voxels::onto(mesh, origin, counts, dx).map_err(|e| format!("{name}: {e}"))?;
             let loss = voxels.loss();
             measured.push(PartAt {
                 name: name.clone(),

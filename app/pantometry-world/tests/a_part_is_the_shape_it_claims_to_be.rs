@@ -173,7 +173,7 @@ fn every_part_is_the_shape_it_claims_to_be() {
         for (axis, at) in [("x", low.x), ("y", low.y), ("z", low.z)] {
             assert!(
                 at.abs() < 1e-12,
-                "{name} starts at {at:e} m on {axis} rather than at the origin, so a block domain                  would refuse it for reaching outside its own grid"
+                "{name} starts at {at:e} m on {axis} rather than at the origin, so a block domain would refuse it for reaching outside its own grid"
             );
         }
         // A pin and not a closed form: how many triangles a profile needs is the generator's

@@ -475,3 +475,109 @@ fn a_grid_origin_with_no_parts_is_refused() {
         "the refusal should name the key and the block: {why}"
     );
 }
+
+/// Twelve bricks, in millimetres, drawn once at random to four decimals and written down here.
+///
+/// **Five of them were refused** when `fit`'s recommendation was pasted as it came — `odd01`,
+/// `odd02`, `odd06`, `odd10` and `odd11` — and every one of them sat at the origin, so it was not
+/// the grid's corner. The shipped parts all have sides like `20` and `60`, which is why no test
+/// saw it: a four-decimal cell of a round number is the round number.
+const ODD: [[f64; 3]; 12] = [
+    [14.9818, 8.5814, 27.0846],
+    [5.6801, 22.8276, 16.5305],
+    [5.146, 21.7751, 4.3873],
+    [19.0449, 5.5847, 6.3564],
+    [18.7072, 33.5935, 7.5807],
+    [11.2598, 26.215, 38.0652],
+    [24.3528, 17.6772, 39.1214],
+    [4.7236, 34.7633, 13.7155],
+    [8.3374, 7.3583, 14.4138],
+    [33.1967, 9.6869, 24.5192],
+    [26.6398, 16.7787, 23.2665],
+    [5.3232, 5.2052, 10.6205],
+];
+
+/// **The grid `fit` recommends is the grid a scene is written with, and it holds the part.**
+///
+/// `propose` measured `thinnest / across` exactly and the writers rounded it to four decimals
+/// afterwards, so the table described a grid that was never written and the scene got one that
+/// was never measured. On the thinnest axis the part fills its grid with no slack, and a cell
+/// rounded down left it short.
+///
+/// Two things are asserted for each of twenty-four placements — twelve bricks, at the origin and
+/// away from it — through both the drop and `fit`'s fragment:
+///
+/// - **It builds.** Every refusal is collected before failing, so the message says how many.
+/// - **The table and the build agree to the cell.** The count `fit` printed for the row it
+///   recommended must be the count the build filled. That is not one implementation checking
+///   another: both are `Voxels::onto`, and the claim is that they were handed the *same grid* —
+///   which is exactly what was false.
+#[test]
+fn a_recommended_grid_is_the_grid_written_and_it_holds_the_part() {
+    let mut refused = Vec::new();
+    let mut agreed = 0;
+    for (i, size) in ODD.iter().enumerate() {
+        for (place, low) in [
+            ("at the origin", [0.0, 0.0, 0.0]),
+            ("off it", [-3.0917, 2.4631, -1.3709]),
+        ] {
+            let name = format!("odd{i:02}.stl");
+            let bytes = brick(low, *size);
+            let files = pantometry_world::Uploaded::new().with(name.clone(), bytes.clone());
+
+            let mesh = pantometry::shape::Mesh::from_stl(&bytes).expect("a brick parses");
+            let fit = pantometry_world::fit::propose(&[(name.clone(), mesh)], 2_000_000)
+                .expect("a brick has a grid");
+            let row = fit.recommended(0.5).expect("a recommendation");
+            let said = row.parts[0].filled;
+            // **The thinnest side gets a power of two**, which is what the ladder is: 1, 2, 4, 8
+            // cells across the thinnest feature. A cell rounded down still builds — the counts are
+            // then made to cover by the builder's arithmetic — but it gives that side one cell
+            // more than the row it claims to be, so it is asserted rather than inferred.
+            let thin = (0..3)
+                .min_by(|a, b| size[*a].partial_cmp(&size[*b]).expect("finite"))
+                .expect("three axes");
+            let across = [row.counts.0, row.counts.1, row.counts.2][thin];
+            assert!(
+                across.is_power_of_two(),
+                "odd{i:02} {place}: the thinnest side, {} mm, got {across} cells, which is no row of a ladder that doubles",
+                size[thin]
+            );
+
+            let dropped = add_domain_json(
+                EMPTY,
+                &asset_domain(&name, &bytes).expect("a brick is an STL"),
+            )
+            .expect("it splices");
+            let fragment = fit.scene_fragment(row, "aluminium");
+            let pasted = format!(
+                "{{ \"title\": \"as fit said\", \"duration_s\": 1.0, \"frames\": 2, \
+                 \"domains\": [ {{ \"kind\": \"block\", \"name\": \"b\", \"initial_c\": 20.0,\n\
+                 {fragment} }} ] }}"
+            );
+
+            for (how, text) in [("dropped", &dropped), ("pasted from fit", &pasted)] {
+                let built = check(text, &files);
+                match &built.error {
+                    Some(e) => refused.push(format!("{name} {place}, {how}: {e}")),
+                    None => {
+                        let got = filled(&built);
+                        assert_eq!(
+                            got, said,
+                            "{name} {place}, {how}: fit's table said {said} cells for the grid it \
+                             recommended and the build filled {got}, so they were not the same grid"
+                        );
+                        agreed += 1;
+                    }
+                }
+            }
+        }
+    }
+    println!("  {agreed} of 48 built and agreed with the table to the cell");
+    assert!(
+        refused.is_empty(),
+        "{} of 48 were refused:\n{}",
+        refused.len(),
+        refused.join("\n")
+    );
+}
