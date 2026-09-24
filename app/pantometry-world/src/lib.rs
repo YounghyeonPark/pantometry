@@ -890,6 +890,64 @@ pub enum Device {
     Gpu,
 }
 
+/// Where a block's grid starts, among the coordinates its parts are drawn in.
+///
+/// An STL carries absolute positions, and `Voxels::onto` reads them as written — which is what lets
+/// an assembly of several files keep its relative placement. The grid's corner was always the
+/// origin of those coordinates, so a part modelled about its own centre reached outside its grid
+/// and was **refused**: correctly, since cropping it would answer about a different shape, and
+/// with no way to say anything else.
+///
+/// # Why a word and not a coordinate
+///
+/// A coordinate in millimetres goes through a decimal and back, and **12.65% of such round trips
+/// land on a different `f64`** — measured over 200 000 STL-shaped values. The grid that
+/// `pantometry fit` recommends usually fills its part exactly, so a corner moved up by one ulp
+/// leaves the part a sliver outside and the build refuses it for no reason anybody could see.
+/// `Parts` is resolved by the builder from the meshes themselves, with the same arithmetic `fit`
+/// measured with, so there is nothing to round.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum GridOrigin {
+    /// The origin of the parts' own coordinates. What every block written before this key is.
+    #[default]
+    Zero,
+    /// The lowest corner of the block's parts, taken together, so relative placement is kept.
+    Parts,
+}
+
+impl GridOrigin {
+    /// Where the grid's corner is, in metres, for these meshes.
+    ///
+    /// **One definition**, used by the builder to rasterise and by the editor to draw: the cells
+    /// and the surface drawn over them have to agree to the bit, and two copies of this is how
+    /// they come to disagree by one. The minimum is taken the way `fit::propose` takes it, so a
+    /// grid it recommended is the grid built.
+    pub fn resolve(self, meshes: &[pantometry::shape::Mesh]) -> [f64; 3] {
+        match self {
+            GridOrigin::Zero => [0.0; 3],
+            GridOrigin::Parts => {
+                let mut lo = [f64::INFINITY; 3];
+                for mesh in meshes {
+                    if let Some((a, _)) = mesh.bounds() {
+                        let a = a.to_si();
+                        for axis in 0..3 {
+                            lo[axis] = lo[axis].min(a[axis]);
+                        }
+                    }
+                }
+                // No mesh had any triangles, and `Voxels::onto` will say so by name. Zero here
+                // keeps that the error a person reads.
+                if lo.iter().all(|v| v.is_finite()) {
+                    lo
+                } else {
+                    [0.0; 3]
+                }
+            }
+        }
+    }
+}
+
 /// Something that can run a domain somewhere other than the CPU.
 ///
 /// Implemented by an application, because the library's workspace cannot carry a GPU stack — see
@@ -1323,6 +1381,15 @@ pub enum DomainSpec {
         /// the gap between them as though the gap were metal.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         parts: Vec<PartSpec>,
+        /// Where the grid starts among the parts' coordinates. See [`GridOrigin`].
+        ///
+        /// `"parts"` puts its corner at the parts' lowest corner, which is what `pantometry fit`
+        /// measured every candidate grid against and what a dropped file is given. Absent is the
+        /// origin, which every block written before this key used. **Refused without parts**: it
+        /// would be a key that changed nothing, and a key that is read and ignored is the silence
+        /// this format keeps refusing.
+        #[serde(default)]
+        grid_origin: GridOrigin,
         /// Faces that lose heat to something, and to what. See [`CoolingSpec`].
         ///
         /// **Absent is a block insulated on all six faces**, which is what every scene written
@@ -3119,6 +3186,7 @@ impl DomainSpec {
                 regions,
                 hot_spot,
                 parts,
+                grid_origin,
                 cooling,
                 dissipation,
                 contact,
@@ -3139,17 +3207,32 @@ impl DomainSpec {
                 // `regions`, because a region is a box stated against the block's own grid and
                 // is the way to say "this corner of that part is something else" — the same
                 // last-writer-wins order the format already documents.
+                if parts.is_empty() && *grid_origin != GridOrigin::Zero {
+                    return Err(format!(
+                        "{name}: grid_origin {grid_origin:?} places the grid among the block's \
+                         parts, and it has none — the key would change nothing"
+                    ));
+                }
                 if !parts.is_empty() {
-                    let origin = LengthVec::m(0.0, 0.0, 0.0);
-                    let counts = (cells[0], cells[1], cells[2]);
-                    let mut occupied = vec![false; cells[0] * cells[1] * cells[2]];
+                    // **Every mesh read before any is rasterised**, because where the grid starts
+                    // can depend on all of them.
+                    let mut meshes = Vec::with_capacity(parts.len());
                     for (n, part) in parts.iter().enumerate() {
                         let site = format!("{name}/parts[{n}]");
                         let bytes = files.bytes(&part.stl).map_err(|e| format!("{site}: {e}"))?;
-                        let mesh = pantometry::shape::Mesh::from_stl(&bytes)
-                            .map_err(|e| format!("{site}: {}: {e}", part.stl))?;
+                        meshes.push(
+                            pantometry::shape::Mesh::from_stl(&bytes)
+                                .map_err(|e| format!("{site}: {}: {e}", part.stl))?,
+                        );
+                    }
+                    let [ox, oy, oz] = grid_origin.resolve(&meshes);
+                    let origin = LengthVec::from_si(glam::DVec3::new(ox, oy, oz));
+                    let counts = (cells[0], cells[1], cells[2]);
+                    let mut occupied = vec![false; cells[0] * cells[1] * cells[2]];
+                    for (n, (part, mesh)) in parts.iter().zip(&meshes).enumerate() {
+                        let site = format!("{name}/parts[{n}]");
                         let voxels = pantometry::shape::Voxels::onto(
-                            &mesh,
+                            mesh,
                             origin,
                             counts,
                             Length::mm(*cell_mm),

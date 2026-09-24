@@ -705,15 +705,19 @@ pub const ASSET_EXTENSIONS: [&str; 2] = ["stl", "pdb"];
 /// array at all, so `set_text` aimed at `/parts/0/stl` would find nothing and refuse, which is
 /// the check working rather than failing.
 ///
-/// # A part has to be drawn in the positive octant
+/// # The grid goes around the part, wherever it is drawn
 ///
-/// A `block` domain's grid starts at the origin, and `Voxels::onto` reads an STL's coordinates as
-/// absolute positions -- which is what lets an assembly of several files keep its relative
-/// placement. A solid modelled about its own centre therefore reaches outside its grid, and it is
-/// **refused rather than cropped**. Nothing here can fix that: the grid has no origin key, and
-/// guessing a `poses` entry would move somebody's geometry without being asked. What the drop does
-/// is fit the grid to the extent, which is the same wherever the part is drawn; the build's own
-/// refusal names both boxes. `a_dropped_file_becomes_a_domain` records it.
+/// `Voxels::onto` reads an STL's coordinates as absolute positions, which is what lets an
+/// assembly of several files keep its relative placement, and a `block`'s grid used to start at
+/// their origin. A solid modelled about its own centre therefore reached outside its grid and was
+/// **refused rather than cropped** -- and this said nothing could be done, because the grid had no
+/// origin key and guessing a `poses` entry would move somebody's geometry without being asked.
+///
+/// So the grid moves instead of the geometry. The domain is written with
+/// `"grid_origin": "parts"`, which the builder resolves from the meshes to their lowest corner --
+/// the corner `fit::propose` measured the grid against. A word rather than a coordinate, because
+/// a coordinate in millimetres goes through a decimal and back and 12.65% of those round trips
+/// land on a different `f64`; see [`pantometry_world::GridOrigin`].
 ///
 /// # The name is the file's stem
 ///
@@ -735,7 +739,8 @@ pub fn asset_domain(file: &str, bytes: &[u8]) -> Result<String, String> {
         })?;
         Ok(format!(
             "{{ \"kind\": \"block\", \"name\": {}, \"cells\": [{}, {}, {}], \"cell_mm\": {:.4}, \
-             \"initial_c\": 20.0, \"parts\": [ {{ \"stl\": {}, \"material\": {} }} ] }}",
+             \"grid_origin\": \"parts\", \"initial_c\": 20.0, \
+             \"parts\": [ {{ \"stl\": {}, \"material\": {} }} ] }}",
             quoted(stem),
             candidate.counts.0,
             candidate.counts.1,

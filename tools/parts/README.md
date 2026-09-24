@@ -40,10 +40,12 @@ inside-out export is a real defect and the sign is the only check that sees it.
 
 ## Every one of them starts at the origin, and two of them did not
 
-That is a requirement and not a convention. A `block` domain's grid starts at the origin and
-`Voxels::onto` reads an STL's coordinates as absolute positions -- which is what lets an assembly
-of several files keep its relative placement -- so a solid drawn about its own centre reaches
-outside its grid, and it is **refused rather than cropped**.
+A `block`'s grid starts at the origin of its parts' coordinates unless the scene says
+`"grid_origin": "parts"`, and `Voxels::onto` reads an STL's coordinates as absolute positions --
+which is what lets an assembly of several files keep its relative placement -- so without that key
+a solid drawn about its own centre reaches outside its grid and is **refused rather than
+cropped**. A dropped file is given the key, and `pantometry fit` writes it. The six here start at
+the origin anyway, so a scene written by hand can name one without knowing the key exists.
 
 The hand-made bracket happened to be drawn that way and nothing said why. `rod` and `pipe` are
 built from `polygon()`, which is centred, and they **shipped as two solids no scene could use**.

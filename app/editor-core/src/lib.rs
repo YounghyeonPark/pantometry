@@ -189,20 +189,34 @@ pub fn designed(scene: &Scene, files: &dyn Parts) -> Vec<PlacedMesh> {
     let placed = scene.placements();
     let mut out = Vec::new();
     for spec in &scene.domains {
-        let DomainSpec::Block { parts, .. } = spec else {
+        let DomainSpec::Block {
+            parts, grid_origin, ..
+        } = spec
+        else {
             continue;
         };
         let placement = placed
             .get(spec.name())
             .copied()
             .unwrap_or_else(|| spec.placement());
-        for (n, part) in parts.iter().enumerate() {
-            let Ok(bytes) = files.bytes(&part.stl) else {
-                continue;
-            };
-            let Ok(mesh) = pantometry::shape::Mesh::from_stl(&bytes) else {
-                continue;
-            };
+        let read: Vec<(usize, &pantometry_world::PartSpec, pantometry::shape::Mesh)> = parts
+            .iter()
+            .enumerate()
+            .filter_map(|(n, part)| {
+                let bytes = files.bytes(&part.stl).ok()?;
+                let mesh = pantometry::shape::Mesh::from_stl(&bytes).ok()?;
+                Some((n, part, mesh))
+            })
+            .collect();
+        // **Drawn in the grid's frame, where the cells are.** The block's cells run from its own
+        // corner, and with `grid_origin: "parts"` that corner is not the origin of the STL's
+        // coordinates — so the surface is moved by exactly what the builder moved the grid by,
+        // through the one function both use. Drawn where the file put it, a part off the origin
+        // would float beside the cells it became by the distance of its own corner.
+        let meshes: Vec<pantometry::shape::Mesh> = read.iter().map(|(_, _, m)| m.clone()).collect();
+        let [ox, oy, oz] = grid_origin.resolve(&meshes);
+        for (n, part, mesh) in &read {
+            let n = *n;
             let triangles = mesh
                 .triangles()
                 .iter()
@@ -211,9 +225,9 @@ pub fn designed(scene: &Scene, files: &dyn Parts) -> Vec<PlacedMesh> {
                     // `pantometry` does not re-export, and adding a dependency to name a type in a
                     // closure signature is the wrong reason to add one.
                     [
-                        [t.a.x, t.a.y, t.a.z],
-                        [t.b.x, t.b.y, t.b.z],
-                        [t.c.x, t.c.y, t.c.z],
+                        [t.a.x - ox, t.a.y - oy, t.a.z - oz],
+                        [t.b.x - ox, t.b.y - oy, t.b.z - oz],
+                        [t.c.x - ox, t.c.y - oy, t.c.z - oz],
                     ]
                 })
                 .collect();

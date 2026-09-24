@@ -1636,6 +1636,7 @@ impl DomainSpec {
                 regions,
                 hot_spot,
                 parts,
+                grid_origin,
                 cooling,
                 dissipation,
                 contact,
@@ -1677,6 +1678,9 @@ impl DomainSpec {
                     // reporting that as discretisation error is correct: it *is* the error,
                     // and it is the kind with no other symptom.
                     parts: parts.clone(),
+                    // Where the grid starts is a length, not a count, so it does not double: the
+                    // finer grid covers the same box from the same corner.
+                    grid_origin: *grid_origin,
                     // The **area** is carried through unchanged, and that is the point of
                     // stating a face's whole area rather than a cell's: the same part, exposed
                     // the same way, on a finer grid. A per-cell area would have to be halved here

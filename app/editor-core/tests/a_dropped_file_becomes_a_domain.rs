@@ -289,74 +289,189 @@ fn brick(low: [f64; 3], size: [f64; 3]) -> Vec<u8> {
     s.into_bytes()
 }
 
-/// **A part drawn around the origin is refused, and the refusal says both boxes.**
+/// Two bricks of one size held in memory, the way the web shell holds a dropped file: one drawn from
+/// the origin, one drawn about it.
+fn bricks() -> pantometry_world::Uploaded {
+    pantometry_world::Uploaded::new()
+        .with("at-origin.stl", brick([0.0, 0.0, 0.0], [20.0, 20.0, 20.0]))
+        .with(
+            "centred.stl",
+            brick([-10.0, -10.0, -10.0], [20.0, 20.0, 20.0]),
+        )
+}
+
+/// How many cells the scene's one part filled, from the build's own note.
+fn filled(checked: &editor_core::Checked) -> usize {
+    checked
+        .notes
+        .iter()
+        .find_map(|n| n.split(" filled ").nth(1)?.split(' ').next()?.parse().ok())
+        .unwrap_or_else(|| panic!("no rasterisation note in {:?}", checked.notes))
+}
+
+/// The smallest and largest coordinate of every triangle drawn for the scene's one part.
+fn drawn_box(checked: &editor_core::Checked) -> ([f64; 3], [f64; 3]) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for t in &checked.meshes[0].triangles {
+        for p in t {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+    }
+    (lo, hi)
+}
+
+/// **A part drawn around the origin lands on a grid around it**, and fills exactly what the same
+/// part drawn from the origin fills.
 ///
-/// This is a limit of the scene format rather than of the drop, and it is recorded here so it is
-/// not rediscovered. A `block` domain's grid starts at the origin and `Voxels::onto` reads an
-/// STL's coordinates as absolute positions — which is what lets an assembly of several files keep
-/// its relative placement — so a solid modelled about its own centre reaches outside the grid. It
-/// is **refused rather than cropped**, because a part with its corner missing runs, audits and
-/// answers about a different shape.
+/// Until `grid_origin` existed a `block`'s grid started at the origin of the parts' coordinates
+/// and this brick, spanning `-10..10` mm, was refused for reaching outside it — this test pinned
+/// that refusal. The drop now writes `"grid_origin": "parts"`, which the builder resolves from the
+/// meshes themselves.
 ///
-/// The shipped parts are all drawn in the positive octant for this reason, which
-/// `a_part_is_the_shape_it_claims_to_be` now asserts. A CAD file that is not needs a `poses` entry
-/// the drop cannot guess.
+/// # What is checked, and against what
+///
+/// **The count is a closed form.** A cube that fills its grid fills every cell, so the cells filled
+/// must be the product of the three counts the scene states — whatever grid the fit chose, and for
+/// both bricks. A grid that started anywhere but the brick's corner would cut a slab off one face
+/// and the product would not be reached.
+///
+/// **The surface is drawn on the cells.** The editor draws a part in its grid's frame, which runs
+/// from `0` to `cells × cell_mm`. Drawn where the file put it, the centred brick would sit 10 mm
+/// down each axis from the cells it became — the tolerance below is a picometre, ten orders under
+/// that, and far above the rounding of `±0.01 m`.
 #[test]
-fn a_part_drawn_around_the_origin_is_refused_and_says_why() {
-    // Written to a directory of this process's own, for the reason `an_assembly_from_files` gives:
-    // two runs of one binary sharing a fixture path read each other's files.
-    let dir = std::env::temp_dir().join(format!("pantometry-drop-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a directory to write bricks into");
-    let write = |name: &str, bytes: &[u8]| {
-        std::fs::write(dir.join(name), bytes).expect("the brick is written");
-    };
-    write("at-origin.stl", &brick([0.0, 0.0, 0.0], [20.0, 20.0, 20.0]));
-    write(
-        "centred.stl",
-        &brick([-10.0, -10.0, -10.0], [20.0, 20.0, 20.0]),
-    );
-    let files = Beside::of(dir.join("any-scene.json"));
-
-    let one = |name: &str| {
-        let bytes = std::fs::read(dir.join(name)).expect("it was just written");
+fn a_part_drawn_around_the_origin_is_dropped_on_a_grid_around_it() {
+    use pantometry_world::Parts;
+    let files = bricks();
+    let drop = |name: &str| {
+        let bytes = files.bytes(name).expect("held in memory");
         let domain = asset_domain(name, &bytes).expect("a brick is an STL");
-        let text = add_domain_json(EMPTY, &domain).expect("it splices");
-        let grid: serde_json::Value = serde_json::from_str(&domain).expect("parses");
-        (text, grid)
+        add_domain_json(EMPTY, &domain).expect("it splices")
     };
 
-    let (good_text, good_grid) = one("at-origin.stl");
-    let (bad_text, bad_grid) = one("centred.stl");
+    for name in ["at-origin.stl", "centred.stl"] {
+        let text = drop(name);
+        let checked = check(&text, &files);
+        assert!(
+            checked.error.is_none(),
+            "{name} should build on a grid around it: {:?}",
+            checked.error
+        );
 
-    // **The same box needs the same grid wherever it is drawn.** `fit::propose` measures an
-    // extent, and an extent does not know where it is. Compared with each other rather than with
-    // a number, because which row of the ladder is recommended is the fit's business.
-    assert_eq!(
-        good_grid["cells"], bad_grid["cells"],
-        "a translation should not change the grid"
-    );
-    assert_eq!(good_grid["cell_mm"], bad_grid["cell_mm"]);
-    println!(
-        "  both fit to cells {} at {} mm",
-        good_grid["cells"], good_grid["cell_mm"]
-    );
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("the scene parses");
+        let d = &parsed["domains"][0];
+        assert_eq!(d["grid_origin"], "parts", "the drop says where its grid is");
+        let cells: Vec<usize> = d["cells"]
+            .as_array()
+            .expect("cells")
+            .iter()
+            .map(|c| c.as_u64().expect("a count") as usize)
+            .collect();
+        let cell_m = d["cell_mm"].as_f64().expect("cell_mm") * 1e-3;
+        let every = cells[0] * cells[1] * cells[2];
+        let got = filled(&checked);
+        println!(
+            "  {name:<14} cells {cells:?} at {} mm, filled {got} of {every}",
+            cell_m * 1e3
+        );
+        assert_eq!(
+            got, every,
+            "{name}: a cube filling its grid fills every cell, and {got} of {every} were"
+        );
 
-    let good = check(&good_text, &files);
+        let (lo, hi) = drawn_box(&checked);
+        for a in 0..3 {
+            let edge = cells[a] as f64 * cell_m;
+            assert!(
+                lo[a].abs() < 1e-12 && (hi[a] - edge).abs() < 1e-12,
+                "{name}: drawn from {} to {} m on axis {a}, and its cells run from 0 to {edge}",
+                lo[a],
+                hi[a]
+            );
+        }
+    }
+}
+
+/// **Without `grid_origin` the refusal still stands, and still names both boxes.**
+///
+/// The key is opt-in, so every block written before it keeps its grid where it was. This is the
+/// same scene as above with the one key taken out, and it has to be refused the way it always was:
+/// a part with its corner missing runs and audits and answers about a different shape.
+#[test]
+fn without_grid_origin_a_part_around_the_origin_is_still_refused() {
+    use pantometry_world::Parts;
+    let files = bricks();
+    let bytes = files.bytes("centred.stl").expect("held in memory");
+    let domain = asset_domain("centred.stl", &bytes).expect("a brick is an STL");
+    let text = add_domain_json(EMPTY, &domain)
+        .expect("it splices")
+        .replace("\"grid_origin\": \"parts\", ", "");
     assert!(
-        good.error.is_none(),
-        "a brick in the positive octant should build: {:?}",
-        good.error
+        !text.contains("grid_origin"),
+        "the key was meant to be removed, and the test proves nothing if it was not"
     );
-
-    let bad = check(&bad_text, &files);
-    let why = bad
+    let why = check(&text, &files)
         .error
-        .expect("a part drawn around the origin reaches outside a grid that starts there");
+        .expect("a part drawn about the origin reaches outside a grid that starts there");
     println!("  {why}");
     assert!(
         why.contains("cut off") && why.contains("refused rather than cropped"),
         "the refusal should say both boxes and that it did not crop: {why}"
     );
+}
 
-    let _ = std::fs::remove_dir_all(&dir);
+/// **What `pantometry fit` recommends for a part off the origin builds, pasted as it comes.**
+///
+/// It did not. `fit::propose` measured every candidate grid from the parts' lowest corner and
+/// `scene_fragment` left the corner out, on the stated belief that the rasteriser "places every
+/// part against the grid's own corner" — it does not, the builder puts that corner at the origin.
+/// The CLI printed `from (-10.0, -10.0, -10.0) mm` above its own recommendation, and the
+/// recommendation was refused. The web shell's `fit` is the same function, so this is both.
+#[test]
+fn what_fit_recommends_for_a_part_off_the_origin_builds() {
+    let files = bricks();
+    let only = pantometry_world::Uploaded::new().with(
+        "centred.stl",
+        brick([-10.0, -10.0, -10.0], [20.0, 20.0, 20.0]),
+    );
+    let json = editor_core::fit(&only, 2_000_000, "aluminium").expect("a brick has a grid");
+    let v: serde_json::Value = serde_json::from_str(&json).expect("fit answers in JSON");
+    let fragment = v["fragment"].as_str().expect("a recommended fragment");
+    println!("{fragment}");
+    assert!(
+        fragment.contains("\"grid_origin\": \"parts\""),
+        "the fragment should say where the grid it measured starts"
+    );
+    let text = format!(
+        "{{ \"title\": \"as fit said\", \"duration_s\": 1.0, \"frames\": 2, \"domains\": [ \
+         {{ \"kind\": \"block\", \"name\": \"cube\", \"initial_c\": 20.0,\n{fragment} }} ] }}"
+    );
+    let checked = check(&text, &files);
+    assert!(
+        checked.error.is_none(),
+        "the grid fit recommended should be a grid that builds: {:?}",
+        checked.error
+    );
+}
+
+/// **A `grid_origin` on a block with no parts is refused**, because it would change nothing.
+///
+/// A key the format reads and then ignores is a key somebody believes is doing something.
+#[test]
+fn a_grid_origin_with_no_parts_is_refused() {
+    let text = r#"{ "title": "a grid among no parts", "duration_s": 1.0, "frames": 2,
+      "domains": [ { "kind": "block", "name": "solid", "cells": [2, 2, 2], "cell_mm": 1.0,
+                     "initial_c": 20.0, "grid_origin": "parts" } ] }"#;
+    let why = check(text, &bricks())
+        .error
+        .expect("grid_origin without parts is refused");
+    println!("  {why}");
+    assert!(
+        why.contains("grid_origin") && why.contains("solid"),
+        "the refusal should name the key and the block: {why}"
+    );
 }

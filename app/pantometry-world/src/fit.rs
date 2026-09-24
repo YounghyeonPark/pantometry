@@ -151,12 +151,15 @@ impl Fit {
         out
     }
 
-    /// The `cells`, `cell_mm` and `parts` of a scene built on `candidate`, ready to paste.
+    /// The `cells`, `cell_mm`, `grid_origin` and `parts` of a scene built on `candidate`, ready to
+    /// paste.
     ///
-    /// The origin is not in it, and that is not an omission: `Voxels::onto` places every part
-    /// against the grid's own corner, so an assembly whose parts share a CAD origin keeps its
-    /// relative placement with no further statement. A scene that needs the parts moved says so
-    /// with `poses`.
+    /// **`grid_origin` is `"parts"` because that is what every candidate was measured against.**
+    /// This said the origin was left out on purpose, since `Voxels::onto` "places every part
+    /// against the grid's own corner" — but the builder put that corner at the origin of the
+    /// parts' coordinates, and this measured from their lowest corner. For any part not drawn in
+    /// the positive octant the recommended fragment, pasted as it came, was refused by the build
+    /// it was recommended for: reproduced with a 20 mm cube from `-10` to `10`.
     pub fn scene_fragment(&self, candidate: &Candidate, material: &str) -> String {
         let parts: Vec<String> = candidate
             .parts
@@ -169,7 +172,7 @@ impl Fit {
             })
             .collect();
         format!(
-            "    \"cells\": [{}, {}, {}],\n    \"cell_mm\": {:.4},\n    \"parts\": [\n{}\n    ]",
+            "    \"cells\": [{}, {}, {}],\n    \"cell_mm\": {:.4},\n    \"grid_origin\": \"parts\",\n    \"parts\": [\n{}\n    ]",
             candidate.counts.0,
             candidate.counts.1,
             candidate.counts.2,
