@@ -371,18 +371,33 @@ jobs:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
       - name: install wasmtime
-        # **A step that proves it worked.** On 2026-09-23 the installer resolved "the latest
-        # version" to the literal string `{`, printed "Error: Could not download Wasmtime version
-        # '{'", and this step reported success: the default shell is `bash -e` without
-        # `pipefail`, so only the last command of `curl | bash` counted. The failure surfaced two
-        # steps later as "could not execute process wasmtime ... No such file or directory",
-        # which reads like a test that forgot its wasm `cfg`. `pipefail` makes the installer's own
-        # exit code count, and `--version` fails here whatever the installer claimed.
+        # **A named release, checked by its hash.** This used to be `curl wasmtime.dev/install.sh
+        # | bash`, which asks for "the latest version". On 2026-09-23 and again on 2026-09-24 that
+        # lookup came back as the literal string `{`, the script printed "Error: Could not
+        # download Wasmtime version '{'" -- and exited 0. The first time the step reported
+        # success and the failure surfaced two steps later as "could not execute process
+        # wasmtime ... No such file or directory", which reads like a test that forgot its wasm
+        # `cfg`. The second time a `--version` line added for that caught it here, exit 127:
+        # `pipefail`, added alongside it, did not, because the script's own status was 0.
+        #
+        # Two failures in a day is not an accident to be caught better, it is a dependency on a
+        # lookup. So the release is named and its archive is checked: a changed file under the
+        # same name fails `sha256sum -c` rather than running. The hash is of the archive as
+        # GitHub serves it, measured once (11 619 072 bytes, which is the size the release API
+        # reports); the release publishes no checksum of its own. To move to a newer wasmtime,
+        # change both lines together.
+        env:
+          WASMTIME: v49.0.0
+          WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
         run: |
           set -o pipefail
-          curl https://wasmtime.dev/install.sh -sSf | bash
-          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
-          "$HOME/.wasmtime/bin/wasmtime" --version
+          name="wasmtime-$WASMTIME-x86_64-linux"
+          curl -sSfL -o "$RUNNER_TEMP/$name.tar.xz" \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/$WASMTIME/$name.tar.xz"
+          echo "$WASMTIME_SHA256  $RUNNER_TEMP/$name.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/$name.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/$name/wasmtime" --version
       - name: cargo test --target wasm32-wasip1
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
