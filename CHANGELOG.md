@@ -191,6 +191,13 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   and it was rewritten every paint, so nothing else the editor said survived its frame. It names
   every panel now, when the set changes. `--layout-at` held its own copy of the panel widths and
   would have reported a viewport 190 points wider than the one laid out.
+- **The run format gained a panel kind and two keys without its number moving.** `surface` and the
+  `labels` and `bonds` of `points` all shipped under format 2, so a format-2 reader — which is
+  `deny_unknown_fields` on purpose — met them as an unknown variant and an unknown field: right to
+  refuse, wrong about why, and the one confusion the `format` key exists to prevent. The writer and
+  the viewer are at **3**, the doc that said the number "has always been one" while it read 2 is a
+  table of what each number added, and every key the writer emits is held against that table —
+  a key added under an unmoved number now fails with the instruction to bump it.
 - **The wasm CI job asked a script for "the latest wasmtime" and was twice told `{`.** The script
   printed its error and exited 0, so the failure surfaced two steps later as a missing file. It
   installs a named release checked against its hash.

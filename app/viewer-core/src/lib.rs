@@ -114,7 +114,8 @@ impl Placed {
 /// `the_writer_and_the_reader_agree_on_the_version` rather than by anyone remembering. They are
 /// in different workspaces on purpose -- this crate does not link the library -- so a constant
 /// each is the only way, and a test comparing them is the only thing that makes it one number.
-pub const FORMAT: u32 = 2;
+/// What each number added is tabled beside the writer's.
+pub const FORMAT: u32 = 3;
 
 /// Read an array of numbers in which a hole is written `null`.
 ///

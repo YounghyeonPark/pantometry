@@ -55,15 +55,23 @@ pub fn readings_csv(frames: &[Frame]) -> String {
 /// What [`to_json`] writes in its `format` field, and the highest a reader of this version
 /// understands.
 ///
-/// **One, and it has always been one** - this is the first version *written*, not the first
-/// version of the shape. Every run file produced before the key existed is a format 1 file, and
-/// a reader treats an absent `format` as 1 for exactly that reason.
+/// | format | what it added |
+/// | --- | --- |
+/// | 1 | every run written before the key existed, which a reader takes an absent `format` to be |
+/// | 2 | `place`: where a panel's own coordinates sit in the world |
+/// | 3 | the `surface` panel kind, and `labels` and `bonds` on `points` |
 ///
 /// The scene format has carried a version since it had consumers; this one did not, and the gap
 /// only mattered once something wanted to add a shape to it. A reader that meets a panel kind it
 /// does not know cannot tell "this file is newer than me" from "this file is broken", and those
 /// two want different words in front of a person.
-pub const FORMAT: u32 = 2;
+///
+/// **Format 3's additions shipped under 2 first.** This said "one, and it has always been one"
+/// while the constant read 2, and both `surface` and the `points` keys went in without moving it —
+/// so a format-2 reader, `deny_unknown_fields` on purpose, met them as an unknown variant and an
+/// unknown field: right to refuse, and wrong about why. `the_format_number_moves_whenever_the_shape_does`
+/// holds each key the writer emits against a table of what each number is.
+pub const FORMAT: u32 = 3;
 
 /// The frames as JSON, for a viewer this crate does not contain.
 ///
