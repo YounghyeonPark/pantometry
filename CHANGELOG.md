@@ -20,6 +20,33 @@ which it has reported a pass it had not earned. Four of them are closed by that 
 
 ## [Unreleased]
 
+### Changed — breaking
+
+- **`pantometry_scene::PanelData` gained a variant, and `Points` gained two fields.** `Surface` is
+  new — vertices, triangles over them and a value per vertex — and `Points` carries `labels` and
+  `bonds`. The enum is not `#[non_exhaustive]`, so a `match` over it that names every variant with
+  no `_` arm stops compiling, and so does a `Points { .. }` pattern that lists its fields without
+  `..`. A consumer builds neither by hand — a scene makes them from its domains — so reading is
+  the only way to be affected.
+
+  Nothing else in the published crates moved. Every public enum, struct and trait was compared
+  against `v0.21.0`, and all **997** public functions present in both have the signature they
+  had. The comparison was first run on a change that did happen — `ligand_from_pdb`'s return type
+  between two unreleased commits — so its zero is a result and not a silence.
+
+### Changed
+
+- **A set of bodies with no periodic cell declares the box it occupies, not a cube about the
+  origin.** It was `max|coordinate| × 1.2` on every axis: right for an orbit, and wrong for
+  anything read out of a crystal file. Crambin, 2.1 × 1.7 × 2.5 nm and about 10 Å off the origin,
+  declared a **5.37 nm cube** — seventeen times its volume — and a viewport framing that drew the
+  protein at a sixth of the width. Per axis now, with the margin taken from the longest side:
+  2.71 × 2.33 × 3.13 nm. Every scene with bodies tightens, and the library gate did not move.
+- **A `Fluid` in reduced units reports its speeds as `sigma/tau`.** It said `m/s`, and a wire
+  format whose positions are metres wrote 108 atoms spanning 1.7 nm as a box `5.0388 x 5.0388 x
+  5.0388 m`; `pantometry view` drew a scale bar reading `2 M` under it, correct about the numbers
+  it was given. A fluid built from a real gas still says `m/s` — see `substance` below.
+
 ### Added
 
 - **`pantometry_optics::geometry::profile`** — the curve a surface *is*, as points in space, from
@@ -36,6 +63,57 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   nothing to either routine — because the ray check cannot carry it. An axial ray holds `h` fixed,
   so `conic_intersect` inverts the same sag the profile was drawn from and agrees with it whatever
   shape it has: with `k` multiplied by 1.3 inside `conic_sag_si`, every test in the crate passed.
+- **`Bodies::label` and `Bodies::bonds`**, both defaulted, so no domain changes by a line. A run
+  holding a protein was forty-six positions and forty-six numbers and nothing else, and the editor
+  drew it as forty-six unconnected spheres — the picture being honest about the file. `Protein`
+  says `chain:number:name` for each body now, and joins two only when they share a chain, are
+  numbered one apart and sit within `PEPTIDE_REACH` (4.5 Å, Cα to Cα); `Protein::with_residues`
+  carries the names across. The run format writes `labels` and `bonds` only when there are any.
+- **`pantometry_molecular::substance`: argon and krypton**, as `σ`, `ε/k` and mass, so a scene that
+  names its gas runs in SI. The pair is checked against each gas's measured **triple point**, which
+  neither fit saw: argon lands 0.8% out on temperature and 0.4% on density, krypton 1.7% and 2.2%.
+  Neon and xenon are kept in `UNSHIPPED` with the measurement that put them there, and the de Boer
+  parameter says why they differ: neon's is 0.594 and the potential is wrong for it (8.66% on
+  density), xenon's is 0.063 — the most classical of the four — so its 10.77% is a pair that could
+  not be sourced. Each shipped residual is also **pinned**, because the 5% band that holds the model
+  lets a transposed digit through: `3.405` written as `3.450` is 4.24%. `Fluid::is_reduced`.
+- **`Structure::ligand_from_pdb`**, a `HETATM` ligand as atoms with their elements.
+  `Structure::from_pdb` refuses `HETATM` on purpose, so one crystal structure could not give both
+  halves of the complex it holds. The element is read from columns 77–78 and never guessed from
+  the atom name, which is ambiguous exactly where it matters: `CA` is an alpha carbon in one file
+  and a calcium ion in the next.
+- **`PanelData::Surface`**, a solid a renderer can light. `pantometry view` built triangles only for
+  an isosurface through a grid, so a doublet meshed with care arrived as lines and left as lines.
+  It crosses the run format, glTF, USD, the filmstrip, the HTML report, the viewer, the editor and
+  the GPU shell. The first mesh had **4675** edges not shared by exactly two triangles, for two real
+  reasons: every azimuth's own copy of an apex, and the cemented face drawn by both elements.
+- **`ligand_binding`**: adenylate kinase open and empty (`4AKE`) and closed on AP5A (`1AKE`). Shown
+  only the open structure, the enzyme's softest mode points at the closure with an overlap of
+  **0.799**, against 0.039 for a direction in 642 dimensions that knows nothing. Walked along it,
+  the distance from the closed form falls 7.13 Å to 4.29 and climbs back — a harmonic direction is
+  a straight line through a curved path — and the example writes that as a 48-frame run. The
+  backbone is a swept solid of 7680 triangles, held closed and right-side-out against the exact
+  area and volume of a prism and an icosahedron rather than against a second sweep.
+- **Figures a reader can see the instrument in.** `optical_bench` projects its bench to an SVG
+  through the same rotate, tilt and divide as the report's viewer. `docs/bench-app.png`,
+  `docs/protein-app.gif` and `docs/editor-protein.png` are the three things only a GPU can draw,
+  so each carries a `.txt` of the geometry it is of, and a check compares it on every CI run.
+  `pantometry view --all-frames` writes a GIF from one load: 37 s where forty-eight calls to
+  `--snapshot` measured sixteen minutes.
+- **The viewer draws the run's readings and says which keys do anything.** A run carries the
+  numbers it measured frame by frame and `view.rs` did not contain the word, so a window showing a
+  protein closing could not say how far it had closed; the controls went to stdout, where a person
+  looking at the window is not.
+- **A parts library, and an asset panel to put a part in a scene.** `tools/parts/make.py` writes six
+  STL solids — plate, rod, wedge, L-bracket, heat sink, pipe — and each is held against the exact
+  volume and area of its own profile. The editor lists every `.stl` and `.pdb` beside the open
+  scene; drag one onto the view or press `+` and it becomes a domain, a part on the grid
+  `pantometry fit` would choose for it. `--ui-dump --drag` drives the drag, with a control released
+  over the outliner that must add nothing.
+- **`"grid_origin": "parts"` on a block** starts its grid at the parts' lowest corner, so geometry
+  modelled about its own centre can be used without moving it. A word rather than a coordinate:
+  a millimetre coordinate goes through a decimal and back, and 12.65% of such round trips land on
+  a different `f64` — enough, on a grid that fills its part exactly, to refuse it by one ulp.
 
 ### Fixed
 
@@ -74,6 +152,48 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   "one per field angle" as the check. Lines are depth-shaded now, so the unchanged committed
   fixture reports 77506 in 100 shades — the drift is the renderer, not the run. Nothing asserted
   either number, so nothing said it had moved.
+- **The front page counted thirteen domains and named twelve.** `pantometry-protein` was never
+  written into the list when the count moved. A correct number beside a short list is invisible to
+  a guard on numbers, so the list's own length is held against the crate arithmetic now. Five more
+  claims on that page had stopped being true and were measured again.
+- **The lens on the front page was three vertical lines**, with the rays drawn straight through
+  the glass under a comment saying the bending was too small to draw. `lens_spots` draws the
+  surfaces it traces now.
+- **A caption claimed an achromat the picture could not show.** Its F and C foci are 21.9 µm apart
+  in a frame 118 mm wide, so the three colours coincided and the last one painted was all a reader
+  saw. A second panel sets it beside the singlet of the same power, whose colours spread 1546 µm.
+- **The citation block restated three numbers nothing compared** — the version, its DOI and the
+  concept DOI — and had been wrong four times. Each is held to the thing that owns it; sabotaged
+  three ways, including a version DOI where the concept one belongs, and each fires.
+- **The legend could not spell its own units.** The glyph table held ten letters and a missing one
+  drew nothing, so `refractive index` rendered as `_E__ACT_VE ___E_`; the scale bar knew metres and
+  millimetres to three decimals, so a 4.5 nm protein read `0 MM`; and the unit label ran off the
+  canvas. The alphabet is complete, an unknown character draws a box, and no two characters may
+  draw the same strokes.
+- **A scale bar changed length between frames under an unchanged label.** It divided by the
+  frame's box while the camera frames the whole run: `2 NM` ran 108 px at the ends of the swing and
+  119 in the middle, the ratio of the two frames' boxes. It takes the run's size now.
+- **What `pantometry fit` recommended for a part off the origin was refused by the build it was
+  for.** It measured every candidate from the parts' lowest corner and left the corner out of the
+  fragment, while the builder put the grid at the origin. The fragment says `grid_origin` now.
+- **Five of twelve ordinary bricks were refused on the grid `fit` recommended.** The table measured
+  the exact `thinnest / across` and the fragment printed it rounded to four decimals, so the grid
+  written was never measured, and on the thinnest axis — which has no slack — a cell rounded down
+  left the part a sliver outside. The cell is rounded up before it is measured, the counts come
+  from the builder's own arithmetic, and all 48 placements tried build and agree with the table to
+  the cell.
+- **Two of the six parts could not be used by any scene, and the one part that shipped before them
+  had no check at all.** `rod` and `pipe` were built about the origin and reached outside a grid
+  that started there. Volume, area and the closed-edge count are all translation-invariant; it took
+  building a scene around one to see it.
+- **The editor's note about hidden panels named the first to go and silenced the status bar.** At
+  500 points the assets, the inspector and the scene text had all gone and it said only the first;
+  and it was rewritten every paint, so nothing else the editor said survived its frame. It names
+  every panel now, when the set changes. `--layout-at` held its own copy of the panel widths and
+  would have reported a viewport 190 points wider than the one laid out.
+- **The wasm CI job asked a script for "the latest wasmtime" and was twice told `{`.** The script
+  printed its error and exited 0, so the failure surfaced two steps later as a missing file. It
+  installs a named release checked against its hash.
 
 ### Found
 
@@ -92,6 +212,23 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   forty-eight, and `CLAUDE.md` described the open findings as "the same underlying decision" where
   the file itself gives a different reason for each. The report’s closing section also still said
   eleven domains have scenes, which has been thirteen since `32-a-dose-distributing-and-leaving`.
+- **A fan triangulation gets the volume exactly right and the area wrong.** The signed areas of a
+  fan telescope to the shoelace sum whatever the polygon, and a fan is still a valid combinatorial
+  triangulation, so the solid is closed too. Only the area sees triangles laid across a gap: the
+  heat sink fanned is **43%** high on area and exact on volume. `make.py` clips ears, and the test
+  builds a U to show all three.
+- **Six significant figures is `5e-6` a coordinate, not `5e-7`.** The first tolerance on the parts
+  was derived from the wrong end of the mantissa and sat below what the format can produce; the
+  pipe, whose cross-section is a difference of two nearly equal areas, amplifies it 2.92 times.
+  Moving the parts changed nothing but which coordinates were rounded, and took the pipe from
+  `2.0e-7` to `6.8e-6` of a bound advertised as sevenfold. It is `1e-4` and derived.
+- **The Lennard-Jones residuals are not an offset a constant could correct.** Argon's triple-point
+  density sits below the measurement and krypton's above, and the constant each would need differs
+  by 2.58%. The best single value takes argon from 0.39% to 1.27% to take krypton from 2.21% to
+  1.31%: a redistribution, recorded beside the residuals so the next reader gets the arithmetic.
+- **A window capture loses ninety-six per cent of a solid render's shading.** `PrintWindow` on a
+  hardware-accelerated surface kept 247 distinct colours of the 6964 the headless render has, so
+  the figures are rendered and not photographed.
 
 ## [0.21.0] — 2026-09-15
 
