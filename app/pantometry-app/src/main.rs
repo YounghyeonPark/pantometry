@@ -134,6 +134,17 @@ fn main() {
                 .filter_map(|w| w.split_once(','))
                 .filter_map(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))
                 .collect();
+            // `--drag x0,y0,x1,y1` may be given more than once too, after the clicks.
+            let drag: Vec<((f32, f32), (f32, f32))> = rest
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--drag")
+                .filter_map(|(i, _)| rest.get(i + 1))
+                .filter_map(|w| {
+                    let n: Vec<f32> = w.split(',').filter_map(|v| v.parse().ok()).collect();
+                    (n.len() == 4).then(|| ((n[0], n[1]), (n[2], n[3])))
+                })
+                .collect();
             // The kinds screen with *nothing* ticked had no door: `--new` alone is the preset
             // screen and `--new bar` is the kinds screen with `bar` ticked, so the empty chooser —
             // which is what `Custom…` actually opens on — could not be looked at.
@@ -174,6 +185,7 @@ fn main() {
                             height,
                             choosing,
                             click,
+                            drag,
                             ran,
                             iso,
                             solo,

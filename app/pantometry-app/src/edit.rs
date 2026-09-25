@@ -200,6 +200,14 @@ pub struct Dump {
     /// state change survived leaving a screen: `Back` then `Custom…`, with the state in
     /// between on neither screen.
     pub click: Vec<(f32, f32)>,
+    /// Press at the first point, walk to the second across several frames, and release there.
+    ///
+    /// **A click cannot stand in for a drag.** The asset panel's rows are drag sources and the
+    /// viewport is the drop zone, and egui decides a press is a drag only once the pointer has
+    /// moved past a threshold with the button held — then carries the payload until a release
+    /// over the zone. One frame holding a press and a release at one point is none of that, so
+    /// until this existed the drop path was code nothing here could reach.
+    pub drag: Vec<((f32, f32), (f32, f32))>,
     /// Run the scene first, so everything that only exists after a run does.
     pub ran: bool,
     /// Run, then turn the isosurface on at its default level.
@@ -238,6 +246,7 @@ pub fn ui_dump(asked: Dump) -> String {
         height,
         choosing,
         click,
+        drag,
         ran,
         iso,
         solo,
@@ -306,6 +315,33 @@ pub fn ui_dump(asked: Dump) -> String {
         let mut with_click = input();
         with_click.events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
         let _ = ctx.run(with_click, |c| app.ui(c));
+        let _ = ctx.run(input(), |c| app.ui(c));
+    }
+    // **A drag, frame by frame**, after the clicks and in the order given. The press lands on the
+    // source; twelve moves carry it to the target, each its own frame, which is well past egui's
+    // six-point threshold for deciding a press is a drag; the release is its own frame over the
+    // target; and one more frame lets whatever the drop changed be laid out and reported.
+    for &((x0, y0), (x1, y1)) in &drag {
+        let (from, to) = (egui::pos2(x0, y0), egui::pos2(x1, y1));
+        let button = |at, down| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: down,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut press = input();
+        press.events = vec![egui::Event::PointerMoved(from), button(from, true)];
+        let _ = ctx.run(press, |c| app.ui(c));
+        const STEPS: usize = 12;
+        for step in 1..=STEPS {
+            let at = from + (to - from) * (step as f32 / STEPS as f32);
+            let mut moved = input();
+            moved.events = vec![egui::Event::PointerMoved(at)];
+            let _ = ctx.run(moved, |c| app.ui(c));
+        }
+        let mut release = input();
+        release.events = vec![egui::Event::PointerMoved(to), button(to, false)];
+        let _ = ctx.run(release, |c| app.ui(c));
         let _ = ctx.run(input(), |c| app.ui(c));
     }
     let out = ctx.run(input(), |c| app.ui(c));

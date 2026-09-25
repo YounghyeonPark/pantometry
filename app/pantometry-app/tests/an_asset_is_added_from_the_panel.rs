@@ -5,13 +5,15 @@
 //! `a_dropped_file_becomes_a_domain` already holds the arithmetic, and none of it would matter if
 //! the panel drew nothing or the button called nobody.
 //!
-//! # Why the button and not the drag
+//! # The drag and the button, both
 //!
-//! The row is draggable, which is what an asset browser is for. A drag is a press, a movement and
-//! a release, and `--ui-dump` drives one point at a time — so a feature reachable only by dragging
-//! would be a feature nothing here could say still works. The row is therefore also a button, and
-//! both call the same `App::add_asset`. What is checked below is that path end to end: the scene
-//! text, the outliner and the build's own note about the cells the part became.
+//! The row is draggable, which is what an asset browser is for, and it is also a button; both call
+//! the same `App::add_asset`. A drag is a press, a movement and a release, and `--ui-dump` could
+//! only drive one point at a time — so for the first version of this file the drag was code
+//! nothing here could reach, and the header said so. `--drag` walks a press across frames to a
+//! release now, and the drop is checked the way the button is: the scene text, the outliner and
+//! the build's own note about the cells the part became. And against a control, because a drop
+//! that fired wherever the pointer was let go would pass the first test too.
 #![cfg(not(target_family = "wasm"))]
 
 /// One frame of the editor, as text. The pattern `a_frame_of_the_editor_can_be_read` set, and the
@@ -167,8 +169,7 @@ fn every_listed_asset_has_a_way_to_add_it() {
             .find(|d| d.text == "+" && (d.y - row.y).abs() < 4.0 && d.x < row.x);
         assert!(
             button.is_some(),
-            "{want} is drawn at y={} with no + to its left; it can be dragged and a drag is the \
-             one thing this suite cannot press",
+            "{want} is drawn at y={} with no + to its left, so a reader has only the drag",
             row.y
         );
     }
@@ -328,4 +329,94 @@ fn a_folder_with_no_assets_says_where_it_looked() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The viewport's rect from the dump's own `viewport=x,y WxH` line, as its centre.
+fn viewport_centre(dump: &str) -> (f32, f32) {
+    let line = dump
+        .lines()
+        .find_map(|l| l.strip_prefix("viewport="))
+        .unwrap_or_else(|| panic!("the dump reports no viewport:\n{dump}"));
+    let (at, size) = line.split_once(' ').expect("x,y WxH");
+    let (x, y) = at.split_once(',').expect("x,y");
+    let (w, h) = size.split_once('x').expect("WxH");
+    let n = |v: &str| v.trim().parse::<f32>().expect("a number");
+    (n(x) + n(w) / 2.0, n(y) + n(h) / 2.0)
+}
+
+/// Where the rod's row is drawn, a little inside its label: on the label and not on its `+`, so a
+/// release that landed as a click would press nothing.
+fn rod_row(dump: &str) -> (f32, f32) {
+    let rows = drawn(dump);
+    let row = rows
+        .iter()
+        .find(|d| d.text == "parts/rod.stl")
+        .expect("the rod is listed");
+    (row.x + 20.0, row.y + 6.0)
+}
+
+/// **Dragging a row onto the view puts the domain in the scene**, the same three ways the button does.
+#[test]
+fn dragging_a_row_onto_the_view_puts_the_domain_in_the_scene() {
+    let before = dump(&[&scene(), "--width", "1400", "--height", "800"]);
+    let (from, to) = (rod_row(&before), viewport_centre(&before));
+    let drag = format!("{},{},{},{}", from.0, from.1, to.0, to.1);
+    println!("  dragged from {from:?} to {to:?}");
+
+    let after = dump(&[
+        &scene(),
+        "--width",
+        "1400",
+        "--height",
+        "800",
+        "--drag",
+        &drag,
+    ]);
+    assert!(
+        !before.contains("added parts/rod.stl"),
+        "the status said it before anything was dragged, so it proves nothing"
+    );
+    assert!(
+        after.contains("added parts/rod.stl"),
+        "the status bar should say what the drop did:\n{after}"
+    );
+    assert!(
+        after.contains("rod/parts[0]: parts/rod.stl filled"),
+        "the dropped part should have become cells:\n{after}"
+    );
+    assert!(
+        drawn(&after).iter().any(|d| d.text == "rod"),
+        "the outliner should show the new domain"
+    );
+}
+
+/// **A drag let go anywhere but the view adds nothing.**
+///
+/// The control for the test above. The drop zone is the viewport, and a drag released over the
+/// outliner — the same press, the same walk, a different place to let go — has to leave the scene
+/// as it was. Without this, a drop that fired on any release would pass above just as well.
+#[test]
+fn a_drag_let_go_anywhere_but_the_view_adds_nothing() {
+    let before = dump(&[&scene(), "--width", "1400", "--height", "800"]);
+    let from = rod_row(&before);
+    let outliner = drawn(&before)
+        .iter()
+        .find(|d| d.text == "Outliner")
+        .map(|d| (d.x + 20.0, d.y + 120.0))
+        .expect("the outliner is on screen at 1400");
+    let drag = format!("{},{},{},{}", from.0, from.1, outliner.0, outliner.1);
+
+    let after = dump(&[
+        &scene(),
+        "--width",
+        "1400",
+        "--height",
+        "800",
+        "--drag",
+        &drag,
+    ]);
+    assert!(
+        !after.contains("added parts/rod.stl") && !after.contains("rod/parts[0]"),
+        "a drag let go over the outliner added the rod anyway:\n{after}"
+    );
 }
