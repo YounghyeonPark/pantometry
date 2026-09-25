@@ -76,7 +76,8 @@ fn the_licence_is_one_identifier_and_not_an_expression_or_a_list() {
         .trim_matches('"');
     assert!(
         !value.is_empty(),
-        "`license:` with nothing beside it opens a list, and a list is what failed the v0.14.0          deposition — Zenodo stores one licence"
+        "`license:` with nothing beside it opens a list, and a list is what failed the v0.14.0 \
+         deposition — Zenodo stores one licence"
     );
     assert!(
         ["MIT", "Apache-2.0"].contains(&value),
@@ -153,7 +154,8 @@ fn the_citation_file_has_nothing_a_loader_could_trip_on() {
         .collect();
     assert!(
         offenders.is_empty(),
-        "CITATION.cff must be plain ASCII; non-ASCII bytes at {:?}. An em dash here is valid YAML and          Zenodo's only report is \"Citation metadata load failed\", which cannot tell you it was fine",
+        "CITATION.cff must be plain ASCII; non-ASCII bytes at {:?}. An em dash here is valid YAML and \
+         Zenodo's only report is \"Citation metadata load failed\", which cannot tell you it was fine",
         &offenders[..offenders.len().min(5)]
     );
 

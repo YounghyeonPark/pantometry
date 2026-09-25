@@ -198,6 +198,15 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   the viewer are at **3**, the doc that said the number "has always been one" while it read 2 is a
   table of what each number added, and every key the writer emits is held against that table —
   a key added under an unmoved number now fails with the instruction to bump it.
+- **Thirty-nine strings had lost their line continuation**, so their words stood an
+  indentation apart: the refusal a person gets for asking for a GPU read `this binary has no
+  device.` and then twenty-six spaces, and `pantometry-view` wrote twenty-six into every surface
+  panel. Each was a Rust string edited through a Python one, where the backslash and newline are
+  Python's continuation and go first; rustfmt does not reflow strings, so nothing said so. They
+  came from twenty-nine commits reaching back to 2026-08-08. Each is restored as it was written,
+  and a test reads every Rust file in the tree for a string holding a run of nine spaces on a line
+  over a hundred columns — the length is what separates a join from the fourteen tables that hold
+  such a run on purpose.
 - **The wasm CI job asked a script for "the latest wasmtime" and was twice told `{`.** The script
   printed its error and exited 0, so the failure surfaced two steps later as a missing file. It
   installs a named release checked against its hash.

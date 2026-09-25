@@ -207,7 +207,8 @@ fn the_room_rings_at_the_closed_form_frequency_and_converges_at_second_order() {
     let fall = coarse / fine;
     assert!(
         fall > 40.0,
-        "31 -> 241 cells is three doublings: second order is 64x, first order 8x.          Got {coarse:.5} -> {fine:.5}, a factor of {fall:.1}"
+        "31 -> 241 cells is three doublings: second order is 64x, first order 8x. \
+         Got {coarse:.5} -> {fine:.5}, a factor of {fall:.1}"
     );
 }
 
@@ -990,7 +991,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     let off = (sampled - want).abs() / want.abs().max(1e-30);
                     assert!(
                         off < 1e-6,
-                        "{name}: the panel's peak is {sampled:.8} and the cells hold                          {want:.8} — {off:.3e} apart, so the samples are not on the values"
+                        "{name}: the panel's peak is {sampled:.8} and the cells hold \
+                         {want:.8} — {off:.3e} apart, so the samples are not on the values"
                     );
                 }
             }
@@ -1476,11 +1478,13 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // at 0.075 and saturates, so the growth has stopped rather than gone diffusive.
                 assert!(
                     moved < 0.12,
-                    "{name}: a crystal keeps its sites, and these wandered {moved:.3} of a                      neighbour spacing"
+                    "{name}: a crystal keeps its sites, and these wandered {moved:.3} of a \
+                     neighbour spacing"
                 );
                 assert!(
                     growth < 1.5,
-                    "{name}: saturated growth is about 1 and this is {growth:.3} — 4 would be                      free flight and 2 diffusion"
+                    "{name}: saturated growth is about 1 and this is {growth:.3} — 4 would be \
+                     free flight and 2 diffusion"
                 );
             }
             "09-atoms-liquid.json" => {
@@ -1491,11 +1495,13 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let (moved, growth) = wandered(&frames, 0);
                 assert!(
                     moved > 1.0,
-                    "{name}: a liquid leaves its site, and these moved {moved:.3} of a neighbour                      spacing"
+                    "{name}: a liquid leaves its site, and these moved {moved:.3} of a neighbour \
+                     spacing"
                 );
                 assert!(
                     (1.5..3.0).contains(&growth),
-                    "{name}: diffusion grows like t, so the ratio is about 2 and this is                      {growth:.3} — 4 is free flight and 1 is a solid"
+                    "{name}: diffusion grows like t, so the ratio is about 2 and this is \
+                     {growth:.3} — 4 is free flight and 1 is a solid"
                 );
             }
             // Every joule the lamp paid arrived in the mirror.
@@ -1799,7 +1805,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let want = (2.0 * std::f64::consts::PI * f * last.time_s).cos().abs();
                 assert!(
                     (peak - want).abs() < 0.02,
-                    "{name}: a standing mode rides |cos(2 pi f t)|: {peak:.4} against                      {want:.4} at {f:.2} Hz"
+                    "{name}: a standing mode rides |cos(2 pi f t)|: {peak:.4} against \
+                     {want:.4} at {f:.2} Hz"
                 );
                 assert!(
                     peak <= 1.0 + 1e-9,
@@ -1872,7 +1879,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 );
                 assert!(
                     got > naive,
-                    "{name}: spreading costs more than a series estimate:                      {got:.4e} against {naive:.4e}"
+                    "{name}: spreading costs more than a series estimate: \
+                     {got:.4e} against {naive:.4e}"
                 );
 
                 // **And how far this grid is from the shape's own answer.** Richardson at the
@@ -2141,7 +2149,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let fusion = melted * MM3 * rho * latent;
                 let absorbed = reading(last, "absorbed");
                 println!(
-                    "  and {absorbed:.4} J absorbed = {sensible:.4} warming + {fusion:.4} melting                      = {:.4}, off {:.2e}",
+                    "  and {absorbed:.4} J absorbed = {sensible:.4} warming + {fusion:.4} melting \
+                     = {:.4}, off {:.2e}",
                     sensible + fusion,
                     ((sensible + fusion) / absorbed - 1.0).abs()
                 );
@@ -2212,7 +2221,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     / (frames[5].time_s - frames[2].time_s);
                 let closed = 20.0 / (phi_w * rho_w * l_w * MM3);
                 println!(
-                    "  {name}: melted at {slope:.4} mm3/s against P/(phi rho L) = {closed:.4} — off                      {:.2e}",
+                    "  {name}: melted at {slope:.4} mm3/s against P/(phi rho L) = {closed:.4} — off \
+                     {:.2e}",
                     (slope / closed - 1.0).abs()
                 );
                 assert!(
@@ -2246,7 +2256,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let fusion = melted * MM3 * phi_w * rho_w * l_w;
                 let absorbed = reading(last, "absorbed");
                 println!(
-                    "  and {absorbed:.4} J = {sensible:.4} warming + {fusion:.4} melting = {:.4}, off                      {:.2e}",
+                    "  and {absorbed:.4} J = {sensible:.4} warming + {fusion:.4} melting = {:.4}, off \
+                     {:.2e}",
                     sensible + fusion,
                     ((sensible + fusion) / absorbed - 1.0).abs()
                 );
@@ -2326,7 +2337,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 );
                 assert!(
                     start - end > 20.0,
-                    "{name}: the clearance should have carried tens of kelvin, carried              {:.2} K",
+                    "{name}: the clearance should have carried tens of kelvin, carried \
+             {:.2} K",
                     start - end
                 );
 
@@ -2498,7 +2510,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     at("coldest")
                 );
                 println!(
-                    "  {name}: junction {peak:.2} C against a {resistance:.4} K/W stack giving                      {junction:.2} C — off {:.2e}",
+                    "  {name}: junction {peak:.2} C against a {resistance:.4} K/W stack giving \
+                     {junction:.2} C — off {:.2e}",
                     (peak - junction).abs() / (junction - ambient)
                 );
                 assert!(
@@ -2706,7 +2719,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let peak = *junction.last().expect("frames");
                 assert!(
                     peak < 181.190_771 && peak > 179.0,
-                    "{name}: 60 s is short of steady, so it sits just under this scene's own                      181.190771 C: {peak:.6} C"
+                    "{name}: 60 s is short of steady, so it sits just under this scene's own \
+                     181.190771 C: {peak:.6} C"
                 );
             }
             "26-poiseuille-in-a-cooling-channel.json" => {
@@ -2756,7 +2770,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // with one of them to 5e-5.
                 assert!(
                     (mean - discrete).abs() < (mean - continuum).abs() / 100.0,
-                    "{name}: the discrete parabola is the one this scheme solves: {mean:.9}                      against {discrete:.9} and {continuum:.9}"
+                    "{name}: the discrete parabola is the one this scheme solves: {mean:.9} \
+                     against {discrete:.9} and {continuum:.9}"
                 );
 
                 // **The flow is incompressible and the advection is resolved**, or the profile
@@ -2845,7 +2860,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 );
                 assert!(
                     measured < closed,
-                    "{name}: a Yee wave travels *slow*, so the mode should come out under the                      continuum frequency: {measured:.6} against {closed:.6} Hz"
+                    "{name}: a Yee wave travels *slow*, so the mode should come out under the \
+                     continuum frequency: {measured:.6} against {closed:.6} Hz"
                 );
 
                 // **The invariant does not move, and the field energy does.** `½εE² + ½μH²` is not
@@ -2931,7 +2947,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 );
                 assert!(
                     discrete < continuum,
-                    "{name}: a discrete Laplacian is softer than a continuous one, so the level                      sits below: {discrete:e} against {continuum:e}"
+                    "{name}: a discrete Laplacian is softer than a continuous one, so the level \
+                     sits below: {discrete:e} against {continuum:e}"
                 );
 
                 // **Nothing moves**, which is what stationary means and is checked frame by frame

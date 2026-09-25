@@ -176,7 +176,8 @@ fn the_timescale_span_says_when_a_set_cannot_run_together() {
     let widest = templates::timescale_span(&every);
     assert!(
         (widest - far).abs() / far < 1e-12,
-        "the widest pair in the table spans {widest}, and `well` against `compartments` spans          {far}"
+        "the widest pair in the table spans {widest}, and `well` against `compartments` spans \
+         {far}"
     );
     // Seventeen orders, which is what two live doc comments say. It was sixteen, and `orbit`
     // held the far end until `compartments` arrived with a twelve-hour run.

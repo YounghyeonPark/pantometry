@@ -4524,7 +4524,10 @@ impl World {
                 (device, Some(a)) => a.take(spec, device, built)?,
                 (Device::Gpu, None) => {
                     return Err(format!(
-                        "{}: this scene asks to run on the gpu, and this binary has no device.                          The scene format carries the request and an application honours it —                          `World::build_with_accelerator` with `pantometry-gpu`'s. Remove                          \"device\" to run on the cpu, which is the reference either way",
+                        "{}: this scene asks to run on the gpu, and this binary has no device. \
+                         The scene format carries the request and an application honours it — \
+                         `World::build_with_accelerator` with `pantometry-gpu`'s. Remove \
+                         \"device\" to run on the cpu, which is the reference either way",
                         spec.name()
                     ));
                 }
@@ -4670,7 +4673,8 @@ impl World {
                 .is_none()
             {
                 return Err(format!(
-                    "{structure}: {block:?} cannot be read back as a thermal block, so its                      temperature cannot drive anything"
+                    "{structure}: {block:?} cannot be read back as a thermal block, so its \
+                     temperature cannot drive anything"
                 ));
             }
             if sim
@@ -4678,7 +4682,9 @@ impl World {
                 .is_none()
             {
                 return Err(format!(
-                    "{structure}: this body cannot be written to between steps, so the                      temperature would reach it and change nothing. A domain has to implement                      `Domain::as_any_mut` to be coupled into"
+                    "{structure}: this body cannot be written to between steps, so the \
+                     temperature would reach it and change nothing. A domain has to implement \
+                     `Domain::as_any_mut` to be coupled into"
                 ));
             }
         }

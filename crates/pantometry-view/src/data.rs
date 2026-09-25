@@ -170,7 +170,8 @@ pub fn to_json(title: &str, frames: &[Frame]) -> String {
                     // a file a strict parser reads.
                     let faces: Vec<f64> = triangles.iter().flatten().map(|&i| i as f64).collect();
                     out.push_str(&format!(
-                        "\"kind\": \"surface\", \"bounds\": {}, \"positions\": {},                          \"triangles\": {}, \"values\": {}",
+                        "\"kind\": \"surface\", \"bounds\": {}, \"positions\": {}, \
+                         \"triangles\": {}, \"values\": {}",
                         numbers(bounds),
                         numbers(&flat),
                         numbers(&faces),

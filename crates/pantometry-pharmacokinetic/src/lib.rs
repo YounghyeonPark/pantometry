@@ -1276,7 +1276,8 @@ mod tests {
         let lost = dose - m.amount(central).to_si();
         assert!(
             (lost - (q + cl) * c1 * h).abs() < 1e-19,
-            "the central one should have lost the link and the clearance together: {lost:e}              against {:e}",
+            "the central one should have lost the link and the clearance together: {lost:e} \
+             against {:e}",
             (q + cl) * c1 * h
         );
         // Nothing crossed a link that does not exist.

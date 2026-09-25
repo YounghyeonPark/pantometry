@@ -852,7 +852,8 @@ pub fn pose_of(text: &str, name: &str) -> [f64; 3] {
 pub fn set_pose(text: &str, name: &str, at_m: [f64; 3]) -> Result<String, String> {
     if let Some(bad) = at_m.iter().find(|v| !v.is_finite()) {
         return Err(format!(
-            "{name}: a position of {bad} has no JSON spelling, and a scene holding one would              not load"
+            "{name}: a position of {bad} has no JSON spelling, and a scene holding one would \
+             not load"
         ));
     }
     let root: serde_json::Value =
@@ -1891,7 +1892,8 @@ mod tests {
             let ratio = previous / now.max(1e-300);
             assert!(
                 (3.0..=5.0).contains(&ratio),
-                "halving the drag should quarter the error; step {step} gave {ratio:.2}                  ({previous:.3e} -> {now:.3e})"
+                "halving the drag should quarter the error; step {step} gave {ratio:.2} \
+                 ({previous:.3e} -> {now:.3e})"
             );
             previous = now;
         }
@@ -1952,7 +1954,8 @@ mod tests {
             let ratio = previous / now.max(1e-300);
             assert!(
                 (3.0..=5.0).contains(&ratio),
-                "halving the turn should quarter the error; step {step} gave {ratio:.2}                  ({previous:.3e} -> {now:.3e})"
+                "halving the turn should quarter the error; step {step} gave {ratio:.2} \
+                 ({previous:.3e} -> {now:.3e})"
             );
             previous = now;
         }

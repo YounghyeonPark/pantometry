@@ -621,8 +621,10 @@ fn main() {
             edges.len()
         );
         assert_eq!(
-            open, 0,
-            "the {name} is not closed: {open} of {} edges are on one face or on three, which is              a hole or a fold and neither is a solid anybody could grind",
+            open,
+            0,
+            "the {name} is not closed: {open} of {} edges are on one face or on three, which is \
+             a hole or a fold and neither is a solid anybody could grind",
             edges.len()
         );
     }

@@ -241,7 +241,8 @@ fn heat_crosses_a_join_and_not_a_gap() {
     );
     assert!(
         (gapped - start) < (joined - start) / 100.0,
-        "and radiation across nothing is nothing like a shared face: {gapped:.4} K against          {joined:.4} K"
+        "and radiation across nothing is nothing like a shared face: {gapped:.4} K against \
+         {joined:.4} K"
     );
 }
 

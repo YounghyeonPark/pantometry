@@ -187,7 +187,8 @@ fn an_insulated_block_conserves_exactly() {
     let left = b.peak_temperature().to_si() - b.coldest_temperature().to_si();
     assert!(
         left < 0.2 * spread,
-        "the gradient should be mostly gone, or nothing was asked of the sweep:          {spread:.3} K -> {left:.3} K"
+        "the gradient should be mostly gone, or nothing was asked of the sweep: \
+         {spread:.3} K -> {left:.3} K"
     );
 }
 

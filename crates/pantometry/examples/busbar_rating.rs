@@ -122,7 +122,8 @@ fn main() {
     for pair in approach.windows(2) {
         assert!(
             pair[1].1 > pair[0].1,
-            "widening the section must raise the constriction toward the limit:              {:?} then {:?}",
+            "widening the section must raise the constriction toward the limit: \
+             {:?} then {:?}",
             pair[0],
             pair[1]
         );
@@ -460,7 +461,8 @@ fn thermal_path() -> (ThermalNetwork, Node) {
 fn bisect(f: impl Fn(f64) -> f64, mut lo: f64, mut hi: f64) -> f64 {
     assert!(
         f(lo) < 0.0 && f(hi) > 0.0,
-        "bisect needs f(lo) < 0 < f(hi); got f({lo}) = {} and f({hi}) = {}.          A decreasing function has to be negated.",
+        "bisect needs f(lo) < 0 < f(hi); got f({lo}) = {} and f({hi}) = {}. \
+         A decreasing function has to be negated.",
         f(lo),
         f(hi)
     );

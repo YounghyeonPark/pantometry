@@ -210,7 +210,8 @@ fn two_halves_that_want_different_sizes_converge_on_force_balance() {
     for e in [coarse, middle, fine] {
         assert!(
             e < 0.0,
-            "trilinear elements are too stiff in bending, so the mean is short of the average:              {e:e}"
+            "trilinear elements are too stiff in bending, so the mean is short of the average: \
+             {e:e}"
         );
     }
     for (a, b) in [(coarse, middle), (middle, fine)] {

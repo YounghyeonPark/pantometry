@@ -617,7 +617,9 @@ fn the_tile_and_kind_counts_agree_with_the_files() {
         let want = template.replace("{}", &tiles.to_string());
         assert!(
             text.contains(&want),
-            "{file} no longer contains {want:?} — if the sentence was reworded, update the              template here, because a phrase that cannot be found is the failure this is shaped              to give instead of a silent pass"
+            "{file} no longer contains {want:?} — if the sentence was reworded, update the \
+             template here, because a phrase that cannot be found is the failure this is shaped \
+             to give instead of a silent pass"
         );
         for other in [tiles - 1, tiles + 1, 27, 30] {
             let wrong = template.replace("{}", &other.to_string());

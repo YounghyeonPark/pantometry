@@ -212,7 +212,8 @@ fn a_tracer_travels_at_the_pore_velocity() {
     let off = (half_at / predicted - 1.0).abs();
     assert!(
         off < 0.30,
-        "arrival should be the pore transit time to within the smearing: {half_at:.3} s against          {predicted:.3} s, off by {:.0}%",
+        "arrival should be the pore transit time to within the smearing: {half_at:.3} s against \
+         {predicted:.3} s, off by {:.0}%",
         off * 100.0
     );
     // And the two hypotheses are far enough apart here for that to have meant something.

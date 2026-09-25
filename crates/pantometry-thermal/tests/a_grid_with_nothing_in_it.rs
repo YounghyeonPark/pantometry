@@ -83,7 +83,8 @@ fn void_breaks_the_path_and_a_poor_conductor_only_slows_it() {
     );
     assert!(
         through_plastic < through_copper && through_nothing < through_plastic,
-        "metal, then a poor conductor, then only radiation: {through_copper:.2} /          {through_plastic:.2} / {through_nothing:.2} K"
+        "metal, then a poor conductor, then only radiation: {through_copper:.2} / \
+         {through_plastic:.2} / {through_nothing:.2} K"
     );
 }
 

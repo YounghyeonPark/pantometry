@@ -1263,7 +1263,8 @@ mod tests {
         // Three doublings: second order is 64x, first order 8x. Measured 78.7.
         assert!(
             fall > 30.0,
-            "31 -> 241 cells fell only {fall:.1}x ({coarse:.4e} -> {fine:.4e});              a first-order startup would give about 8"
+            "31 -> 241 cells fell only {fall:.1}x ({coarse:.4e} -> {fine:.4e}); \
+             a first-order startup would give about 8"
         );
     }
 

@@ -391,7 +391,8 @@ fn a_two_material_block_conserves_exactly_and_its_capacity_is_a_sum() {
     // a bound that traces to an effect rather than to a round number of zeros.
     let bound = 4_000.0 * f64::EPSILON;
     println!(
-        "  {joules} J in, {closing:.12} J held after 4000 steps — off {:.2e} of a bound of          {bound:.2e}",
+        "  {joules} J in, {closing:.12} J held after 4000 steps — off {:.2e} of a bound of \
+         {bound:.2e}",
         (closing / joules - 1.0).abs()
     );
     assert!(
