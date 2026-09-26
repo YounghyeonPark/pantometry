@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "pantometry-acoustic",
  "pantometry-core",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-acoustic"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-units",
@@ -2462,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-elastic"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-electrical"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-em"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-fluid"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-mechanics"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-molecular"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-optics"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2540,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-pharmacokinetic"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "pantometry-core",
  "pantometry-units",
@@ -2548,7 +2548,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-porous"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2557,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-protein"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "pantometry-core",
  "pantometry-units",
@@ -2565,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-quantum"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "pantometry-core",
  "pantometry-units",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-scene"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2582,7 +2582,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-shape"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-units",
@@ -2590,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-thermal"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "pantometry-core",
@@ -2600,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-units"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "glam",
  "serde",
@@ -2608,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "pantometry-view"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "pantometry-scene",
 ]

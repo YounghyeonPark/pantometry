@@ -145,7 +145,7 @@ for d in crates/*/; do printf "%s " "$d"; ls "$d" | grep -c LICENSE; done   # ea
 New since the workspace went to crates.io, and the one invariant here that cannot be fixed after
 the fact: a published version is permanent. You may yank it, you may not replace it.
 
-`pantometry` 0.21.0 is on crates.io and the tree is 0.21.0 — they match, which is the state
+`pantometry` 0.22.0 is on crates.io and the tree is 0.22.0 — they match, which is the state
 immediately after a release and the state a release leaves behind. So the **next** change to the
 public API is the one with a version consequence, and `0.x` semantics mean a breaking change needs
 the minor bumped.

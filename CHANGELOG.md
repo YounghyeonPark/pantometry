@@ -21,6 +21,19 @@ protects nothing.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-09-26
+
+Thirty-six commits, and the theme is making a run say what it holds. A protein was forty-six points
+and forty-six numbers; it carries its residues and its bonds now, and is drawn as the surface it is.
+A fluid of real argon was written in reduced units under a field that promised metres; it names its
+gas and reports SI. The editor gained a library of parts and a panel to drop them into a scene, and
+the run file gained a panel shape — which is the one break below, and the reason its format number
+moved to 3.
+
+Most of what else is recorded here is what doing that found: a recommended grid that its own build
+refused, thirty-nine strings that had lost their line continuations, and thirty sentences of prose
+that had stopped being true.
+
 ### Changed — breaking
 
 - **`pantometry_scene::PanelData` gained a variant, and `Points` gained two fields.** `Surface` is
@@ -4484,7 +4497,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.22.0
 [0.21.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.21.0
 [0.20.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.20.0
 [0.19.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.19.0
