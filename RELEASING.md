@@ -82,6 +82,21 @@ cargo test --locked --workspace --release 2>&1 | grep -E "test result:" \
   | awk -F'[; ]' '{p+=$4} END {print p}'             # tests
 ```
 
+And the external-crate counts `CLAUDE.md`, `ARCHITECTURE.md` and `app/README.md` quote. They move
+with every lockfile change, so a test pinning them would fail on a `cargo update` that changed
+nothing anyone wrote — counted here, by the one method all three documents name: packages with a
+source, and for `app/deny.toml` the union over the three targets it lists.
+
+```sh
+for d in . bindings/python app; do (cd $d && cargo metadata --locked --format-version 1 \
+  | python -c "import json,sys; print(sum(p['source'] is not None for p in json.load(sys.stdin)['packages']))"); done
+                                                     # 12, 19, 432 at 0.22.0
+cd app && for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc wasm32-unknown-unknown; do
+  cargo metadata --locked --format-version 1 --filter-platform $t \
+  | python -c "import json,sys; [print(p['id']) for p in json.load(sys.stdin)['packages'] if p['source']]"
+done | sort -u | wc -l                               # 332 at 0.22.0: what app/deny.toml gates
+```
+
 And the two **numerators** in `scenes/README.md`, which nothing guards and which were wrong by three
 in each direction until 0.19.0. They need every scene run, so they are counted here rather than
 continuously — a guard demanding a template edit whenever one moved is a guard somebody rewrites

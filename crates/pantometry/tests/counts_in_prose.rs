@@ -421,18 +421,9 @@ fn the_scene_count_agrees_everywhere_it_is_written() {
     );
 }
 
-/// **The example count in `RELEASING.md`'s own counting command is the number of example files.**
-///
-/// Not a prose claim — a shell snippet, which is worse, because it looks like a measurement. The command
-/// there globbed `crates/pantometry/examples/*.rs` and missed the one example that lives in `pantometry-optics`,
-/// so a release following it would have counted fourteen of fifteen and had no way to know.
-///
-/// **`AGENTS.md`'s "twelve worked problems" is deliberately not checked against this.** Three of the
-/// fifteen files are a quickstart, a benchmark and a README checker, and calling them worked problems
-/// would be the wrong sentence rather than the wrong number. A test that insisted they agree would be
-/// asserting a definition, and it fired on exactly that when this file's first draft tried.
-#[test]
-fn the_releasing_example_command_counts_every_example() {
+/// Every example file in `crates/`, wherever it lives — one is in `pantometry-optics`, and a glob
+/// over the facade's directory missed it once.
+fn example_files() -> usize {
     let mut examples = 0;
     let mut stack = vec![root().join("crates")];
     while let Some(dir) = stack.pop() {
@@ -450,6 +441,22 @@ fn the_releasing_example_command_counts_every_example() {
             }
         }
     }
+    examples
+}
+
+/// **The example count in `RELEASING.md`'s own counting command is the number of example files.**
+///
+/// Not a prose claim — a shell snippet, which is worse, because it looks like a measurement. The command
+/// there globbed `crates/pantometry/examples/*.rs` and missed the one example that lives in `pantometry-optics`,
+/// so a release following it would have counted fourteen of fifteen and had no way to know.
+///
+/// **`AGENTS.md`'s "twelve worked problems" is deliberately not checked against this.** Three of the
+/// fifteen files are a quickstart, a benchmark and a README checker, and calling them worked problems
+/// would be the wrong sentence rather than the wrong number. A test that insisted they agree would be
+/// asserting a definition, and it fired on exactly that when this file's first draft tried.
+#[test]
+fn the_releasing_example_command_counts_every_example() {
+    let examples = example_files();
     if examples == 0 {
         return;
     }
@@ -748,5 +755,153 @@ fn the_crate_and_domain_counts_agree_everywhere_they_are_written() {
         "ARCHITECTURE.md",
         "The physics layer is {} crates deep",
         domains,
+    );
+}
+
+/// **Every library in the tree denies missing docs, and the documents say how many there are.**
+///
+/// Three documents state the rule with a count — `AGENTS.md`, `CLAUDE.md` and `CONTRIBUTING.md` —
+/// and `AGENTS.md` said **twenty-two** beside "the seventeen published ones" until the sweep before
+/// 0.22.0, with nineteen on crates.io. Counted here from the `lib.rs` files themselves, and the
+/// rule is asserted before the count is: a library that stopped denying missing docs would
+/// otherwise just lower the number every document is held to.
+#[test]
+fn every_library_denies_missing_docs_and_the_count_is_written_right() {
+    let mut in_crates = 0;
+    let mut in_app = 0;
+    let mut without = Vec::new();
+    for (dir, tally) in [("crates", &mut in_crates), ("app", &mut in_app)] {
+        let Ok(entries) = std::fs::read_dir(root().join(dir)) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let lib = entry.path().join("src").join("lib.rs");
+            let Ok(text) = std::fs::read_to_string(&lib) else {
+                continue;
+            };
+            if text.contains("#![deny(missing_docs)]") {
+                *tally += 1;
+            } else {
+                without.push(lib.display().to_string());
+            }
+        }
+    }
+    assert!(
+        without.is_empty(),
+        "these libraries do not deny missing docs: {without:?}"
+    );
+    let all = in_crates + in_app;
+    println!("  {all} libraries deny missing docs: {in_crates} in crates/, {in_app} in app/");
+    for f in ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"] {
+        phrase(f, "in all **{}** crates", all);
+    }
+    phrase("AGENTS.md", "the {} published ones", in_crates);
+    phrase("CLAUDE.md", "the {} in `crates/`", in_crates);
+    phrase("AGENTS.md", "the {} libraries in `app/`", in_app);
+    phrase("CLAUDE.md", "the {} libraries in `app/`", in_app);
+    // The facade stands in for every other published crate. It said twelve until the same sweep.
+    phrase(
+        "crates/pantometry/src/lib.rs",
+        "rather than naming {} crates",
+        in_crates - 1,
+    );
+}
+
+/// Ordinals, for the one sentence that counts with one.
+const ORDINALS: [&str; 31] = [
+    "zeroth",
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "sixteenth",
+    "seventeenth",
+    "eighteenth",
+    "nineteenth",
+    "twentieth",
+    "twenty-first",
+    "twenty-second",
+    "twenty-third",
+    "twenty-fourth",
+    "twenty-fifth",
+    "twenty-sixth",
+    "twenty-seventh",
+    "twenty-eighth",
+    "twenty-ninth",
+    "thirtieth",
+];
+
+/// **The benchmark is the last example, and `EXAMPLES.md` says which one it is by number.**
+///
+/// "A fifteenth, `where_the_time_goes`" stayed fifteenth when `ligand_binding` made it the
+/// sixteenth, because a number in prose has no way to know the directory grew.
+#[test]
+fn the_benchmark_is_called_by_the_right_ordinal() {
+    let examples = example_files();
+    if examples == 0 {
+        return;
+    }
+    println!("  {examples} examples");
+    let Ok(text) = std::fs::read_to_string(root().join("EXAMPLES.md")) else {
+        return;
+    };
+    let want = format!("A {}, `where_the_time_goes`", ORDINALS[examples]);
+    assert!(
+        text.contains(&want),
+        "EXAMPLES.md should call the benchmark the {} of {examples} examples: {want:?}",
+        ORDINALS[examples]
+    );
+}
+
+/// How many shapes a panel can be. **Update both when this stops compiling.**
+///
+/// The `match` is exhaustive with no wildcard, so a fifth variant of `PanelData` fails to compile
+/// here — which is the point: it is the only way a count of an enum's variants can be made to
+/// notice the enum.
+fn panel_shapes() -> usize {
+    use pantometry::scene::PanelData;
+    fn index(p: &PanelData) -> usize {
+        match p {
+            PanelData::Field { .. } => 0,
+            PanelData::Paths { .. } => 1,
+            PanelData::Surface { .. } => 2,
+            PanelData::Points { .. } => 3,
+        }
+    }
+    let _ = index;
+    4
+}
+
+/// **A panel's shapes are counted where they are named.** `PanelData`'s own doc said two, and the
+/// viewer's crate doc and README said three, with four in the enum.
+#[test]
+fn the_panel_shapes_are_counted_where_they_are_named() {
+    let shapes = panel_shapes();
+    phrase(
+        "crates/pantometry-scene/src/lib.rs",
+        "{} shapes, and the first two are why",
+        shapes,
+    );
+    phrase(
+        "app/viewer-core/src/lib.rs",
+        "a panel is one of {} shapes",
+        shapes,
+    );
+    phrase("app/viewer-core/src/lib.rs", "accepts all {} by", shapes);
+    phrase(
+        "app/viewer-core/README.md",
+        "it reads all {} panel shapes",
+        shapes,
     );
 }
