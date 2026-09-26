@@ -26,11 +26,10 @@
 //! exactly. A reflection off an impedance step is `(Z₂-Z₁)/(Z₂+Z₁)` exactly. A pulse
 //! travels at `c` and arrives when it should.
 //!
-//! Full Navier-Stokes has none of that, and this workspace's README has said from the
-//! start why: turbulence at any interesting Reynolds number is a question about
-//! supercomputer budgets rather than about API design, and a solver that could not be
-//! checked against anything would be decoration. So the fluid domain here is the linear
-//! one, and it is complete rather than partial.
+//! Full Navier-Stokes has far less of that: turbulence at any interesting Reynolds number is
+//! a question about supercomputer budgets rather than about API design. The incompressible
+//! solver is `pantometry-fluid`, built around the three exact solutions that exist; this crate
+//! is the linear limit, and it is complete rather than partial.
 //!
 //! # The fourth domain, and what it had to add to the kernel
 //!

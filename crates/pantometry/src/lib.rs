@@ -1,7 +1,7 @@
 //! pantometry: physics for simulated worlds, in one dependency.
 //!
 //! A facade over the workspace. Nothing is implemented here — the point is that a
-//! consumer writes `pantometry = "0.21"` rather than naming twelve crates, and that the
+//! consumer writes `pantometry = "0.21"` rather than naming eighteen crates, and that the
 //! integration tests which need two domains at once have somewhere to live.
 //!
 //! ```

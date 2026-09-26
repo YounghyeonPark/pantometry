@@ -156,7 +156,7 @@ jobs:
 
   # The Python bindings, built and tested the way somebody would install them.
   #
-  # A separate job because they are a separate workspace: pyo3 brings fifteen crates and links
+  # A separate job because they are a separate workspace: pyo3 is most of the nineteen crates it resolves and it links
   # libpython, and the library's lockfile and `deny.toml` allow-list should not have to
   # accommodate that to compile a physics crate. Nothing here is in `--workspace`.
   #
@@ -227,7 +227,7 @@ jobs:
       #   1955 s across 55 binaries, 1600 of them one test   82%
       #
       # The absolute wanders by a third; the **share does not**. That one test is
-      # `a_streamed_run_reads_back`, which drives all thirty scenes through the editor's streaming
+      # `a_streamed_run_reads_back`, which drives all thirty-two scenes through the editor's streaming
       # path in a **debug** build, and the next three together are 300-400 s.
       #
       # So a scene that gains a second gains it thirty times there before it costs anything

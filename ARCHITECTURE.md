@@ -150,7 +150,7 @@ separately have no way to touch.
 | `pantometry` | A facade over the other eighteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
-| `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because a GPU stack is 86 external crates and a GUI shell 371 against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
+| `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because its GPU and GUI stacks are 432 external crates against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
 | `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty-two scenes across all thirteen domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
 
 The last three are the workspace's answer to the same question from three sides: what a
@@ -320,11 +320,11 @@ free-energy machinery.
 Both acoustic domains had a boundary defect until recently, and how it was found is worth
 more than the fix. See [EVIDENCE.md](EVIDENCE.md#a-boundary-defect-and-the-thing-that-found-it).
 
-**There is no fluid domain, and that is deliberate.** Sound *is* the fluid domain here:
-it is what a fluid does when the variations are small enough to linearise, which is
-exactly the regime where every answer has a closed form to check against. Full
-Navier-Stokes has none, and a solver that could not be validated against anything would
-be decoration. See the note below on turbulence.
+**Sound was the fluid domain here for a long time, and that was deliberate.** It is what a
+fluid does when the variations are small enough to linearise, which is exactly the regime
+where every answer has a closed form to check against. Full Navier-Stokes has few, so
+`pantometry-fluid` arrived built around the three exact solutions that exist — Poiseuille,
+Couette and Taylor-Green, each blind to a different mistake. See the note below on turbulence.
 
 Gravity comes both ways and the choice is a real one. `NBody` sums every pair: exact,
 momentum conserved to the last bit, `O(n²)`, and awkward to parallelise precisely
@@ -597,7 +597,7 @@ different quantities, the second separates domains carrying the same one.
    balance against bus traffic alone. That is a boundary being modelled, not a leak, and a check
    that accused it would be the wrong check.
 6. **A renderer with depth.** Partly answered, and the answer turned out not to be a depth
-   buffer. Content came first, as this list said it should: three domains produce volumes now, and
+   buffer. Content came first, as this list said it should: seven domains produce volumes now, and
    what a volume wants is not occlusion but **integration along a ray**. `pantometry-view` raycasts a
    3D field — trilinear sampling, front-to-back compositing, rotatable — beside the slice montage,
    because a render shows shape and cannot be read for values while a montage is the reverse.
@@ -639,6 +639,11 @@ different quantities, the second separates domains carrying the same one.
    design before any of them, from the scene rather than from a run. The filmstrip and the CSV
    draw no geometry and are unchanged. The wire format did not change either, and the
    `deny_unknown_fields` reader this entry was worried about was never asked to.
+
+   **A fourth `PanelData` did arrive later, for the other side of this argument.** A drawn
+   instrument's glass is part of what a run *shows*, not an input copied into it, so
+   `PanelData::Surface` carries it — and that one did change the wire format, to format 3.
+   Designed input meshes still travel as a `Drawing`.
 
    What the pair is *for* is the rasterisation loss. `Rasterised` has reported it as a volume
    error since designed parts existed, and a number in a terminal is not what a designer looks at.
@@ -750,9 +755,9 @@ around the three that exist — Poiseuille, Couette and Taylor–Green — each 
 different mistake, with two machine-precision statements beside them that a decay rate is too
 coarse to see.
 
-That closes the list this section opened with. **The physics layer is where it was aimed**: ten
+That closes the list this section opened with. **The physics layer is where it was aimed**: thirteen
 crates, each one added without the kernel or either layer above it changing, which is this
-document's rule 1 held ten times. `CLAUDE.md` numbers the same rule 4, which is why a reader who has
+document's rule 1 held thirteen times. `CLAUDE.md` numbers the same rule 4, which is why a reader who has
 both open should trust the wording over the number.
 
 What was open was not a list of missing physics but a list of missing *depth* in what is here, and
@@ -963,7 +968,7 @@ which the linear stencil commutes with exactly — improved the divergence 1660�
 
 The other three belong **above the layers**, in workspaces of their own, for the reason
 `bindings/python` already established. Measured: the library resolves 12 external crates, the
-python bindings 15, and a wgpu stack **86**. They are one workspace, `app/` — the argument is about
+python bindings 19, and everything above them **432**. They are one workspace, `app/` — the argument is about
 the boundary between the library and everything above it, and one is all it supports. See
 `app/README.md`.
 
@@ -1077,7 +1082,7 @@ digest, so "this result reproduces bit for bit on any machine" is a checkable fa
 rather than a claim. And where a run stands beside a measured system — the digital-twin case —
 the measurement takes the closed form's seat, and the same battery is the comparison.
 
-Of the platform's verbs, all three exist inside `pantometry-world`: `--check` parses and builds
+Of the platform's verbs, all three exist in the `pantometry` binary, on top of `pantometry-world`: `--check` parses and builds
 without running, reporting `file:line:column`; a scene runs to a file; and `verify` runs the
 battery above — built before any GUI, because a CLI that earns trust is the platform with the
 smallest possible surface. Its maiden run did what the battery is for: the default scene's peak
@@ -1102,7 +1107,7 @@ allowed to name them — it is the composition root, which is already true today
 ### Three rules, so the platform does not undo the library
 
 1. **Its own workspace.** Measured three times now: the library resolves 12 external crates, the
-   python bindings 15, the viewer's wgpu stack 86 — and a GUI stack is heavier than a viewer's.
+   python bindings 19, and `app/`, which holds the viewer's wgpu stack and a GUI stack, 432.
    The library's lockfile, licence gate, WebAssembly and MSRV promises cannot carry it. Unlike
    the viewer it links `pantometry`, because it has to run things; the rendering half is
    `viewer-core`, reused rather than rewritten.

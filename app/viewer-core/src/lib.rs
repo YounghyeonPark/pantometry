@@ -9,8 +9,9 @@
 //! # What a run is
 //!
 //! What `pantometry_view::to_json` writes: a title and a list of frames, each with a time, some
-//! panels and some readings. A panel is one of three shapes — a field on a grid, a set of points,
-//! or runs of connected points — and the reader below accepts all three by name.
+//! panels and some readings. A panel is one of four shapes — a field on a grid, a set of points,
+//! runs of connected points, or a surface of triangles — and the reader below accepts all four by
+//! name.
 //!
 //! # What this crate is responsible for
 //!

@@ -71,7 +71,7 @@ Two more are run by CI without being in the table, because they are checks rathe
 showcases: `agents_quickstart`, the runnable form of [AGENTS.md](AGENTS.md), and
 `readme_check`, which re-runs this file's own code so the snippets above cannot rot.
 
-A fifteenth, `where_the_time_goes`, is a benchmark and is **not** run by CI. It measures rather than
+A sixteenth, `where_the_time_goes`, is a benchmark and is **not** run by CI. It measures rather than
 asserts, and a timing threshold on a shared runner fails for reasons that have nothing to do with
 the code. Run it by hand when a change should have made something faster: it is dependency-free,
 takes best-of-five, and prints where a step actually spends itself.
@@ -83,8 +83,8 @@ a calculation that did not go through the same code. Give a path and it also wri
 give none and it just checks. Nothing generated is committed — with two exceptions, and they are named so that this sentence stays true. `tools/presets` writes `presets.rs` and the chooser's tiles, which are build *inputs* rather than outputs and cannot be produced without a GPU; `tools/parts` writes the six STL solids a `block` domain names, which a scene needs on disk before it runs. Both are inputs, and both are held against something other than the script that wrote them.
 
 Plotting has no dependency. SVG is text, so it is a `format!` and a file write — no
-encoder, no fonts, and it opens by double-click. `examples/common/svg.rs` is about three
-hundred and fifty lines and is the right size for this job; when it stops being, the answer is
+encoder, no fonts, and it opens by double-click. `examples/common/svg.rs` is about five
+hundred lines — three hundred and fifty when this was written — and is still the right size for this job; when it stops being, the answer is
 a crate rather than a bigger version of it. That turned out to be a prediction rather than a
 plan: `pantometry-world` had to write its own renderer, because this one lives under `examples/`
 where no other crate can reach it — `FRICTION.md` finding 4.
@@ -100,7 +100,7 @@ The examples also exist to keep the library honest in a way tests cannot. `Scala
 written as the interface a visualiser would read a simulation through and then sat with no
 implementor at all, which meant "is it the right interface" was a guess. There are two now —
 a one-dimensional bar governed by diffusion and a two-dimensional room governed by a wave —
-and the pair has said more about the interface than either could alone. See the next section.
+and the pair has said more about the interface than either could alone.
 
 An actual visualiser has since said something neither could: `ScalarField` is the right
 *shape* and is unreachable through the thing you have. A renderer holds `&dyn Domain` and

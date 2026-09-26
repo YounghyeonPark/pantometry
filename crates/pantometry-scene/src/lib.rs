@@ -347,10 +347,12 @@ pub struct Panel {
     pub data: PanelData,
 }
 
-/// A continuum sampled on a grid, or a finite number of bodies at positions.
+/// A continuum sampled on a grid, bodies at positions, runs of connected points, or a surface of
+/// triangles.
 ///
-/// Two shapes because domains genuinely are two kinds of thing, and collapsing them would mean
-/// inventing a continuum for the bodies or a body count for the field.
+/// Four shapes, and the first two are why there is more than one: domains genuinely are two kinds
+/// of thing, and collapsing them would mean inventing a continuum for the bodies or a body count
+/// for the field. Paths are rays and trajectories; a surface is a solid a renderer can light.
 #[derive(Clone, Debug)]
 pub enum PanelData {
     /// A field, sampled on a grid of one, two or three dimensions.

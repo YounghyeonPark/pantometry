@@ -97,12 +97,12 @@ for f in pantometry-world/scenes/*.json; do
   then echo refused
   else echo "FAILED $n"
   fi
-done | sort | uniq -c            # 24 export, 7 refused, 0 otherwise
+done | sort | uniq -c            # 24 export, 8 refused, 0 otherwise
 
 for f in pantometry-world/scenes/*.json; do
   cargo run --locked -q --release --bin pantometry -- run "$f" /tmp/one.svg 2>&1 \
     | grep -q "not drawn" && echo undrawable
-done | wc -l                     # 12 have a domain the filmstrip cannot draw
+done | wc -l                     # 13 have a domain the filmstrip cannot draw
 ```
 
 The second number was already right. The first was not, which is the argument for counting both

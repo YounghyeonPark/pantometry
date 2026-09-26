@@ -32,7 +32,7 @@ reaching into `crates/` meant adding a path dependency somebody would notice. In
 links the library deliberately — sits beside this one sharing the same dependency table. A property
 that was structural is a discipline, and `the_wire_format_is_enough` is what checks it.
 
-It reads all three panel shapes a run can contain, and an unknown `kind` is an **error** rather
+It reads all four panel shapes a run can contain, and an unknown `kind` is an **error** rather
 than a panel quietly skipped. A viewer written against an older library than the run should say
 so, not open a window with something missing.
 

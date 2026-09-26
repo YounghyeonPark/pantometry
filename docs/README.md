@@ -81,7 +81,7 @@ read.** The three figures above come from examples CI runs on every commit, so o
 true would take a failing example with it; the editor's picture would just quietly age, and every
 change to its interface since it was taken would have left it wrong. So the script writes `editor.txt`
 beside it: the same frame through `--ui-dump`, which is the same egui layout with no window and no
-GPU. `the_screenshot_shows_the_editor_as_it_is` regenerates that text and compares it.
+GPU. `the_screenshots_show_the_editor_as_it_is` regenerates that text and compares it.
 
 That guard sees the *frame*, not the pixels — a change to a colour, a font or the shaded pass moves
 nothing in the dump. What it holds is the failure that was actually coming.
@@ -89,10 +89,10 @@ nothing in the dump. What it holds is the failure that was actually coming.
 That is also how to refresh them. They are the one place in this repository where generated output
 is tracked on purpose: `.gitignore` still refuses assets at the root, which is where a run leaves
 them, and the rule those two lines exist for — a `git add -A` that put a 302 KB filmstrip and a
-927 KB frame dump into history — is untouched. The three SVGs are 17, 52 and 40 KB, and the two
-stills that are not the animation are 43 and 176 KB, with the editor's pair at 176 and 139.
+927 KB frame dump into history — is untouched. The three SVGs are 17, 53 and 41 KB, the bench still is
+44 KB, and the editor's pair is 195 and 160.
 
-**The animation is 2.08 MB and that is the largest thing in this repository by a wide margin**, so
+**The animation is 2.2 MB and that is the largest thing in this repository by a wide margin**, so
 it is worth saying what it buys and what it would take to shrink it. It is forty-eight frames of
 1100x720, and `image`'s GIF encoder writes each one whole: it does not difference against the
 frame before, which on a run that is mostly unchanging background is where the bytes are. Assembled

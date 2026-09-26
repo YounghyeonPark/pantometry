@@ -30,9 +30,10 @@ constant, and changing that constant is never the fix.
 
 The parallel half of that is executed rather than argued. `TreeNBody::with_threads`
 changes how many threads evaluate forces, and
-`tree::tests::parallel_and_sequential_agree_bit_for_bit` asserts the answers are
-identical across one, two, four, eight and sixteen of them — through a whole
-integration, not just one evaluation. It holds because each thread owns a disjoint
+`tree::tests::parallel_and_sequential_agree_bit_for_bit` asserts one force evaluation is
+identical across one, two, three, four, eight and sixteen of them, and
+`a_threaded_run_reproduces_a_sequential_one` holds twenty steps of integration identical
+across one, two, four and eight. It holds because each thread owns a disjoint
 range of the output: there is no reduction, so there is no summation order to vary.
 
 ## Running several domains at once
@@ -482,7 +483,7 @@ numerical rule separates this row from the others, because what separates it is 
 *means*.
 
 **A domain says which of its own readings describe the solve**, through `Domain::diagnostics`.
-Seven labels across five crates: a residual from `Conductor` and from elastic `Block`, a divergence
+Seven labels across six crates: a residual from `Conductor` and from elastic `Block`, a divergence
 and a cell Reynolds number from `Channel`, a `div B` from `Cavity`, a wavefunction norm from the
 quantum well, and a rigid-mode count and mode separation from `Protein`. They print their values
 with no percentage, get no order, and stay out of `Sweep::worst`, which the window sweep raises a
@@ -495,7 +496,7 @@ silence and needed three pins to hold: the labels the scenes emit, the length of
 the whole walk stayed green), and who emitted them — because keying on a label alone meant a *new*
 domain reporting `norm` as its **answer** would vanish from the sweep with nothing to say so.
 Asking the domain removes the first two problems by removing the list, and gives `(domain, label)`
-pairs, which is what the third needed. The scene walk pins the **55** `(label, unit)` pairs the
+pairs, which is what the third needed. The scene walk pins the **59** `(label, unit)` pairs the
 thirty-two scenes emit — 52 answers and 7 diagnostics — and the **8** `(domain, label)` pairs, so
 an arrival or a departure is a decision somebody made rather than a line nobody read.
 

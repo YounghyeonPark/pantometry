@@ -355,7 +355,7 @@ fail there rather than quietly producing different physics.
 `pantometry-core` knows about conservation, integration, scheduling and boundaries. It knows
 nothing about light, heat, motion, sound, electricity or matter. If a new physics needs the kernel changed,
 the kernel was wrong — with one narrow exception, which is that the *coupling mechanism* itself
-can turn out to be under-specified. That happened once and the README explains why it was not a
+can turn out to be under-specified. That happened once and `ARCHITECTURE.md` explains why it was not a
 violation of the rule.
 
 Domain crates do not depend on each other either. Rustdoc enforces this in a way worth
@@ -386,9 +386,9 @@ nothing. If you find something like that, write it down.
 
 - One idea. A fix and a refactor in the same change are two changes.
 - Tests that would fail without it, checked against something independent.
-- No new dependency without saying what it buys. The workspace has twelve, three of which
-  reach a *published* artifact — the unpublished application links four more — and `deny.toml`
-  gates the licences.
+- No new dependency without saying what it buys. The library's workspace has twelve, three of which
+  reach a *published* artifact, and `deny.toml` gates the licences; `app/` is a workspace of its
+  own and has a `deny.toml` of its own.
 - `cargo fmt` clean and `clippy -D warnings` clean.
 
 ## Reporting something

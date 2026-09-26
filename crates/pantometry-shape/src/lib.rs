@@ -23,7 +23,7 @@
 //!
 //! **Not a domain.** It depends on `pantometry-units` and nothing else in the workspace, and no domain
 //! depends on it. It produces a predicate; a domain's `fill` consumes one. That is the whole coupling,
-//! and it means adding geometry cost the ten domains nothing.
+//! and it means adding geometry cost the thirteen domains nothing.
 //!
 //! **Not a mesh library.** No refinement, no repair, no boolean operations, no simplification. It reads
 //! what a CAD tool exported, measures it, and rasterises it.

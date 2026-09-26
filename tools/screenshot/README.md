@@ -40,7 +40,7 @@ page, so an em dash in a comment is a parse error at the line that contains it.
 ## The second file is the point
 
 `docs/editor.txt` is the same frame through `--ui-dump` — the same egui layout, built with no window
-and no GPU. `the_screenshot_shows_the_editor_as_it_is` regenerates it and compares, so a change to
+and no GPU. `the_screenshots_show_the_editor_as_it_is` regenerates it and compares, so a change to
 the interface fails a test instead of ageing a picture in silence. It sees the frame and not the
 pixels: the same strings in the same places, the same viewport rect, the same counts.
 

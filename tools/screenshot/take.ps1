@@ -7,7 +7,7 @@
 # **This needs a display, which is why CI does not run it.** Everything else in `docs/` is one
 # command from an example that CI runs on every commit; this one is a photograph of a window. What
 # stands in for it is `docs/editor.txt` -- the same frame as text, from `--ui-dump`, regenerated and
-# compared by `the_screenshot_shows_the_editor_as_it_is`. When that test fails the picture is
+# compared by `the_screenshots_show_the_editor_as_it_is`. When that test fails the picture is
 # stale and this script is how it is retaken.
 param(
     [string]$Scene = "pantometry-world/scenes/29-a-designed-bracket-becomes-cells.json",

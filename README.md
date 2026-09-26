@@ -23,7 +23,7 @@ another implementation that might be wrong in the same direction. Where no close
 ![A cemented achromat drawn as the surfaces it is, three colours traced through the glass, and below them where each colour focuses against a singlet of the same power](docs/lens-achromat.svg)
 
 *`cargo run --release --example lens_spots -- lens.svg`. The three SVGs here are an example's
-output and every example checks itself against a closed form. The three screenshots are the
+output and every example checks itself against a closed form. The four screenshots are the
 figures CI cannot take — they need a GPU, and the editor's needs a display — so each carries a
 machine-readable record of what it is a picture *of*, and the thing that writes that record fails
 when the picture goes stale.*
@@ -124,7 +124,7 @@ had open before.
 ![The editor: an outliner, the scene as JSON, a shaded viewport and an inspector](docs/editor.png)
 
 *`pantometry edit 29-a-designed-bracket-becomes-cells.json --run`. An L-bracket designed as an STL,
-filled into 4 100 cells at 2 mm and cooling to still air. The scene is the text on the left and the
+filled into 4 100 cells at 2 mm and cooled through a bolt pad and to still air. The scene is the text on the left and the
 picture is what running it produced — the readings, the colour bar and the frame transport are the
 run's, and the note in orange is the mesher saying what it did.*
 

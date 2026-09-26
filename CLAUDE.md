@@ -199,8 +199,8 @@ earned and was not.
 
 Two of those are separate workspaces because a dependency tree does not belong in the library's
 lockfile. Measured, with `cargo metadata` counting packages that have a source: the library resolves
-**12** external crates, `bindings/python` **19**, and `app/` **430** — of which `app/deny.toml`
-gates the **330** that its three targets resolve. The wgpu window and the GUI shell used to be
+**12** external crates, `bindings/python` **19**, and `app/` **432** — of which `app/deny.toml`
+gates the **332** that its three targets resolve. The wgpu window and the GUI shell used to be
 counted separately at 86 and 371; they are one workspace now and that pair is what a merged
 number replaced. `deny.toml` gates every one of the library's twelve, CI
 builds with `--locked`, and the same crates go to `wasm32` and Rust 1.78 — none of which can carry

@@ -15,8 +15,9 @@ Entries record what was *found* as well as what was added, because several of th
 changes here were corrections to a mistaken assumption rather than new features. The commit
 messages carry the full account.
 
-`CLAUDE.md`'s gate is a `set -euo pipefail` script now, and carries a table of the five disguises in
-which it has reported a pass it had not earned. Four of them are closed by that one line.
+`CONTRIBUTING.md` holds the gate and indexes the sixteen times it has reported a pass it had not
+earned; `CLAUDE.md` carries the kinds they were, and why a `set -euo pipefail` pasted into a shell
+protects nothing.
 
 ## [Unreleased]
 
@@ -205,7 +206,7 @@ which it has reported a pass it had not earned. Four of them are closed by that 
   Python's continuation and go first; rustfmt does not reflow strings, so nothing said so. They
   came from twenty-nine commits reaching back to 2026-08-08. Each is restored as it was written,
   and a test reads every Rust file in the tree for a string holding a run of nine spaces on a line
-  over a hundred columns — the length is what separates a join from the fourteen tables that hold
+  over a hundred columns — the length is what separates a join from the fourteen lines that hold
   such a run on purpose.
 - **The wasm CI job asked a script for "the latest wasmtime" and was twice told `{`.** The script
   printed its error and exited 0, so the failure surfaced two steps later as a missing file. It

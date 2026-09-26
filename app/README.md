@@ -18,9 +18,8 @@ The split existed for a reason that is still true, and the numbers are measured 
 | | external crates |
 | --- | --- |
 | the library, all nineteen published crates | **12** |
-| `bindings/python`, which is split out for this | 15 |
-| a wgpu window | 86 |
-| a GUI shell | 371 |
+| `bindings/python`, which is split out for this | 19 |
+| `app/` — the viewer, the editor, the CLI and the accelerator, one workspace | 432 |
 
 `deny.toml` gates every one of the library's twelve by licence, CI builds it with `--locked`, and
 the same crates compile to `wasm32` and to Rust 1.78. None of that can carry a GPU stack, a window
@@ -59,7 +58,7 @@ three lines.
 
 **`pantometry-world` left the library's `deny.toml`, so this workspace grew one.** It was a member
 there, so its dependencies were licence-gated with the library's twelve; it is here now beside
-stacks that had never been gated at all. `app/deny.toml` gates the 330 its three targets resolve, and its allow-list was built
+stacks that had never been gated at all. `app/deny.toml` gates the 332 its three targets resolve, and its allow-list was built
 by censusing what is actually here rather than by copying the library's.
 
 Its first run found **four advisories**, all reached through `eframe` and none fixable from here:
