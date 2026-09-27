@@ -67,9 +67,13 @@ const WORDS: [&str; 51] = [
     "fifty",
 ];
 
-fn friction() -> Option<String> {
+/// `FRICTION.md`, which has to be there. This returned `None` and the test skipped, commented "not
+/// packaged" — but this crate is `publish = false`, so there is no packaged copy, and the one
+/// thing the skip could do was pass the test for a file that had moved.
+fn friction() -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("FRICTION.md");
-    std::fs::read_to_string(path).ok()
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} could not be read: {e}", path.display()))
 }
 
 /// **The summary line's two numbers are the file's two numbers.**
@@ -85,9 +89,7 @@ fn friction() -> Option<String> {
 /// and seven, for a file that was forty-two and five.
 #[test]
 fn the_summary_counts_what_the_file_contains() {
-    let Some(text) = friction() else {
-        return; // not packaged; nothing to check
-    };
+    let text = friction();
 
     let findings = text
         .lines()

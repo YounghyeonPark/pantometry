@@ -109,6 +109,22 @@ fn repository() -> bool {
     root().join("Cargo.toml").is_file() && root().join("crates").is_dir()
 }
 
+/// Read a file that has to be there. **Every test here used to `return` when a read failed**, and
+/// that made a moved or renamed file indistinguishable from a checked one: the skip belongs to
+/// "no repository", which each test asks once at its top, and not to each file inside one.
+fn read(path: impl AsRef<Path>) -> String {
+    let path = path.as_ref();
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("{} could not be read: {e}", path.display()))
+}
+
+/// List a directory that has to be there, for the same reason.
+fn list(path: impl AsRef<Path>) -> std::fs::ReadDir {
+    let path = path.as_ref();
+    std::fs::read_dir(path)
+        .unwrap_or_else(|e| panic!("{} could not be listed: {e}", path.display()))
+}
+
 /// Assert that `template` filled with `want` appears in `relative`, and that no other number-word fills
 /// it.
 ///
@@ -171,8 +187,8 @@ fn phrase(relative: &str, template: &str, want: usize) {
 
 /// How many findings `FRICTION.md` holds, and how many are fixed — computed the same way
 /// `friction_counts.rs` computes them, so the two tests cannot disagree about the number.
-fn friction_totals() -> Option<(usize, usize)> {
-    let text = std::fs::read_to_string(root().join("app/pantometry-world/FRICTION.md")).ok()?;
+fn friction_totals() -> (usize, usize) {
+    let text = read(root().join("app/pantometry-world/FRICTION.md"));
     let findings = text
         .lines()
         .filter(|l| {
@@ -182,7 +198,13 @@ fn friction_totals() -> Option<(usize, usize)> {
         })
         .count();
     let fixed = text.lines().filter(|l| l.starts_with("**Fixed")).count();
-    (findings > 0 && fixed > 0).then_some((findings, fixed))
+    // Zero of either used to return `None`, and the caller skipped: a heading format that changed
+    // under this parse would have read as no findings and switched the test off.
+    assert!(
+        findings > 0 && fixed > 0,
+        "FRICTION.md parsed as {findings} findings, {fixed} fixed"
+    );
+    (findings, fixed)
 }
 
 /// **The findings total is the same in all eight places it is written.**
@@ -197,9 +219,10 @@ fn friction_totals() -> Option<(usize, usize)> {
 /// Guarded now, which is the only reason to have noticed it twice.
 #[test]
 fn the_findings_total_agrees_everywhere_it_is_written() {
-    let Some((findings, fixed)) = friction_totals() else {
+    if !repository() {
         return;
-    };
+    }
+    let (findings, fixed) = friction_totals();
     println!("  {findings} findings, {fixed} fixed");
 
     // The total was spelled by hand here and in `lib.rs` below, which is the third and fourth
@@ -304,10 +327,11 @@ fn the_findings_total_agrees_everywhere_it_is_written() {
 /// to give instead of a silent pass.
 #[test]
 fn the_agent_team_counts_itself_and_the_domains_it_describes() {
-    let dir = root().join(".claude/agents");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    if !repository() {
         return;
-    };
+    }
+    let dir = root().join(".claude/agents");
+    let entries = list(&dir);
     let agents = entries
         .filter_map(Result::ok)
         .filter(|e| {
@@ -315,9 +339,7 @@ fn the_agent_team_counts_itself_and_the_domains_it_describes() {
             n.ends_with(".md") && n != "README.md"
         })
         .count();
-    if agents == 0 {
-        return;
-    }
+    assert!(agents > 0, "counted no agents");
     println!("  {agents} agents");
     phrase(
         ".claude/agents/README.md",
@@ -329,9 +351,7 @@ fn the_agent_team_counts_itself_and_the_domains_it_describes() {
     // The domains `domain-builder` claims to have learned from, against the crates that are
     // domains: everything in `crates/` that is not the facade, the units, the kernel, or one of
     // the three layers above physics.
-    let Ok(crates) = std::fs::read_dir(root().join("crates")) else {
-        return;
-    };
+    let crates = list(root().join("crates"));
     let not_a_domain = [
         "pantometry",
         "pantometry-units",
@@ -369,17 +389,16 @@ fn the_agent_team_counts_itself_and_the_domains_it_describes() {
 /// guarded badly.
 #[test]
 fn the_scene_count_agrees_everywhere_it_is_written() {
-    let dir = root().join("app/pantometry-world/scenes");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    if !repository() {
         return;
-    };
+    }
+    let dir = root().join("app/pantometry-world/scenes");
+    let entries = list(&dir);
     let scenes = entries
         .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .count();
-    if scenes == 0 {
-        return;
-    }
+    assert!(scenes > 0, "counted no scenes");
     println!("  {scenes} scenes");
 
     let readme = "app/pantometry-world/scenes/README.md";
@@ -469,14 +488,13 @@ fn example_files() -> usize {
 /// asserting a definition, and it fired on exactly that when this file's first draft tried.
 #[test]
 fn the_releasing_example_command_counts_every_example() {
-    let examples = example_files();
-    if examples == 0 {
+    if !repository() {
         return;
     }
+    let examples = example_files();
+    assert!(examples > 0, "counted no examples");
     println!("  {examples} example files across the workspace");
-    let Ok(text) = std::fs::read_to_string(root().join("RELEASING.md")) else {
-        return;
-    };
+    let text = read(root().join("RELEASING.md"));
     let want = format!("# examples: {examples}");
     assert!(
         text.contains(&want),
@@ -503,9 +521,10 @@ fn the_releasing_example_command_counts_every_example() {
 /// thing rather than a count somebody remembered.
 #[test]
 fn the_unearned_passes_are_counted_where_they_are_listed() {
-    let Ok(text) = std::fs::read_to_string(root().join("CONTRIBUTING.md")) else {
+    if !repository() {
         return;
-    };
+    }
+    let text = read(root().join("CONTRIBUTING.md"));
     // The index: the rows of the table under that heading, which begin with their own number.
     let listed = text
         .lines()
@@ -563,12 +582,11 @@ fn the_unearned_passes_are_counted_where_they_are_listed() {
 /// a name a reader will look for and not find.
 #[test]
 fn what_is_in_the_box_is_what_is_in_crates() {
-    let Ok(text) = std::fs::read_to_string(root().join("AGENTS.md")) else {
+    if !repository() {
         return;
-    };
-    let Ok(entries) = std::fs::read_dir(root().join("crates")) else {
-        return;
-    };
+    }
+    let text = read(root().join("AGENTS.md"));
+    let entries = list(root().join("crates"));
     let mut on_disk: Vec<String> = entries
         .filter_map(Result::ok)
         .filter(|e| e.path().is_dir())
@@ -576,9 +594,7 @@ fn what_is_in_the_box_is_what_is_in_crates() {
         // The facade is what the table is *about*; it does not hold anything of its own.
         .filter(|n| n.starts_with("pantometry-"))
         .collect();
-    if on_disk.is_empty() {
-        return;
-    }
+    assert!(!on_disk.is_empty(), "found no on_disk");
     on_disk.sort();
 
     let mut in_table: Vec<String> = text
@@ -615,16 +631,15 @@ fn what_is_in_the_box_is_what_is_in_crates() {
 /// twenty. Each is one directory listing or one array length away from being checkable.
 #[test]
 fn the_tile_and_kind_counts_agree_with_the_files() {
-    let Ok(tiles) = std::fs::read_dir(root().join("app/pantometry-world/thumbnails")) else {
+    if !repository() {
         return;
-    };
+    }
+    let tiles = list(root().join("app/pantometry-world/thumbnails"));
     let tiles = tiles
         .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
         .count();
-    if tiles == 0 {
-        return;
-    }
+    assert!(tiles > 0, "counted no tiles");
     println!("  {tiles} tiles");
     // Digits rather than `phrase`, which spells its numbers: both of these sentences carry the
     // figure as a numeral, and rewriting a table cell into words to suit a helper would be the
@@ -653,11 +668,7 @@ fn the_tile_and_kind_counts_agree_with_the_files() {
     // `TEMPLATES` is the array the editor offers and `DomainSpec` is what the format defines;
     // `every_domain_has_a_template` already holds those two against each other and against the
     // scenes, so reading one of them here is reading the set all three agree on.
-    let Ok(templates) =
-        std::fs::read_to_string(root().join("app/pantometry-world/src/templates.rs"))
-    else {
-        return;
-    };
+    let templates = read(root().join("app/pantometry-world/src/templates.rs"));
     let Some(kinds) = templates
         .split_once("pub const TEMPLATES: [Template; ")
         .and_then(|(_, r)| r.split_once(']'))
@@ -699,17 +710,16 @@ const NOT_A_PHYSICS: [&str; 6] = [
 /// three that this file already covered were the three that had stayed correct.
 #[test]
 fn the_crate_and_domain_counts_agree_everywhere_they_are_written() {
-    let Ok(entries) = std::fs::read_dir(root().join("crates")) else {
+    if !repository() {
         return;
-    };
+    }
+    let entries = list(root().join("crates"));
     let names: Vec<String> = entries
         .filter_map(Result::ok)
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    if names.is_empty() {
-        return;
-    }
+    assert!(!names.is_empty(), "found no names");
     for expected in NOT_A_PHYSICS {
         assert!(
             names.iter().any(|n| n == expected),
@@ -952,6 +962,9 @@ fn panel_shapes() -> Vec<String> {
 /// viewer's crate doc and README said three, with four in the enum.
 #[test]
 fn the_panel_shapes_are_counted_where_they_are_named() {
+    if !repository() {
+        return;
+    }
     let variants = panel_shapes();
     println!("  {} panel shapes: {variants:?}", variants.len());
     let shapes = variants.len();
