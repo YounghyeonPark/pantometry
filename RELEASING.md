@@ -69,8 +69,10 @@ only the `python bindings` job could have caught it — nothing in the main gate
 ## The prose sweep, which is the part that gets skipped
 
 A release moves the test count, the crate count, the scene count, the FRICTION totals and the install
-line across four documents no compiler reads. Three of those *are* under test —
-`documented_version.rs` and `friction_counts.rs` — and the rest have shipped stale more than once.
+line across four documents no compiler reads. Four of those five *are* under test —
+`documented_version.rs` holds the install line, `friction_counts.rs` the FRICTION totals, and
+`counts_in_prose.rs` the crate and scene counts wherever they are restated. The test count is not,
+and has shipped stale more than once. This said "three" and named two files.
 
 Count them rather than remembering them:
 

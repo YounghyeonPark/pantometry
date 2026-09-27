@@ -103,16 +103,29 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Whether these tests are running in a checkout. A published crate's tests run from a registry
+/// directory with no documents beside it, and that is the one place a missing file is not a defect.
+fn repository() -> bool {
+    root().join("Cargo.toml").is_file() && root().join("crates").is_dir()
+}
+
 /// Assert that `template` filled with `want` appears in `relative`, and that no other number-word fills
 /// it.
 ///
-/// A missing file is skipped: this crate is `publish = false` but its tests run from a checkout, and a
-/// packaging arrangement that hid a document is not this test's business. A missing *phrase* is a
-/// failure, which is the whole point.
+/// A missing *phrase* is a failure, which is the whole point, and so is a missing *file* whenever
+/// there is a repository to find it in. **This used to skip a file it could not read**, on the
+/// argument that a packaging arrangement which hid a document was not its business — and
+/// `unearned-pass-hunter` measured what that bought: `git mv CONTRIBUTING.md` and the viewer's
+/// README, wrong counts written into both moved copies, and every check that named them passed. A
+/// renamed document switched its own guards off. The skip now happens once, for the case it was
+/// for: no repository at all.
 fn phrase(relative: &str, template: &str, want: usize) {
-    let Ok(text) = std::fs::read_to_string(root().join(relative)) else {
+    if !repository() {
         return;
-    };
+    }
+    let text = std::fs::read_to_string(root().join(relative)).unwrap_or_else(|e| {
+        panic!("{relative} could not be read ({e}); if it moved, move the template with it")
+    });
     assert!(
         template.contains("{}"),
         "the template needs a hole for the number"
@@ -765,24 +778,56 @@ fn the_crate_and_domain_counts_agree_everywhere_they_are_written() {
 /// 0.22.0, with nineteen on crates.io. Counted here from the `lib.rs` files themselves, and the
 /// rule is asserted before the count is: a library that stopped denying missing docs would
 /// otherwise just lower the number every document is held to.
+///
+/// **The rule is a line, not a substring.** The first version asked whether the file *contained*
+/// `#![deny(missing_docs)]`, and `// #![deny(missing_docs)]` does — commented out in `viewer-core`,
+/// the test passed, and with the lint back at its default of off nothing else noticed either. So the
+/// attribute has to be a line of its own, and an `allow(missing_docs)` anywhere refuses the file.
+///
+/// **A crate this walk cannot read is a failure, not a skip.** It looks for `src/lib.rs`; a library
+/// whose `[lib]` names another path would have been invisible to the rule and to the count at once.
+/// And "published" is asked of each `Cargo.toml` rather than assumed of `crates/`.
 #[test]
 fn every_library_denies_missing_docs_and_the_count_is_written_right() {
+    if !repository() {
+        return;
+    }
     let mut in_crates = 0;
     let mut in_app = 0;
+    let mut published = 0;
     let mut without = Vec::new();
     for (dir, tally) in [("crates", &mut in_crates), ("app", &mut in_app)] {
-        let Ok(entries) = std::fs::read_dir(root().join(dir)) else {
-            return;
-        };
+        let entries = std::fs::read_dir(root().join(dir)).expect("crates/ and app/");
         for entry in entries.filter_map(Result::ok) {
-            let lib = entry.path().join("src").join("lib.rs");
-            let Ok(text) = std::fs::read_to_string(&lib) else {
+            let Ok(manifest) = std::fs::read_to_string(entry.path().join("Cargo.toml")) else {
                 continue;
             };
-            if text.contains("#![deny(missing_docs)]") {
+            let src = entry.path().join("src");
+            let lib_path = manifest
+                .split("\n[")
+                .filter(|section| section.starts_with("lib]"))
+                .any(|section| section.lines().any(|l| l.trim_start().starts_with("path")));
+            assert!(
+                !lib_path,
+                "{}'s [lib] names a path, and this walk only knows src/lib.rs",
+                entry.path().display()
+            );
+            let Ok(text) = std::fs::read_to_string(src.join("lib.rs")) else {
+                assert!(
+                    src.join("main.rs").is_file(),
+                    "{} has neither src/lib.rs nor src/main.rs",
+                    entry.path().display()
+                );
+                continue;
+            };
+            let denies = text.lines().any(|l| l.trim() == "#![deny(missing_docs)]");
+            if denies && !text.contains("allow(missing_docs)") {
                 *tally += 1;
             } else {
-                without.push(lib.display().to_string());
+                without.push(entry.path().display().to_string());
+            }
+            if dir == "crates" && !manifest.contains("publish = false") {
+                published += 1;
             }
         }
     }
@@ -791,11 +836,14 @@ fn every_library_denies_missing_docs_and_the_count_is_written_right() {
         "these libraries do not deny missing docs: {without:?}"
     );
     let all = in_crates + in_app;
-    println!("  {all} libraries deny missing docs: {in_crates} in crates/, {in_app} in app/");
+    println!(
+        "  {all} libraries deny missing docs: {in_crates} in crates/ ({published} published), \
+         {in_app} in app/"
+    );
     for f in ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"] {
         phrase(f, "in all **{}** crates", all);
     }
-    phrase("AGENTS.md", "the {} published ones", in_crates);
+    phrase("AGENTS.md", "the {} published ones", published);
     phrase("CLAUDE.md", "the {} in `crates/`", in_crates);
     phrase("AGENTS.md", "the {} libraries in `app/`", in_app);
     phrase("CLAUDE.md", "the {} libraries in `app/`", in_app);
@@ -848,14 +896,13 @@ const ORDINALS: [&str; 31] = [
 /// sixteenth, because a number in prose has no way to know the directory grew.
 #[test]
 fn the_benchmark_is_called_by_the_right_ordinal() {
-    let examples = example_files();
-    if examples == 0 {
+    if !repository() {
         return;
     }
+    let examples = example_files();
+    assert!(examples > 0, "no example files under crates/");
     println!("  {examples} examples");
-    let Ok(text) = std::fs::read_to_string(root().join("EXAMPLES.md")) else {
-        return;
-    };
+    let text = std::fs::read_to_string(root().join("EXAMPLES.md")).expect("EXAMPLES.md");
     let want = format!("A {}, `where_the_time_goes`", ORDINALS[examples]);
     assert!(
         text.contains(&want),
@@ -864,30 +911,50 @@ fn the_benchmark_is_called_by_the_right_ordinal() {
     );
 }
 
-/// How many shapes a panel can be. **Update both when this stops compiling.**
+/// The variants of `PanelData`, read from its source.
 ///
-/// The `match` is exhaustive with no wildcard, so a fifth variant of `PanelData` fails to compile
-/// here — which is the point: it is the only way a count of an enum's variants can be made to
-/// notice the enum.
-fn panel_shapes() -> usize {
-    use pantometry::scene::PanelData;
-    fn index(p: &PanelData) -> usize {
-        match p {
-            PanelData::Field { .. } => 0,
-            PanelData::Paths { .. } => 1,
-            PanelData::Surface { .. } => 2,
-            PanelData::Points { .. } => 3,
-        }
+/// **The first version typed the count.** It was an exhaustive `match` with no wildcard and a `4`
+/// under it, on the argument that a fifth variant would not compile until the count moved. Only the
+/// `match` had to move: a fifth arm and a `4` left standing compiled, and with the prose changed to
+/// five and the `4` to `5` over an enum of four the test passed — measured by
+/// `unearned-pass-hunter`. A number typed beside the thing it counts is a second copy, so this reads
+/// the enum instead: every line at one level of indentation inside it that starts with a capital.
+fn panel_shapes() -> Vec<String> {
+    let path = "crates/pantometry-scene/src/lib.rs";
+    let text = std::fs::read_to_string(root().join(path)).expect("the scene crate's source");
+    let body = text
+        .split_once("\npub enum PanelData {\n")
+        .and_then(|(_, rest)| rest.split_once("\n}\n"))
+        .expect("`pub enum PanelData {` and its closing brace in pantometry-scene")
+        .0;
+    let variants: Vec<String> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("    "))
+        .filter(|l| l.starts_with(|c: char| c.is_ascii_uppercase()))
+        .map(|l| {
+            l.split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    // The four are named so that a parse which found the wrong four, or none, cannot pass.
+    for known in ["Field", "Paths", "Surface", "Points"] {
+        assert!(
+            variants.iter().any(|v| v == known),
+            "{known} is not among the variants read from {path}: {variants:?}"
+        );
     }
-    let _ = index;
-    4
+    variants
 }
 
 /// **A panel's shapes are counted where they are named.** `PanelData`'s own doc said two, and the
 /// viewer's crate doc and README said three, with four in the enum.
 #[test]
 fn the_panel_shapes_are_counted_where_they_are_named() {
-    let shapes = panel_shapes();
+    let variants = panel_shapes();
+    println!("  {} panel shapes: {variants:?}", variants.len());
+    let shapes = variants.len();
     phrase(
         "crates/pantometry-scene/src/lib.rs",
         "{} shapes, and the first two are why",

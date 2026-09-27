@@ -3554,24 +3554,27 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // **`EVIDENCE.md` states these four counts, and they are measured here.** Each pin above
     // holds a list, and a list growing by one reads as a one-line diff; the sentence in
     // `EVIDENCE.md` that counts them did not move with it and nothing compared the two.
+    //
+    // Not behind an `if let`: this crate is `publish = false`, so there is no copy of it anywhere
+    // that EVIDENCE.md is legitimately absent from, and the first version skipped when it was.
+    // The answers begin at the dash, because "2 answers" is inside "52 answers".
     let evidence = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../EVIDENCE.md");
-    if let Ok(evidence) = std::fs::read_to_string(evidence) {
-        let evidence = evidence.split_whitespace().collect::<Vec<_>>().join(" ");
-        for claim in [
-            format!("the **{}** `(label, unit)` pairs", emitted.len()),
-            format!(
-                "{} answers and {} diagnostics",
-                answers.len(),
-                diagnostics.len()
-            ),
-            format!("the **{}** `(domain, label)` pairs", diagnosed.len()),
-        ] {
-            assert!(
-                evidence.contains(&claim),
-                "EVIDENCE.md should say {claim:?} — the count moved, or the sentence was reworded \
-                 and this has to follow it"
-            );
-        }
+    let evidence = std::fs::read_to_string(evidence).expect("EVIDENCE.md at the repository root");
+    let evidence = evidence.split_whitespace().collect::<Vec<_>>().join(" ");
+    for claim in [
+        format!("the **{}** `(label, unit)` pairs", emitted.len()),
+        format!(
+            "— {} answers and {} diagnostics",
+            answers.len(),
+            diagnostics.len()
+        ),
+        format!("the **{}** `(domain, label)` pairs", diagnosed.len()),
+    ] {
+        assert!(
+            evidence.contains(&claim),
+            "EVIDENCE.md should say {claim:?} — the count moved, or the sentence was reworded \
+             and this has to follow it"
+        );
     }
 
     flat.sort();
