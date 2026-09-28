@@ -21,6 +21,19 @@ protects nothing.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The protein and the bracket opened from New project as a missing file.** A preset opens as an
+  unsaved `scene.json`, which has no directory beside it, so `structures/1CRN.pdb` and
+  `parts/l-bracket.stl` were looked for wherever the editor had been started. The protein showed
+  an error and a viewport saying it had no geometry. The chooser was supposed to warn about the
+  bracket, but its flag came from a search for `"stl"`, so the protein got no warning at all.
+  Presets now carry the files they name, the editor reads those first, and saving writes them
+  beside the scene without overwriting a file already there. Nothing had opened a preset through
+  the editor. `a_preset_opens_with_its_files` now clicks all thirty-two tiles, and it failed on
+  exactly these two before the change. It also runs the two, saves one and reverts one: Revert
+  after a preset had kept the preset's files attached to whatever `scene.json` it then loaded.
+
 ## [0.22.0] — 2026-09-26
 
 Thirty-six commits, and the theme is making a run say what it holds. A protein was forty-six points

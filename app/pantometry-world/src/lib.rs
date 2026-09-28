@@ -1712,6 +1712,29 @@ impl Parts for Beside {
     }
 }
 
+/// [`Parts`] for a scene that carries some of its files with it: those first, then beside it.
+///
+/// **A preset opened as an unsaved project has no "beside".** It is a `scene.json` in whatever
+/// directory the editor was started from, so the protein's `structures/1CRN.pdb` was looked for
+/// there and not found. The preset has the bytes — [`presets::Preset::files`] — and this serves
+/// them under the name the scene writes, and asks the directory for anything else.
+#[derive(Debug, Clone, Default)]
+pub struct WithFiles {
+    /// Served first, by the name the scene writes.
+    pub held: &'static [(&'static str, &'static [u8])],
+    /// Everything the scene names that is not held.
+    pub beside: Beside,
+}
+
+impl Parts for WithFiles {
+    fn bytes(&self, name: &str) -> Result<Vec<u8>, String> {
+        match self.held.iter().find(|(held, _)| *held == name) {
+            Some((_, bytes)) => Ok(bytes.to_vec()),
+            None => self.beside.bytes(name),
+        }
+    }
+}
+
 /// One compartment of a [`DomainSpec::Compartments`] model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

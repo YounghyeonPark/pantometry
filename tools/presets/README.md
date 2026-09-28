@@ -16,6 +16,19 @@ It runs every scene, renders the last frame with `pantometry view --thumbnail`, 
 tile no scene names any more, writes the Rust and runs `rustfmt` over it. Running it against an
 unchanged tree then reproduces `presets.rs` byte for byte and rewrites the tiles identically.
 
+`python tools/presets/make.py --rust-only` writes `presets.rs` from the tiles already committed,
+without a binary and without rendering anything, for a change to the table that is not a change to
+any picture.
+
+**A preset carries the files it names.** Every string in a scene that is a file beside the scenes
+directory — the protein's `structures/1CRN.pdb`, the bracket's `parts/l-bracket.stl` — goes into
+`presets.rs` as `include_bytes!`, because a preset opens as an unsaved `scene.json` with no
+directory beside it. This was a flag, `needs_a_part`, set by searching for `"stl"`. It could not see
+a `"pdb"`, so the protein opened as a missing file and an empty viewport with no warning.
+`every_preset_builds_from_the_files_it_carries` builds each preset from its own files and nothing
+else, and holds the names the builder asked for against the set carried. Saving the scene writes
+them beside it.
+
 The `rustfmt` step is not tidiness. This script writes each `AREAS` entry on one line at up to 104
 characters and rustfmt reflows them across four, so without it the committed file is **not** what
 the script produces and the tree fails the app gate's first step. That sentence about reproducing

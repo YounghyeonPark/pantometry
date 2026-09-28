@@ -32,11 +32,15 @@ pub struct Preset {
     pub title: &'static str,
     /// The kinds of domain it holds, so a reader can see what physics they are getting.
     pub kinds: &'static [&'static str],
-    /// Whether it names a file beside itself — an STL for a designed part.
+    /// The files it names beside itself, as `(the name the scene writes, the bytes)`.
     ///
-    /// **One does.** A preset opened as an unsaved project has nowhere to resolve that from, so
-    /// the chooser says so rather than opening a scene that will refuse on its first check.
-    pub needs_a_part: bool,
+    /// **A preset opened as an unsaved project has no "beside".** It is a `scene.json` in
+    /// whatever directory the editor was started from, so `structures/1CRN.pdb` was looked for
+    /// there and the protein opened as an error and an empty viewport. This field was a flag,
+    /// `needs_a_part`, set by searching the scene for `"stl"` — which could not see a `"pdb"`, so
+    /// the one warning it existed to give was missing from the scene that needed it. The files
+    /// travel with the preset now, and [`WithFiles`](crate::WithFiles) serves them.
+    pub files: &'static [(&'static str, &'static [u8])],
     /// The scene, as text.
     pub json: &'static str,
     /// A picture of its last frame, as PNG, or `None` when there is nothing to draw.
@@ -124,7 +128,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "rooms",
         title: "a small room ringing in its (1,1) mode",
         kinds: &["room"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/01-room-mode.json"),
         thumb: Some(include_bytes!("../thumbnails/01-room-mode.png")),
     },
@@ -133,7 +137,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "rooms",
         title: "the (3,2) mode: more nodal lines, and a higher note",
         kinds: &["room"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/02-room-higher-mode.json"),
         thumb: Some(include_bytes!("../thumbnails/02-room-higher-mode.png")),
     },
@@ -142,7 +146,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "rooms",
         title: "a clap in the corner, spreading and coming back",
         kinds: &["room"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/03-room-pulse.json"),
         thumb: Some(include_bytes!("../thumbnails/03-room-pulse.png")),
     },
@@ -151,7 +155,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "a heater pays joules onto the bus and a bar takes them",
         kinds: &["bar", "heater"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/04-heater-and-bar.json"),
         thumb: Some(include_bytes!("../thumbnails/04-heater-and-bar.png")),
     },
@@ -160,7 +164,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "optics",
         title: "a beam that heats where it lands, and the heat spreading afterwards",
         kinds: &["bar", "beam"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/05-beam-on-bar.json"),
         thumb: Some(include_bytes!("../thumbnails/05-beam-on-bar.png")),
     },
@@ -169,7 +173,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "orbits",
         title: "four satellites, tilted out of one plane, and Kepler's third law",
         kinds: &["orbit"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/06-orbits.json"),
         thumb: Some(include_bytes!("../thumbnails/06-orbits.png")),
     },
@@ -178,7 +182,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "contact",
         title: "a ball bouncing on a penalty contact, and the heat its dashpot makes",
         kinds: &["bounce", "lump"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/07-bouncing-ball.json"),
         thumb: Some(include_bytes!("../thumbnails/07-bouncing-ball.png")),
     },
@@ -187,7 +191,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "matter",
         title: "a Lennard-Jones crystal at T* = 0.15: atoms rattling in place",
         kinds: &["atoms"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/08-atoms-crystal.json"),
         thumb: Some(include_bytes!("../thumbnails/08-atoms-crystal.png")),
     },
@@ -196,7 +200,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "matter",
         title: "the same atoms at T* = 1.4: the lattice is gone and they wander",
         kinds: &["atoms"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/09-atoms-liquid.json"),
         thumb: Some(include_bytes!("../thumbnails/09-atoms-liquid.png")),
     },
@@ -205,7 +209,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "optics",
         title: "a tungsten lamp on an aluminium mirror, and the heat the blue end leaves",
         kinds: &["bar", "light"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/10-lamp-on-a-mirror.json"),
         thumb: Some(include_bytes!("../thumbnails/10-lamp-on-a-mirror.png")),
     },
@@ -214,7 +218,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "motors",
         title: "a motor that starts under load, and the winding overshoot a steady run cannot show",
         kinds: &["heater", "network"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/11-motor-thermal-network.json"),
         thumb: None,
     },
@@ -223,7 +227,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "motors",
         title: "the same motor, with the heat computed instead of stated",
         kinds: &["network", "winding"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/12-winding-heats-a-motor.json"),
         thumb: None,
     },
@@ -232,7 +236,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "motors",
         title: "a winding whose resistance follows its own temperature",
         kinds: &["network", "winding"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/13-winding-that-heats-itself.json"),
         thumb: None,
     },
@@ -241,7 +245,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "everything",
         title: "a world: five domains, four crates, one clock and one audit",
         kinds: &["bar", "beam", "light", "orbit", "room"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/14-a-world.json"),
         thumb: Some(include_bytes!("../thumbnails/14-a-world.png")),
     },
@@ -250,7 +254,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "a hot spot in a block of aluminium, spreading in three dimensions",
         kinds: &["block"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/15-a-hot-spot-in-a-block.json"),
         thumb: Some(include_bytes!("../thumbnails/15-a-hot-spot-in-a-block.png")),
     },
@@ -259,7 +263,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "rooms",
         title: "the oblique (1,1,1) mode of a room with a ceiling",
         kinds: &["hall"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/16-a-room-with-a-ceiling.json"),
         thumb: Some(include_bytes!("../thumbnails/16-a-room-with-a-ceiling.png")),
     },
@@ -268,7 +272,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "power",
         title: "a busbar with a notch, and the resistance the shape actually has",
         kinds: &["conductor", "lump"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/17-a-busbar-with-a-notch.json"),
         thumb: Some(include_bytes!("../thumbnails/17-a-busbar-with-a-notch.png")),
     },
@@ -277,7 +281,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "flow",
         title: "an espresso shot, and the same basket with a gap at its wall",
         kinds: &["puck"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/18-an-espresso-shot.json"),
         thumb: Some(include_bytes!("../thumbnails/18-an-espresso-shot.png")),
     },
@@ -286,7 +290,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "optics",
         title: "a hot face in aluminium, meeting a wall of borosilicate halfway",
         kinds: &["block"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/19-a-coating-stops-the-heat.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/19-a-coating-stops-the-heat.png"
@@ -297,7 +301,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "a heater melting a block of ice, and the plateau it holds at while it does",
         kinds: &["block", "heater"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/20-melting-a-block-of-ice.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/20-melting-a-block-of-ice.png"
@@ -308,7 +312,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "a wax thermal buffer holding a plateau, in a substance the library does not ship",
         kinds: &["block", "heater"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/21-a-wax-thermal-buffer.json"),
         thumb: Some(include_bytes!("../thumbnails/21-a-wax-thermal-buffer.png")),
     },
@@ -317,7 +321,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "the same wax buffer with an aluminium matrix through it, declared as a composite",
         kinds: &["block", "heater"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/22-wax-in-an-aluminium-matrix.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/22-wax-in-an-aluminium-matrix.png"
@@ -328,7 +332,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "a hot part in a housing, radiating and convecting to a cooled lid",
         kinds: &["block"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/23-a-part-radiating-to-its-lid.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/23-a-part-radiating-to-its-lid.png"
@@ -339,7 +343,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "power",
         title: "a power module: 45 W from the die, junction to ambient through the stack",
         kinds: &["block"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/24-a-power-module-junction-to-ambient.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/24-a-power-module-junction-to-ambient.png"
@@ -350,7 +354,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "power",
         title: "the same power module, and what 140 kelvin does to its solder",
         kinds: &["block", "structure"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/25-what-140-kelvin-does-to-the-solder.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/25-what-140-kelvin-does-to-the-solder.png"
@@ -361,7 +365,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "flow",
         title: "pressure-driven water in a 2 mm channel, against Poiseuille",
         kinds: &["channel"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/26-poiseuille-in-a-cooling-channel.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/26-poiseuille-in-a-cooling-channel.png"
@@ -372,7 +376,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "radio",
         title: "a 120 x 120 mm vacuum cavity ringing in its (1,0,1) mode",
         kinds: &["cavity"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/27-a-cavity-ringing-at-its-own-frequency.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/27-a-cavity-ringing-at-its-own-frequency.png"
@@ -383,7 +387,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "matter",
         title: "an electron in the third state of a 10 nm well, which does not move",
         kinds: &["well"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/28-an-eigenstate-that-does-not-move.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/28-an-eigenstate-that-does-not-move.png"
@@ -394,7 +398,10 @@ pub const PRESETS: [Preset; 32] = [
         area: "heat",
         title: "a designed bracket carrying a module's heat along its own shape to its bolts",
         kinds: &["block"],
-        needs_a_part: true,
+        files: &[(
+            "parts/l-bracket.stl",
+            include_bytes!("../scenes/parts/l-bracket.stl"),
+        )],
         json: include_str!("../scenes/29-a-designed-bracket-becomes-cells.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/29-a-designed-bracket-becomes-cells.png"
@@ -406,7 +413,7 @@ pub const PRESETS: [Preset; 32] = [
         title:
             "two blackened busbars crossing at a clearance, one at twice the current, in still air",
         kinds: &["block"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/30-two-phases-crossing-at-a-clearance.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/30-two-phases-crossing-at-a-clearance.png"
@@ -417,7 +424,10 @@ pub const PRESETS: [Preset; 32] = [
         area: "proteins",
         title: "crambin at body temperature, moving along the collective modes its own fold has",
         kinds: &["protein"],
-        needs_a_part: false,
+        files: &[(
+            "structures/1CRN.pdb",
+            include_bytes!("../scenes/structures/1CRN.pdb"),
+        )],
         json: include_str!("../scenes/31-a-protein-shaking-at-body-temperature.json"),
         thumb: Some(include_bytes!(
             "../thumbnails/31-a-protein-shaking-at-body-temperature.png"
@@ -428,7 +438,7 @@ pub const PRESETS: [Preset; 32] = [
         area: "medicine",
         title: "a 500 mg bolus distributing into tissue and leaving the body, twelve hours of it",
         kinds: &["compartments"],
-        needs_a_part: false,
+        files: &[],
         json: include_str!("../scenes/32-a-dose-distributing-and-leaving.json"),
         thumb: None,
     },

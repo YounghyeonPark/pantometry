@@ -218,6 +218,12 @@ pub struct Dump {
     pub open: Option<usize>,
     /// Show the kinds screen even with nothing ticked, which is what `Custom…` opens on.
     pub custom: bool,
+    /// Run the scene *after* the clicks and drags, so a scene a click opened can be run.
+    ///
+    /// `ran` runs before any input, which is right for a file named on the command line and
+    /// cannot reach a preset: a preset only exists once its tile is clicked. So the editor
+    /// handing a run the preset's own files was a change no dump could see.
+    pub run_after: bool,
 }
 
 /// One frame of the editor's interface, as text: every string it drew and where.
@@ -252,6 +258,7 @@ pub fn ui_dump(asked: Dump) -> String {
         solo,
         open,
         custom,
+        run_after,
     } = asked;
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -344,6 +351,12 @@ pub fn ui_dump(asked: Dump) -> String {
         let _ = ctx.run(release, |c| app.ui(c));
         let _ = ctx.run(input(), |c| app.ui(c));
     }
+    if run_after {
+        if let Err(e) = app.run_here() {
+            return format!("the run refused: {e}\n");
+        }
+        let _ = ctx.run(input(), |c| app.ui(c));
+    }
     let out = ctx.run(input(), |c| app.ui(c));
 
     let mut texts: Vec<Drawn> = Vec::new();
@@ -433,6 +446,13 @@ pub fn ui_dump(asked: Dump) -> String {
         unwritable.len(),
         callbacks.len()
     );
+    // **The check's own error, when there is one**, rather than a test inferring it from how a
+    // message happens to be worded. A test that looked for ` (at ` — the wording of a file that
+    // was not found — passed with a preset's PDB served half-length, because a truncated file is
+    // a different error. Only when there is one, so the committed figures' headers do not move.
+    if let Some(e) = &app.checked.error {
+        s.push_str(&format!("error={}\n", e.replace('\n', " / ")));
+    }
     for r in &callbacks {
         s.push_str(&format!(
             "viewport={:.0},{:.0} {:.0}x{:.0}\n",
@@ -680,6 +700,10 @@ struct App {
     /// The scene text being edited, and where it loads from and saves to.
     text: String,
     path: String,
+    /// Files the scene carries with it until it is saved: a preset's PDB or STL, which an unsaved
+    /// `scene.json` has no directory to find. Empty for anything opened from disk. Saving writes
+    /// them beside the scene and empties this, so from then on the scene reads what is on disk.
+    held: &'static [(&'static str, &'static [u8])],
     /// Every text this scene has been, so an edit can be taken back.
     ///
     /// **Committed on both sides of an edit.** The text pane is bound straight to `text`, so
@@ -872,6 +896,7 @@ impl App {
             history: editor_core::edit::History::new(text.clone()),
             text,
             path,
+            held: &[],
             checked,
             run: None,
             verify: None,
@@ -933,10 +958,16 @@ impl App {
     /// Two things do this now — `New project` from a preset, and `Create` from a set of kinds —
     /// and a second copy of "and also clear the mtime" is how one of them comes to think the file
     /// on disk is its own.
-    fn open_text(&mut self, text: String, status: String) {
+    fn open_text(
+        &mut self,
+        text: String,
+        held: &'static [(&'static str, &'static [u8])],
+        status: String,
+    ) {
         self.text = text;
         self.history.reset(self.text.clone());
         self.path = String::from("scene.json");
+        self.held = held;
         self.dirty = true;
         self.known_mtime = None;
         self.recheck();
@@ -954,6 +985,7 @@ impl App {
     /// an empty editor and an error message where the two ways forward used to be.
     fn open(&mut self, path: String) {
         let was = std::mem::replace(&mut self.path, path);
+        // `load_from_disk` lets go of what a preset held, and only when the read succeeds.
         if !self.load_from_disk() {
             self.path = was;
             return;
@@ -966,8 +998,19 @@ impl App {
     }
 
     fn recheck(&mut self) {
-        self.checked = editor_core::check(&self.text, &Beside::of(&self.path));
+        self.checked = editor_core::check(&self.text, &self.files());
         self.run = None;
+    }
+
+    /// Where this scene's files come from: what it holds, then the directory beside it.
+    ///
+    /// Every check, run and verify goes through this, because the three of them resolving a name
+    /// differently is how a scene checks clean and then refuses to run.
+    fn files(&self) -> pantometry_world::WithFiles {
+        pantometry_world::WithFiles {
+            held: self.held,
+            beside: Beside::of(&self.path),
+        }
     }
 
     /// Step the scene back through the history, or forward again.
@@ -1031,7 +1074,7 @@ impl App {
         let text = self.text.clone();
         // The path travels with the text, because a `parts` entry is resolved beside the scene
         // and the thread has no idea where the scene came from.
-        let beside = Beside::of(&self.path);
+        let beside = self.files();
         self.stop = Arc::new(AtomicBool::new(false));
         let stop = self.stop.clone();
         self.spawn("running", move |tx| {
@@ -1051,7 +1094,7 @@ impl App {
     /// a frame built without an event loop has nowhere for that to arrive, so this takes the
     /// batch call `editor_core::run` and the same `viewer_core::Run::from_json` the channel does.
     fn run_here(&mut self) -> Result<(), String> {
-        let json = editor_core::run(&self.text, &Beside::of(&self.path))?;
+        let json = editor_core::run(&self.text, &self.files())?;
         let run = viewer_core::Run::from_json(&json)
             .map_err(|e| format!("the run's own JSON did not read back: {e}"))?;
         let last = run.frames.len().saturating_sub(1);
@@ -1070,7 +1113,7 @@ impl App {
     fn start_verify(&mut self) {
         let text = self.text.clone();
         let deep = self.deep;
-        let beside = Beside::of(&self.path);
+        let beside = self.files();
         self.spawn("verifying", move |tx| {
             let _ = tx.send(Job::Verified(editor_core::verify(&text, deep, &beside)));
         });
@@ -1287,6 +1330,7 @@ impl App {
                     let preset = &pantometry_world::presets::PRESETS[i];
                     self.open_text(
                         preset.json.to_string(),
+                        preset.files,
                         format!(
                             "a new scene from {} — save it to give it a name",
                             preset.title
@@ -1342,7 +1386,7 @@ impl App {
                         "a new scene of {} — save it to give it a name",
                         kinds.join(", ")
                     );
-                    self.open_text(text, said);
+                    self.open_text(text, &[], said);
                 }
                 crate::start::Made::Nothing => self.choosing = Some(ticked),
             }
@@ -2102,6 +2146,11 @@ impl App {
                 self.history.reset(self.text.clone());
                 self.dirty = false;
                 self.known_mtime = mtime_of(&self.path);
+                // Text from disk finds its files on disk. Cleared here rather than in `open`,
+                // because Revert reads through this too: after a preset, Revert loads whatever
+                // `scene.json` the working directory has, and that scene was being served the
+                // preset's PDB ahead of its own directory's — and saved beside it next time.
+                self.held = &[];
                 self.recheck();
                 self.rescan_assets();
                 self.needs_fit = true;
@@ -2115,7 +2164,11 @@ impl App {
         }
     }
 
-    /// Write the pane to `path`.
+    /// Write the pane to `path`, and the files it holds beside it.
+    ///
+    /// A preset's PDB or STL is written where the scene will look for it, so the saved project
+    /// opens on its own. Once they are on disk the scene reads them from there, which is what
+    /// "beside" means for a file that has a directory.
     fn save_to_disk(&mut self) {
         match std::fs::write(&self.path, &self.text) {
             Ok(()) => {
@@ -2123,7 +2176,25 @@ impl App {
                 self.known_mtime = mtime_of(&self.path);
                 self.status = format!("saved {}", self.path);
             }
-            Err(e) => self.status = format!("{}: {e}", self.path),
+            Err(e) => {
+                self.status = format!("{}: {e}", self.path);
+                return;
+            }
+        }
+        if self.held.is_empty() {
+            return;
+        }
+        match write_held(&Beside::of(&self.path).0, self.held) {
+            Ok(notes) => {
+                self.held = &[];
+                if !notes.is_empty() {
+                    self.status = format!("{}; {}", self.status, notes.join("; "));
+                }
+                self.recheck();
+                self.rescan_assets();
+            }
+            // Kept held: the scene still has its files, and says why the disk does not.
+            Err(e) => self.status = format!("{}; {e}", self.status),
         }
     }
 
@@ -2181,6 +2252,13 @@ impl App {
             });
         });
         ui.separator();
+
+        // What an unsaved preset carries is not beside it — there is no "beside" yet — so the
+        // directory listing below cannot show it, and "no .pdb beside ." under a protein that has
+        // one reads as the file being missing.
+        for (name, _) in self.held {
+            ui.weak(format!("{name} — carried until saved"));
+        }
 
         if self.assets.is_empty() {
             // **Where it looked and what for.** A panel that renders empty and says nothing is
@@ -4398,9 +4476,70 @@ fn default_scene() -> String {
     )
 }
 
+/// Write each held file under `dir` at the name the scene writes, and say what was not written.
+///
+/// **A file already there is kept, not overwritten**: a project saved into a directory that has
+/// its own `structures/1CRN.pdb` is using that one, and replacing somebody's file because a
+/// preset once carried one of the same name is not something a save should do quietly. A file
+/// identical to the held bytes is not worth a note; a different one is, since the scene will
+/// now read it. A failed write is an error, and the caller keeps holding the files.
+fn write_held(dir: &std::path::Path, held: &[(&str, &[u8])]) -> Result<Vec<String>, String> {
+    let mut notes = Vec::new();
+    for (name, bytes) in held {
+        let at = dir.join(name);
+        match std::fs::read(&at) {
+            Ok(there) if there == *bytes => {}
+            Ok(_) => notes.push(format!("kept the {name} already there, which differs")),
+            Err(_) => {
+                if let Some(parent) = at.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{} was not written: {e}", at.display()))?;
+                }
+                std::fs::write(&at, bytes)
+                    .map_err(|e| format!("{} was not written: {e}", at.display()))?;
+                notes.push(format!("wrote {name} beside it"));
+            }
+        }
+    }
+    Ok(notes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A save writes a preset's files where the scene will look, and keeps one already there.**
+    #[test]
+    fn a_saved_preset_brings_its_files_and_keeps_what_was_there() {
+        let dir = std::env::temp_dir().join(format!("pantometry-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+
+        let held: &[(&str, &[u8])] = &[("structures/a.pdb", b"held a"), ("b.stl", b"held b")];
+        std::fs::write(dir.join("b.stl"), b"somebody's own b").expect("an existing file");
+
+        let notes = write_held(&dir, held).expect("both are handled");
+        assert_eq!(
+            std::fs::read(dir.join("structures/a.pdb")).expect("written, directory and all"),
+            b"held a"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("b.stl")).expect("still there"),
+            b"somebody's own b",
+            "a file already beside the scene was overwritten"
+        );
+        assert_eq!(
+            notes,
+            [
+                "wrote structures/a.pdb beside it",
+                "kept the b.stl already there, which differs"
+            ]
+        );
+        // Saved again, nothing differs from what it would write and nothing is said about a.
+        let again = write_held(&dir, held).expect("a second save");
+        assert_eq!(again, ["kept the b.stl already there, which differs"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// **A pointer is measured against the handle's line, not against its ends.**
     ///

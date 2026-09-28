@@ -100,39 +100,88 @@ fn a_presets_title_and_kinds_are_the_scenes_own() {
     }
 }
 
-/// **Every preset builds**, which is what makes it a starting point rather than a sample.
+/// The files a build asked for, served from what the preset holds and from nowhere else.
+struct OnlyHeld {
+    held: &'static [(&'static str, &'static [u8])],
+    asked: std::cell::RefCell<std::collections::BTreeSet<String>>,
+}
+
+impl pantometry_world::Parts for OnlyHeld {
+    fn bytes(&self, name: &str) -> Result<Vec<u8>, String> {
+        self.asked.borrow_mut().insert(name.to_string());
+        self.held
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, b)| b.to_vec())
+            .ok_or_else(|| format!("{name} is not held"))
+    }
+}
+
+/// **`WithFiles` serves a held file by its name, and asks the directory for anything else.**
 ///
-/// One names a file beside itself — an STL for a designed part — and says so, because a preset
-/// opened as an unsaved project has nowhere to resolve that from. It builds here because the test
-/// runs beside the scenes.
+/// Each preset that carries a file carries one, so a `WithFiles` that returned the first held
+/// file whatever it was asked for would have passed everything built on the presets. Two held
+/// files, asked for by name, and a third that is neither.
 #[test]
-fn every_preset_builds_and_says_when_it_needs_a_file() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes");
-    let mut needs = Vec::new();
+fn with_files_serves_each_held_file_by_its_name() {
+    use pantometry_world::Parts;
+    let dir = std::env::temp_dir().join(format!("pantometry-with-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a temporary directory");
+    std::fs::write(dir.join("c.txt"), b"on disk").expect("a file beside");
+    let files = pantometry_world::WithFiles {
+        held: &[("a.pdb", b"held a"), ("b.stl", b"held b")],
+        beside: pantometry_world::Beside(dir.clone()),
+    };
+    assert_eq!(files.bytes("b.stl").expect("held"), b"held b");
+    assert_eq!(files.bytes("a.pdb").expect("held"), b"held a");
+    assert_eq!(files.bytes("c.txt").expect("beside"), b"on disk");
+    let missing = files.bytes("d.stl").expect_err("neither held nor beside");
+    assert!(missing.contains("d.stl"), "{missing}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **Every preset builds from what it carries**, which is what makes it a starting point rather
+/// than a sample.
+///
+/// **This built each one beside the scenes directory, which is exactly where an opened preset is
+/// not.** A preset opens as an unsaved `scene.json` wherever the editor was started, and the
+/// protein opened there as a missing `structures/1CRN.pdb` while this passed. It was also held to
+/// a flag set by searching for `"stl"`, which could not see a `"pdb"`. So the build here is given
+/// *no directory at all*: the preset's own files, and a record of every name the builder asked
+/// for, which has to be exactly the set it holds — a file it needs and does not carry fails the
+/// build, and a file it carries and does not need fails the comparison.
+#[test]
+fn every_preset_builds_from_the_files_it_carries() {
+    let mut carrying = Vec::new();
     for p in PRESETS {
         let scene: Scene = serde_json::from_str(p.json)
             .unwrap_or_else(|e| panic!("{}: the preset does not parse: {e}", p.file));
-        let beside = pantometry_world::Beside::of(dir.join(p.file));
-        World::build_with(scene, &beside)
+        let files = OnlyHeld {
+            held: p.files,
+            asked: Default::default(),
+        };
+        World::build_with(scene, &files)
             .unwrap_or_else(|e| panic!("{}: the preset does not build: {e}", p.file));
-        if p.needs_a_part {
-            needs.push(p.file);
-        }
-        // A scene that reaches for a file says so, and one that does not, does not.
-        let reaches = p.json.contains("\"stl\"");
+        let held: std::collections::BTreeSet<String> =
+            p.files.iter().map(|(n, _)| n.to_string()).collect();
         assert_eq!(
-            reaches,
-            p.needs_a_part,
-            "{}: `needs_a_part` is {} and the scene {} a part",
-            p.file,
-            p.needs_a_part,
-            if reaches { "names" } else { "does not name" }
+            files.asked.into_inner(),
+            held,
+            "{}: what the build asked for is not what the preset carries",
+            p.file
         );
+        if !p.files.is_empty() {
+            carrying.push(p.file);
+        }
     }
     assert_eq!(
-        needs,
-        ["29-a-designed-bracket-becomes-cells.json"],
-        "the set of presets that need a file beside them has changed"
+        carrying,
+        [
+            "29-a-designed-bracket-becomes-cells.json",
+            "31-a-protein-shaking-at-body-temperature.json"
+        ],
+        "the set of presets that carry a file has changed"
     );
 }
 

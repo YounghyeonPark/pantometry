@@ -347,16 +347,6 @@ pub fn presets(ui: &mut egui::Ui, open: &mut Option<usize>, art: &mut Art) -> Ma
                                                     .weak()
                                                     .size(11.0),
                                             );
-                                            if preset.needs_a_part {
-                                                ui.label(
-                                                    egui::RichText::new(
-                                                        "needs its part file beside it",
-                                                    )
-                                                    .weak()
-                                                    .size(11.0)
-                                                    .color(egui::Color32::from_rgb(230, 180, 60)),
-                                                );
-                                            }
                                         },
                                     );
                                 }

@@ -152,6 +152,9 @@ fn main() {
             let ran = rest.iter().any(|a| a == "--ran") || rest.iter().any(|a| a == "--iso");
             let iso = rest.iter().any(|a| a == "--iso");
             let solo = rest.iter().any(|a| a == "--solo");
+            // `--run-after-clicks` runs whatever the clicks opened. `--ran` runs first, which
+            // cannot reach a preset: a preset exists only once its tile has been clicked.
+            let run_after = rest.iter().any(|a| a == "--run-after-clicks");
             // **A bad index is refused, not ignored.** `--open 99`, `--open banana`, `--open -1`
             // and a bare `--open` all used to produce a dump byte-identical to the shut screen
             // and exit 0 — and the shut screen satisfies every geometric assertion the tests make
@@ -191,6 +194,7 @@ fn main() {
                             solo,
                             open,
                             custom,
+                            run_after,
                         })
                     );
                     0

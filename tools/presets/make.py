@@ -99,11 +99,15 @@ pub struct Preset {
     pub title: &'static str,
     /// The kinds of domain it holds, so a reader can see what physics they are getting.
     pub kinds: &'static [&'static str],
-    /// Whether it names a file beside itself — an STL for a designed part.
+    /// The files it names beside itself, as `(the name the scene writes, the bytes)`.
     ///
-    /// **One does.** A preset opened as an unsaved project has nowhere to resolve that from, so
-    /// the chooser says so rather than opening a scene that will refuse on its first check.
-    pub needs_a_part: bool,
+    /// **A preset opened as an unsaved project has no "beside".** It is a `scene.json` in
+    /// whatever directory the editor was started from, so `structures/1CRN.pdb` was looked for
+    /// there and the protein opened as an error and an empty viewport. This field was a flag,
+    /// `needs_a_part`, set by searching the scene for `"stl"` — which could not see a `"pdb"`, so
+    /// the one warning it existed to give was missing from the scene that needed it. The files
+    /// travel with the preset now, and [`WithFiles`](crate::WithFiles) serves them.
+    pub files: &'static [(&'static str, &'static [u8])],
     /// The scene, as text.
     pub json: &'static str,
     /// A picture of its last frame, as PNG, or `None` when there is nothing to draw.
@@ -178,8 +182,11 @@ def rust(made):
             raise SystemExit(f.name + " has no area - add it to AREA in this file")
         s = json.loads(f.read_text(encoding="utf-8"))
         kinds = sorted(set(d.get("kind", "?") for d in s.get("domains", [])))
-        needs = any("stl" in json.dumps(d) for d in s.get("domains", []))
-        rows.append((f.name, area, s.get("title", ""), kinds, needs, f.stem in made))
+        # Every string in the scene that names a file beside it. Not a list of keys: that was
+        # `"stl"`, and it missed the `"pdb"` it was never told about. The Rust side holds this
+        # against the names the builder actually asks for, so a file this misses fails there.
+        files = sorted(set(v for v in strings(s) if names_a_file(v)))
+        rows.append((f.name, area, s.get("title", ""), kinds, files, f.stem in made))
 
     seen = set(r[1] for r in rows)
     named = set(a for a, _, _ in AREAS)
@@ -195,7 +202,7 @@ def rust(made):
         "/// Every shipped scene, as a starting point.\npub const PRESETS: [Preset; %d] = ["
         % len(rows)
     )
-    for name, area, title, kinds, needs, has_tile in rows:
+    for name, area, title, kinds, files, has_tile in rows:
         ks = ", ".join('"%s"' % k for k in kinds)
         esc = title.replace("\\", "\\\\").replace('"', '\\"')
         stem = name[:-5]
@@ -206,7 +213,8 @@ def rust(made):
             '        area: "%s",' % area,
             '        title: "%s",' % esc,
             "        kinds: &[%s]," % ks,
-            "        needs_a_part: %s," % ("true" if needs else "false"),
+            "        files: &[%s],"
+            % ", ".join('("%s", include_bytes!("../scenes/%s"))' % (p, p) for p in files),
             '        json: include_str!("../scenes/%s"),' % name,
             "        thumb: %s," % tile,
             "    },",
@@ -226,7 +234,35 @@ def rust(made):
     return rows
 
 
+def names_a_file(v):
+    """Whether `v` is a file beside the scenes. A title is a string too, and on Windows one with a
+    `:` or a `?` in it is not a path at all rather than a path to nothing."""
+    try:
+        return v != "" and (SCENES / v).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def strings(value):
+    """Every string anywhere in a parsed scene."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from strings(v)
+
+
 def main():
+    # `--rust-only` writes `presets.rs` from the tiles already committed, for a change to the
+    # table that is not a change to any picture. Rendering all twenty-eight again for it would
+    # put twenty-eight PNGs in a diff about something else.
+    if "--rust-only" in sys.argv[1:]:
+        rows = rust(set(p.stem for p in THUMBS.glob("*.png")))
+        print("%d presets written from the committed tiles" % len(rows))
+        return
     if not EXE.is_file():
         raise SystemExit(
             "no binary at %s\n"
