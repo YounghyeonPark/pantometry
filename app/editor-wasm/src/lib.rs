@@ -359,8 +359,7 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
     let Some(bounds) = bounds else {
         return give(
             serde_json::json!({
-                "empty": "nothing in this scene has geometry — sources, lumps and networks are \
-                          readings, not places; run to see what they report"
+                "empty": editor_core::nothing_to_draw(s.checked.error.is_none(), s.run.is_some())
             })
             .to_string(),
         );

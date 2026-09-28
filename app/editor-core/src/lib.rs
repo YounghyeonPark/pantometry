@@ -253,6 +253,34 @@ pub fn place(at: pantometry::scene::Placed, p: [f64; 3]) -> [f64; 3] {
     at.apply(p)
 }
 
+/// What an empty viewport says, which depends on **why** it is empty.
+///
+/// It was one sentence for every case — "nothing in this scene has geometry — sources, lumps and
+/// networks are readings, not places; run to see what they report" — and it was wrong twice over
+/// for the protein opened from New project: the scene had not checked, because its PDB was not
+/// found, and a protein is not a reading, it is forty-six residues that exist once a run places
+/// them. Three cases, and each says the one thing that is true of it:
+///
+/// - the scene does not check, so nothing was laid out and the error is the thing to read;
+/// - it checks and has not run, and what it draws — bodies, a protein, a fluid — only exists once
+///   a run has placed it;
+/// - it has run and still has nothing to draw, which is the scene that reports readings.
+///
+/// One function for both editors, because two copies of this sentence is how the desktop and the
+/// browser would come to say different things about the same scene.
+pub fn nothing_to_draw(checks: bool, ran: bool) -> &'static str {
+    match (checks, ran) {
+        (false, _) => "nothing to draw — the scene does not check, and its error says why",
+        (true, false) => {
+            "nothing here has a place until it runs — press run to see what it draws or reports"
+        }
+        (true, true) => {
+            "this scene reports readings, not places — sources, lumps and networks have no \
+             geometry to draw"
+        }
+    }
+}
+
 /// Parse and build the text, and lay out its geometry.
 ///
 /// The same two steps `pantometry check` runs, in the same order, so the editor and the

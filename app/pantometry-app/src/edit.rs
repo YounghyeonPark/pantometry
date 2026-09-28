@@ -3524,8 +3524,7 @@ impl App {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "nothing in this scene has geometry — sources, lumps and networks are \
-                 readings, not places; run to see what they report",
+                editor_core::nothing_to_draw(self.checked.error.is_none(), self.run.is_some()),
                 egui::FontId::proportional(14.0),
                 ui.visuals().weak_text_color(),
             );

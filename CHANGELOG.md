@@ -33,6 +33,10 @@ protects nothing.
   the editor. `a_preset_opens_with_its_files` now clicks all thirty-two tiles, and it failed on
   exactly these two before the change. It also runs the two, saves one and reverts one: Revert
   after a preset had kept the preset's files attached to whatever `scene.json` it then loaded.
+- **An empty viewport said the same sentence whatever the reason.** It said "sources, lumps and
+  networks are readings, not places" to a scene that had not checked and to a protein that simply
+  had not run yet. `editor_core::nothing_to_draw` now says which of the three it is, and both
+  editors call it.
 
 ## [0.22.0] — 2026-09-26
 

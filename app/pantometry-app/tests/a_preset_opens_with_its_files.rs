@@ -184,7 +184,84 @@ fn a_preset_that_carries_a_file_runs() {
             "{}: nothing says it ran:\n{frame}",
             p.file
         );
+        // **And once run, it draws.** Every empty-viewport sentence is absent, which is the
+        // protein's forty-six residues and the bracket's field having somewhere to be.
+        for checks in [true, false] {
+            for ran in [true, false] {
+                let empty = editor_core::nothing_to_draw(checks, ran);
+                assert!(
+                    !frame.contains(empty),
+                    "{}: ran, and the viewport says {empty:?}",
+                    p.file
+                );
+            }
+        }
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **An empty viewport says why it is empty.**
+///
+/// It said one sentence in every case — "nothing in this scene has geometry — sources, lumps and
+/// networks are readings, not places" — and the protein opened from New project got it twice
+/// wrong: the scene had not checked, and a protein is not a reading. Each of the three cases,
+/// shown where it happens:
+///
+/// - a scene that does not check: the protein, written out without its PDB;
+/// - one that checks and has not run: the protein opened from its tile;
+/// - one that has run and has nothing to draw: a preset with no tile, which is exactly the set
+///   of scenes whose run carries no panel — a network and two windings, reporting readings.
+#[test]
+fn an_empty_viewport_says_why_it_is_empty() {
+    // **Three sentences, not one.** Each check below compares a frame against the function's own
+    // answer, so a function answering one sentence for every case — which is the defect — passed
+    // all three: measured, with `(true, false) | (true, true)` sharing an arm.
+    let said: Vec<&str> = [(false, false), (true, false), (true, true)]
+        .into_iter()
+        .map(|(checks, ran)| editor_core::nothing_to_draw(checks, ran))
+        .collect();
+    assert!(
+        said[0] != said[1] && said[1] != said[2] && said[0] != said[2],
+        "the three cases share a sentence: {said:?}"
+    );
+    assert!(
+        !said[1].contains("readings"),
+        "a scene that has not run is told it reports readings: {:?}",
+        said[1]
+    );
+
+    let dir = empty_dir("empty");
+    let protein = PRESETS
+        .iter()
+        .find(|p| p.files.iter().any(|(n, _)| n.ends_with(".pdb")))
+        .expect("a preset carries a PDB");
+
+    std::fs::write(dir.join("broken.json"), protein.json).expect("the scene, without its file");
+    let broken = dump_in(&dir, &["broken.json"]);
+    let said = editor_core::nothing_to_draw(false, false);
+    assert!(
+        broken.contains(said),
+        "a scene that does not check:\n{broken}"
+    );
+
+    let unrun = dump_in(&dir, &args(&opening(&dir, protein)));
+    let said = editor_core::nothing_to_draw(true, false);
+    assert!(
+        unrun.contains(said),
+        "the protein, before it runs:\n{unrun}"
+    );
+
+    let readings_only = PRESETS
+        .iter()
+        .find(|p| p.thumb.is_none())
+        .expect("a preset with nothing to draw");
+    std::fs::write(dir.join("readings.json"), readings_only.json).expect("the scene");
+    let readings = dump_in(&dir, &["readings.json", "--ran"]);
+    let said = editor_core::nothing_to_draw(true, true);
+    assert!(
+        readings.contains(said),
+        "a scene that reports readings, after its run:\n{readings}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
