@@ -438,16 +438,35 @@ pub enum RunEnd {
     Stopped,
 }
 
-/// Run the scene, emitting the run-so-far as JSON after every captured frame.
+/// One payload of a streaming run.
 ///
-/// This is what makes a run **watchable while it happens**: each `emit` payload is a complete,
-/// readable run — `viewer-core` parses every one — containing the frames captured so far, and
-/// the last payload is byte-identical to what [`run`] returns for the same text, which the
-/// tests pin — `the_two_run_paths_are_one_run`, which measured them at 15459 bytes against 15463
-/// before this path learned to read `window_s`. Intermediate payloads are the run *unsettled*: `settle_framing` runs once at the
-/// end, exactly as [`World::run`] does, so a shell scrubbing mid-run sees each frame's own
-/// framing and the picture settles when the run does — the honest rendering of a run that is
-/// not finished yet.
+/// Both are a complete, readable run — `viewer-core` parses either — and they differ in what a
+/// shell does with them, which is why they are two variants and not a string whose meaning
+/// depends on where it arrived.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Streamed {
+    /// A run holding **only the frame captured since the last payload**. Append its frames.
+    Frame(String),
+    /// The finished run, framing settled. Replaces everything appended; byte-identical to
+    /// what [`run`] returns for the same text.
+    Whole(String),
+}
+
+/// Run the scene, emitting each captured frame as it is taken, and the settled run at the end.
+///
+/// This is what makes a run **watchable while it happens**: each [`Streamed::Frame`] is one new
+/// frame, which a shell appends, and the [`Streamed::Whole`] at the end is byte-identical to what
+/// [`run`] returns for the same text, which the tests pin — `the_two_run_paths_are_one_run`,
+/// which measured them at 15459 bytes against 15463 before this path learned to read `window_s`.
+/// Frames are the run *unsettled*: `settle_framing` runs once at the end, exactly as
+/// [`World::run`] does, so a shell scrubbing mid-run sees each frame's own framing and the
+/// picture settles when the run does — the honest rendering of a run that is not finished yet.
+///
+/// **This emitted the whole run so far after every frame**, which is quadratic in the frame
+/// count. The cavity scene captures 1600 frames into a 38.5 MB run, so watching it serialised
+/// about 31 GB, and the test that streams every scene took 26 minutes where running them all
+/// takes under two. Each frame's JSON depends on that frame alone — the header is the format
+/// and the title — so a run of one frame, appended, is the same run.
 ///
 /// `stop` is read between frames. A violation still emits nothing extra: the frames already
 /// emitted stand, and the error carries the kernel's own words, so a shell can leave the
@@ -457,7 +476,7 @@ pub fn run_streaming(
     text: &str,
     files: &dyn Parts,
     stop: &std::sync::atomic::AtomicBool,
-    mut emit: impl FnMut(String),
+    mut emit: impl FnMut(Streamed),
 ) -> Result<RunEnd, String> {
     use std::sync::atomic::Ordering;
 
@@ -481,7 +500,7 @@ pub fn run_streaming(
     let dt = pantometry::units::Time::from_si(scene.duration_s / steps as f64);
 
     let mut frames = vec![world.capture()];
-    emit(pantometry::view::to_json(&title, &frames));
+    emit(Streamed::Frame(pantometry::view::to_json(&title, &frames)));
     let mut taken = 0usize;
     for i in 1..=scene.frames {
         if stop.load(Ordering::Relaxed) {
@@ -498,10 +517,13 @@ pub fn run_streaming(
         }
         taken = want;
         frames.push(world.capture());
-        emit(pantometry::view::to_json(&title, &frames));
+        emit(Streamed::Frame(pantometry::view::to_json(
+            &title,
+            &frames[frames.len() - 1..],
+        )));
     }
     pantometry::scene::settle_framing(&mut frames);
-    emit(pantometry::view::to_json(&title, &frames));
+    emit(Streamed::Whole(pantometry::view::to_json(&title, &frames)));
     Ok(RunEnd::Finished)
 }
 
@@ -606,9 +628,9 @@ mod tests {
         assert!(report.contains("determinism     two runs, identical bytes"));
     }
 
-    /// Streaming emits one readable run per capture, and its last payload is byte-identical
-    /// to [`run`]'s — the stream lands exactly where the batch does, so watching a run happen
-    /// and reading it afterwards are the same run.
+    /// Streaming emits one readable frame per capture, and its last payload is the whole run,
+    /// byte-identical to [`run`]'s — the stream lands exactly where the batch does, so watching
+    /// a run happen and reading it afterwards are the same run.
     #[test]
     fn a_streamed_run_is_watchable_and_lands_on_the_batch_answer() {
         let stop = std::sync::atomic::AtomicBool::new(false);
@@ -617,13 +639,35 @@ mod tests {
         assert_eq!(end, RunEnd::Finished);
         // The initial capture, one per frame, and the settled final.
         assert_eq!(payloads.len(), 4);
-        for p in &payloads {
-            viewer_core::Run::from_json(p).expect("every payload is a whole, readable run");
+        let (last, frames) = payloads.split_last().expect("payloads");
+        let mut appended = 0;
+        for p in frames {
+            let Streamed::Frame(json) = p else {
+                panic!("a payload before the last was not a frame: {p:?}")
+            };
+            let one = viewer_core::Run::from_json(json).expect("every payload is a readable run");
+            // **One frame each**, not the run so far: that was 31 GB for the cavity scene.
+            assert_eq!(
+                one.frames.len(),
+                1,
+                "a streamed frame carried {}",
+                one.frames.len()
+            );
+            appended += 1;
         }
         assert_eq!(
-            payloads.last().unwrap(),
-            &run(ROOM, &OnDisk).unwrap(),
+            last,
+            &Streamed::Whole(run(ROOM, &OnDisk).unwrap()),
             "the stream must land on the batch answer to the byte"
+        );
+        let Streamed::Whole(whole) = last else {
+            unreachable!()
+        };
+        let whole = viewer_core::Run::from_json(whole).expect("the whole run reads");
+        assert_eq!(
+            appended,
+            whole.frames.len(),
+            "a frame was streamed twice or not at all"
         );
     }
 

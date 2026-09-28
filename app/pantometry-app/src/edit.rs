@@ -106,8 +106,8 @@ fn open(passed: &[String]) -> eframe::Result {
 
 /// What a background job sent back.
 enum Job {
-    /// The run so far, as JSON — one of these per captured frame, plus the settled final.
-    Frames(String),
+    /// One captured frame to append, or the settled whole run — see [`editor_core::Streamed`].
+    Frames(editor_core::Streamed),
     /// How the streaming run ended: finished, stopped, or the violation that refused it.
     RunEnded(Result<editor_core::RunEnd, String>),
     /// The battery's rendered report and its findings count, or why it could not start.
@@ -704,6 +704,12 @@ struct App {
     /// `scene.json` has no directory to find. Empty for anything opened from disk. Saving writes
     /// them beside the scene and empties this, so from then on the scene reads what is on disk.
     held: &'static [(&'static str, &'static [u8])],
+    /// The next streamed frame starts a new run rather than extending the one on screen.
+    ///
+    /// Set when a run starts. A stream used to send the whole run so far, so its first payload
+    /// replaced whatever was showing; now it sends one frame at a time, and the first of them
+    /// has to replace the previous run rather than be appended to it.
+    fresh_run: bool,
     /// Every text this scene has been, so an edit can be taken back.
     ///
     /// **Committed on both sides of an edit.** The text pane is bound straight to `text`, so
@@ -897,6 +903,7 @@ impl App {
             text,
             path,
             held: &[],
+            fresh_run: false,
             checked,
             run: None,
             verify: None,
@@ -1077,9 +1084,12 @@ impl App {
         let beside = self.files();
         self.stop = Arc::new(AtomicBool::new(false));
         let stop = self.stop.clone();
+        // Only when the thread will really start: `spawn` refuses while another job runs, and a
+        // flag set then would make that job's next frame throw its own run away.
+        self.fresh_run = self.busy.is_none();
         self.spawn("running", move |tx| {
-            let end = editor_core::run_streaming(&text, &beside, &stop, |json| {
-                let _ = tx.send(Job::Frames(json));
+            let end = editor_core::run_streaming(&text, &beside, &stop, |streamed| {
+                let _ = tx.send(Job::Frames(streamed));
             });
             let _ = tx.send(Job::RunEnded(end));
         });
@@ -1125,48 +1135,75 @@ impl App {
     fn poll_jobs(&mut self) {
         let Some((_, rx)) = &self.busy else { return };
         let mut ended = None;
-        let mut latest_frames = None;
+        let mut streamed = Vec::new();
         while let Ok(job) = rx.try_recv() {
             match job {
-                Job::Frames(json) => latest_frames = Some(json),
+                Job::Frames(s) => streamed.push(s),
                 other => {
                     ended = Some(other);
                     break;
                 }
             }
         }
-        if let Some(json) = latest_frames {
-            match viewer_core::Run::from_json(&json) {
-                Ok(run) => {
-                    let last = run.frames.len().saturating_sub(1);
-                    // Follow the tail while the run grows, unless the person has scrubbed
-                    // back — a slider that snatches itself out of a hand is worse than one
-                    // that lags.
-                    let follow = self
-                        .run
-                        .as_ref()
-                        .is_none_or(|v| v.frame + 1 >= v.run.frames.len());
-                    let frame = if follow {
-                        last
-                    } else {
-                        self.run.as_ref().map_or(last, |v| v.frame.min(last))
-                    };
-                    if self.run.is_none() {
-                        self.needs_fit = true;
-                    }
-                    self.run = Some(RunView {
-                        run,
-                        frame,
-                        playing: false,
-                        last_step: None,
-                        partial: true,
-                    });
-                    self.status = format!("running: {} frame(s) so far", last + 1);
-                }
+        // **Every payload, in order.** This kept only the latest, which was right while each
+        // one was the whole run so far; a frame now is only itself, and skipping one is a hole.
+        for s in streamed {
+            let (json, whole) = match s {
+                editor_core::Streamed::Frame(json) => (json, false),
+                editor_core::Streamed::Whole(json) => (json, true),
+            };
+            let run = match viewer_core::Run::from_json(&json) {
+                Ok(run) => run,
                 // The editor wrote this JSON one call ago, so the viewer failing to read it
                 // back is a wire-format defect, not a user mistake — say so.
-                Err(e) => self.status = format!("the run's own JSON did not read back: {e}"),
+                Err(e) => {
+                    self.status = format!("the run's own JSON did not read back: {e}");
+                    continue;
+                }
+            };
+            // Follow the tail while the run grows, unless the person has scrubbed back — a
+            // slider that snatches itself out of a hand is worse than one that lags.
+            let follow = self.fresh_run
+                || self
+                    .run
+                    .as_ref()
+                    .is_none_or(|v| v.frame + 1 >= v.run.frames.len());
+            let start = std::mem::take(&mut self.fresh_run) || self.run.is_none();
+            // The camera fits the first run only: a rerun after an edit keeps the view the
+            // person turned to, as it did when every payload replaced the run.
+            if self.run.is_none() {
+                self.needs_fit = true;
             }
+            let run = match (&mut self.run, start || whole) {
+                // Appended: the frame belongs to the run on screen.
+                (Some(view), false) => {
+                    let mut grown = std::mem::replace(
+                        &mut view.run,
+                        viewer_core::Run {
+                            title: String::new(),
+                            frames: Vec::new(),
+                        },
+                    );
+                    grown.frames.extend(run.frames);
+                    grown
+                }
+                // The first frame of a new run, or the settled whole: it replaces.
+                _ => run,
+            };
+            let last = run.frames.len().saturating_sub(1);
+            let frame = if follow {
+                last
+            } else {
+                self.run.as_ref().map_or(last, |v| v.frame.min(last))
+            };
+            self.run = Some(RunView {
+                run,
+                frame,
+                playing: false,
+                last_step: None,
+                partial: true,
+            });
+            self.status = format!("running: {} frame(s) so far", last + 1);
         }
         match ended {
             None => {}
@@ -4506,6 +4543,85 @@ fn write_held(dir: &std::path::Path, held: &[(&str, &[u8])]) -> Result<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A stream arrives in the editor as the run it is**: its first frame replaces the run on
+    /// screen, later frames append across paints, and the settled whole lands on the batch run.
+    ///
+    /// The stream used to send the whole run so far, so taking the latest payload was the whole
+    /// story. It sends one frame at a time now, which gives the editor three new ways to be
+    /// wrong: appending a new run to the old one, dropping a frame that arrived in the same
+    /// paint as another, and appending the settled whole instead of taking it.
+    #[test]
+    fn a_streamed_run_arrives_in_the_editor_as_the_run_it_is() {
+        let mut app = App::new(None);
+        app.run_here().expect("the built-in scene runs");
+        let batch = app.run.as_ref().expect("a run").run.frames.clone();
+        assert!(
+            batch.len() >= 3,
+            "the built-in scene has {} frames",
+            batch.len()
+        );
+
+        let stop = AtomicBool::new(false);
+        let mut payloads = Vec::new();
+        editor_core::run_streaming(&app.text, &app.files(), &stop, |s| payloads.push(s))
+            .expect("the built-in scene streams");
+        let (whole, frames) = payloads.split_last().expect("payloads");
+
+        let (tx, rx) = mpsc::channel();
+        app.busy = Some(("running", rx));
+        app.fresh_run = true;
+        let times = |app: &App| -> Vec<f64> {
+            app.run
+                .as_ref()
+                .expect("a run")
+                .run
+                .frames
+                .iter()
+                .map(|f| f.t)
+                .collect()
+        };
+
+        // Two frames in one paint: both kept, and the old run is gone rather than extended.
+        for s in &frames[..2] {
+            assert!(tx.send(Job::Frames(s.clone())).is_ok());
+        }
+        app.poll_jobs();
+        assert_eq!(
+            times(&app),
+            [batch[0].t, batch[1].t],
+            "a new run did not start clean"
+        );
+
+        // The rest, over a second paint: appended to what is there.
+        for s in &frames[2..] {
+            assert!(tx.send(Job::Frames(s.clone())).is_ok());
+        }
+        app.poll_jobs();
+        let want: Vec<f64> = batch.iter().map(|f| f.t).collect();
+        assert_eq!(
+            times(&app),
+            want,
+            "the appended frames are not the run's frames"
+        );
+
+        // The whole: taken, not appended, and the batch run exactly.
+        assert!(tx.send(Job::Frames(whole.clone())).is_ok());
+        app.poll_jobs();
+        assert_eq!(
+            times(&app),
+            want,
+            "the settled run was appended rather than taken"
+        );
+        let editor_core::Streamed::Whole(json) = whole else {
+            panic!("the last payload was not the whole run")
+        };
+        assert_eq!(
+            json,
+            &editor_core::run(&app.text, &app.files()).expect("the batch run"),
+            "the whole run is not the batch run"
+        );
+    }
 
     /// **A save writes a preset's files where the scene will look, and keeps one already there.**
     #[test]

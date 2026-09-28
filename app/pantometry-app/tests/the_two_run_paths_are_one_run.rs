@@ -35,8 +35,13 @@ const WINDOWED: &str = r#"{
 fn last_streamed(text: &str) -> String {
     let stop = std::sync::atomic::AtomicBool::new(false);
     let mut last = String::new();
-    editor_core::run_streaming(text, &OnDisk, &stop, |json| last = json)
-        .expect("the streaming run finishes");
+    editor_core::run_streaming(text, &OnDisk, &stop, |streamed| {
+        if let editor_core::Streamed::Whole(json) = streamed {
+            last = json;
+        }
+    })
+    .expect("the streaming run finishes");
+    assert!(!last.is_empty(), "the stream ended without its whole run");
     last
 }
 

@@ -204,6 +204,13 @@ The streaming itself is `editor-core::run_streaming`, built on `World::advance` 
 iteration of `World::run`'s loop, made public when the editor became its second consumer —
 and its tests pin that the final streamed payload is byte-identical to the batch run's.
 
+**It sends one frame at a time, then the settled whole.** It used to send the whole run so far
+after every frame, which is quadratic in the frame count: the cavity scene's 1600 frames
+serialised about 31 GB to reach a 38.5 MB run, on the editor's run thread every time somebody
+pressed run, and the test that streams every scene took twenty-six minutes. A frame's JSON
+depends only on that frame, so the editor appends each one, and replaces the lot with the
+`Streamed::Whole` at the end.
+
 ## Three things it was doing itself, and one of them wrong
 
 `editor-core` exists so that anything which could be got wrong the same way twice is written once.

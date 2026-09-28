@@ -37,6 +37,12 @@ protects nothing.
   networks are readings, not places" to a scene that had not checked and to a protein that simply
   had not run yet. `editor_core::nothing_to_draw` now says which of the three it is, and both
   editors call it.
+- **Watching a run serialised it quadratically.** `editor_core::run_streaming` sent the whole run
+  so far after every frame. For the cavity scene that was about 31 GB to reach a 38.5 MB run, on
+  the editor's run thread. It now sends each frame once as `Streamed::Frame` and the settled run
+  as `Streamed::Whole`, which the editor appends and then takes. The test that streams every
+  scene went from 1565 s to 107 s. `editor-core` is not published, so its new signature changes
+  nothing outside the tree.
 
 ## [0.22.0] — 2026-09-26
 

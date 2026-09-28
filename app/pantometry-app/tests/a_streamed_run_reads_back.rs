@@ -24,7 +24,20 @@ fn scenes() -> std::path::PathBuf {
         .join("pantometry-world/scenes")
 }
 
-/// **Every frame a streaming run emits is a run the viewer can read.**
+/// A reader's error, with the first lines of what it was reading: the reader reports a line and a
+/// column, and the useful thing is to see what is at it.
+fn read_error(json: &str, e: &str) -> String {
+    let head: String = json.lines().take(9).collect::<Vec<_>>().join("\n");
+    format!("{e}\n{head}")
+}
+
+/// **Every frame a streaming run emits is a run the viewer can read**, and appended they are the
+/// run.
+///
+/// **This took twenty-six minutes, and the test was not what was slow.** The stream sent the whole
+/// run so far after every frame, so the cavity scene's 1600 frames serialised about 31 GB to
+/// reach a 38.5 MB run, while every shipped scene *runs* in under two minutes of a debug build.
+/// The same cost fell on the editor whenever somebody pressed run. Each payload is one frame now.
 #[test]
 fn every_scene_streams_json_the_viewer_can_read() {
     let dir = scenes();
@@ -44,6 +57,7 @@ fn every_scene_streams_json_the_viewer_can_read() {
         dir.display()
     );
 
+    let scenes = entries.len();
     for path in entries {
         let name = path
             .file_name()
@@ -52,31 +66,49 @@ fn every_scene_streams_json_the_viewer_can_read() {
         let text = std::fs::read_to_string(&path).expect("a scene reads");
         let beside = pantometry_world::Beside::of(&path);
         let stop = std::sync::atomic::AtomicBool::new(false);
-        let mut last: Option<String> = None;
-        let mut frames = 0;
-        let end = editor_core::run_streaming(&text, &beside, &stop, |json| {
-            frames += 1;
-            last = Some(json);
+        let mut appended: Vec<f64> = Vec::new();
+        let mut whole: Option<String> = None;
+        let mut unread = Vec::new();
+        let end = editor_core::run_streaming(&text, &beside, &stop, |streamed| match streamed {
+            editor_core::Streamed::Frame(json) => match viewer_core::Run::from_json(&json) {
+                Ok(run) => appended.extend(run.frames.iter().map(|f| f.t)),
+                Err(e) => unread.push(read_error(&json, &e.to_string())),
+            },
+            editor_core::Streamed::Whole(json) => whole = Some(json),
         });
+        // **A refused run is a failure here.** It was a `continue` with a line printed, on the
+        // argument that a scene the kernel refuses is another test's business — which made this
+        // one pass over any scene that stopped running, having checked nothing about it.
         if let Err(why) = end {
-            // A scene the kernel refuses is not this test's business — it is
-            // `every_scene_that_ships_runs_and_says_something_true`'s.
-            println!("  {name}: the run itself refused ({why})");
+            broken.push(format!("{name}: the run refused ({why})"));
             continue;
         }
-        let Some(json) = last else {
-            broken.push(format!("{name}: streamed no frames at all"));
+        broken.extend(unread.into_iter().map(|e| format!("{name}: a frame: {e}")));
+        let Some(json) = whole else {
+            broken.push(format!("{name}: the stream ended without its whole run"));
             continue;
         };
-        checked += 1;
-        if let Err(e) = viewer_core::Run::from_json(&json) {
-            // The first lines, because the reader reports a line and a column and the useful
-            // thing is to see what is at it.
-            let head: String = json.lines().take(9).collect::<Vec<_>>().join("\n");
-            broken.push(format!("{name}: {e}\n{head}"));
+        match viewer_core::Run::from_json(&json) {
+            Err(e) => broken.push(format!(
+                "{name}: the whole run: {}",
+                read_error(&json, &e.to_string())
+            )),
+            // The frames appended one at a time are the run's frames, in order: each carries
+            // its own instant, so a frame streamed twice or skipped shows up here.
+            Ok(run) => {
+                let want: Vec<f64> = run.frames.iter().map(|f| f.t).collect();
+                if appended != want {
+                    broken.push(format!(
+                        "{name}: {} frames appended, {} in the run",
+                        appended.len(),
+                        want.len()
+                    ));
+                }
+            }
         }
+        checked += 1;
     }
     println!("  {checked} scenes streamed and read back");
-    assert!(checked > 0, "no scene streamed a frame — the walk broke");
     assert!(broken.is_empty(), "{}", broken.join("\n\n"));
+    assert_eq!(checked, scenes, "not every scene was streamed");
 }
