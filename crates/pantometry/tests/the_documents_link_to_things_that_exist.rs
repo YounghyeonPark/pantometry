@@ -115,9 +115,10 @@ fn every_anchor_a_document_links_to_is_a_heading_somewhere() {
     let mut checked = 0;
     let mut broken = Vec::new();
     for doc in DOCS {
-        let Ok(text) = std::fs::read_to_string(root.join(doc)) else {
-            continue;
-        };
+        // A document in this list that has moved is a failure: it used to be skipped, and
+        // `app/editor-core/README.md` removed passed with every link in it unchecked.
+        let text = std::fs::read_to_string(root.join(doc))
+            .unwrap_or_else(|e| panic!("{doc} is in DOCS and could not be read: {e}"));
         let here = anchors(&text);
         for (file, anchor) in links(&text) {
             checked += 1;

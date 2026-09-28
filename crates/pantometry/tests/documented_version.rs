@@ -15,11 +15,28 @@
 /// crate from a tarball that contains no `AGENTS.md`, and a test that failed there would make
 /// publishing impossible for a reason that has nothing to do with the crate. Absent is
 /// therefore skipped and *present but wrong* is a failure — the distinction that matters.
+///
+/// **Absent was decided per file, and that was a third case passing as the first.** A file missing
+/// from a checkout — `RELEASING.md` removed, measured — read as "packaged" and its whole check
+/// passed. So "packaged" is now a property of the tree, asked once: no workspace manifest and no
+/// `crates/` above this crate. Inside a checkout a missing file is a failure with its path.
 fn repo_file(name: &str) -> Option<String> {
+    if !in_checkout() {
+        return None;
+    }
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(name);
-    std::fs::read_to_string(path).ok()
+    Some(
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} could not be read: {e}", path.display())),
+    )
+}
+
+/// Whether this crate sits in the repository rather than in a package.
+fn in_checkout() -> bool {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    root.join("Cargo.toml").is_file() && root.join("crates").is_dir()
 }
 
 /// The `major.minor` a caller should write, which is what the install lines quote.
@@ -163,12 +180,17 @@ fn the_citation_block_quotes_the_version_and_the_dois_it_should() {
     // The concept DOI, which is the one that never moves. `CITATION.cff` is what a citation
     // manager reads and the BibTeX is what a person copies; the two naming different records
     // would be the worst version of this being wrong.
-    let concept = repo_file("CITATION.cff").and_then(|cff| {
-        cff.lines().find_map(|l| {
-            l.trim_start()
-                .strip_prefix("doi:")
-                .map(|v| v.trim().to_string())
-        })
+    //
+    // A `CITATION.cff` with no line this parse recognises used to switch the comparison off —
+    // `doi:` written `doi :` passed, measured — so a file that is there has to yield the DOI.
+    let concept = repo_file("CITATION.cff").map(|cff| {
+        cff.lines()
+            .find_map(|l| {
+                l.trim_start()
+                    .strip_prefix("doi:")
+                    .map(|v| v.trim().to_string())
+            })
+            .expect("CITATION.cff has a `doi:` line, which is the concept DOI")
     });
     if let Some(concept) = concept {
         let url = field("url").expect("the BibTeX block names a url");
@@ -197,9 +219,11 @@ fn the_agents_know_what_version_the_tree_is() {
     let mut checked = 0;
 
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.claude/agents");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    if !in_checkout() {
         return; // packaged build: the agents are not part of any crate
-    };
+    }
+    let entries = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{} could not be listed: {e}", dir.display()));
     let mut files: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     files.sort(); // deterministic order, as everything here must be
 
