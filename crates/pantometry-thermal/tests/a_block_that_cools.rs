@@ -97,27 +97,118 @@ fn a_cooling_block_follows_newtons_law() {
         / (mid.to_si() - ambient.to_si());
     let tau = capacity / h_a;
 
-    let elapsed = tau;
-    let after = run(block, elapsed);
-    let expect = ambient.to_si() + (start.to_si() - ambient.to_si()) * (-elapsed / tau).exp();
+    // **The error budget, computed rather than chosen.** The closed form freezes `h` at the
+    // midpoint while the real one moves with the temperature. With `k = hA/C`, `ln θ` falls by
+    // `∫k dt`, so after time `t` the block's `ln θ` and the closed form's differ by at most
+    // `(t/τ)·δ`, where `δ` is the largest relative departure of `h` from its midpoint value over
+    // the temperatures crossed — and the temperatures differ by at most `θ(t)·(e^{(t/τ)δ} − 1)`.
+    // `h` comes from the same `Environment::loss_from` the expectation does: a statement about
+    // the linearisation, not a second model of the physics.
+    //
+    // **This was a hand-set 3 K**, on a comment that said the radiative part of `h` moves by
+    // about 12% across the swing and that the error was "measured at 1.2 K". The domain's own
+    // model gives `δ` = 1.1% — copper's emissivity is low, so the radiative part is small — and
+    // the error, measured, is 0.10 K. The 3 K was seven times the bound it claimed to be.
+    let h_at = |c: f64| {
+        let at = Temperature::celsius(c);
+        env.loss_from(at, Substance::copper().thermal.unwrap().emissivity)
+            .to_si()
+            / (at.to_si() - ambient.to_si())
+    };
+    let within = |t: f64| {
+        let theta = (start.to_si() - ambient.to_si()) * (-t / tau).exp();
+        // Every temperature the block has crossed, from where it started to below where the
+        // closed form puts it now; `h` is monotone in temperature, so its extremes are the ends.
+        let delta = [h_at(120.0), h_at(20.0 + theta / 2.0)]
+            .iter()
+            .map(|h| (h / h_a - 1.0).abs())
+            .fold(0.0, f64::max);
+        // The low end above is below every temperature crossed only while the real `θ` stays
+        // above `θ_cf/2`, which the bound itself guarantees as long as `(t/τ)δ < ln 2`. Checked,
+        // rather than left implied: here it is about 0.04.
+        assert!(
+            (t / tau) * delta < 2f64.ln(),
+            "the bound's own precondition fails at t = {t} s: (t/τ)δ = {}",
+            (t / tau) * delta
+        );
+        (
+            ambient.to_si() + theta,
+            theta * (((t / tau) * delta).exp() - 1.0),
+        )
+    };
+
+    // One time constant of a hundred-kelvin swing. Measured 0.10 K from the closed form, against
+    // a bound of 0.41 K: `h` sits above its midpoint value for the first half of the swing and
+    // below it for the second, and the two nearly cancel.
+    let after = run(block, tau);
+    let (want, bound) = within(tau);
     let got = after.mean_temperature().to_si();
-
-    // One time constant of a hundred-kelvin swing, against a closed form whose `h` was frozen
-    // at the midpoint while the real one falls as the block cools. That curvature is the whole
-    // error budget: the radiative part of `h` moves by about 12% across the swing and enters
-    // the exponent, so a couple of kelvin is what it buys. Measured at 1.2 K.
     assert!(
-        (got - expect).abs() < 3.0,
-        "after one time constant the block should be near {expect:.2} K, and it is {got:.2} K"
+        (got - want).abs() < bound,
+        "after one time constant the block should be within {bound:.3} K of {want:.3} K, \
+         and it is {got:.3} K"
     );
 
-    // And it keeps going the right way: far past the constant it is within a kelvin of the air.
-    let settled = run(after, 12.0 * tau);
+    // **And it keeps going the right way, along the same curve.** This ran twelve more time
+    // constants to check the block ended within a kelvin of the air: 1.43 million steps, 96 s of
+    // a debug build, for a looser claim than the curve itself. Two more constants against the
+    // closed form instead: measured 0.05 K from it, against a bound of 0.17 K.
+    let settled = run(after, 2.0 * tau);
+    let (want, bound) = within(3.0 * tau);
+    let now = settled.mean_temperature().to_si();
     assert!(
-        (settled.mean_temperature().to_si() - ambient.to_si()).abs() < 1.0,
-        "a block left in air settles at the air's temperature, got {} K",
-        settled.mean_temperature().to_si()
+        (now - want).abs() < bound,
+        "three time constants in, the block should be within {bound:.3} K of {want:.3} K, \
+         and it is {now:.3} K"
     );
+}
+
+/// **Within a kelvin of the air, the block still moves toward it, from either side, at Newton's
+/// rate.**
+///
+/// `a_cooling_block_follows_newtons_law` stops three time constants in, five kelvin above the
+/// air. It used to run twelve more and see everything down to ambient, and that was ninety-six
+/// seconds of a debug build. What the shorter run gave up was measured by `numerics-reviewer`: a
+/// film that stops conducting within 3 K of the air — `if gap.abs() < 3.0 { continue; }` in the
+/// film flux — passed it. So this starts where that one stopped, half a kelvin either side of the
+/// air, for sixty seconds, and it also covers the case neither version had: a block *below* the
+/// air, which has to warm.
+///
+/// Sixty seconds is under a twenty-fifth of `τ`, so over it `h` is its value at the start to
+/// within the change in temperature, and the closed form is `Δθ = θ₀(1 − e^{−t/τ₀})` with
+/// `τ₀` from the loss at the start. What is left is the block not quite being lumped (Biot
+/// `hL/k` ≈ 6e-5) and Euler's step (`(t/τ)(dt/τ)/2`), both near 1e-4 of the change. Measured
+/// at 2.4e-5 and 2.1e-5, so 1e-3 is that effect with room to spare, not a number picked to pass.
+#[test]
+fn near_the_air_it_still_moves_both_ways() {
+    let n = 4;
+    let side = n as f64 * 5.0e-3;
+    let area = Area::from_si(6.0 * side * side);
+    let ambient = Temperature::celsius(20.0);
+    let emissivity = Substance::copper().thermal.unwrap().emissivity;
+    for start_c in [20.5, 19.5] {
+        let start = Temperature::celsius(start_c);
+        let mut block = cube(n, 5.0, start_c);
+        for face in Face::ALL {
+            block = block.losing_from(face, Environment::still_air(ambient, area / 6.0));
+        }
+        let theta0 = start.to_si() - ambient.to_si();
+        let h_a = Environment::still_air(ambient, area)
+            .loss_from(start, emissivity)
+            .to_si()
+            / theta0;
+        let tau = block.heat_capacity().to_si() / h_a;
+        let t = 60.0;
+        let after = run(block, t);
+        let moved = theta0 - (after.mean_temperature().to_si() - ambient.to_si());
+        let want = theta0 * (1.0 - (-t / tau).exp());
+        let off = (moved - want) / want;
+        assert!(
+            off.abs() < 1e-3,
+            "from {start_c} C the block should move {want:.6} K toward the air in {t} s, and it \
+             moved {moved:.6} K ({off:+.2e} of it)"
+        );
+    }
 }
 
 /// **Nothing is lost on the way out: `stored + lost` is conserved to the bit.**
