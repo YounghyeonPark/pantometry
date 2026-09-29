@@ -62,6 +62,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
+        env:
+          # **Optimised, with its checks on.** At opt-level 0 this step was 1303 s on Linux and
+          # 1349 s on Windows, most of it seven physics test binaries running unoptimised loops;
+          # `test (release, LTO)` ran the same suite, compile included, in 535 s. Measured on one
+          # machine, one configuration after the other: 528 s at opt-level 0 and 150 s at 2, the
+          # same 884 tests passing in both.
+          #
+          # **What this gives up, decided rather than overlooked:** CI no longer runs anything at
+          # opt-level 0. Debug assertions stay on (rustc is still passed `-C
+          # debug-assertions=on`, read off `cargo build -v`) and overflow checks follow them, so
+          # an overflow still panics. What goes is the check that unoptimised code generation gives
+          # the same answers. Rust's floating point does not change with the optimisation level,
+          # the pinned digest holds that at 2 here and in wasm, and at 3 with LTO in `release`,
+          # and the gate in CLAUDE.md and CONTRIBUTING.md still runs `cargo test` at 0 before every
+          # commit. So opt-level 0 is checked, but now only locally.
+          CARGO_PROFILE_DEV_OPT_LEVEL: "2"
         run: cargo test --locked --workspace
 
   # The same suite with optimisation and link-time optimisation on.
@@ -205,41 +221,31 @@ jobs:
           cargo fmt --all --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-      # The whole suite, which includes the **thirty** scenes and their closed-form checks. Those
-      # used to run in the library's `test` job; they moved with `pantometry-world` and this is
-      # where they are held now. That count said twenty-eight through two more scenes.
+      # The whole suite, which includes the **thirty-two** scenes and their closed-form checks.
+      # Those used to run in the library's `test` job; they moved with `pantometry-world` and this
+      # is where they are held now. That count said twenty-eight, then thirty, as scenes arrived.
       #
-      # **This is the long job, and its wall time here says almost nothing.** Twelve runs measured:
+      # **This was the long job, and its wall time says little about any one change.** Twelve runs
+      # measured 38 to 78 minutes on the same kind of runner, and a first version of this comment
+      # read two of them as a 53% rise from a change that sat on both sides of the spread.
       #
-      #   38.4  40.8  41.0  47.0  47.6  48.8  49.4  49.7  50.6  55.4  72.0  77.6   minutes
+      # **Where the time sat did hold**, measured locally: 80 to 86% of this step was one test,
+      # `a_streamed_run_reads_back`, which drives every scene through the editor's streaming path.
+      # That was not the test being slow. The stream re-serialised the whole run after every
+      # frame, 31 GB for the cavity scene alone, and fixing it (`4c0166b`) took the test from
+      # 1565 s to 107 s and this job to 19 minutes.
       #
-      # A session that turned on three resolution sweeps sits on both sides of that spread — mean
-      # **52.5 min over the six runs before it and 50.6 over the six after** — and the second
-      # longest run in the set predates it. A first version of this comment read two of those
-      # numbers as "50.6 then 77.6, a 53% rise from the sweeps". Two samples of a runner is not a
-      # trend, and a comment about measuring before claiming is a poor place to skip the measuring.
-      #
-      # **What does hold is where the time sits**, measured on one machine with a warm build, where
-      # the runner's variance is not in the way. Three runs of this step:
-      #
-      #   2412 s across 55 binaries, 1932 of them one test   80%
-      #   2618 s across 55 binaries, 2253 of them one test   86%
-      #   1955 s across 55 binaries, 1600 of them one test   82%
-      #
-      # The absolute wanders by a third; the **share does not**. That one test is
-      # `a_streamed_run_reads_back`, which drives all thirty-two scenes through the editor's streaming
-      # path in a **debug** build, and the next three together are 300-400 s.
-      #
-      # So a scene that gains a second gains it thirty times there before it costs anything
-      # anywhere else. Whoever wants this job shorter should start with that binary and not with
-      # the suite — and should measure it locally, because CI cannot resolve a change this job's
-      # own spread is larger than.
+      # **Optimised since**, like the other test jobs: `CARGO_PROFILE_DEV_OPT_LEVEL: "2"`, for the
+      # reason and at the cost the `test` job gives. Measured locally, this step 544 s at opt-level
+      # 0 and 158 s at 2, 391 tests passing in both; the build 14 s against 124 s, cold.
       #
       # The device tests need a real adapter and a runner has none. Every one of them skips with a
       # printed reason rather than quietly, and a software rasteriser is deliberately not used: it
       # would be checking a different implementation than anyone runs.
       - name: the suite, and the device tests say why they skipped
         working-directory: app
+        env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: "2"
         run: cargo test --locked --workspace -- --nocapture
       # The browser shell shares `editor-core` rather than carrying a copy, so this is the check
       # that the shared half stays free of anything native.

@@ -42,6 +42,13 @@ claim about *results*, which compiling for the target does not establish.
 `--locked` throughout, so a stale `Cargo.lock` fails the build rather than being silently updated:
 CI compiles what a contributor compiled.
 
+**CI's test jobs run the dev profile at opt-level 2, and this gate does not.** The unoptimised
+suite took 22 minutes of CI's time on Linux and Windows and 3.5 times as long as the same suite at
+opt-level 2, with the same tests passing, so CI sets `CARGO_PROFILE_DEV_OPT_LEVEL=2` on every step
+that runs tests. Debug assertions and overflow checks stay on. What that moves is the only run at
+opt-level 0: it happens here, in `cargo test` above, and nowhere else. This is one more reason the
+gate is not a copy of what CI already did — it runs what CI has decided not to.
+
 `-D warnings` is passed to clippy and rustdoc rather than set in `RUSTFLAGS`, because `RUSTFLAGS`
 reaches dependencies too and would break the build on somebody else's warning. Clippy runs the
 rustc lints as well, so our own warnings are still errors.
