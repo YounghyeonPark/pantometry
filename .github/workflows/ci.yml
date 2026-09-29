@@ -384,8 +384,11 @@ jobs:
         # lookup. So the release is named and its archive is checked: a changed file under the
         # same name fails `sha256sum -c` rather than running. The hash is of the archive as
         # GitHub serves it, measured once (11 619 072 bytes, which is the size the release API
-        # reports); the release publishes no checksum of its own. To move to a newer wasmtime,
-        # change both lines together.
+        # reports). The release publishes no checksum file of its own, but the release API now
+        # reports a `digest` for each asset, and on 2026-09-29 it was this hash exactly -- a
+        # second source, where there had been one. To move to a newer wasmtime, change both
+        # lines together, and read the new hash from `gh api
+        # repos/bytecodealliance/wasmtime/releases/tags/<tag>` as well as from the download.
         env:
           WASMTIME: v49.0.0
           WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
@@ -401,6 +404,19 @@ jobs:
       - name: cargo test --target wasm32-wasip1
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+          # **Optimised, and still checked.** This was the dev profile as it stands, opt-level 0,
+          # and unoptimised wasm is what wasmtime runs slowest: this step took 1300 s on one
+          # runner and 2580 s on another, every test binary about twice as slow on the second,
+          # and it was the longest job in CI. Measured on one machine with the wasmtime pinned
+          # above: 1018 s at opt-level 0 and 164 s at opt-level 2, 857 tests passing in both.
+          #
+          # Only the optimisation level moves. rustc is still passed `-C debug-assertions=on`,
+          # read off `cargo build -v` at this setting, and overflow checks follow debug
+          # assertions unless told otherwise, so an overflow still panics here. And this workspace
+          # claims results bit-for-bit identical across optimisation levels, with a pinned digest
+          # that says so, which makes an optimised wasm build one more place that claim is
+          # checked rather than a weaker version of this job.
+          CARGO_PROFILE_DEV_OPT_LEVEL: "2"
         run: cargo test --locked --workspace --target wasm32-wasip1
 
   # The oldest toolchain the workspace is claimed to build on.
