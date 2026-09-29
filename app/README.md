@@ -110,7 +110,14 @@ cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
+cargo build --locked --release -p editor-wasm --target wasm32-unknown-unknown
+node editor-wasm/selftest.mjs     # the browser path, run -- see below
 ```
+
+The last two lines run the browser editor: `editor-wasm/selftest.mjs` instantiates the `.wasm` the
+page fetches and drives it through the page's exports under Node, which needs nothing the module
+does not import. Nothing ran it until 2026-09-29, and it had been failing one claim since
+2026-09-09 — a scene it called clean, which the battery had since learned to fault correctly.
 
 `cargo doc` is in it because this tree went unchecked for as long as it existed and had a broken
 intra-doc link in `editor-core` from the day that file was written.

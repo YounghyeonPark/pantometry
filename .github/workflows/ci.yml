@@ -252,6 +252,21 @@ jobs:
       - name: the browser shell compiles too
         working-directory: app
         run: cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
+      # **And runs.** `editor-wasm/selftest.mjs` instantiates the `.wasm` the page fetches and
+      # drives it through the page's own exports, and nothing had ever run it: two READMEs named
+      # the command and neither this job nor the gate did. Run at last, it failed a claim -- "a
+      # clean scene has no findings" -- that had been false since `8389b94` on 2026-09-09 taught
+      # the battery to fault a field its grid is not carrying, correctly; and the browser editor's
+      # empty-canvas sentence had been compiled and never executed. It is Node rather than a browser, which is the point of the file: the module
+      # imports nothing, so any host that runs WebAssembly runs exactly what the page runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: the browser shell runs, in a host that is not a browser
+        working-directory: app
+        run: |
+          cargo build --locked --release -p editor-wasm --target wasm32-unknown-unknown
+          node editor-wasm/selftest.mjs
       # Its own `deny.toml`, written because the merge took `pantometry-world` out of the library's.
       # Its first run found four advisories, all through `eframe` and none fixable from here; they
       # are in the ignore list with a reachability argument each rather than as bare ids.

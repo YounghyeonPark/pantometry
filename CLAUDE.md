@@ -97,7 +97,14 @@ cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
+cargo build --locked --release -p editor-wasm --target wasm32-unknown-unknown
+node editor-wasm/selftest.mjs     # the browser path, run -- see below
 ```
+
+**The last two lines run the browser editor, and nothing did.** `editor-wasm/selftest.mjs` drives
+the `.wasm` the page loads through the page's own exports, under Node. Two READMEs named it and no
+gate or CI job ran it, so when it was finally run it had been failing a claim for twenty days, and
+the browser's half of a fix had been compiled and never executed.
 
 The device tests there skip loudly on a machine with no adapter. A skip that says why is a
 result; a skip that says nothing is the shape of a suite that has stopped testing anything.

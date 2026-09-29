@@ -9,8 +9,9 @@
 //   cargo build --release -p editor-wasm --target wasm32-unknown-unknown
 //   node editor-wasm/selftest.mjs
 //
-// Exits non-zero on the first failed claim, so it can be a gate step rather than a thing to
-// read.
+// Runs every claim and exits non-zero if any failed, so it can be a gate step rather than a thing
+// to read -- and it is one now, in the app gate and in CI's `the app` job. For twenty days before
+// that it was neither, and it was failing.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +76,26 @@ ok('a truncated scene reports line:column', /^1:/.test(bad.error || ''), bad.err
 const refused = take(w.pantometry_run());
 ok('run refuses a scene that did not check', /^1:/.test(refused.error || ''), refused.error);
 
+// **An empty canvas says why it is empty**, in all three of its cases. The page asks
+// `editor_core::nothing_to_draw` the same two questions the desktop does, and until this file ran
+// in the gate that call was compiled and never executed: a sabotage there would have passed
+// everything. The three sentences are written out here rather than shared, so a change to one
+// arrives as a failure to read rather than as agreement with itself.
+const DRAW = JSON.stringify({ aspect: 1.6, frame: 0, fit: true });
+const unchecked = call(w.pantometry_draw, DRAW);
+ok('an empty canvas says a scene that does not check does not',
+   (unchecked.empty || '').includes('the scene does not check'), unchecked.empty);
+const NETWORK = readFileSync(
+  join(here, '..', 'pantometry-world', 'scenes', '11-motor-thermal-network.json'), 'utf8');
+call(w.pantometry_check, NETWORK);
+const unrun = call(w.pantometry_draw, DRAW);
+ok('and one that has not run that it has not',
+   (unrun.empty || '').includes('until it runs'), unrun.empty);
+take(w.pantometry_run());
+const readings = call(w.pantometry_draw, DRAW);
+ok('and one that ran and reports readings that it does',
+   (readings.empty || '').includes('reports readings, not places'), readings.empty);
+
 // The run is the CLI's run.
 call(w.pantometry_check, HOT);
 const ran = take(w.pantometry_run());
@@ -119,7 +140,19 @@ call(w.pantometry_check, HOT);
 const verified = take(w.pantometry_verify(0));
 ok('verify returns a report', typeof verified.report === 'string' && verified.report.length > 50);
 ok('the report carries the determinism line', (verified.report || '').includes('determinism'));
-ok('a clean scene has no findings', verified.findings === 0, `${verified.findings} findings`);
+// **The same verdict the native battery gives, not "no findings".** This claimed the scene was
+// clean, and it stopped being clean when the battery learned to say that a field flat to a fraction
+// of a percent is not being carried by its grid: after 2 s a one-cell hot spot in a 30 mm block has
+// diffused to within 1.22 C everywhere. Nothing ran this file, so it said "1 findings" to nobody.
+// Shortening the run does not make it clean either -- a one-cell spike trips the window check
+// instead, at every duration and frame count from 0.1 s and 4 frames to 1 s and 16 -- so the claim
+// is the one this path exists for: `pantometry verify` on the same scene, natively, prints digest
+// 05c4c2408b996043 and exactly this one finding, and the page has to say the same.
+ok('verify gives the native digest', (verified.report || '').includes('digest          05c4c2408b996043'),
+   (verified.report || '').split('\n').find(l => l.startsWith('digest')));
+ok('and the one finding native verify gives', verified.findings === 1
+   && (verified.report || '').includes('the grid is not carrying the answer'),
+   `${verified.findings} findings`);
 
 
 // --- CAD, which is the whole reason this page is an IDE and not a viewer ----------------------
