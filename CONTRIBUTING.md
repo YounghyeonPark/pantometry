@@ -31,6 +31,11 @@ cargo +1.78 build --locked --workspace
 echo "the gate passed"     # and if this line does not appear, it did not
 ```
 
+**A change that touches no code** — prose, the agent team, CI's own files, the citation — can go
+through `bash tools/prose-gate/run.sh` instead. It checks that condition itself and refuses
+otherwise, then runs every test that reads what changed. See
+[tools/prose-gate/README.md](tools/prose-gate/README.md).
+
 ### Why those jobs, and not others
 
 Two of them enforce a claim rather than catch a typo. The suite runs on **Linux, macOS and

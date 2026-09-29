@@ -106,6 +106,12 @@ the `.wasm` the page loads through the page's own exports, under Node. Two READM
 gate or CI job ran it, so when it was finally run it had been failing a claim for twenty days, and
 the browser's half of a fix had been compiled and never executed.
 
+**A change with no code in it has a shorter gate:** `bash tools/prose-gate/run.sh`. It decides for
+itself — every changed path `.md`, `.claude/`, `.github/` or `CITATION.cff`, none compiled in —
+refuses anything else, and runs every test that names what changed. The full gate is never wrong
+to run instead. [tools/prose-gate/README.md](tools/prose-gate/README.md) has what it was checked
+against.
+
 The device tests there skip loudly on a machine with no adapter. A skip that says why is a
 result; a skip that says nothing is the shape of a suite that has stopped testing anything.
 
