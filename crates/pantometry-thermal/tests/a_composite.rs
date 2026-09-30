@@ -55,14 +55,20 @@ const SOLVED: f64 = 1e-9;
 /// A laminate is a set of independent one-dimensional problems and settles in a few thousand steps. The
 /// board does not: with a 150-fold conductivity contrast the explicit step is set by the **aluminium**
 /// and the slowest mode by the **glass**, so the steps needed run as `N² α_al/α_eff` and the approach to
-/// steady state is exponential in that. Measured, `1e-11` on a 16³ board does not arrive inside eight
-/// million steps; `1e-9` arrives in about four seconds.
+/// steady state is exponential in that. Measured from a uniform start, `1e-11` on a 16³ board did not
+/// arrive inside eight million steps. From the straight-line start and under the cell-by-cell rule,
+/// the board test's six solves at `1e-9` take 23 s of a debug build, where from 20 C under the old rule
+/// they took 57.
 ///
 /// It costs nothing here, and that is why it is acceptable rather than a compromise. Every claim about
 /// the board is a **bracketing** claim with margins of 50% and more — 1.53× and 2.32× the Reuss bound
 /// against bounds 38× apart — so a residual of `1e-9` is seven orders tighter than anything being
 /// asserted. The one claim that needs precision is the aliasing equality, and `1e-9` covers it with a
 /// hundredfold margin.
+///
+/// **The same margins are why the board cannot check the stopping rule.** A march that stopped early
+/// landed 52% high and inside every bracket, so what the residual *means* is held by a column with a
+/// closed form instead — [`the_march_stops_at_steady_state_not_at_a_symmetric_start`].
 const BOARD_RESIDUAL: f64 = 1e-9;
 
 /// Aluminium and borosilicate, half and half by volume. A 150-fold contrast in conductivity, which is
@@ -156,21 +162,17 @@ enum Axis {
     Z,
 }
 
-/// Which end of it a flux is read at.
-#[derive(Clone, Copy)]
-enum Face {
-    Hot,
-    Cold,
-}
-
 /// Clamp the two end planes along `axis` 60 K apart, march to a **converged** steady state, and report
 /// the effective conductivity from the flux crossing the plane next to the hot face.
 ///
 /// # Converged, and not "marched for a while"
 ///
 /// `a_layered_wall.rs` found a 130-second march sitting **1.56% high** while looking converged, so the
-/// stopping rule here is an **absolute residual**: the flux entering the hot face has to equal the flux
-/// leaving the cold one to within [`RESIDUAL`], because at steady state nothing is being stored. That is
+/// stopping rule here is an **absolute residual**: the net heat flowing into every unclamped cell,
+/// summed in absolute value, has to be under [`RESIDUAL`] of the flux entering at the hot face, because
+/// at steady state nothing is being stored anywhere — and that sum bounds the error in `k`. It compared
+/// the two ends, then every plane, and a symmetric start and heat moving within a slab passed those —
+/// see [`the_march_stops_at_steady_state_not_at_a_symmetric_start`]. That is
 /// dimensionless and independent of `dx`, unlike "the flux stopped changing over N steps" — which as `dx`
 /// shrinks becomes trivially true, since N steps is then a shorter and shorter physical time. The
 /// iteration cap exists so a mistake fails loudly instead of hanging, and reaching it is a panic.
@@ -203,16 +205,9 @@ fn steady_conductivity(w: &mut Solid3D, axis: Axis, residual: f64) -> f64 {
             }
         }
     };
-    // The flux crossing the plane beside one clamped face, summed face by face. A steady state carries
-    // the same flux across every plane, and the difference between the two ends is how far from steady
-    // it still is.
-    let flux = |w: &Solid3D, face: Face| -> f64 {
-        let (a, b) = match (axis, face) {
-            (Axis::X, Face::Hot) => (0, 1),
-            (Axis::X, Face::Cold) => (nx - 2, nx - 1),
-            (Axis::Z, Face::Hot) => (0, 1),
-            (Axis::Z, Face::Cold) => (nz - 2, nz - 1),
-        };
+    // The flux crossing the plane between layers `a` and `a + 1` along the axis, summed face by face.
+    let flux = |w: &Solid3D, a: usize| -> f64 {
+        let b = a + 1;
         let mut q = 0.0;
         match axis {
             Axis::X => {
@@ -256,9 +251,27 @@ fn steady_conductivity(w: &mut Solid3D, axis: Axis, residual: f64) -> f64 {
             t += dt.to_si();
         }
         clamp(w);
-        // In and out. At steady state they are equal because nothing is being stored, so this is an
-        // **absolute residual** rather than a rate of change -- dimensionless, and independent of `dx`.
-        if (flux(w, Face::Hot) / flux(w, Face::Cold) - 1.0).abs() < residual {
+        // **No cell is gaining or losing heat**, which is what steady means: the net flux into every
+        // unclamped cell, summed in absolute value over all of them, against the flux entering.
+        // Dimensionless, independent of `dx`, and it **bounds the answer**: the error in the flux
+        // read at the hot plane is those net fluxes weighted by the steady field between the clamps,
+        // which the discrete maximum principle keeps within [0, 1], so `k` is out by at most this
+        // sum. That is what makes `SOLVED` a hundred times `RESIDUAL` a derivation, for any geometry.
+        //
+        // **It was the two ends, and then every plane, and both stopped early.** Comparing the two
+        // ends is fooled by any field symmetric through the middle: started on the straight line
+        // between the clamps, the checkerboard passed it after 200 steps at 7.83 where its steady
+        // state is 5.14, 52% high, and every assertion on the board still passed because a value
+        // with no closed form is only bracketed. Comparing every plane is fooled in three dimensions
+        // by heat still moving *within* a slab, which leaves each slab's total unchanged: measured by
+        // `numerics-reviewer`, it stopped the block-4 board with the cell-by-cell residual at 1.28e-8,
+        // thirteen times what it reported. Cell by cell costs 19% more steps there.
+        //
+        // Written so that `NaN` is unsettled: `<` is false on it, and the iteration cap's panic is
+        // where a `NaN` belongs. A `max` fold would have read it as zero.
+        let entering = flux(w, 0);
+        let imbalance = net_imbalance(w, axis);
+        if imbalance / entering.abs() < residual {
             settled = true;
             break;
         }
@@ -273,7 +286,95 @@ fn steady_conductivity(w: &mut Solid3D, axis: Axis, residual: f64) -> f64 {
         Axis::X => ny * nz,
         Axis::Z => nx * ny,
     };
-    flux(w, Face::Hot) * (along - 1) as f64 * DX / (across as f64 * DX * DX * 60.0)
+    flux(w, 0) * (along - 1) as f64 * DX / (across as f64 * DX * DX * 60.0)
+}
+
+/// The net heat flowing into each cell not on a clamped plane, summed in absolute value, in W.
+///
+/// Zero at steady state and only there. Every face of every such cell, read through
+/// [`Solid3D::face_conductance`] — the number the march itself uses.
+fn net_imbalance(w: &Solid3D, axis: Axis) -> f64 {
+    let (nx, ny, nz) = w.counts();
+    let mut total = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            for k in 0..nz {
+                let along = match axis {
+                    Axis::X => (i, nx),
+                    Axis::Z => (k, nz),
+                };
+                if along.0 == 0 || along.0 == along.1 - 1 {
+                    continue;
+                }
+                let t = w.temperature_at(i, j, k).to_si();
+                let mut net = 0.0;
+                let neighbours = [
+                    (i.wrapping_sub(1), j, k),
+                    (i + 1, j, k),
+                    (i, j.wrapping_sub(1), k),
+                    (i, j + 1, k),
+                    (i, j, k.wrapping_sub(1)),
+                    (i, j, k + 1),
+                ];
+                for (a, b, c) in neighbours {
+                    if a >= nx || b >= ny || c >= nz {
+                        continue;
+                    }
+                    let g = w
+                        .face_conductance((i, j, k), (a, b, c))
+                        .expect("face neighbours")
+                        .to_si();
+                    net += g * (w.temperature_at(a, b, c).to_si() - t);
+                }
+                total += net.abs();
+            }
+        }
+    }
+    total
+}
+
+/// **The march stops at steady state, and not at a field that only looks balanced from its ends.**
+///
+/// A column of two-cell layers, aluminium at both ends, started on the straight line between the
+/// clamps. At that start the two end planes are both aluminium-to-aluminium with the same drop across
+/// them, so they carry the same flux — while the glass layers in between carry far less and the
+/// interior is nowhere near steady. That is the trap the stopping rule fell into on the checkerboard,
+/// built where the answer is known: at steady state the column is its faces' resistances in series,
+/// which [`chain_z`] reads off without marching.
+///
+/// So this is what holds the rule to its meaning, because nothing else can: the checkerboard's
+/// assertions are brackets, and with the rule loosened back to comparing the two ends they passed
+/// at 7.83 and 3.79 where the steady values are 5.14 and 3.38. Measured with that loosening, this
+/// column stops at 2.524 against its series 2.395, 5.4% out, and fails.
+///
+/// **What it cannot hold:** the rule loosened from every cell to every plane. In one dimension the two
+/// are the same, and every closed form in this file is one-dimensional or has a steady field uniform
+/// across each plane, so nothing here can tell them apart. That half rests on the bound written at the
+/// rule — the cell sum bounds the error in `k` in any geometry — rather than on a test.
+#[test]
+fn the_march_stops_at_steady_state_not_at_a_symmetric_start() {
+    let cells = 14;
+    let mut w = Solid3D::new(
+        "layers of two",
+        Substance::aluminium_6061(),
+        (1, 1, cells),
+        Length::from_si(DX),
+        Temperature::celsius(20.0),
+    );
+    // Seven layers of two cells: aluminium, glass, ..., aluminium.
+    w.fill(Substance::borosilicate_crown(), |_, _, k| (k / 2) % 2 == 1);
+    for k in 0..cells {
+        let c = 80.0 - 60.0 * k as f64 / (cells - 1) as f64;
+        w.set_temperature(0, 0, k, Temperature::celsius(c));
+    }
+    let expected = conductivity_from(chain_z(&w, 0, 0), cells, 1);
+    let measured = steady_conductivity(&mut w, Axis::Z, RESIDUAL);
+    println!("  two-cell layers: {measured:.9} against the series chain {expected:.9}");
+    assert!(
+        (measured / expected - 1.0).abs() < SOLVED,
+        "the steady conductivity of a layered column is its series resistance: {measured:.9} \
+         against {expected:.9}"
+    );
 }
 
 /// **Flux along the layers gives Voigt -- the same block, the other direction.**
@@ -352,7 +453,7 @@ fn the_same_laminate_along_its_layers_is_the_voigt_bound() {
 /// Returns `(kx, kz)`. They have to agree: the geometry is cubic-symmetric, so the effective tensor is
 /// isotropic, and measuring both is how that stops being an assumption.
 fn checkerboard(cells: usize, block: usize) -> (f64, f64) {
-    let build = || {
+    let build = |axis: Axis| {
         let mut w = Solid3D::new(
             "checkerboard",
             Substance::aluminium_6061(),
@@ -363,11 +464,23 @@ fn checkerboard(cells: usize, block: usize) -> (f64, f64) {
         w.fill(Substance::borosilicate_crown(), move |i, j, k| {
             (i / block + j / block + k / block) % 2 == 1
         });
+        for i in 0..cells {
+            for j in 0..cells {
+                for k in 0..cells {
+                    let along = match axis {
+                        Axis::X => i,
+                        Axis::Z => k,
+                    };
+                    let c = 80.0 - 60.0 * along as f64 / (cells - 1) as f64;
+                    w.set_temperature(i, j, k, Temperature::celsius(c));
+                }
+            }
+        }
         w
     };
     (
-        steady_conductivity(&mut build(), Axis::X, BOARD_RESIDUAL),
-        steady_conductivity(&mut build(), Axis::Z, BOARD_RESIDUAL),
+        steady_conductivity(&mut build(Axis::X), Axis::X, BOARD_RESIDUAL),
+        steady_conductivity(&mut build(Axis::Z), Axis::Z, BOARD_RESIDUAL),
     )
 }
 
@@ -378,7 +491,9 @@ fn checkerboard(cells: usize, block: usize) -> (f64, f64) {
 /// describing a real spread of achievable values rather than hedging.
 ///
 /// A three-dimensional checkerboard is the arrangement, because it is cubic-symmetric and therefore has
-/// an isotropic effective conductivity — measured, `kx` and `kz` agree to `1e-9`. Its value has no closed
+/// an isotropic effective conductivity — measured, `kx` and `kz` agree exactly. The two marches are
+/// mirror images of each other, so that agreement checks that x-faces and z-faces are treated alike and
+/// says nothing about whether either march converged; that is the stopping rule's job. Its value has no closed
 /// form, so the claim is the bracketing: inside `[Reuss, Voigt]`, which is a theorem for any
 /// microstructure whatever, and **strictly** inside, because landing on a bound would mean the geometry
 /// was secretly a laminate.
@@ -438,7 +553,9 @@ fn a_checkerboard_is_inside_the_bounds_once_it_is_resolved() {
             kx / reuss.to_si()
         );
         assert!(
-            (kx / kz - 1.0).abs() < BOARD_RESIDUAL * 100.0,
+            // Rounding, not the stopping residual it used to be tied to: the two marches are mirror
+            // images and stop together, so a march that stopped early agrees with itself. Measured 0.
+            (kx / kz - 1.0).abs() < 1e-12,
             "block {block}: cubic symmetry makes this isotropic, {kx:.6} against {kz:.6}"
         );
         measured.push((block, kx));
@@ -447,7 +564,8 @@ fn a_checkerboard_is_inside_the_bounds_once_it_is_resolved() {
     // The aliasing case, asserted so it stays known.
     let one = measured[0].1;
     println!(
-        "  the one-cell board sits {:.2e} from Reuss, which is the march and not the geometry",
+        "  the one-cell board sits {:.2e} from Reuss: rounding, since the straight-line start is \
+         already this board's steady state",
         (one / reuss.to_si() - 1.0).abs()
     );
     assert!(
