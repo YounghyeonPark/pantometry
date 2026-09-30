@@ -23,6 +23,12 @@ protects nothing.
 
 ### Fixed
 
+- **Xenon's reason for being out of the catalogue was stated and not measured.** The docs said
+  its 10.8% miss on liquid density was an unsourced pair. A sourced one misses too: Beattie,
+  Barriault and Brierley's fit to xenon's own virial coefficients, *J. Chem. Phys.* 19, 1222
+  (1951), is 3.5% low in triple-point temperature and 8.4% low in density. So it is not only a
+  transcription. `a_gas_this_model_cannot_describe` now measures that pair beside the table's,
+  and xenon stays out.
 - **The protein and the bracket opened from New project as a missing file.** A preset opens as an
   unsaved `scene.json`, which has no directory beside it, so `structures/1CRN.pdb` and
   `parts/l-bracket.stl` were looked for wherever the editor had been started. The protein showed

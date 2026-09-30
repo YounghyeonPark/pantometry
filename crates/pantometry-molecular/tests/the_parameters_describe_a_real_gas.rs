@@ -144,11 +144,14 @@ fn the_model_is_a_few_per_cent_out_at_the_critical_point() {
 /// They are out for opposite reasons and the de Boer parameter tells them apart. **Neon** is the
 /// most quantum of the four at `Λ* = 0.594`, three times argon's, and no choice of `σ` and `ε`
 /// fixes an atom whose position is spread over a quarter of its own well. **Xenon** is the *least*
-/// quantum at 0.063 — so its 10.8% cannot be the potential, and it is not: it is a pair written
-/// down here that could not be sourced.
+/// quantum at 0.063, so quantum spread is not what misses — and the pair written down here could
+/// not be sourced.
 ///
-/// Substituting a pair that passes is the one thing this whole file exists to stop, so xenon stays
-/// out until a sourced one arrives.
+/// **A sourced pair was tried and misses too**, which is measured below rather than said: Beattie,
+/// Barriault and Brierley's fit to xenon's own virial coefficients, *J. Chem. Phys.* **19**, 1222
+/// (1951), is 8.4% low on the liquid's density. Substituting a pair that passes is the one thing this
+/// whole file exists to stop, so xenon stays out, now for a reason that is not known rather than
+/// one that was assumed.
 #[test]
 fn a_gas_this_model_cannot_describe() {
     let miss = |s: &Substance| {
@@ -174,7 +177,7 @@ fn a_gas_this_model_cannot_describe() {
 
     // **Which of the two reasons it is, measured.** Quantum spread against the well's own width:
     // everything shipped is below a quarter, neon is more than half, and xenon is the lowest of
-    // all four — which is what says its miss is arithmetic and not physics.
+    // all four — which says quantum spread is not its reason, and not what is.
     for s in CATALOGUE {
         println!("  {:<8} de Boer {:.3}", s.name, s.de_boer());
         assert!(
@@ -193,8 +196,29 @@ fn a_gas_this_model_cannot_describe() {
     );
     assert!(
         xenon.de_boer() < CATALOGUE.iter().map(|s| s.de_boer()).fold(1.0f64, f64::min),
-        "xenon is supposed to be the most classical of the four, which is why its miss is the \
-         parameters' and not the potential's"
+        "xenon is supposed to be the most classical of the four, which is why its miss is not \
+         quantum spread"
+    );
+
+    // **The sourced pair, beside the unsourced one.** `ε` is given in the paper as 309.9e-16 erg,
+    // which is 309.9e-23 J, and this is its temperature. Measured: 3.5% low in temperature, which is
+    // inside the band, and 8.4% low in density, which is not — and more than twice the catalogue's
+    // worst, the same test the table's own pair fails above.
+    let mut beattie = xenon;
+    beattie.sigma = 4.064e-10;
+    beattie.epsilon_over_k = 309.9e-23 / 1.380_649e-23;
+    let (dt, dd) = residuals(&beattie);
+    println!(
+        "  xenon, Beattie 1951: sigma 4.064 A, eps/k {:.1} K -> temperature {:+.2}%, density {:+.2}%",
+        beattie.epsilon_over_k,
+        100.0 * dt,
+        100.0 * dd
+    );
+    assert!(
+        dd.abs() > MODEL_BAND && miss(&beattie) > 2.0 * worst,
+        "a sourced xenon pair now reaches the liquid ({:+.2}% on density); if it is within the band \
+         xenon can be shipped with it, and this test is what should change",
+        100.0 * dd
     );
 }
 

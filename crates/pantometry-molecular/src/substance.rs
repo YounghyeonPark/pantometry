@@ -29,7 +29,7 @@
 //! | argon | 0.186 | 0.8% | 0.4% | — |
 //! | krypton | 0.104 | 1.7% | 2.2% | — |
 //! | neon | **0.594** | 0.6% | **8.7%** | the model |
-//! | xenon | 0.063 | **4.5%** | **10.8%** | the parameters |
+//! | xenon | 0.063 | **4.5%** | **10.8%** | not known — a sourced pair misses too |
 //!
 //! **Neon's parameters are fine and the potential is wrong for it.** The de Boer parameter
 //! `Λ* = h / (σ √(m ε))` is how much of an atom's position is quantum spread compared with the
@@ -37,11 +37,20 @@
 //! Broglie wavelength is a quarter of `σ`. No choice of `σ` and `ε` fixes that, and helium and
 //! hydrogen are further still.
 //!
-//! **Xenon is the opposite**, and that is how it was caught. It is the *most* classical of the
-//! four — `Λ*` of 0.063 — so a 10.8% miss cannot be the potential; it was the pair written down
-//! here, which could not be sourced. Solving for the `σ` that reproduces the measured density
-//! gives 3.94 Å against the 4.10 that was in the table. **Substituting one that passes is the one
-//! thing this check exists to stop**, so xenon waits for a sourced pair rather than a fitted one.
+//! **Xenon is the opposite of neon**, and that is how it was caught. It is the *most* classical of
+//! the four — `Λ*` of 0.063 — so quantum spread cannot be what misses. The pair in the table could
+//! not be sourced, and solving for the `σ` that reproduces the measured density gives 3.94 Å
+//! against its 4.10. **Substituting one that passes is the one thing this check exists to stop.**
+//!
+//! **A sourced pair misses as well.** Beattie, Barriault and Brierley fitted xenon's own second
+//! and third virial coefficients to this potential — *J. Chem. Phys.* **19**, 1222 (1951) — and got
+//! `σ` = 4.064 Å and `ε` = 309.9 × 10⁻¹⁶ erg, which is `ε/k` = 224.5 K. Through the same triple
+//! point it lands 3.5% low in temperature and **8.4% low in density**, outside the band argon and
+//! krypton sit well inside. So this was believed to be a transcription and is not only that: the
+//! virial fit and the liquid disagree for xenon in a way they do not for the two lighter gases.
+//! Why is not something this file can measure. Forces between three atoms at once, which a pair
+//! potential cannot carry and which grow with how polarisable an atom is, are one candidate. Xenon
+//! stays out, and `a_gas_this_model_cannot_describe` holds the sourced pair's miss beside the table's.
 //!
 //! # What checks them, and what the check is worth
 //!
@@ -186,8 +195,9 @@ pub const NAMES: [&str; 2] = ["argon", "krypton"];
 /// The two that did not pass, kept so the catalogue's boundary is a measurement and not a
 /// sentence.
 ///
-/// Neon because the potential is wrong for it, xenon because the parameters written down here
-/// could not be sourced — see this module's own docs for both, and
+/// Neon because the potential is wrong for it, xenon because no pair tried reaches its liquid: the
+/// one written down here could not be sourced, and a sourced one misses its density by 8.4% — see
+/// this module's own docs for both, and
 /// `a_gas_this_model_cannot_describe` for the arithmetic.
 pub const UNSHIPPED: [Substance; 2] = [
     Substance {
