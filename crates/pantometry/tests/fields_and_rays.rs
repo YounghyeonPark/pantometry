@@ -204,10 +204,14 @@ fn the_grid_and_the_algebra_agree_on_a_surfaces_reflectance() {
 
     let closed = fresnel_reflectance(1.0, 2.0, 1.0);
     let mut errors = Vec::new();
+    let mut n2_at_80 = None;
     for per in [20usize, 40, 80] {
         let measured = reflectance(&layout, wavelength, per, |c, interface| {
             c.fill(Medium::dielectric(4.0), |_, _, k| k >= interface);
         });
+        if per == 80 {
+            n2_at_80 = Some(measured);
+        }
         let error = (measured / closed - 1.0).abs();
         println!(
             "  {per:>2} cells per wavelength: {:.4}% against Fresnel's {:.4}% — off {:.3}%",
@@ -227,9 +231,16 @@ fn the_grid_and_the_algebra_agree_on_a_surfaces_reflectance() {
     }
 
     for n2 in [1.5, 2.0, 3.5] {
-        let measured = reflectance(&layout, wavelength, 80, |c, interface| {
-            c.fill(Medium::dielectric(n2 * n2), |_, _, k| k >= interface);
-        });
+        // **`n = 2` at eighty cells is the last run of the loop above**, and this marched it a
+        // second time: the costliest of the seven, sixteen times the twenty-cell one, for the same
+        // bytes. It is taken from there now, and the line printed for it is unchanged.
+        let measured = if n2 == 2.0 {
+            n2_at_80.expect("the convergence loop ran at eighty cells")
+        } else {
+            reflectance(&layout, wavelength, 80, |c, interface| {
+                c.fill(Medium::dielectric(n2 * n2), |_, _, k| k >= interface);
+            })
+        };
         let closed = fresnel_reflectance(1.0, n2, 1.0);
         println!(
             "  n = {n2}: FDTD {:.4}% against Fresnel {:.4}% — off {:.3}%",
