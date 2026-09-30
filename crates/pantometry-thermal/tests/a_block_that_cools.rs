@@ -64,7 +64,8 @@ fn an_unexposed_block_loses_nothing() {
 ///
 /// Copper at 5 mm cells has a Biot number far below 0.1 — `hL/k` is about `12 · 0.01 / 401`,
 /// which is `3e-4` — so the block is isothermal to a part in three thousand and the closed form
-/// is the lumped one: `T(t) = T∞ + (T₀ − T∞)·exp(−t/τ)` with `τ = mc/(hA)`.
+/// is the lumped one: `C dT/dt = −L(T)`. With `h` constant that is `exp(−t/τ)`; `h` is not quite
+/// constant, so the lumped equation is integrated as it stands rather than linearised.
 ///
 /// `h` is the environment's convective coefficient **plus** the radiative term the domain also
 /// models, and that is the point of computing the expected `τ` from `Environment::loss_from`
@@ -86,80 +87,110 @@ fn a_cooling_block_follows_newtons_law() {
     }
 
     // The time constant, from the loss the domain's own environment model gives at the
-    // *midpoint* of the swing — the linearisation Newton's law assumes, evaluated where it is
-    // most representative rather than at either end.
+    // *midpoint* of the swing. Used below only to say *when* to look; the expectation itself no
+    // longer freezes `h` anywhere.
+    let copper = Substance::copper().thermal.unwrap();
     let capacity = block.heat_capacity().to_si();
     let mid = Temperature::celsius(70.0);
     let env = Environment::still_air(ambient, area);
-    let h_a = env
-        .loss_from(mid, Substance::copper().thermal.unwrap().emissivity)
-        .to_si()
-        / (mid.to_si() - ambient.to_si());
-    let tau = capacity / h_a;
-
-    // **The error budget, computed rather than chosen.** The closed form freezes `h` at the
-    // midpoint while the real one moves with the temperature. With `k = hA/C`, `ln θ` falls by
-    // `∫k dt`, so after time `t` the block's `ln θ` and the closed form's differ by at most
-    // `(t/τ)·δ`, where `δ` is the largest relative departure of `h` from its midpoint value over
-    // the temperatures crossed — and the temperatures differ by at most `θ(t)·(e^{(t/τ)δ} − 1)`.
-    // `h` comes from the same `Environment::loss_from` the expectation does: a statement about
-    // the linearisation, not a second model of the physics.
-    //
-    // **This was a hand-set 3 K**, on a comment that said the radiative part of `h` moves by
-    // about 12% across the swing and that the error was "measured at 1.2 K". The domain's own
-    // model gives `δ` = 1.1% — copper's emissivity is low, so the radiative part is small — and
-    // the error, measured, is 0.10 K. The 3 K was seven times the bound it claimed to be.
-    let h_at = |c: f64| {
-        let at = Temperature::celsius(c);
-        env.loss_from(at, Substance::copper().thermal.unwrap().emissivity)
+    let loss = |kelvin: f64| {
+        env.loss_from(Temperature::from_si(kelvin), copper.emissivity)
             .to_si()
-            / (at.to_si() - ambient.to_si())
     };
-    let within = |t: f64| {
-        let theta = (start.to_si() - ambient.to_si()) * (-t / tau).exp();
-        // Every temperature the block has crossed, from where it started to below where the
-        // closed form puts it now; `h` is monotone in temperature, so its extremes are the ends.
-        let delta = [h_at(120.0), h_at(20.0 + theta / 2.0)]
-            .iter()
-            .map(|h| (h / h_a - 1.0).abs())
-            .fold(0.0, f64::max);
-        // The low end above is below every temperature crossed only while the real `θ` stays
-        // above `θ_cf/2`, which the bound itself guarantees as long as `(t/τ)δ < ln 2`. Checked,
-        // rather than left implied: here it is about 0.04.
-        assert!(
-            (t / tau) * delta < 2f64.ln(),
-            "the bound's own precondition fails at t = {t} s: (t/τ)δ = {}",
-            (t / tau) * delta
-        );
-        (
-            ambient.to_si() + theta,
-            theta * (((t / tau) * delta).exp() - 1.0),
-        )
+    let tau = capacity / (loss(mid.to_si()) / (mid.to_si() - ambient.to_si()));
+
+    // **The lumped block, integrated rather than linearised.** `C dT/dt = −L(T)` with `L` the
+    // environment's own loss, so the time to fall from the start to `T` is `C ∫ dT'/L(T')` — a
+    // quadrature, then a bisection for the temperature at a given time. `L` is the same
+    // `Environment::loss_from` the linearised form used; what changed is that `h` is no longer
+    // frozen at the midpoint, so the linearisation is out of the budget entirely.
+    //
+    // **This compared with `exp(−t/τ)` and `h` frozen at the midpoint**, to a bound of 0.41 K at
+    // one time constant set by that freezing, with the real error 0.10 K. Against the integral the
+    // error is 0.0023 K: forty times smaller, and what is left is the block itself.
+    let time_to = |kelvin: f64| {
+        let (a, b) = (kelvin, start.to_si());
+        let m = 2_000;
+        let h = (b - a) / m as f64;
+        let mut s = 1.0 / loss(a) + 1.0 / loss(b);
+        for i in 1..m {
+            s += if i % 2 == 1 { 4.0 } else { 2.0 } / loss(a + i as f64 * h);
+        }
+        capacity * s * h / 3.0
+    };
+    let lumped = |t: f64| {
+        let (mut lo, mut hi) = (ambient.to_si() + 1e-9, start.to_si());
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if time_to(mid) > t {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
     };
 
-    // One time constant of a hundred-kelvin swing. Measured 0.10 K from the closed form, against
-    // a bound of 0.41 K: `h` sits above its midpoint value for the first half of the swing and
-    // below it for the second, and the two nearly cancel.
+    // **What is left, bounded — and it has a sign.** The block is not quite lumped: its surface
+    // runs a little below its mean, so it sheds heat more slowly than a lumped block would, and it
+    // can only ever be *slower*. For a cube cooling uniformly the quasi-steady field is
+    // `T₀ − a·r²`, and the mean sits above its coldest point — a corner — by exactly
+    // `q·(side/2)/k`, so the rate is short by at most `Bi½ = h'·(side/2)/k`: an upper bound with a
+    // factor of three in it, since the *area-averaged* surface is short by a third of that and
+    // that is what the loss sees. `h'` is the loss's derivative in temperature, which is what a
+    // rate deficit scales with, taken where it is largest — the start. The one thing that makes
+    // the block cool *faster* is the explicit march: each step's `1 − k·dt` in place of `e^{−k·dt}`
+    // costs `(k·dt)²/2`, so `t·k²·dt/2` in `ln θ` — under a part in a hundred thousand here.
+    //
+    // **This was a symmetric window**, `|got − want|` under the upper bound, and the physics fixes
+    // the sign: `numerics-reviewer` set the solver's emissivity 0.4% high, the error went from
+    // +0.0023 K to −0.0039 K, and the test passed. Now the window is `[−march, +Biot]`, and a loss
+    // too high by more than the march's own error fails.
+    let dt = block.max_stable_dt(Time::ZERO).to_si() * 0.4;
+    let slope = {
+        let (hot, step) = (start.to_si(), 1e-3);
+        (loss(hot + step) - loss(hot - step)) / (2.0 * step)
+    };
+    let k_most = slope / capacity;
+    let biot_half = slope / area.to_si() * (side / 2.0) / copper.conductivity.to_si();
+    let window = |t: f64| {
+        let want = lumped(t);
+        let theta = want - ambient.to_si();
+        let slower = theta * ((t * k_most * biot_half).exp() - 1.0);
+        let faster = theta * ((t * k_most * k_most * dt / 2.0).exp() - 1.0);
+        (want, -faster, slower)
+    };
+    // `run` takes whole steps, so the time reached is a whole number of them past what was asked.
+    let reached = |t: f64| (t / dt).ceil() * dt;
+
+    // One time constant of a hundred-kelvin swing: measured +0.0023 K from the integral, inside
+    // −0.00018 to +0.0072. Measured with the solver's emissivity sabotaged: 0.4% high is −0.0039 K
+    // and fails; 2% high is 0.029 K out and 5% high 0.076 K, and the linearised version passed
+    // both. A loss 5% high is 1.8 K out.
+    let at_one = reached(tau);
     let after = run(block, tau);
-    let (want, bound) = within(tau);
+    let (want, low, high) = window(at_one);
     let got = after.mean_temperature().to_si();
     assert!(
-        (got - want).abs() < bound,
-        "after one time constant the block should be within {bound:.3} K of {want:.3} K, \
-         and it is {got:.3} K"
+        got - want > low && got - want < high,
+        "after one time constant the block should be between {low:+.5} and {high:+.5} K of \
+         {want:.4} K, and it is {:+.5} K from it",
+        got - want
     );
 
     // **And it keeps going the right way, along the same curve.** This ran twelve more time
     // constants to check the block ended within a kelvin of the air: 1.43 million steps, 96 s of
     // a debug build, for a looser claim than the curve itself. Two more constants against the
-    // closed form instead: measured 0.05 K from it, against a bound of 0.17 K.
+    // integral instead: measured +0.00095 K from it, inside −0.00007 to +0.0029.
+    let at_three = at_one + reached(2.0 * tau);
     let settled = run(after, 2.0 * tau);
-    let (want, bound) = within(3.0 * tau);
+    let (want, low, high) = window(at_three);
     let now = settled.mean_temperature().to_si();
     assert!(
-        (now - want).abs() < bound,
-        "three time constants in, the block should be within {bound:.3} K of {want:.3} K, \
-         and it is {now:.3} K"
+        now - want > low && now - want < high,
+        "three time constants in, the block should be between {low:+.5} and {high:+.5} K of \
+         {want:.4} K, and it is {:+.5} K from it",
+        now - want
     );
 }
 
