@@ -439,6 +439,132 @@ fn the_biot_number_decides_whether_a_cooled_block_is_isothermal() {
     );
 }
 
+/// **A wall between two films is its resistances in series, cell by cell.**
+///
+/// A column of copper with a film on each end — 120 C water on one side, 20 C water on the other,
+/// the two at different coefficients —
+/// at steady state. Fourier and Newton together say what it does: one flux `Q` through
+/// `R = 1/(h₁A) + n·dx/(kA) + 1/(h₂A)`, the two surfaces where the films put them, and a straight
+/// line between them on which every cell centre sits. None of that is the domain's arithmetic.
+///
+/// **Why this and not the Biot test above.** That one is a pair of ratios with an order of
+/// magnitude between them, and a conductivity three times wrong, or the half cell between a centre
+/// and its surface left out of the film's path, both leave its verdicts where they were. Here the
+/// film is stiff enough — `h·dx/(2k)` is 0.37 — that the half cell is a third of the film, and the
+/// conductivity sets the slope of the line; both are numbers the test reads.
+///
+/// Copper, whose emissivity of 0.04 radiates about a millionth of what the film carries, so the
+/// closed form's films are Newton's and the domain's `T⁴` term cannot move the answer.
+#[test]
+fn a_wall_between_two_films_is_its_resistances_in_series() {
+    let n = 4;
+    let dx = 3.0e-3;
+    let area = dx * dx;
+    // Two different films, so a film's coefficient ending up on the other face shows: with the
+    // same `h` on both, that swap left every number where it was.
+    let (h_hot, h_cold) = (1.0e5, 3.0e4);
+    let copper = Substance::copper().thermal.unwrap();
+    let k = copper.conductivity.to_si();
+    let (hot, cold) = (Temperature::celsius(120.0), Temperature::celsius(20.0));
+    let film = |ambient, h| Environment {
+        ambient,
+        convection_w_per_m2_k: h,
+        area: Area::from_si(area),
+    };
+    let (hot_film, cold_film) = (film(hot, h_hot), film(cold, h_cold));
+    let wall = Solid3D::new(
+        "wall",
+        Substance::copper(),
+        (1, 1, n),
+        Length::from_si(dx),
+        Temperature::celsius(70.0),
+    )
+    .losing_from(Face::ZMin, film(hot, h_hot))
+    .losing_from(Face::ZMax, film(cold, h_cold));
+    let field = wall
+        .steady_state()
+        .expect("a wall between two films has a steady state");
+
+    // The closed form, with the films' own loss so their small radiative part is in it too. The
+    // surfaces are where each film's loss equals the flux, and the flux is what the copper between
+    // them carries: a bisection on `Q` for which the two surfaces sit `Q·n·dx/(kA)` apart.
+    let loss = |env: &Environment, kelvin: f64| {
+        env.loss_from(Temperature::from_si(kelvin), copper.emissivity)
+            .to_si()
+    };
+    let surface = |env: &Environment, q: f64| {
+        let (mut lo, mut hi) = (cold.to_si() - 1.0, hot.to_si() + 1.0);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if loss(env, mid) > q {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+    let conduction = n as f64 * dx / (k * area);
+    let gap = |q: f64| surface(&hot_film, -q) - surface(&cold_film, q) - q * conduction;
+    let (mut lo, mut hi) = (0.0, (hot.to_si() - cold.to_si()) * h_hot * area);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if gap(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let q = 0.5 * (lo + hi);
+    let top = surface(&hot_film, -q);
+
+    // **The films are nearly all convection**, checked against the coefficients as written and
+    // not through `loss_from`, so a loss model that doubled its own convective term cannot agree
+    // with itself here.
+    for (env, h) in [(&hot_film, h_hot), (&cold_film, h_cold)] {
+        let share = loss(env, 70.0 + 273.15) / (70.0 + 273.15 - env.ambient.to_si()) / (h * area);
+        assert!(
+            (share - 1.0).abs() < 1e-4,
+            "a film of h = {h} should be convection to a part in ten thousand, is {share:.8}"
+        );
+    }
+
+    // **What the two can differ by, and it is small.** The closed form takes each film at its
+    // surface. The domain has only cell centres and takes a film's radiative part at the centre,
+    // half a cell in, so the one structural difference is how much the radiative secant
+    // `s(T) = L(T)/(T − T∞) − hA` changes over that half cell, `q·dx/(2kA)`: `δs` in conductance,
+    // which moves the surface by `δs·(T_s − T∞)/(hA)`. That, for each film, plus the solver's own
+    // stopping rule — it stops when no sweep moves a cell by 1e-6 K — and twice the sum, because
+    // the first is a first-order estimate. Measured: 3.3e-6 to 6.1e-6 K against a bound of
+    // 2.7e-5 K.
+    //
+    // **The first version bounded the whole radiative share times the whole drop**, 3.7e-4 K, and
+    // `numerics-reviewer` switched radiation off in the film and it passed: the effect it was
+    // meant to hold was a hundredth of what it allowed.
+    let half = q * dx / (2.0 * k * area);
+    let secant = |env: &Environment, h: f64, kelvin: f64| {
+        loss(env, kelvin) / (kelvin - env.ambient.to_si()) - h * area
+    };
+    let bottom = surface(&cold_film, q);
+    let moved = |env: &Environment, h: f64, at: f64, centre: f64| {
+        (secant(env, h, centre) - secant(env, h, at)).abs() * (at - env.ambient.to_si()).abs()
+            / (h * area)
+    };
+    let bound = 2.0
+        * (moved(&hot_film, h_hot, top, top - half)
+            + moved(&cold_film, h_cold, bottom, bottom + half)
+            + 1e-6);
+    for (i, got) in field.iter().enumerate() {
+        let want = top - q * (i as f64 + 0.5) * dx / (k * area);
+        assert!(
+            (got - want).abs() < bound,
+            "cell {i} of the wall: {got:.7} K against the series {want:.7} K, off by {:.2e} K \
+             where the films' half cell and the solver allow {bound:.2e}",
+            got - want
+        );
+    }
+}
+
 /// **A film stiffer than the conduction it replaces tightens the stability limit, and the
 /// domain refuses a step past it.**
 ///
