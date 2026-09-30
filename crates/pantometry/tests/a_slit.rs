@@ -22,6 +22,13 @@
 //! A factor of 48 from one wavelength to twelve, monotone — which is what says the disagreement is
 //! Kirchhoff's condition and not something that happens to be large at one width.
 //!
+//! **Not all of the smallest number is Kirchhoff's.** At 12 and 10 cells per wavelength the 12λ
+//! figure is 0.0065 and 0.0067 against this table's 0.0057 at 16, and read as `e₀ + c·h²` that
+//! puts roughly a fifth of 0.0057 in the grid. The rate is still the physics — the fall is 44× at
+//! 12 cells and 40× at 10, every assertion below holds at both — but the table's last row is an
+//! upper bound on the Kirchhoff error rather than a measurement of it. Sixteen cells is kept for
+//! that reason: at twelve the grid's share of that row would be nearer 30%.
+//!
 //! # How the far field is got out of a small box
 //!
 //! Not by making the box big enough to be in the far field — that would be `a²/λ` deep, hundreds of
@@ -98,8 +105,34 @@ impl Aperture {
     }
 }
 
+/// The widths this file marches.
+const WIDTHS: [f64; 5] = [0.75, 1.0, 3.0, 6.0, 12.0];
+
+/// A slit's aperture field, marched the first time any test asks for that width.
+///
+/// **The paragraph on [`Aperture`] said a width was marched once and this did not do it.** Each
+/// test called the march itself, so the first test marched four widths, the second marched 6λ and
+/// 12λ again and the third marched 12λ a third time: eight marches of one box, where the comment
+/// counted five. Held here per width, the tests share them — the same bytes, so every number this
+/// file prints is unchanged — and the harness's threads, which already run the three tests at once,
+/// divide the five between them.
+fn aperture(width_wavelengths: f64) -> &'static Aperture {
+    static MARCHED: [std::sync::OnceLock<Aperture>; 5] = [
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+    ];
+    let slot = WIDTHS
+        .iter()
+        .position(|w| *w == width_wavelengths)
+        .unwrap_or_else(|| panic!("{width_wavelengths} is not one of the widths {WIDTHS:?}"));
+    MARCHED[slot].get_or_init(|| march(width_wavelengths))
+}
+
 /// March a slit and record its aperture field.
-fn aperture(width_wavelengths: f64) -> Aperture {
+fn march(width_wavelengths: f64) -> Aperture {
     let wavelength = 500e-9;
     let dx = wavelength / PER as f64;
     let nx = 2 * HALF_WIDTH * PER;
