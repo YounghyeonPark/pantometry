@@ -211,6 +211,94 @@ fn near_the_air_it_still_moves_both_ways() {
     }
 }
 
+/// **A face named is the face that cools**, for each of the six.
+///
+/// Every other test here exposes all six faces equally to a block that is isothermal to a part in
+/// ten thousand, and there a face mapped to the wrong side, or one applied twice and another never,
+/// leaves the total loss and every temperature the same. `numerics-reviewer` named it while reviewing
+/// `a_cooling_block_follows_newtons_law`, and nothing in the file could see it.
+///
+/// So one face at a time, on glass rather than copper — Biot `hL/k` ≈ 0.13, where the block has a
+/// gradient worth reading — and three things that hold only if the face is where its name says:
+///
+/// - the layer of cells against it is colder than the layer against the opposite face;
+/// - along the other two axes the block is still symmetric, so their two end layers agree to
+///   rounding — a face put on the wrong axis breaks that;
+/// - and a cube is the same from every side, so the six runs lose the same heat.
+///
+/// Measured after 600 s: the exposed layer 7.65 K below the opposite one for every face, the other
+/// two axes symmetric to exactly zero, and the six losses equal to the last printed digit of
+/// 301.075319781 J. The 0.5 K is there so a difference at rounding cannot pass as a sign; a face on
+/// the wrong end reads −7.6 K and one on the wrong axis reads 0.
+///
+/// Sabotaged in `Face::holds` with `XMin` and `XMax` swapped, and with `YMin` read along `z`: this
+/// fails on both, and every other test in the file, run as it stood before this one, passed both.
+#[test]
+fn a_named_face_is_the_face_that_cools() {
+    let n = 4;
+    let side = n as f64 * 5.0e-3;
+    let ambient = Temperature::celsius(20.0);
+    let layer = |b: &Solid3D, axis: usize, at: usize| -> f64 {
+        let mut sum = 0.0;
+        for p in 0..n {
+            for q in 0..n {
+                let (i, j, k) = match axis {
+                    0 => (at, p, q),
+                    1 => (p, at, q),
+                    _ => (p, q, at),
+                };
+                sum += b.temperature_at(i, j, k).to_si();
+            }
+        }
+        sum / (n * n) as f64
+    };
+
+    let mut lost = Vec::new();
+    for (face, axis, low) in [
+        (Face::XMin, 0, true),
+        (Face::XMax, 0, false),
+        (Face::YMin, 1, true),
+        (Face::YMax, 1, false),
+        (Face::ZMin, 2, true),
+        (Face::ZMax, 2, false),
+    ] {
+        let block = Solid3D::new(
+            "glass",
+            Substance::borosilicate_crown(),
+            (n, n, n),
+            Length::mm(5.0),
+            Temperature::celsius(120.0),
+        )
+        .losing_from(
+            face,
+            Environment::still_air(ambient, Area::from_si(side * side)),
+        );
+        let after = run(block, 600.0);
+
+        let (near, far) = if low { (0, n - 1) } else { (n - 1, 0) };
+        let (exposed, opposite) = (layer(&after, axis, near), layer(&after, axis, far));
+        assert!(
+            opposite - exposed > 0.5,
+            "{face:?}: the layer against it is {exposed:.4} K and the opposite one {opposite:.4} K"
+        );
+        for other in (0..3).filter(|a| *a != axis) {
+            let (a, b) = (layer(&after, other, 0), layer(&after, other, n - 1));
+            assert!(
+                (a - b).abs() < 1e-9,
+                "{face:?}: along axis {other} the ends should match, {a:.12} against {b:.12}"
+            );
+        }
+        lost.push((face, after.lost_energy().to_si()));
+    }
+    let first = lost[0].1;
+    for (face, joules) in &lost {
+        assert!(
+            (joules / first - 1.0).abs() < 1e-9,
+            "{face:?} lost {joules:.6} J where XMin lost {first:.6} J"
+        );
+    }
+}
+
 /// **Nothing is lost on the way out: `stored + lost` is conserved to the bit.**
 ///
 /// The identity that lets `books_balance` stay `true` for a block that sheds heat. Every joule
