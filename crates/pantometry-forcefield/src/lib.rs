@@ -6,15 +6,20 @@
 //! The aim, over the steps that follow this one, is molecular mechanics on drug-sized molecules —
 //! an energy, its minimum, and which conformations are stable — with every term checkable.
 //!
-//! **This is the first step and it computes no energy.** What is here:
+//! **This step computes an energy, but not all of UFF's, and nothing moves yet.** What is here:
 //!
 //! - [`Component::from_ccd`] reads one entry of the wwPDB Chemical Component Dictionary, strictly:
 //!   every malformed or unsupported input is a [`CcdError`] naming what it refused. See [`ccd`].
 //! - [`uff::assign`] gives every atom its Universal Force Field type from its element, its bond
 //!   orders and the dictionary's aromatic flags, and [`UffType::parameters`] gives each type's
 //!   Table I row in SI. See [`uff`] for the citation, the table and the rules.
+//! - [`ForceField`] holds three of UFF's terms — harmonic bond stretch, Lennard-Jones van der
+//!   Waals, and Coulomb electrostatics with 1-2 and 1-3 exclusions — and gives the energy, term by
+//!   term, and the analytic force on every atom. See [`energy`] for the equations, the page each
+//!   is on, and the one place this departs from the paper as printed.
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
-//!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is.
+//!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, and
+//!   the energy terms as readings.
 //!
 //! # What it is checked against
 //!
@@ -25,21 +30,31 @@
 //! structure; and the natural angles of `C_3`, `C_R` and `C_1` are the tetrahedral, trigonal and
 //! linear angles of geometry. Every refusal has a test that feeds it the input it refuses.
 //!
+//! The energy terms against closed forms: a bond's energy is zero at its natural length and
+//! `½ k Δr²` away from it; `C_3–C_3` is 1.514 Å; the paper's own worked Si–O correction is
+//! reproduced; the van der Waals minimum is `−D_IJ` at `x_IJ` and crosses zero at `x_IJ / 2^(1/6)`;
+//! two unit charges at 1 Å are 332.0637 kcal/mol; the exclusions leave exactly the 1-4 pair of a
+//! four-atom chain. The forces against central finite differences of the energy, to a tolerance
+//! derived from the step; the energy against translation and rotation; and the net force against
+//! zero.
+//!
 //! # What is deliberately not in it
 //!
-//! - **No energy, no forces, no motion — yet.** [`Molecule::step`](Domain::step) leaves the atoms
-//!   where the file put them. Bond stretch, angle bend, torsion, inversion and van der Waals terms
-//!   are the next step, and each will arrive with a closed form it is checked against.
-//! - **No electronegativity.** UFF's natural bond length needs the GMP electronegativity χ, whose
-//!   values come from a second paper not yet verified against its source. [`uff`] says so where
-//!   the parameters are.
+//! - **No angle bend, torsion or inversion yet**, so the energy here is not UFF's total and a
+//!   geometry relaxed against it would not be UFF's geometry. **No motion and no minimisation**:
+//!   [`Molecule::step`](Domain::step) leaves the atoms where the file put them.
+//! - **The electronegativities are not from their primary source.** χ is transcribed from Open
+//!   Babel, which copies RDKit; the paper it comes from has not been read. [`uff`] says so where
+//!   the values are, and what the one partial check pins.
 //! - **No ring perception, no bond-order guessing, no protonation.** The dictionary states
 //!   aromaticity, bond orders and explicit hydrogens, and a second opinion computed here could
 //!   only disagree with it. A file without bonds is refused, not guessed at.
 //! - **No elements beyond H, C, N, O, F, P, S, Cl, Br and I**, and no hypervalent sulfur types —
 //!   [`uff::assign`] documents the sulfone gap.
-//! - **No solvent, no charges for electrostatics, no binding energies.** All of those are later,
-//!   and a number that looked like any of them now would be invented.
+//! - **No charge model, no solvent, no binding energies.** Electrostatics is computed from
+//!   charges a caller supplies, and they default to zero — the paper's charges come from charge
+//!   equilibration, which is the next step. A hypervalent sulfur is refused by name
+//!   ([`Unsupported`]) rather than given the wrong radius.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.
@@ -47,9 +62,11 @@
 #![deny(missing_docs)]
 
 pub mod ccd;
+pub mod energy;
 pub mod uff;
 
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
+pub use energy::{Energy, Evaluation, ForceField, Unsupported};
 pub use uff::{Parameters, TableI, UffType};
 
 use pantometry_core::{Bodies, Domain, Exchange, Kind, Ledger, Reading, Violation};
@@ -60,31 +77,71 @@ use pantometry_units::{LengthVec, Qty, Time};
 /// # How it moves
 ///
 /// **It does not, yet.** [`Domain::step`] leaves every atom where the dictionary put it, so
-/// [`Domain::max_stable_dt`] is infinite — honestly, because nothing moves — and the ledger is
-/// empty, because the molecule holds no energy this crate can yet compute. Both change when the
-/// force field's energy terms arrive; until then a run of this domain is a picture of a parsed and
-/// typed molecule, and is meant to be.
+/// [`Domain::max_stable_dt`] is infinite — honestly, because nothing moves. It has an energy now
+/// — [`Molecule::evaluate`], and the readings — but no dynamics and no minimiser to use it, and
+/// the ledger stays empty: an energy that never changes is not a flow anything balances against.
+/// Until minimisation arrives a run of this domain is a picture of a parsed and typed molecule,
+/// with its energy beside it.
+///
+/// # Readings
+///
+/// `atoms`, `heavy atoms`, `bonds` and `formal charge`, and the energy at the current positions in
+/// **kcal/mol** — the paper's unit and the one every reader of a force field compares in — as
+/// `energy`, `bond stretch`, `van der Waals` and `electrostatic`. `energy` is the sum of the three
+/// and **not** UFF's total, which has angle, torsion and inversion terms this crate does not yet
+/// have. For a molecule [`ForceField::new`] refuses, the four energy readings are `NaN` and
+/// [`Molecule::force_field`] says why.
 #[derive(Clone, Debug)]
 pub struct Molecule {
     name: String,
     component: Component,
     types: Vec<UffType>,
+    force_field: Result<ForceField, Unsupported>,
     at: Vec<[f64; 3]>,
     saved: Option<Vec<[f64; 3]>>,
 }
 
 impl Molecule {
-    /// A molecule named `name`, at the component's coordinates, typed by [`uff::assign`].
+    /// A molecule named `name`, at the component's coordinates, typed by [`uff::assign`], with
+    /// its [`ForceField`] built and every partial charge zero.
+    ///
+    /// Never fails: a molecule the force field refuses is still read, typed and drawn, and
+    /// [`Molecule::force_field`] carries the refusal.
     pub fn new(name: impl Into<String>, component: Component) -> Molecule {
         let types = uff::assign(&component);
+        let force_field = ForceField::new(&component, &types);
         let at = component.atoms().iter().map(|a| a.at).collect();
         Molecule {
             name: name.into(),
             component,
             types,
+            force_field,
             at,
             saved: None,
         }
+    }
+
+    /// The same molecule with partial charges `charges`, in elementary charges, one per atom.
+    ///
+    /// # Panics
+    ///
+    /// If `charges` is not one per atom.
+    pub fn with_charges(mut self, charges: Vec<f64>) -> Molecule {
+        assert_eq!(charges.len(), self.at.len(), "one charge per atom");
+        if let Ok(ff) = self.force_field {
+            self.force_field = Ok(ff.with_charges(charges));
+        }
+        self
+    }
+
+    /// Its force field, or why there is none.
+    pub fn force_field(&self) -> Result<&ForceField, &Unsupported> {
+        self.force_field.as_ref()
+    }
+
+    /// The energy and forces at the current positions, or why there are none.
+    pub fn evaluate(&self) -> Result<Evaluation, &Unsupported> {
+        self.force_field().map(|ff| ff.evaluate(&self.at))
     }
 
     /// The component it was built from.
@@ -168,8 +225,8 @@ impl Domain for Molecule {
         Ok(())
     }
 
-    /// Empty: the molecule holds no quantity this crate can compute yet, and an entry it could
-    /// not stand behind would be worse than none.
+    /// Empty: nothing moves, so nothing flows, and an energy that cannot change has nothing to
+    /// balance against. This becomes an entry when the molecule can move.
     fn ledger(&self) -> Ledger {
         Ledger::new()
     }
@@ -197,11 +254,32 @@ impl Domain for Molecule {
         let atoms = self.component.atoms();
         let heavy = atoms.iter().filter(|a| a.element != Element::H).count();
         let charge: i32 = atoms.iter().map(|a| a.charge).sum();
+        let e = self.evaluate().map(|ev| ev.energy).unwrap_or(Energy {
+            bond: f64::NAN,
+            van_der_waals: f64::NAN,
+            electrostatic: f64::NAN,
+            total: f64::NAN,
+        });
+        let kcal = |joules: f64| joules / uff::KCAL_PER_MOL;
         vec![
             Reading::new(&self.name, "atoms", atoms.len() as f64, ""),
             Reading::new(&self.name, "heavy atoms", heavy as f64, ""),
             Reading::new(&self.name, "bonds", self.component.bonds().len() as f64, ""),
             Reading::new(&self.name, "formal charge", f64::from(charge), "e"),
+            Reading::new(&self.name, "energy", kcal(e.total), "kcal/mol"),
+            Reading::new(&self.name, "bond stretch", kcal(e.bond), "kcal/mol"),
+            Reading::new(
+                &self.name,
+                "van der Waals",
+                kcal(e.van_der_waals),
+                "kcal/mol",
+            ),
+            Reading::new(
+                &self.name,
+                "electrostatic",
+                kcal(e.electrostatic),
+                "kcal/mol",
+            ),
         ]
     }
 

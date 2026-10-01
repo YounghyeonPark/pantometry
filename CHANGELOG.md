@@ -47,6 +47,30 @@ protects nothing.
   the GMP electronegativity χ, whose source paper is not yet verified, so nothing here computes a
   UFF natural bond length; and the hypervalent sulfur types, so a sulfone types as `S_2` until the
   energy step refuses or extends it.
+- **`pantometry-forcefield` computes an energy: UFF's bond stretch, van der Waals and
+  electrostatics, with analytic forces — and still does not move.** `ForceField` gives the energy
+  by term and the force on every atom: harmonic stretch about the natural length of eq 2 with the
+  bond-order (eq 3, aromatic 1.5, amide C–N 1.41) and electronegativity (eq 4) corrections and the
+  force constant of eq 6; Lennard-Jones 12-6 with geometric combination (eqs 20–22); Coulomb at
+  332.0637 kcal mol⁻¹ Å e⁻² (eq 43); 1-2 and 1-3 pairs excluded. **`r_EN` is subtracted, not added
+  as eq 2 prints it**, as Open Babel and RDKit do and as the paper's minimised dimethyl ether and
+  trimethylamine favour — and the paper's own amide sentence favours the printed plus: with the
+  amide carbon now typed `C_R`, as that sentence's "C_R and N_R single bond radii" require
+  (`uff::assign` typed it `C_2` before), n = 1.41 gives 1.35684 Å with the minus and 1.36845 Å
+  with the plus, against the paper's 1.366. Recorded beside the decision for the minimisation step
+  to settle. χ is Open Babel's copy, not read from its source paper; the paper's worked Si–O
+  correction (0.0533 Å) is the one partial check, and one natural length per element against
+  `C_3` holds the transcription. Charges are an input and default to zero until the charge model
+  arrives. A sulfur whose bond orders sum past two — sulfoxide, sulfone, sulfonium — is now refused
+  by name (`Unsupported`) instead of getting a divalent radius, and the message says which. An
+  N-acyl aromatic nitrogen is not treated as an amide (order 1, carbon `C_2`), a recorded choice.
+  Checked against closed forms — 1.514 Å for `C_3–C_3`, `k` and `r_IJ` by hand for aromatic and
+  amide `C_R–N_R`, the well's depth and zero crossing, the Coulomb constant against CODATA's ε₀,
+  the exclusions counted on chains and rings — and the forces against central differences of the
+  energy on aspirin, to a tolerance built from per-term rounding bounds, with every atom required
+  to have most of its terms well above it; each of thirty-one sabotages was caught. **Found on the way:** the dictionary's
+  ideal coordinates for aspirin put the acetyl oxygen O4 1.645 Å from ring hydrogen H1, and that
+  one contact is 134 of aspirin's 173 kcal/mol of van der Waals energy there.
 
 ### Fixed
 

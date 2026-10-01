@@ -50,11 +50,24 @@
 //! by the bond-stretch and angle-bend force constants. Transcribed from the scanned original and
 //! checked against Open Babel's `data/UFF.prm`, which carries the same values.
 //!
-//! **Not here yet: the GMP electronegativity χ.** UFF's natural bond length subtracts an
-//! electronegativity correction `r_EN` built from it, and Table I prints a χ column — but its
-//! values come from a different paper (Rappé and Goddard's charge-equilibration work) that has not
-//! been checked against its source for this crate. TODO: add χ once that source is verified. Until
-//! then nothing here can compute a UFF natural bond length, and nothing pretends to.
+//! # The GMP electronegativity χ, and where it comes from
+//!
+//! UFF's natural bond length carries an electronegativity correction `r_EN` (eq 4, p. 10027)
+//! built from the generalized Mulliken–Pauling electronegativity χ of each element.
+//! [`gmp_electronegativity`] gives it, in eV, for the ten elements here:
+//!
+//! | H | C | N | O | F | P | S | Cl | Br | I |
+//! | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+//! | 4.528 | 5.343 | 6.899 | 8.741 | 10.874 | 5.463 | 6.928 | 8.564 | 7.790 | 6.822 |
+//!
+//! **Provenance, stated as it is.** These numbers are transcribed from Open Babel's
+//! `data/UFF.prm`, which says it copies RDKit's. The UFF paper takes χ from the
+//! charge-equilibration paper — A. K. Rappé and W. A. Goddard III, *J. Phys. Chem.* **95**, 3358
+//! (1991) — and **that paper has not been read for this crate.** One partial check exists: the UFF
+//! paper's worked example (p. 10027) gives the Si–`O_3_z` correction as 0.0533 Å, and eq 4 with
+//! Open Babel's χ_Si 4.168 and χ_O 8.741 and Table I's r_Si 1.117 and r_O_3_z 0.528 gives
+//! 0.05325 Å. That pins χ_O (and χ_Si, which this crate does not ship) to the printed precision;
+//! it says nothing about the other nine. The test `the_papers_silicon_oxygen_example` carries it.
 //!
 //! # Torsion barriers
 //!
@@ -327,6 +340,27 @@ impl UffType {
     }
 }
 
+/// The GMP electronegativity χ of `element`, in **electronvolts**.
+///
+/// Left in eV rather than converted, because the one place it enters — eq 4's `r_EN` — is
+/// homogeneous of degree zero in χ: scaling every χ by one factor leaves `r_EN` unchanged, so the
+/// unit cancels and a conversion would only add a rounding. See the module documentation for the
+/// table and for where these numbers come from, which is **not** their primary source.
+pub fn gmp_electronegativity(element: Element) -> f64 {
+    match element {
+        Element::H => 4.528,
+        Element::C => 5.343,
+        Element::N => 6.899,
+        Element::O => 8.741,
+        Element::F => 10.874,
+        Element::P => 5.463,
+        Element::S => 6.928,
+        Element::Cl => 8.564,
+        Element::Br => 7.790,
+        Element::I => 6.822,
+    }
+}
+
 impl fmt::Display for UffType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
@@ -377,6 +411,13 @@ fn bonding(component: &Component, i: usize) -> Bonding {
 ///   centre, CO₂), → `C_1`: both are linear, two-coordinate sp carbon. Otherwise any double bond
 ///   → `C_2`. Otherwise `C_3`. The aromatic test comes first because the CCD writes a ring in
 ///   Kekulé form, so a ring carbon *has* a double bond and would read as `C_2` without it.
+///   **An amide carbon is `C_R`**: a carbon with a double bond to oxygen and a single,
+///   non-aromatic bond to a nitrogen the amide rule below types `N_R` (non-aromatic, single bonds
+///   only). The paper's amide bond order on p. 10026 is derived "from the C_R and N_R single bond
+///   radii", so UFF treats both ends of the amide bond as resonant; typing the carbon `C_2` would
+///   give the amide C–N a radius the paper did not use. An N-acyl *aromatic* nitrogen (an
+///   N-acetylimidazole) does not make its carbon `C_R` — see [`crate::energy`] for why that bond
+///   is not treated as an amide.
 /// - **Nitrogen.** Aromatic → `N_R`. Triple → `N_1`. Double → `N_2`. Otherwise, **an amide
 ///   nitrogen** — one with only single bonds, next to a carbon that has a double bond to oxygen —
 ///   → `N_R`; else `N_3`. The amide case is the one rule here that bond orders alone cannot
@@ -392,8 +433,12 @@ fn bonding(component: &Component, i: usize) -> Bonding {
 /// - **Sulfur.** Aromatic → `S_R` (a thiophene's). Double → `S_2`. Otherwise `S_3+2`.
 ///   **Known gap:** a sulfoxide or sulfone sulfur — common in drugs — is hypervalent and UFF's
 ///   own types for it are `S_3+4` and `S_3+6`, which are not in this table. It is typed `S_2`
-///   here because it has a double bond, and that is wrong for it; step 1b must refuse or extend
-///   before computing an energy for one.
+///   here because it has a double bond, and that is wrong for it. [`ForceField::new`] refuses
+///   one — any sulfur whose bond orders sum past two — with
+///   [`Unsupported::HypervalentSulfur`], rather than compute an energy from the wrong radius.
+///
+/// [`ForceField::new`]: crate::energy::ForceField::new
+/// [`Unsupported::HypervalentSulfur`]: crate::energy::Unsupported::HypervalentSulfur
 /// - **Phosphorus.** A double bond to oxygen (a phosphate, a phosphine oxide) → `P_3+5`;
 ///   otherwise `P_3+3`. The suffix is the oxidation state, and P=O is what puts phosphorus at +5
 ///   in every common drug motif.
@@ -413,6 +458,8 @@ pub fn assign(component: &Component) -> Vec<UffType> {
                         UffType::CR
                     } else if b.triples > 0 || b.doubles >= 2 {
                         UffType::C1
+                    } else if is_amide_carbon(component, i) {
+                        UffType::CR
                     } else if b.doubles > 0 {
                         UffType::C2
                     } else {
@@ -462,6 +509,23 @@ pub fn assign(component: &Component) -> Vec<UffType> {
             }
         })
         .collect()
+}
+
+/// A carbon with a C=O and a single, non-aromatic bond to a non-aromatic nitrogen whose bonds are
+/// all single — the nitrogen [`assign`] types `N_R` by its amide rule.
+fn is_amide_carbon(component: &Component, c: usize) -> bool {
+    let atoms = component.atoms();
+    let carbonyl = component
+        .neighbours(c)
+        .any(|(o, bond)| atoms[o].element == Element::O && bond.order == BondOrder::Double);
+    carbonyl
+        && component.neighbours(c).any(|(n, bond)| {
+            if atoms[n].element != Element::N || bond.order != BondOrder::Single || bond.aromatic {
+                return false;
+            }
+            let nb = bonding(component, n);
+            !nb.aromatic && nb.doubles == 0 && nb.triples == 0
+        })
 }
 
 /// A nitrogen with only single bonds, next to a carbon that carries a C=O.

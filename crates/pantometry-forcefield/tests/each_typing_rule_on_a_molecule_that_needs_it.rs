@@ -37,7 +37,10 @@ fn types(atoms: &[(&str, &str, bool)], bonds: &[(&str, &str, &str, bool)]) -> Ve
 
 /// **Acetamide's nitrogen is resonant, and methylamine's is not.** CH₃C(=O)NH₂ is planar at the
 /// nitrogen because the C–N bond is partly double; CH₃NH₂ is pyramidal. Their bond orders, as
-/// written, are identical at the nitrogen — only the neighbouring C=O tells them apart.
+/// written, are identical at the nitrogen — only the neighbouring C=O tells them apart. **The
+/// amide's carbonyl carbon is resonant too** (`C_R`, not `C_2`): the paper's amide bond order is
+/// worked "from the C_R and N_R single bond radii" (p. 10026). Methylamine's carbon has no C=O
+/// and stays `C_3`.
 #[test]
 fn an_amide_nitrogen_is_resonant_and_an_amine_is_not() {
     let acetamide = types(
@@ -65,7 +68,7 @@ fn an_amide_nitrogen_is_resonant_and_an_amine_is_not() {
     );
     assert_eq!(
         acetamide[..4],
-        [UffType::C3, UffType::C2, UffType::O2, UffType::NR]
+        [UffType::C3, UffType::CR, UffType::O2, UffType::NR]
     );
 
     let methylamine = types(
