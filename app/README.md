@@ -17,7 +17,7 @@ The split existed for a reason that is still true, and the numbers are measured 
 
 | | external crates |
 | --- | --- |
-| the library, all nineteen published crates | **12** |
+| the library, all twenty published crates | **12** |
 | `bindings/python`, which is split out for this | 19 |
 | `app/` — the viewer, the editor, the CLI and the accelerator, one workspace | 432 |
 

@@ -21,6 +21,33 @@ protects nothing.
 
 ## [Unreleased]
 
+### Added
+
+- **`pantometry-forcefield`, the fourteenth domain: a small molecule, read and typed — and not yet
+  an energy.** The first step towards molecular mechanics on drug-sized molecules, and deliberately
+  only the part that can be checked before any energy exists. `Component::from_ccd` reads one wwPDB
+  Chemical Component Dictionary entry (mmCIF) with a strict loop parser and no dependency: a missing
+  column, an element outside H C N O F P S Cl Br I, a bond order other than `SING`/`DOUB`/`TRIP`, a
+  bond naming an atom that is not there, a repeated atom or bond, a row one value short, or several
+  components in one file are each a `CcdError` that names what it refused. Positions are the
+  entry's ideal coordinates, or its model coordinates **for every atom** when any ideal one is
+  missing, because the two are in different frames — twenty ångström apart for aspirin.
+  `uff::assign` gives every atom its Universal Force Field type from element, bond orders and the
+  dictionary's own aromatic flags, with no ring perception; `UffType::parameters` is Table I of
+  Rappé et al., *J. Am. Chem. Soc.* 114, 10024 (1992), for the twenty-two types those ten elements
+  need, in SI, with the torsion barriers beside it. `Molecule` is the `Domain`: atoms as `Bodies`
+  with the dictionary's names and bonds, so `capture` draws it ball-and-stick without naming it.
+  **It does not move**: `step` leaves every atom in place, the ledger is empty, and both say so.
+  Checked against aspirin's (`AIN`) own stated formula and net charge, one bond per hydrogen,
+  every heavy atom's valence with aromatic bonds at 1.5, the types a chemist reads off its
+  structure, a textbook molecule for each rule aspirin does not reach (acetamide against
+  methylamine for the amide nitrogen, HCN, CO, CO₂, pyridine, thiophene, furan, phosphoric acid,
+  phosphine), the tetrahedral, trigonal and linear angles `θ₀` has to be, and UFF's own rule that
+  the non-bonded parameters belong to the element. Left out and said so where it would be missed:
+  the GMP electronegativity χ, whose source paper is not yet verified, so nothing here computes a
+  UFF natural bond length; and the hypervalent sulfur types, so a sulfone types as `S_2` until the
+  energy step refuses or extends it.
+
 ### Fixed
 
 - **Xenon's reason for being out of the catalogue was stated and not measured.** The docs said

@@ -1,6 +1,6 @@
 # Scenes
 
-Thirty-two worlds described as data, covering **all thirteen** of the library's domains — `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-one of them
+Thirty-two worlds described as data, covering **thirteen** of the library's fourteen domains — `forcefield`, added after them, has none yet, and gets one when it has energies to show. Before it, `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-one of them
 one question at a time, and one that is actually a world. The count above this line used to read
 "twenty-seven of them ... and one", which is twenty-eight and was never the number of files in this
 directory; **nineteen** state a single kind of domain and thirteen state more, so no split of them

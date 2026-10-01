@@ -136,9 +136,9 @@ Stated in full in CONTRIBUTING.md. The compressed version:
    are bit-for-bit identical across platforms, optimisation levels, WebAssembly and thread
    counts, and there is a pinned digest that says so.
 4. **The kernel must never depend on a domain**, and no domain may depend on another. That
-   claim is the reason for the crate split and has now been held through thirteen domains.
-5. **Every public item is documented.** `#![deny(missing_docs)]` in all **twenty-four** crates:
-   the nineteen in `crates/` and the five libraries in `app/`. It said eighteen through the
+   claim is the reason for the crate split and has now been held through fourteen domains.
+5. **Every public item is documented.** `#![deny(missing_docs)]` in all **twenty-five** crates:
+   the twenty in `crates/` and the five libraries in `app/`. It said eighteen through the
    consolidation and one crate had never had the rule at all.
 
 ## Commit messages

@@ -31,7 +31,7 @@ promise dates.
     ┌───────────────────────────┴─────────────────────────────────┐
     │  PHYSICS       what evolves, and what it conserves           │
     │                the kernel, and one crate per physics         │
-    │                         `pantometry-core` + thirteen domain crates │
+    │                         `pantometry-core` + fourteen domain crates │
     └───────────────────────────▲─────────────────────────────────┘
                                 │  fills
     ┌───────────────────────────┴─────────────────────────────────┐
@@ -144,14 +144,15 @@ separately have no way to touch.
 | `pantometry-porous` | Flow through a packed bed: Darcy's law solved as a field, the heat the liquid carries, and the dissolution that rides on both. An espresso puck, and also a filter, a catalyst bed and an aquifer |
 | `pantometry-quantum` | A wavefunction in a well: the time-dependent Schrödinger equation, marched with the same staggered leapfrog family the acoustic domain uses — real part on integer steps, imaginary on halves — so **probability is conserved as an identity of the update**, the way `∇·B` is on the Yee grid. Eigenvalues against the discrete operator's own closed form, Gaussian spreading and Ehrenfest's theorem at second order |
 | `pantometry-protein` | How a protein's fold moves: one node per alpha carbon, one spring per pair inside a cutoff, and the Hessian's eigenvectors are the collective motions. Rigid motions annihilated to `1.5e-17` of the matrix; a straight chain reproduces `4γ sin²(jπ/2N)`; a ligand cannot make a residue more mobile, by a theorem about the Schur complement rather than by observation. Checked against two measurements: deposited B-factors, where one line of geometry does as well, and the open-to-closed motion of adenylate kinase, where the softest mode scores **0.799** against a chance level of `0.039` |
+| `pantometry-forcefield` | A small molecule, atom by atom: one wwPDB Chemical Component Dictionary entry read strictly, every atom typed for the Universal Force Field from its element, bond orders and aromatic flags, and Table I of Rappé et al. (1992) in SI. Checked against the entry's own formula, valence, the hybridisation a chemist reads off the structure, and the tetrahedral, trigonal and linear angles the table's θ₀ must be. **No energy terms yet** — the molecule is drawn, with its bonds, and does not move |
 | `pantometry-shape` | Designed geometry as input: an STL read and measured, and rasterised into the cells a domain fills — with a report of what the cells could **not** hold, because a rib finer than the grid does not fail, it disappears. Depends on `pantometry-units` and nothing else |
 | `pantometry-scene` | Where things are and what a run looks like: placement, capture, and the shapes a view can draw. Names no domain |
 | `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
-| `pantometry` | A facade over the other eighteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
+| `pantometry` | A facade over the other nineteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
 | `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because its GPU and GUI stacks are 432 external crates against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
-| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty-two scenes across all thirteen domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
+| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty-two scenes across thirteen of the fourteen domains that CI runs — `pantometry-forcefield` has none yet. It exists to use the SDK from outside and write down where that is awkward |
 
 The last three are the workspace's answer to the same question from three sides: what a
 simulation *is* (`pantometry-scene`), what a picture of one *is* (`pantometry-view`), and what it feels
@@ -172,7 +173,8 @@ pantometry-em          depends on core      │
 pantometry-fluid       depends on core      │
 pantometry-porous      depends on core      │
 pantometry-quantum     depends on core      │
-pantometry-protein     depends on core     ─┘
+pantometry-protein     depends on core      │
+pantometry-forcefield  depends on core     ─┘
 pantometry-shape       depends on units only                ── designed geometry in
 pantometry-scene       depends on core                      ── where things are
 pantometry-view        depends on scene                     ── how to draw that
@@ -378,7 +380,7 @@ a galaxy — a simulation has to declare which regime it is in.
 
 ## Where the work is: 3D is not the default yet
 
-The physics layer is thirteen crates deep and dimensionally uneven. This is the honest state.
+The physics layer is fourteen crates deep and dimensionally uneven. This is the honest state.
 
 | crate | space it lives in | for the goal |
 | --- | --- | --- |
@@ -395,6 +397,7 @@ The physics layer is thirteen crates deep and dimensionally uneven. This is the 
 | `pantometry-quantum` | **1D** `Well` — a wavefunction between walls | arrived one-dimensional, as every wave here did; higher dimensions are cells and cost, not new physics |
 | `pantometry-pharmacokinetic` | **no space at all** — `CompartmentModel` is a graph, like `ThermalNetwork`. A compartment is an apparent volume, not a place | done, and 3D is not what it is missing |
 | `pantometry-protein` | **3D and no grid** — a `3n`-dimensional eigenproblem over points, so space is the structure rather than a discretisation of it | done; what it is missing is size, not dimension, at `n³` a sweep |
+| `pantometry-forcefield` | **3D and no grid** — atoms at places, joined by the bonds the chemistry has | typed and drawn; the energy terms that would make it move are the next step |
 
 Two observations follow, and they point in opposite directions.
 
@@ -494,7 +497,7 @@ These are not style. Each one is what makes some part of the goal reachable.
 
 1. **The kernel must never depend on a domain.** Without this, "add a physics" means "edit the
    kernel", and the goal is a rewrite each time.
-2. **No domain may depend on another.** They meet on the bus. Thirteen domains have now been added
+2. **No domain may depend on another.** They meet on the bus. Fourteen domains have now been added
    without this breaking, which is the evidence that the split is real.
 3. **The arrows point one way.** Analysis → scene → physics. A domain that can see the scene can
    see another domain through it. This is enforced by cargo rather than by discipline now that
@@ -548,7 +551,7 @@ different quantities, the second separates domains carrying the same one.
    `dx/(c√3)`, checked against the rigid-wall mode frequencies and a second-order convergence
    rate measured across three doublings.
 
-   Ten of the thirteen domains are three-dimensional now. What is left is `pantometry-optics`, whose rays
+   Eleven of the fourteen domains are three-dimensional now. What is left is `pantometry-optics`, whose rays
    are already 3D and whose *fields* are not — and gap 4 below, which closed `pantometry-electrical`,
    is why this sentence used to say eight. `pantometry-quantum` is one-dimensional and
    `pantometry-pharmacokinetic` has no space at all; the second of those is not a gap, in the
@@ -755,9 +758,9 @@ around the three that exist — Poiseuille, Couette and Taylor–Green — each 
 different mistake, with two machine-precision statements beside them that a decay rate is too
 coarse to see.
 
-That closes the list this section opened with. **The physics layer is where it was aimed**: thirteen
+That closes the list this section opened with. **The physics layer is where it was aimed**: fourteen
 crates, each one added without the kernel or either layer above it changing, which is this
-document's rule 1 held thirteen times. `CLAUDE.md` numbers the same rule 4, which is why a reader who has
+document's rule 1 held fourteen times. `CLAUDE.md` numbers the same rule 4, which is why a reader who has
 both open should trust the wording over the number.
 
 What was open was not a list of missing physics but a list of missing *depth* in what is here, and

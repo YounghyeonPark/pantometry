@@ -147,6 +147,7 @@ A domain that overrides `books_balance` to `true` claims its ledger changes by e
 | `pantometry-fluid` | `Channel`: incompressible Navier–Stokes by projection on a staggered grid, with `Walls` and `CELL_REYNOLDS_LIMIT`. The hardest domain here to trust, and its own documentation says why: few closed forms, schemes that trade conservation for stability, and a divergence that is a statement about the solve rather than about the flow |
 | `pantometry-porous` | `Puck`: Darcy flow through a packed bed, the heat the liquid carries and the dissolution it drives — a coffee puck, and equally a chromatography column, a sand filter or an aquifer. `Basket`, `Shot`, `Observable`, `PuckField` |
 | `pantometry-protein` | `Protein`: a fold's collective motions, from a Protein Data Bank file. `Structure::from_pdb` reads alpha carbons and the crystallographer's B-factors, `Network` joins every pair inside a cutoff, and `Modes` is the Hessian's eigendecomposition — with `spectrum::Symmetric` underneath it, a Jacobi eigensolver that adds no dependency. It predicts **which way** a structure moves and nothing about how tightly anything binds; `correlation` is how it is judged against what was measured |
+| `pantometry-forcefield` | `Molecule`: a small molecule atom by atom, hydrogens included. `Component::from_ccd` reads one wwPDB Chemical Component Dictionary entry strictly — a missing column, an unknown element, a bond to an atom that is not there are each a `CcdError` naming it — and `uff::assign` gives every atom its Universal Force Field type (`UffType`) from its element, bond orders and the dictionary's aromatic flags, with Table I of Rappé et al. (1992) in SI behind `UffType::parameters`. **No energy yet**: the molecule is drawn as bodies with names and bonds and does not move. Checked against aspirin's own formula, valence, and the types a chemist reads off its structure |
 | `pantometry-quantum` | `Well`: a 1D wavefunction between hard walls, marched with the same staggered-leapfrog family the acoustic domain uses. `in_eigenstate(n)`, `with_gaussian(centre, sigma, k0)`, `with_harmonic(omega)`; probability sits on the ledger as an identity of the update |
 | `pantometry-pharmacokinetic` | `CompartmentModel`: *n* well-stirred compartments joined by intercompartmental clearances, with elimination out of the ones that eliminate. `bolus`, `infuse`, and a `Clearance` that is a volume per time rather than a rate constant. Checked against the one- and two-compartment closed forms — `A₀e^{−kt}`, `(R/k)(1−e^{−kt})`, and the bi-exponential whose `α` and `β` are the roots of `λ² − (k10+k12+k21)λ + k10k21 = 0`. No field and no bodies: `readings` is the whole output |
 | `pantometry-shape` | Designed geometry as input, and the bridge where the physics gets decided: `Mesh::from_stl` reads a surface and measures it, `Voxels` rasterises it onto the structured grid every domain here takes, and `Loss` is what that costs. Depends on `pantometry-units` and nothing else in the workspace — it hands out a predicate and a domain's `fill` takes one |
@@ -218,8 +219,8 @@ They are listed here so it does not have to be loudly.
   `rand::thread_rng`, and reductions over unordered collections all break this.
 - **Domains do not depend on each other.** If your new physics needs to `use pantometry_thermal`,
   the design is wrong — publish on a channel instead. The kernel depends on no domain either.
-- **Every public item is documented.** `#![deny(missing_docs)]` is set in all **twenty-four** crates —
-  the nineteen published ones and the five libraries in `app/`.
+- **Every public item is documented.** `#![deny(missing_docs)]` is set in all **twenty-five** crates —
+  the twenty published ones and the five libraries in `app/`.
 - **MSRV is 1.78**, checked by CI.
 - **Tolerances are earned.** A number in an `assert!` should trace to an effect — an
   integrator's order, `1/√N` for a sample count, a discretisation. If you cannot say which,
@@ -268,7 +269,7 @@ also pass it, then go and check *that*.
 - **[README.md](README.md)** — the long version, including what is deliberately *not* here.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — the conventions, and the gate CI runs.
 - **[CLAUDE.md](CLAUDE.md)** — working on pantometry rather than with it.
-- **[RELEASING.md](RELEASING.md)** — the nineteen crates, the wheel, the nine places a version
+- **[RELEASING.md](RELEASING.md)** — the twenty crates, the wheel, the nine places a version
   lives, and the DOI, which was minted at 0.16.0 after failing silently at 0.13.0 and 0.14.0. Read
   once per release and not otherwise, which is why it is not in `CLAUDE.md`.
 - **[CITATION.cff](CITATION.cff)** — how to cite this. Co-authorship is not requested and could not be

@@ -1,7 +1,7 @@
 //! pantometry: physics for simulated worlds, in one dependency.
 //!
 //! A facade over the workspace. Nothing is implemented here — the point is that a
-//! consumer writes `pantometry = "0.22"` rather than naming eighteen crates, and that the
+//! consumer writes `pantometry = "0.22"` rather than naming nineteen crates, and that the
 //! integration tests which need two domains at once have somewhere to live.
 //!
 //! ```
@@ -62,19 +62,20 @@
 //! pantometry-thermal          depends on core   │
 //! pantometry-mechanics        depends on core   │
 //! pantometry-acoustic         depends on core   ├ one crate per physics, and none knows another
-//! pantometry-molecular        depends on core   │   -- thirteen, and six more not listed
+//! pantometry-molecular        depends on core   │   -- fourteen, and five more not listed
 //! pantometry-electrical       depends on core   │
 //! pantometry-pharmacokinetic  depends on core   │
-//! pantometry-protein          depends on core   ┘
+//! pantometry-protein          depends on core   │
+//! pantometry-forcefield       depends on core   ┘
 //! pantometry-scene            depends on core      where things are, and what a run looks like
 //! pantometry-view             depends on scene     how to draw that, chosen by the data's shape
 //! pantometry                  depends on all of them
 //! ```
 //!
-//! None of the thirteen domains knows about any of the others. They meet on the kernel's
+//! None of the fourteen domains knows about any of the others. They meet on the kernel's
 //! [`Exchange`](pantometry_core::Exchange), and each one that arrived left the others
 //! untouched — which is the claim the split was made to test, and has held every time a domain
-//! has been added, most recently for a protein's normal modes.
+//! has been added, most recently for a small molecule typed for a force field.
 //!
 //! [`scene`] and [`view`] are layers up rather than domains, and they are bound by the same rule
 //! from the other side: neither names a domain. A physics that arrives tomorrow is captured
@@ -92,6 +93,7 @@ pub use pantometry_elastic as elastic;
 pub use pantometry_electrical as electrical;
 pub use pantometry_em as em;
 pub use pantometry_fluid as fluid;
+pub use pantometry_forcefield as forcefield;
 pub use pantometry_mechanics as mechanics;
 pub use pantometry_molecular as molecular;
 pub use pantometry_optics as optics;
@@ -136,6 +138,7 @@ pub mod prelude {
     pub use pantometry_electrical::{Conductor, Winding};
     pub use pantometry_em::{cavity_frequency, Cavity, Medium};
     pub use pantometry_fluid::{Channel, Walls};
+    pub use pantometry_forcefield::{Component, Molecule, UffType};
     pub use pantometry_mechanics::{
         Body, ContactSystem, Coords, Ground, Inertia, NBody, RigidBody, TreeNBody, GRAVITATION,
     };

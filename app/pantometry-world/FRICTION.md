@@ -1700,9 +1700,10 @@ one should be compared against.
 
 ## What this report does not cover
 
-**All thirteen domains have scenes** — findings 31 and after closed the last four of the eleven
-there were then, and the two domains added since have them too. This said "eleven" through both of
-them. What is left is smaller and more specific.
+**Thirteen of the fourteen domains have scenes** — findings 31 and after closed the last four of the
+eleven there were then, and the two domains added since have them too. `forcefield`, the fourteenth,
+has none yet. This said "eleven" through both of those two, and "all thirteen" was true until the
+fourteenth arrived. What is left is smaller and more specific.
 
 **`TreeNBody`, `RigidBody` and the rest of mechanics.** Four types took `as_any` in this pass
 but only `NBody` and `ContactSystem` have scene variants, so Barnes-Hut and rigid rotation are

@@ -5,11 +5,12 @@
 [![docs.rs](https://docs.rs/pantometry/badge.svg)](https://docs.rs/pantometry)
 
 Physics for simulated worlds — a kernel that knows nothing about any particular physics, and
-thirteen domains built on it that do: **light, heat, motion, sound, electricity, electromagnetic
+fourteen domains built on it that do: **light, heat, motion, sound, electricity, electromagnetic
 fields, elastic deformation, incompressible flow, flow through a packed bed, matter one atom at a
-time, a quantum wavefunction in a well, the motions a measured protein has, and a drug
-distributing through a body.** Two layers above them place a simulation in the world and draw it,
-and neither knows a domain either.
+time, a quantum wavefunction in a well, the motions a measured protein has, a drug
+distributing through a body, and a drug molecule read atom by atom and typed for a force
+field.** Two layers above them place a simulation in the world and draw it, and neither knows a
+domain either.
 
 Dimensions live in the type system, so `Length + Time` does not compile. Conservation is audited
 rather than assumed, and a `Violation` names what went missing and where. Every result is
@@ -83,7 +84,7 @@ well clear of the rest.*
 ## Install
 
 ```sh
-cargo add pantometry     # one dependency, all nineteen published crates
+cargo add pantometry     # one dependency, all twenty published crates
 pip install pantometry   # or from Python — see bindings/python
 ```
 
@@ -138,7 +139,7 @@ thick ones are what a lumped model cannot tell you: the peak is well above it.*
 | read | for |
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | the whole API on one page. `cargo run --example agents_quickstart` is a runnable version, including a deliberate 10% energy leak so you can see what the audit says |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | the map: three layers, the nineteen crates, what is built, what is missing, and what is deliberately not here |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | the map: three layers, the twenty crates, what is built, what is missing, and what is deliberately not here |
 | [EVIDENCE.md](EVIDENCE.md) | how the claims are checked, and what checking them found — including two real defects the conservation audit reported as clean |
 | [EXAMPLES.md](EXAMPLES.md) | every example and what it demonstrates |
 | [app/README.md](app/README.md) | the binary: CLI, viewer, editor, accelerator |

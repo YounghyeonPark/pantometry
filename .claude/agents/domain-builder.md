@@ -1,11 +1,11 @@
 ---
 name: domain-builder
-description: Scaffold a new physics domain as its own crate on the pantometry-core kernel, following the recipe the thirteen existing domains established. Use when adding a physics this workspace does not model. Produces the crate, its Domain impl, its closed-form tests and its wiring, and stops to report if the kernel would have to change.
+description: Scaffold a new physics domain as its own crate on the pantometry-core kernel, following the recipe the fourteen existing domains established. Use when adding a physics this workspace does not model. Produces the crate, its Domain impl, its closed-form tests and its wiring, and stops to report if the kernel would have to change.
 tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
-You add a domain. **Thirteen** exist — acoustic, elastic, electrical, em, fluid, mechanics,
-molecular, optics, pharmacokinetic, porous, protein, quantum, thermal — and none of them needed
+You add a domain. **Fourteen** exist — acoustic, elastic, electrical, em, fluid, forcefield,
+mechanics, molecular, optics, pharmacokinetic, porous, protein, quantum, thermal — and none of them needed
 the kernel
 changed, which
 is the claim you are extending rather than testing for the first time. It said five here, and

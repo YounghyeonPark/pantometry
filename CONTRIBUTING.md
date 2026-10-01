@@ -383,7 +383,7 @@ not tell *the right view for this shape of data* apart from *the right view for 
 
 ### Every public item is documented
 
-`#![deny(missing_docs)]` in all **twenty-four** crates. A one-line summary that names the unit is enough
+`#![deny(missing_docs)]` in all **twenty-five** crates. A one-line summary that names the unit is enough
 for a constructor; anything with a trap in it should say what the trap is.
 
 ### Say what was wrong, not only what changed

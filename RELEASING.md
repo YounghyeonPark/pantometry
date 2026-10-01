@@ -4,8 +4,8 @@ Read this before a release and not otherwise. It was inside `CLAUDE.md`, which i
 session, and a procedure you follow once per release does not need to be in front of you for the
 hundred commits in between.
 
-Nineteen crates are published together and share one version. **A published version is permanent** —
-it can be yanked, never replaced — so the cost of a release is nineteen permanent version numbers on
+Twenty crates are published together and share one version. **A published version is permanent** —
+it can be yanked, never replaced — so the cost of a release is twenty permanent version numbers on
 crates.io, one on PyPI, and a prose sweep.
 
 ## When
@@ -23,7 +23,7 @@ All of them, or the release is broken in a way only one CI job can see:
 
 | | occurrences |
 | --- | --- |
-| `Cargo.toml` | 20 — the workspace version and all nineteen path pins. **19 at 0.20.0**, and the row moved when `pantometry-protein` arrived: a table that counts path pins gains a row every time a crate does, which is the argument for the `grep -c` below rather than for this column |
+| `Cargo.toml` | 21 — the workspace version and all twenty path pins. **19 at 0.20.0** and **20 at 0.22.0**, and the row moved when `pantometry-protein` arrived and again when `pantometry-forcefield` did: a table that counts path pins gains a row every time a crate does, which is the argument for the `grep -c` below rather than for this column |
 | `bindings/python/Cargo.toml` | 2 — the crate's own version **and** the exact `pantometry` pin |
 | `bindings/python/pyproject.toml` | 1 — the wheel's version |
 | `AGENTS.md` | 1 — `pantometry = "0.x"`, which `documented_version.rs` checks |
@@ -141,7 +141,8 @@ set -euo pipefail
 for c in pantometry-units pantometry-core pantometry-acoustic pantometry-mechanics pantometry-molecular \
          pantometry-optics pantometry-thermal pantometry-electrical pantometry-elastic pantometry-em \
          pantometry-fluid pantometry-porous pantometry-quantum pantometry-pharmacokinetic \
-         pantometry-protein pantometry-shape pantometry-scene pantometry-view pantometry; do
+         pantometry-protein pantometry-forcefield pantometry-shape pantometry-scene \
+         pantometry-view pantometry; do
   cargo publish -p "$c" --locked      # once per crate. Twice publishes the first and stops on it
 done
 git tag -a vX.Y.Z -F message.txt && git push origin vX.Y.Z   # the tag publishes the wheel
@@ -150,7 +151,7 @@ git tag -a vX.Y.Z -F message.txt && git push origin vX.Y.Z   # the tag publishes
 `pantometry-pharmacokinetic` and `pantometry-protein` were new at 0.21.0 and went after the other
 domains and before `pantometry`, which was the only ordering constraint on either: each depends on
 `pantometry-units` and `pantometry-core` and nothing else, and only the facade depends on them.
-Both are on the index now, so the next release adds no new crate unless one arrives. `pantometry-protein` also carries `structures/`, six Protein Data Bank entries totalling
+Both are on the index now. **`pantometry-forcefield` is not**: it is new after 0.22.0, goes in the same place for the same reason, and is the one new crate the next release carries — so that release meets the new-crate rate limit below once. It carries `components/AIN.cif`, one Chemical Component Dictionary entry of 6 KB, unmodified. `pantometry-protein` also carries `structures/`, six Protein Data Bank entries totalling
 1.1 MB that its tests `include_str!` — the largest thing this workspace publishes, and the reason
 is in `crates/pantometry-protein/structures/README.md`: a fixture that has been through a script
 can no longer be checked against what it came from.

@@ -15,6 +15,7 @@ members = [
     "crates/pantometry-quantum",
     "crates/pantometry-pharmacokinetic",
     "crates/pantometry-protein",
+    "crates/pantometry-forcefield",
     # Not a domain and not a layer: input preparation. It depends on `pantometry-units` and nothing else
     # in the workspace, and no domain depends on it — it hands out a predicate and a domain's `fill`
     # takes one, which is the whole coupling.
@@ -63,6 +64,7 @@ pantometry-fluid = { path = "crates/pantometry-fluid", version = "0.22.0" }
 pantometry-quantum = { path = "crates/pantometry-quantum", version = "0.22.0" }
 pantometry-pharmacokinetic = { path = "crates/pantometry-pharmacokinetic", version = "0.22.0" }
 pantometry-protein = { path = "crates/pantometry-protein", version = "0.22.0" }
+pantometry-forcefield = { path = "crates/pantometry-forcefield", version = "0.22.0" }
 pantometry-shape = { path = "crates/pantometry-shape", version = "0.22.0" }
 pantometry-scene = { path = "crates/pantometry-scene", version = "0.22.0" }
 pantometry-view = { path = "crates/pantometry-view", version = "0.22.0" }

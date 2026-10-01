@@ -34,6 +34,7 @@ dependencies = [
  "pantometry-electrical",
  "pantometry-em",
  "pantometry-fluid",
+ "pantometry-forcefield",
  "pantometry-mechanics",
  "pantometry-molecular",
  "pantometry-optics",
@@ -101,6 +102,14 @@ name = "pantometry-fluid"
 version = "0.22.0"
 dependencies = [
  "glam",
+ "pantometry-core",
+ "pantometry-units",
+]
+
+[[package]]
+name = "pantometry-forcefield"
+version = "0.22.0"
+dependencies = [
  "pantometry-core",
  "pantometry-units",
 ]

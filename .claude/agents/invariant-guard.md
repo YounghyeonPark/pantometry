@@ -93,7 +93,7 @@ alters that constant, that is the finding** — it is never the fix.
 cargo clippy --workspace --lib -- -W missing_docs 2>&1 | grep -c "^warning: missing"
 ```
 
-Must be `0`. All **twenty-four** crates carry `#![deny(missing_docs)]` — the nineteen in `crates/`
+Must be `0`. All **twenty-five** crates carry `#![deny(missing_docs)]` — the twenty in `crates/`
 and the five libraries in `app/` — so a regression is a build failure. But check that the attribute
 is still present and still positioned before any item, since an inner attribute after the first item
 is a compile error and it is easy to reintroduce while editing the top of a file.
@@ -104,8 +104,8 @@ is a compile error and it is easy to reintroduce while editing the top of a file
 nothing failed and nothing said so.
 
 ```sh
-grep -l "deny(missing_docs)" crates/*/src/lib.rs app/*/src/lib.rs | wc -l   # 24
-ls -d crates/*/src/lib.rs app/*/src/lib.rs | wc -l                          # 24, and they must match
+grep -l "deny(missing_docs)" crates/*/src/lib.rs app/*/src/lib.rs | wc -l   # 25
+ls -d crates/*/src/lib.rs app/*/src/lib.rs | wc -l                          # 25, and they must match
 ```
 
 ## 5. The promises CI makes
@@ -164,7 +164,7 @@ became owned, `Panel` became an enum), a removed re-export, a constructor's para
 has *not* meant adding a defaulted trait method or a new `serde(default)` field — those are
 additive, and both have been done without a bump.
 
-The seventeen crates share one version and are published together. Check that every
+The twenty crates share one version and are published together. Check that every
 `workspace.dependencies` entry's `version` matches `workspace.package.version`: a mismatch
 publishes a facade that depends on a version of its own crates that does not exist.
 
