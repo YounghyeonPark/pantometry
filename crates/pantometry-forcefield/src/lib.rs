@@ -33,7 +33,8 @@
 //! to the atom count and composition its own `_chem_comp.formula` states; every hydrogen has one
 //! bond; every heavy atom's bond orders sum to its valence, with an aromatic bond counted as one
 //! and a half; the types of aspirin's thirteen heavy atoms are the ones a chemist reads off the
-//! structure; and the natural angles of `C_3`, `C_R` and `C_1` are the tetrahedral, trigonal and
+//! structure — its acid and ester oxygens resonant, as the paper types a conjugated ether oxygen
+//! (see [`uff::assign`]); and the natural angles of `C_3`, `C_R` and `C_1` are the tetrahedral, trigonal and
 //! linear angles of geometry. Every refusal has a test that feeds it the input it refuses.
 //!
 //! The energy terms against closed forms: a bond's energy is zero at its natural length and
@@ -70,9 +71,11 @@
 //!   no velocities, no temperature, and `dt` is not used. Molecular dynamics is a later step.
 //! - **No conformer search.** The minimiser finds the minimum downhill from where it starts; the
 //!   torsion scans hold a dihedral to find a barrier, and nothing looks for the global minimum.
-//! - **Two readings of the paper are open**, and [`Variant`] exists only to measure them: the
-//!   sign of `r_EN` in eq 2 and the minimum of the group-6 sp³–sp² torsion. The defaults are
-//!   what [`energy`] and [`angular`] document.
+//! - **No reading of the paper but this crate's in use**: [`Variant`] keeps one other — `r_EN`
+//!   added as eq 2 prints it, or dropped — only as the evidence that settled the sign, which the
+//!   paper's own minimised structures did (see [`energy`]). The other question 1d left open, the
+//!   group-6 sp³–sp² torsion's minimum, was settled by typing a conjugated O or S resonant as the
+//!   paper does, after which the row it asked about is reached only by an oxonium oxygen.
 //! - **The electronegativities are not from their primary source.** χ is transcribed from Open
 //!   Babel, which copies RDKit; the paper it comes from has not been read. [`uff`] says so where
 //!   the values are, and what the one partial check pins.

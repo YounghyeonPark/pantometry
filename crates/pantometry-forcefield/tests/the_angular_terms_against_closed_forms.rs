@@ -1173,32 +1173,73 @@ fn the_switch_slope_on_both_ends() {
     }
 }
 
-/// **The planar reading of the group-6 rule moves its minimum and nothing else**: φ₀ = 180°
-/// instead of 90°, with the same n = 2 and eq 17's V; and on every other row the two readings
-/// agree. It exists to measure the open question (see `the_papers_barriers`), so what it changes
-/// is pinned here.
+/// **The group-6 sp³–sp² row is still reached, by one kind of atom**: a three-coordinate oxonium
+/// oxygen on an sp² carbon, which the resonant rule leaves `O_3` because it is not divalent. Here
+/// dimethyl(vinyl)oxonium, CH₂=CH–O⁺(CH₃)₂: its O–C(vinyl) bond takes the row, n = 2 at φ₀ = 90°,
+/// eq 17's 10 kcal/mol; and the same skeleton with one methyl removed — methyl vinyl ether — types
+/// the oxygen `O_R`, and the bond is sp²–sp² instead.
 #[test]
-fn the_planar_reading_moves_only_the_minimum() {
-    use pantometry_forcefield::angular::{torsion_parameters_with, Group6OnSp2};
-    for (j, k, order, js, ks) in [
-        (UffType::O3, UffType::CR, 1.0, false, true),
-        (UffType::C2, UffType::S3Divalent, 1.0, true, false),
-        (UffType::C3, UffType::C3, 1.0, false, false),
-        (UffType::CR, UffType::CR, 1.5, true, true),
-        (UffType::C3, UffType::C2, 1.0, false, true),
-    ] {
-        let printed = torsion_parameters_with(j, k, order, js, ks, Group6OnSp2::AsPrinted)
-            .expect("a torsion");
-        let planar =
-            torsion_parameters_with(j, k, order, js, ks, Group6OnSp2::Planar).expect("a torsion");
-        assert_eq!(printed.case, planar.case);
-        assert_eq!(printed.barrier, planar.barrier);
-        assert_eq!(printed.periodicity, planar.periodicity);
-        if printed.case == TorsionCase::Group6Sp3Sp2 {
-            assert_eq!(printed.equilibrium, 90.0 * DEG);
-            assert_eq!(planar.equilibrium, 180.0 * DEG);
-        } else {
-            assert_eq!(printed.equilibrium, planar.equilibrium);
+fn only_an_oxonium_still_reaches_the_group_6_row() {
+    let atoms_and_bonds = |third_methyl: bool| {
+        let mut atoms = vec![
+            ("C1", "C", false),
+            ("C2", "C", false),
+            ("O", "O", false),
+            ("CM", "C", false),
+            ("H11", "H", false),
+            ("H12", "H", false),
+            ("H2", "H", false),
+            ("HM1", "H", false),
+            ("HM2", "H", false),
+            ("HM3", "H", false),
+        ];
+        let mut bonds = vec![
+            ("C1", "C2", "DOUB", false),
+            ("C2", "O", "SING", false),
+            ("O", "CM", "SING", false),
+            ("C1", "H11", "SING", false),
+            ("C1", "H12", "SING", false),
+            ("C2", "H2", "SING", false),
+            ("CM", "HM1", "SING", false),
+            ("CM", "HM2", "SING", false),
+            ("CM", "HM3", "SING", false),
+        ];
+        if third_methyl {
+            atoms.extend([
+                ("CN", "C", false),
+                ("HN1", "H", false),
+                ("HN2", "H", false),
+                ("HN3", "H", false),
+            ]);
+            bonds.extend([
+                ("O", "CN", "SING", false),
+                ("CN", "HN1", "SING", false),
+                ("CN", "HN2", "SING", false),
+                ("CN", "HN3", "SING", false),
+            ]);
         }
+        entry(&atoms, &bonds)
+    };
+    let oxonium = atoms_and_bonds(true);
+    assert_eq!(uff::assign(&oxonium)[2], UffType::O3);
+    let ff = force_field(&oxonium);
+    let about: Vec<_> = ff
+        .torsions()
+        .iter()
+        .filter(|t| [t.atoms[1], t.atoms[2]] == [1, 2])
+        .map(|t| t.parameters)
+        .collect();
+    assert!(!about.is_empty());
+    for p in about {
+        assert_eq!(p.case, TorsionCase::Group6Sp3Sp2);
+        assert_eq!((p.periodicity, p.equilibrium), (2, 90.0 * DEG));
+        assert!((kcal(p.barrier) - 10.0).abs() < 1e-12);
     }
+    let ether = atoms_and_bonds(false);
+    assert_eq!(uff::assign(&ether)[2], UffType::OR);
+    assert!(force_field(&ether)
+        .torsions()
+        .iter()
+        .filter(|t| [t.atoms[1], t.atoms[2]] == [1, 2])
+        .all(|t| t.parameters.case == TorsionCase::Sp2Sp2));
 }

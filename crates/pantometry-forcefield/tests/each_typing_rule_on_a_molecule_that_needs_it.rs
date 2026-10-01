@@ -282,3 +282,219 @@ fn a_primed_atom_name_is_one_name() {
     assert_eq!(c.atoms()[0].name, "C1'");
     assert_eq!(c.bonds()[0].atoms, [0, 1]);
 }
+
+type Atoms = Vec<(&'static str, &'static str, bool)>;
+type Bonds = Vec<(&'static str, &'static str, &'static str, bool)>;
+
+/// A benzene ring, C1…C6, aromatic, without hydrogens (they change no type here), to extend.
+fn ring() -> (Atoms, Bonds) {
+    let names = ["C1", "C2", "C3", "C4", "C5", "C6"];
+    let atoms = names.iter().map(|n| (*n, "C", true)).collect();
+    let bonds = (0..6)
+        .map(|k| {
+            let order = if k % 2 == 0 { "DOUB" } else { "SING" };
+            (names[k], names[(k + 1) % 6], order, true)
+        })
+        .collect();
+    (atoms, bonds)
+}
+
+/// The type of atom `name` in the molecule `atoms`/`bonds`.
+fn type_of(
+    atoms: &[(&str, &str, bool)],
+    bonds: &[(&str, &str, &str, bool)],
+    name: &str,
+) -> UffType {
+    let k = atoms.iter().position(|a| a.0 == name).expect("named");
+    types(atoms, bonds)[k]
+}
+
+/// **A divalent oxygen or sulfur with only single bonds, next to an sp² or resonant atom, is
+/// resonant** — `uff::assign`'s rule, branch by branch, each on the smallest molecule that needs
+/// it (see `uff::assign` for which branches are the paper's and which are choices):
+///
+/// - on an aromatic ring (anisole's O, thioanisole's S), on a C=C (methyl vinyl ether's O), on a
+///   C=O (methyl formate's ester O, a thioester's S) — `O_R`, `S_R`;
+/// - bearing a hydrogen (phenol's and acetic acid's OH) — `O_R`;
+/// - between two sp² atoms (divinyl ether's O, acetic anhydride's bridging O) — `O_R`;
+/// - on an sp² nitrogen (acetaldoxime's O) — `O_R`;
+///
+/// and what stays as it was: dimethyl ether's and methanol's O and dimethyl sulfide's S (no sp²
+/// neighbour) — `O_3`, `S_3+2`; methyl cyanate's O, whose other neighbour is an sp carbon —
+/// `O_3`; the carbonyl O — `O_2`; furan's O — `O_R` already, by its aromatic flag. And the rule
+/// does not propagate: in methyl peroxyacetate, CH₃C(=O)–O–O–CH₃, the oxygen on the carbonyl is
+/// `O_R` and the one beyond it, whose neighbours are that oxygen and a methyl, stays `O_3`.
+#[test]
+fn a_divalent_oxygen_or_sulfur_next_to_an_sp2_atom_is_resonant() {
+    use UffType::*;
+    // On an aromatic ring: anisole's O, thioanisole's S, and phenol's O–H.
+    for (x, element, want, other) in [
+        ("O", "O", OR, ("CM", "C")),
+        ("S", "S", SR, ("CM", "C")),
+        ("O", "O", OR, ("H", "H")),
+    ] {
+        let (mut atoms, mut bonds) = ring();
+        atoms.extend([(x, element, false), (other.0, other.1, false)]);
+        bonds.extend([("C1", x, "SING", false), (x, other.0, "SING", false)]);
+        assert_eq!(type_of(&atoms, &bonds, x), want, "{element}–{}", other.0);
+    }
+    // On a C=C: methyl vinyl ether.
+    let atoms = [
+        ("C1", "C", false),
+        ("C2", "C", false),
+        ("O", "O", false),
+        ("CM", "C", false),
+    ];
+    let bonds = [
+        ("C1", "C2", "DOUB", false),
+        ("C2", "O", "SING", false),
+        ("O", "CM", "SING", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O"), OR);
+    // On a C=O: methyl formate's ester O, and the carbonyl O beside it unchanged.
+    let atoms = [
+        ("C", "C", false),
+        ("O1", "O", false),
+        ("O2", "O", false),
+        ("CM", "C", false),
+    ];
+    let bonds = [
+        ("C", "O1", "DOUB", false),
+        ("C", "O2", "SING", false),
+        ("O2", "CM", "SING", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O2"), OR);
+    assert_eq!(type_of(&atoms, &bonds, "O1"), O2);
+    // A thioester's S.
+    let atoms = [
+        ("C", "C", false),
+        ("O", "O", false),
+        ("S", "S", false),
+        ("CM", "C", false),
+    ];
+    let bonds = [
+        ("C", "O", "DOUB", false),
+        ("C", "S", "SING", false),
+        ("S", "CM", "SING", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "S"), SR);
+    // Bearing H: acetic acid's OH.
+    let atoms = [
+        ("C1", "C", false),
+        ("C2", "C", false),
+        ("O1", "O", false),
+        ("O2", "O", false),
+        ("HO", "H", false),
+    ];
+    let bonds = [
+        ("C1", "C2", "SING", false),
+        ("C2", "O1", "DOUB", false),
+        ("C2", "O2", "SING", false),
+        ("O2", "HO", "SING", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O2"), OR);
+    // Between two sp² atoms: divinyl ether, and acetic anhydride's bridge.
+    let atoms = [
+        ("C1", "C", false),
+        ("C2", "C", false),
+        ("O", "O", false),
+        ("C3", "C", false),
+        ("C4", "C", false),
+    ];
+    let bonds = [
+        ("C1", "C2", "DOUB", false),
+        ("C2", "O", "SING", false),
+        ("O", "C3", "SING", false),
+        ("C3", "C4", "DOUB", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O"), OR);
+    let atoms = [
+        ("CA", "C", false),
+        ("OA", "O", false),
+        ("O", "O", false),
+        ("CB", "C", false),
+        ("OB", "O", false),
+    ];
+    let bonds = [
+        ("CA", "OA", "DOUB", false),
+        ("CA", "O", "SING", false),
+        ("O", "CB", "SING", false),
+        ("CB", "OB", "DOUB", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O"), OR);
+    // On an sp² nitrogen: acetaldoxime's O–H.
+    let atoms = [
+        ("C1", "C", false),
+        ("C2", "C", false),
+        ("N", "N", false),
+        ("O", "O", false),
+        ("HO", "H", false),
+    ];
+    let bonds = [
+        ("C1", "C2", "SING", false),
+        ("C2", "N", "DOUB", false),
+        ("N", "O", "SING", false),
+        ("O", "HO", "SING", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "N"), N2);
+    assert_eq!(type_of(&atoms, &bonds, "O"), OR);
+
+    // What stays: no sp² neighbour.
+    let ether = [("C1", "C", false), ("O", "O", false), ("C2", "C", false)];
+    let ether_bonds = [("C1", "O", "SING", false), ("O", "C2", "SING", false)];
+    assert_eq!(type_of(&ether, &ether_bonds, "O"), O3);
+    let sulfide = [("C1", "C", false), ("S", "S", false), ("C2", "C", false)];
+    let sulfide_bonds = [("C1", "S", "SING", false), ("S", "C2", "SING", false)];
+    assert_eq!(type_of(&sulfide, &sulfide_bonds, "S"), S3Divalent);
+    let methanol = [("C", "C", false), ("O", "O", false), ("HO", "H", false)];
+    let methanol_bonds = [("C", "O", "SING", false), ("O", "HO", "SING", false)];
+    assert_eq!(type_of(&methanol, &methanol_bonds, "O"), O3);
+    // An sp neighbour is not sp²: methyl cyanate, CH₃–O–C≡N.
+    let atoms = [
+        ("CM", "C", false),
+        ("O", "O", false),
+        ("C", "C", false),
+        ("N", "N", false),
+    ];
+    let bonds = [
+        ("CM", "O", "SING", false),
+        ("O", "C", "SING", false),
+        ("C", "N", "TRIP", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "C"), C1);
+    assert_eq!(type_of(&atoms, &bonds, "O"), O3);
+    // Furan's O is resonant by its aromatic flag already.
+    let atoms = [
+        ("O1", "O", true),
+        ("C2", "C", true),
+        ("C3", "C", true),
+        ("C4", "C", true),
+        ("C5", "C", true),
+    ];
+    let bonds = [
+        ("O1", "C2", "SING", true),
+        ("C2", "C3", "DOUB", true),
+        ("C3", "C4", "SING", true),
+        ("C4", "C5", "DOUB", true),
+        ("C5", "O1", "SING", true),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O1"), OR);
+    // No propagation: methyl peroxyacetate.
+    let atoms = [
+        ("C1", "C", false),
+        ("C2", "C", false),
+        ("O1", "O", false),
+        ("O2", "O", false),
+        ("O3", "O", false),
+        ("CM", "C", false),
+    ];
+    let bonds = [
+        ("C1", "C2", "SING", false),
+        ("C2", "O1", "DOUB", false),
+        ("C2", "O2", "SING", false),
+        ("O2", "O3", "SING", false),
+        ("O3", "CM", "SING", false),
+    ];
+    assert_eq!(type_of(&atoms, &bonds, "O2"), OR);
+    assert_eq!(type_of(&atoms, &bonds, "O3"), O3);
+}

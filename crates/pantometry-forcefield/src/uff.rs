@@ -12,7 +12,9 @@
 //! (aromatic) carbon, `C_2` sp², `C_1` sp — and every energy term is built from the six numbers
 //! Table I gives per type. This module holds those numbers for the twenty-two types the ten
 //! elements in [`Element`] need, and the rules ([`assign`]) that read a type off a
-//! [`Component`]'s bonds.
+//! [`Component`]'s bonds — every one from the atom's own bonds, except the resonant oxygen or
+//! sulfur, which also reads its neighbours' (an ether, ester or thioether O or S on an sp² atom is
+//! `O_R` or `S_R`, as the paper types methyl vinyl ether's oxygen).
 //!
 //! # Table I, as printed
 //!
@@ -471,8 +473,43 @@ fn bonding(component: &Component, i: usize) -> Bonding {
 ///   `N_3`, a choice the paper does not dictate.
 /// - **Oxygen.** Aromatic → `O_R` (a furan's). Double → `O_2`. **Triple → `O_1`** (carbon
 ///   monoxide) — a choice: the specification this was written to gives no rule for `O_1`, and a
-///   triple-bonded oxygen is what the type's 180° angle describes. Otherwise `O_3`.
-/// - **Sulfur.** Aromatic → `S_R` (a thiophene's). Double → `S_2`. Otherwise `S_3+2`.
+///   triple-bonded oxygen is what the type's 180° angle describes. Otherwise `O_3` — **unless it
+///   is resonant**, below.
+/// - **Sulfur.** Aromatic → `S_R` (a thiophene's). Double → `S_2`. Otherwise `S_3+2` — **unless
+///   it is resonant**, below.
+/// - **A resonant oxygen or sulfur: a divalent O or S with only single bonds, bonded to at least
+///   one sp² or resonant atom, is `O_R` or `S_R`** — an ether, ester, enol or thioether oxygen or
+///   sulfur whose lone pair is conjugated with a π system. "Sp² or resonant" is the neighbour's
+///   type before this rule ([`UffType::hybridisation`] `Sp2`: `C_2`, `C_R`, `N_2`, `N_R`, `O_2`,
+///   `S_2`, and the aromatic `O_R` and `S_R`), so the rule does not propagate along a chain.
+///   **The paper's, for an oxygen on a C=C and on an aromatic ring**: `O_R`'s radius was "fit to
+///   … methyl vinyl ether … C–O single … 1.428 Å" (p. 10025) and its angle to methyl vinyl
+///   ether's 118.3° (p. 10028), which only enter if that ether oxygen is `O_R`; and anisole and
+///   thioanisole are the paper's "tests of eq 17" (p. 10029), the sp²–sp² torsion, which only
+///   applies if their ring–O and ring–S bonds join two sp² atoms. Measured before this rule was
+///   adopted, typed so they relax to the paper's numbers: anisole's barrier 3.628 kcal/mol against
+///   3.6, thioanisole's 1.666 against 1.7, methyl vinyl ether's C–O–C 118.05° against 118.3°;
+///   typed `O_3`/`S_3+2`, 19.9, 14.5 and 107.8°. The paper also types a salicylidene ligand's
+///   ring oxygen "resonating" in a nickel complex (p. 10034). **Choices, the paper having no
+///   example**, each the same rule applied without exception:
+///   - **an O bearing H** — a phenol's, a carboxylic acid's OH — is resonant too: its lone pair is
+///     conjugated whatever its other neighbour is, and the paper's resonant phenolate oxygen is
+///     the nearest it comes;
+///   - **an ester's O** between the C=O and an alkyl carbon is resonant (methyl formate's
+///     C–O–C relaxes to 115.6° against the paper's 113.6° so, and to 107.7° as `O_3`);
+///   - **an O between two sp² atoms** — a diaryl ether, an anhydride — is resonant;
+///   - **an O on an sp² nitrogen** — an oxime's — is resonant: the rule names the neighbour's
+///     hybridisation, not its element;
+///   - **on a ring, on a C=C or on a C=O alike**: the rule does not distinguish them;
+///   - **an O bonded only to sp atoms and sp³ atoms stays `O_3`** — on a nitrile carbon, say:
+///     an sp centre has no torsion, and the paper names sp², not sp;
+///   - **sulfur follows oxygen** — a thioester's or thioanisole's S is `S_R`; the paper's `S_R`
+///     radius is thiophene's, so a thioether's resonant S is the rule's, not the paper's.
+///
+///   The bond across an `O_R`–C or `S_R`–C bond keeps the dictionary's order — 1 for a single bond
+///   — and only a bond the dictionary flags aromatic is 1.5, as before. A three-coordinate
+///   oxygen (an oxonium) is never resonant; it is the one way left to reach the group-6 sp³–sp²
+///   torsion rule (see [`crate::angular`]). Nitrogen is unchanged.
 ///   **Known gap:** a sulfoxide or sulfone sulfur — common in drugs — is hypervalent and UFF's
 ///   own types for it are `S_3+4` and `S_3+6`, which are not in this table. It is typed `S_2`
 ///   here because it has a double bond, and that is wrong for it. [`ForceField::new`] refuses
@@ -485,6 +522,15 @@ fn bonding(component: &Component, i: usize) -> Bonding {
 ///   otherwise `P_3+3`. The suffix is the oxidation state, and P=O is what puts phosphorus at +5
 ///   in every common drug motif.
 pub fn assign(component: &Component) -> Vec<UffType> {
+    let first = by_own_bonds(component);
+    (0..first.len())
+        .map(|i| resonant_heteroatom(component, &first, i).unwrap_or(first[i]))
+        .collect()
+}
+
+/// Every atom's type from its own element and bonds — every rule of [`assign`] but the resonant
+/// heteroatom's, which reads its neighbours' types from this.
+fn by_own_bonds(component: &Component) -> Vec<UffType> {
     let atoms = component.atoms();
     (0..atoms.len())
         .map(|i| {
@@ -551,6 +597,30 @@ pub fn assign(component: &Component) -> Vec<UffType> {
             }
         })
         .collect()
+}
+
+/// `O_R` or `S_R` for a divalent oxygen or sulfur with only single bonds next to an sp² or
+/// resonant atom — `None` for every other atom. The neighbours' types are `first`, the types
+/// before this rule, so the rule does not feed on itself: in a peroxy ester `C(=O)–O–O–C` the
+/// oxygen on the carbonyl is resonant and the one beyond it is not. See [`assign`] for why, and
+/// for which of its branches are the paper's and which are choices.
+fn resonant_heteroatom(component: &Component, first: &[UffType], i: usize) -> Option<UffType> {
+    let resonant = match first[i] {
+        UffType::O3 => UffType::OR,
+        UffType::S3Divalent => UffType::SR,
+        _ => return None,
+    };
+    let neighbours: Vec<usize> = component.neighbours(i).map(|(j, _)| j).collect();
+    if neighbours.len() != 2 {
+        return None;
+    }
+    let conjugated = neighbours
+        .iter()
+        .any(|&j| first[j].hybridisation() == Some(Hybridisation::Sp2));
+    if !conjugated {
+        return None;
+    }
+    Some(resonant)
 }
 
 /// A carbon with a C=O and a single, non-aromatic bond to a non-aromatic nitrogen whose bonds are

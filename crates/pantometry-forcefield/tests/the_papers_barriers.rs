@@ -28,15 +28,18 @@
 //! times the per-atom limit; λ_min is measured at the row's relaxed minimum and printed), and the
 //! golden-section search leaves the extremum's angle within 4e-4°, whose energy error is second
 //! order. Those tolerances were fixed before anything was measured. **Which rows are asserted was
-//! decided after measuring**: eight rows agree and are asserted; the six that do not are printed,
+//! decided after measuring**: ten rows agree and are asserted; the four that do not are printed,
 //! not asserted, and each is explained below.
 //!
-//! **What the asserted rows can see, and what they cannot.** They are the rows the paper *fitted*:
-//! p. 10029 says the `C_3`–sp³ barriers were chosen to fit the experimental ones and that H₂O₂
-//! and H₂S₂ are "best compromise values"; the tests of the method it names — anisole,
-//! thioanisole, acetaldehyde, isoprene, ethylbenzene, "tests of eq 17" — are all among the rows
-//! that do **not** agree. So agreement here confirms that this crate reproduces the paper's fit, to
-//! the printed figures; it does not test the method on molecules the fit did not see. And it is
+//! **What the asserted rows can see, and what they cannot.** Eight of them are the rows the paper
+//! *fitted*: p. 10029 says the `C_3`–sp³ barriers were chosen to fit the experimental ones and
+//! that H₂O₂ and H₂S₂ are "best compromise values"; agreement there confirms that this crate
+//! reproduces the paper's fit, to the printed figures. **Two are the first checks of the method**:
+//! anisole and thioanisole are among the paper's "tests of eq 17" (p. 10029), molecules the fit
+//! did not see, and they agree — 3.628 and 1.666 against 3.6 and 1.7 — since `uff::assign` types
+//! their ether oxygen and thioether sulfur resonant, as the paper does (before that typing they
+//! were about 20 and 15; see `anisole_and_thioanisole_typed_now_and_before`). The other tests of
+//! eq 17 — acetaldehyde, isoprene, ethylbenzene — still do not agree, and are explained below. And it is
 //! blind to much of what it might seem to check, measured by changing one thing at a time:
 //!
 //! - **the combination rule**: every 1-4 pair in these rows is H···H, and arithmetic and
@@ -58,7 +61,6 @@
 mod common;
 
 use common::{held, hessian_extremes, index, positions, relaxed, scan, STALL_LIMIT};
-use pantometry_forcefield::angular::Group6OnSp2;
 use pantometry_forcefield::energy::{ElectronegativitySign, Variant};
 use pantometry_forcefield::{uff, Component, ForceField, UffType};
 
@@ -270,15 +272,11 @@ fn rows() -> Vec<Row> {
 }
 
 /// **Table II, every row this crate can type, against the paper's calculated value.** Asserted:
-/// the eight rows that agree to the printed precision. Printed and not asserted, each for a
-/// stated reason:
+/// the ten rows that agree to the printed precision — the eight the paper fitted, and anisole and
+/// thioanisole, two of its tests of eq 17. Printed and not asserted, each for a stated reason:
 ///
 /// - **cis HO–OH**, 6.52 against 6.6: 0.03 kcal/mol outside the half-digit. Its trans partner
 ///   agrees, and nothing in this crate distinguishes the two but the dihedral; not explained.
-/// - **anisole** and **thioanisole**, about 20 and 15 against 3.6 and 1.7: this crate types the
-///   ether oxygen and thioether sulfur `O_3` and `S_3+2`, which brings in the group-6 sp³–sp²
-///   torsion; typed `O_R` and `S_R` — resonant, as the paper's methyl vinyl ether angle implies it
-///   types such an oxygen — they agree. See the next test.
 /// - **acetaldehyde**, 0.17 against 0.83: the propene rule's six terms cancel to a constant, so
 ///   only van der Waals is left; reading the rule as not counting the carbonyl oxygen gives 1.08,
 ///   which does not agree either (measured with a temporary change, not kept).
@@ -296,10 +294,11 @@ fn table_ii_relaxed_barriers() {
         "trans HO-OH",
         "trans HS-SH",
         "cis HS-SH",
+        "anisole",
+        "thioanisole",
     ];
     let plus = Variant {
         electronegativity: ElectronegativitySign::AddedAsPrinted,
-        ..Variant::default()
     };
     println!(
         "| bond | experiment | paper (UFF) | this crate | |Δ| | within ±½ digit | with +r_EN | restraint at max, min | λ_min | numerical bound |"
@@ -355,24 +354,21 @@ fn table_ii_relaxed_barriers() {
     );
 }
 
-/// **Anisole and thioanisole under three readings: the group-6 sp³–sp² rule as printed (90°), the
-/// same rule made planar, and the heteroatom typed resonant (`O_R`, `S_R`) so that the rule does
-/// not apply at all.** Only the third reproduces the paper's 3.6 and 1.7 — 3.628 and 1.666 — and
-/// that is asserted, as evidence for the open question, not as this crate's behaviour: this
-/// crate types both `O_3`/`S_3+2`, and the maintainer decides. The other two are printed.
+/// **Anisole and thioanisole typed as this crate now types them, and as it typed them before**:
+/// with the ether oxygen and thioether sulfur resonant (`O_R`, `S_R`), the default, their barriers
+/// are the paper's 3.6 and 1.7 to the printed figure — asserted, and asserted in Table II too; typed
+/// `O_3` and `S_3+2` again, as `uff::assign` did until the resonant rule, the group-6 sp³–sp² row
+/// applies and they are about 20 and 15 — printed, and asserted to be far off, so that a typing
+/// change that silently reverted would fail here as well as in the typing tests.
 #[test]
-fn anisole_and_thioanisole_under_three_readings() {
-    let planar = Variant {
-        group6_on_sp2: Group6OnSp2::Planar,
-        ..Variant::default()
-    };
-    for (label, text, dihedral, x, resonant, paper) in [
+fn anisole_and_thioanisole_typed_now_and_before() {
+    for (label, text, dihedral, x, before, paper) in [
         (
             "anisole",
             include_str!("../components/A1JFW.cif"),
             ["C4", "C5", "O01", "C03"],
             "O01",
-            UffType::OR,
+            UffType::O3,
             "3.6",
         ),
         (
@@ -380,7 +376,7 @@ fn anisole_and_thioanisole_under_three_readings() {
             include_str!("../components/16R.cif"),
             ["C3", "C4", "S7", "C8"],
             "S7",
-            UffType::SR,
+            UffType::S3Divalent,
             "1.7",
         ),
     ] {
@@ -393,12 +389,11 @@ fn anisole_and_thioanisole_under_three_readings() {
             experiment: "",
             retype,
         };
-        let printed = barrier(&row(None), Variant::default()).value;
-        let flat = barrier(&row(None), planar).value;
-        let typed = barrier(&row(Some((x, resonant))), Variant::default());
+        let typed = barrier(&row(None), Variant::default());
+        let old = barrier(&row(Some((x, before))), Variant::default()).value;
         println!(
-            "{label}: paper {paper}; rule as printed (90°) {printed:.4}; rule planar {flat:.4}; \
-             {x} typed {resonant} {:.4}",
+            "{label}: paper {paper}; this crate ({x} resonant) {:.4}; {x} typed {before} as \
+             before {old:.4}",
             typed.value
         );
         let p: f64 = paper.parse().expect("a number");
@@ -407,9 +402,6 @@ fn anisole_and_thioanisole_under_three_readings() {
             "{label}: {}",
             typed.value
         );
-        assert!(
-            (printed - p).abs() > 1.0 && (flat - p).abs() > 0.1,
-            "{label}"
-        );
+        assert!((old - p).abs() > 1.0, "{label}: {old}");
     }
 }

@@ -94,12 +94,8 @@
 //! whatever length unit they are given, so they can be checked against the paper's ångström
 //! directly.
 
-use crate::angular::{
-    inversion_parameters, torsion_parameters_with, Bend, Group6OnSp2, Inversion, Torsion,
-};
+use crate::angular::{inversion_parameters, torsion_parameters, Bend, Inversion, Torsion};
 
-#[cfg(doc)]
-use crate::angular::torsion_parameters;
 use crate::ccd::{BondOrder, Component, Element, ANGSTROM};
 use crate::uff::{gmp_electronegativity, Hybridisation, UffType, KCAL_PER_MOL};
 use std::fmt;
@@ -197,14 +193,16 @@ pub enum ElectronegativitySign {
     Dropped,
 }
 
-/// The readings of the paper this crate has not settled, together. `Variant::default()` is what
-/// [`ForceField::new`] builds; the others are for measuring the questions, not for use.
+/// A reading of the paper other than this crate's, for measuring the evidence for this crate's.
+/// `Variant::default()` is what [`ForceField::new`] builds. One question is left in it, the sign
+/// of `r_EN`, kept as the evidence the module documentation cites: rerunning
+/// `tests/the_papers_structures.rs` under it is how the sign was settled. (A second, the minimum
+/// of the group-6 sp³–sp² torsion, was removed when the typing that made it matter was changed;
+/// see [`crate::angular`].)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Variant {
     /// The sign of `r_EN` in eq 2.
     pub electronegativity: ElectronegativitySign,
-    /// The group-6 sp³–sp² torsion's minimum.
-    pub group6_on_sp2: Group6OnSp2,
 }
 
 /// [`natural_length`] with `r_EN` taken with either sign.
@@ -509,13 +507,12 @@ impl ForceField {
         let mut torsions = Vec::new();
         for s in &stretches {
             let [j, k] = s.atoms;
-            let Some(parameters) = torsion_parameters_with(
+            let Some(parameters) = torsion_parameters(
                 types[j],
                 types[k],
                 s.order,
                 has_sp2_neighbour(j, k),
                 has_sp2_neighbour(k, j),
-                variant.group6_on_sp2,
             ) else {
                 continue;
             };

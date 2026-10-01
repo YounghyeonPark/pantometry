@@ -17,11 +17,11 @@
 //! used no correction at all, so the correction dropped entirely is the third column. The minus is
 //! nearer than no correction on all 24, and no correction nearer than the plus on all 24: the
 //! paper's numbers sit where the full correction subtracted puts them. All three counts are
-//! asserted. Two rows are
-//! left out of that count and say why: methyl vinyl ether and methyl formate typed as this crate
-//! types them, whose ether oxygen the paper types `O_R` (see [`Row::compare_sign`]); with it typed
-//! so they are in, and the minus wins those too. With them typed `O_3`, the plus is nearer on two
-//! of their six bonds — what the 0.022 Å between the two oxygen radii does, not the sign.
+//! asserted. Methyl vinyl ether and methyl formate are in the count with their ether oxygen typed
+//! `O_R`, as `uff::assign` types it since the resonant-heteroatom rule; two more rows type that
+//! oxygen `O_3`, as it was typed before, and are printed but left out of the count (see
+//! [`Row::compare_sign`]): with `O_3` the plus is nearer on two of their six bonds — what the
+//! 0.022 Å between the two oxygen radii does, not the sign — which is how the typing was found.
 //!
 //! Agreement within half the last printed figure (0.0005 Å, 0.05°) is asserted for the
 //! measures that have it — a list decided after measuring, with the tolerance fixed before — and
@@ -51,11 +51,10 @@ struct Row {
     text: &'static str,
     retype: Option<(&'static str, UffType)>,
     /// Whether this row enters the comparison of the two signs. Two rows do not: methyl vinyl
-    /// ether and methyl formate with their ether oxygen typed `O_3`, as this crate types it. The
-    /// paper types such an oxygen `O_R` — its `O_R` angle was fitted to methyl vinyl ether's C–O–C
-    /// (p. 10028), and typed so, that angle comes out 118.05° against the paper's 118.3°, typed
-    /// `O_3` 107.8° — and `O_R`'s radius is 0.022 Å longer, so their C–O bonds measure the typing
-    /// before the sign. The same molecules typed `O_R` are in the comparison instead.
+    /// ether and methyl formate with their ether oxygen retyped `O_3`, as this crate typed it
+    /// before the resonant-heteroatom rule. The paper types such an oxygen `O_R` — its `O_R` radius
+    /// and angle were fitted to methyl vinyl ether (pp. 10025, 10028) — and `O_R`'s radius is
+    /// 0.022 Å longer, so those rows' C–O bonds measure the typing before the sign.
     compare_sign: bool,
     /// The measure, the paper's value as printed, and whether this crate's value is asserted to
     /// agree with it to half the last figure.
@@ -181,8 +180,9 @@ fn rows() -> Vec<Row> {
         ),
         Row {
             compare_sign: false,
+            retype: Some(("O", UffType::O3)),
             ..r(
-                "methyl vinyl ether, O typed O_3",
+                "methyl vinyl ether, O typed O_3 as before",
                 include_str!("hand_built/mve.cif"),
                 vec![
                     (Bond("O", "CM"), "1.428", false),
@@ -192,19 +192,16 @@ fn rows() -> Vec<Row> {
                 ],
             )
         },
-        Row {
-            retype: Some(("O", UffType::OR)),
-            ..r(
-                "methyl vinyl ether, O typed O_R",
-                include_str!("hand_built/mve.cif"),
-                vec![
-                    (Bond("O", "CM"), "1.428", true),
-                    (Angle("C2", "O", "CM"), "118.3", false),
-                    (Bond("C2", "O"), "1.413", false),
-                    (Bond("C1", "C2"), "1.343", true),
-                ],
-            )
-        },
+        r(
+            "methyl vinyl ether",
+            include_str!("hand_built/mve.cif"),
+            vec![
+                (Bond("O", "CM"), "1.428", true),
+                (Angle("C2", "O", "CM"), "118.3", false),
+                (Bond("C2", "O"), "1.413", false),
+                (Bond("C1", "C2"), "1.343", true),
+            ],
+        ),
         r(
             "acetaldehyde",
             include_str!("../components/ACE.cif"),
@@ -227,8 +224,9 @@ fn rows() -> Vec<Row> {
         ),
         Row {
             compare_sign: false,
+            retype: Some(("O2", UffType::O3)),
             ..r(
-                "methyl formate, O typed O_3",
+                "methyl formate, O typed O_3 as before",
                 include_str!("hand_built/mfo.cif"),
                 vec![
                     (Bond("C", "O1"), "1.219", false),
@@ -238,19 +236,16 @@ fn rows() -> Vec<Row> {
                 ],
             )
         },
-        Row {
-            retype: Some(("O2", UffType::OR)),
-            ..r(
-                "methyl formate, O typed O_R",
-                include_str!("hand_built/mfo.cif"),
-                vec![
-                    (Bond("C", "O1"), "1.219", false),
-                    (Bond("C", "O2"), "1.401", false),
-                    (Bond("O2", "CM"), "1.425", false),
-                    (Angle("C", "O2", "CM"), "113.6", false),
-                ],
-            )
-        },
+        r(
+            "methyl formate",
+            include_str!("hand_built/mfo.cif"),
+            vec![
+                (Bond("C", "O1"), "1.219", false),
+                (Bond("C", "O2"), "1.401", false),
+                (Bond("O2", "CM"), "1.425", false),
+                (Angle("C", "O2", "CM"), "113.6", false),
+            ],
+        ),
         r(
             "acetamide",
             include_str!("../components/ACM.cif"),
@@ -339,11 +334,9 @@ const NUMERICAL: f64 = 1e-6;
 fn figures_4_to_7_under_both_signs() {
     let plus = Variant {
         electronegativity: ElectronegativitySign::AddedAsPrinted,
-        ..Variant::default()
     };
     let zero = Variant {
         electronegativity: ElectronegativitySign::Dropped,
-        ..Variant::default()
     };
     println!("| molecule | measure | paper | −r_EN (this crate) | +r_EN (as printed) | no r_EN | −r_EN within ±½ digit |");
     println!("| --- | --- | --- | --- | --- | --- | --- |");

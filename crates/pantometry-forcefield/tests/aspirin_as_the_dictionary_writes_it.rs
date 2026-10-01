@@ -114,9 +114,14 @@ fn every_heavy_atom_has_its_valence() {
 /// **Aspirin's atoms have the types a chemist reads off its structure.**
 ///
 /// Six ring carbons resonant; the acid's and the ester's carbonyl carbons sp²; the acetyl methyl
-/// sp³; both carbonyl oxygens sp²; the acid's hydroxyl oxygen and the ester's bridging oxygen sp³;
-/// every hydrogen `H_`. The atom names are the dictionary's — `C7` is the acid carbon, `C8` the
-/// ester's, `C9` the methyl.
+/// sp³; both carbonyl oxygens sp²; every hydrogen `H_`. **The acid's hydroxyl oxygen and the
+/// ester's bridging oxygen are resonant, `O_R`** — each is divalent with single bonds and bonded
+/// to an sp² atom (the acid's O1 to the carboxyl carbon C7; the ester's O3 to ring carbon C2 and
+/// carbonyl carbon C8), so its lone pair is conjugated, and `uff::assign`'s resonant-heteroatom
+/// rule types it as the paper types methyl vinyl ether's oxygen. Until that rule this test said
+/// `O_3` for both, the reading of a structure drawn with sp³ ether oxygens; the paper's own
+/// numbers (anisole's barrier, methyl vinyl ether's angle and bond) are what changed it. The atom
+/// names are the dictionary's — `C7` is the acid carbon, `C8` the ester's, `C9` the methyl.
 #[test]
 fn aspirins_atoms_are_typed_as_its_structure_says() {
     let c = aspirin();
@@ -133,8 +138,8 @@ fn aspirins_atoms_are_typed_as_its_structure_says() {
         ("C9", UffType::C3),
         ("O2", UffType::O2),
         ("O4", UffType::O2),
-        ("O1", UffType::O3),
-        ("O3", UffType::O3),
+        ("O1", UffType::OR),
+        ("O3", UffType::OR),
     ];
     for (name, t) in want {
         assert_eq!(types[index(&c, name)], t, "{name}");

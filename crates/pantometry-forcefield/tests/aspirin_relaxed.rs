@@ -80,13 +80,13 @@ fn aspirin_relaxed_from_the_ideal_coordinates() {
     for (label, retype) in [
         ("this crate's typing", false),
         (
-            "O1 and O3 typed O_R, as the paper appears to type an O on an sp2 carbon",
+            "O1 and O3 typed O_3, as before the resonant-heteroatom rule",
             true,
         ),
     ] {
         if retype {
-            types[index(&c, "O1")] = UffType::OR;
-            types[index(&c, "O3")] = UffType::OR;
+            types[index(&c, "O1")] = UffType::O3;
+            types[index(&c, "O3")] = UffType::O3;
         }
         let ff = ForceField::with_variant(&c, &types, Default::default()).expect("supported");
         let before = kcal(ff.energy(&start));

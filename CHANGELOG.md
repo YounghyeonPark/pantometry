@@ -177,6 +177,42 @@ protects nothing.
   and longest C–H, 1.1094 and 1.1130. 97 tests in the crate; each of seventeen sabotages was caught,
   and the review's eleven were rerun before and after the changes it asked for.
 
+### Changed
+
+- **A conjugated ether, ester, acid or thioether oxygen or sulfur is `O_R` or `S_R`, not `O_3` or
+  `S_3+2` — `pantometry-forcefield` had been typing it differently from the paper, and the 1d
+  measurements showed it.** `uff::assign` now types a divalent O or S with only single bonds,
+  bonded to at least one sp² or resonant atom, as resonant. **What was wrong**: with the oxygen of
+  anisole and the sulfur of thioanisole typed `O_3` and `S_3+2`, the paper's group-6 sp³–sp²
+  torsion row applied and their relaxed barriers were 19.87 and 14.46 kcal/mol against Table II's
+  3.6 and 1.7; methyl vinyl ether's C–O–C was 107.84° against Fig 6's 118.3°. The paper fitted
+  `O_R`'s radius to methyl vinyl ether's O–CH₃ bond (p. 10025) and its angle to that molecule's
+  C–O–C (p. 10028), names anisole and thioanisole "tests of eq 17" (p. 10029) — the sp²–sp² row —
+  and types a salicylidene ring oxygen "resonating" (p. 10034). **Now**: anisole 3.6280, thioanisole
+  1.6655 — **asserted in Table II, the first of the paper's tests of its method there to agree**
+  (the eight rows asserted before are all rows it fitted); methyl vinyl ether's C–O–C 118.05°,
+  O–CH₃ 1.4284 Å against 1.428 (asserted) and C–O 1.4137 against 1.413; methyl formate's C–O–C
+  115.56° against 113.6° (107.66° before). The paper's for an O on a C=C or a ring; **choices**,
+  recorded in `uff::assign`: an O–H (phenol, carboxylic acid), an ester's O, an O between two sp²
+  atoms, an O on an sp² nitrogen and a thioether or thioester S are resonant too; an O bonded only
+  to sp and sp³ atoms (a cyanate's) is not; neighbours are read before the rule, so it does not
+  propagate (a peroxy ester's second O stays `O_3`); the bond keeps the dictionary's order, 1.
+  Unchanged: acetaldehyde 0.1728, isoprene 6.6275, ethylbenzene 3.8381 and cis HO–OH 6.5191 —
+  none has such an atom; the sign of `r_EN` still wins all three ways on all 24 heteronuclear
+  bonds, now with methyl vinyl ether and methyl formate typed by the crate itself. **Aspirin**: its
+  acid O1 and ester O3 are `O_R`, and the typing test says so with the reason. At the dictionary's
+  ideal geometry its energy falls from 223.095 to 185.672 kcal/mol (torsion 30.673 → 1.334, bond
+  2.139 → 5.026, angle 17.007 → 6.035); relaxed, from 18.573 to 29.583 kcal/mol — higher, because
+  the ester and acid are now held planar instead of turned perpendicular (C2–O3–C8–O4 −89.0° →
+  −17.4°, C3–C7–O1–HO1 90.4° → 179.9°); O4–H1 4.242 → 2.666 Å; heavy-atom RMSD to the crystal
+  1.113 → 0.894 Å, now below the ideal start's 0.905. Its minimum takes 454 steps instead of 443,
+  FNV-1a `2455b1d7dc555a40` instead of `dac2edd5b0a72aa3`; the facade's ten frames run 185.672 →
+  35.084 kcal/mol instead of 223.095 → 72.679. **`Variant::group6_on_sp2` and
+  `Group6OnSp2` are removed**: the group-6 sp³–sp² row they switched is now reached only by a
+  three-coordinate oxonium oxygen on an sp² atom, which a test builds, and its numbers are held
+  through `torsion_parameters` directly. `ElectronegativitySign` stays, as the evidence for the
+  sign. Each of the four sabotages of the new rule was caught.
+
 ### Fixed
 
 - **Xenon's reason for being out of the catalogue was stated and not measured.** The docs said

@@ -77,26 +77,20 @@
 //! the rotation. Propene's and acetaldehyde's methyl barriers therefore come from van der Waals
 //! alone in UFF as written. Aspirin's acetyl C8–C9 reads exactly 1.0000 kcal/mol for that reason.
 //!
-//! **The one row to distrust** is "sp³ group 6 – sp²". The paper is explicit — "eq 17 is used
-//! directly. For this case the periodicity (n) is 2 and the equilibrium angle φ₀ is 90°" — and
-//! that is what is implemented; RDKit is believed to do the same (not checked for this crate).
-//! But with eq 15 it puts the minimum of the C–O torsion of an ester, an anisole or a carboxylic
-//! acid at 90°, with a 10 kcal/mol barrier at planarity, and esters are planar. Measured on
-//! aspirin at the dictionary's (planar) geometry: its three such bonds — the acid's O1–C7 and the
-//! ester's C2–O3 and O3–C8 — carry 29.7 of its 30.7 kcal/mol of torsion energy, each within
-//! 0.25 kcal/mol of its maximum; relaxed, the ester and the acid's hydrogen turn perpendicular.
-//!
-//! **What minimising Table II's molecules found** (`tests/the_papers_barriers.rs`): anisole's
-//! relaxed barrier is 19.9 kcal/mol under this rule as written and 0.26 with it made planar
-//! ([`Group6OnSp2::Planar`]), against the paper's 3.6; thioanisole's 14.5 and 1.50 against 1.7.
-//! **Neither reading reproduces the paper. Typing the heteroatom resonant does**: with the
-//! ether oxygen `O_R` and the thioether sulfur `S_R`, the rule never applies (both ends are sp²),
-//! and the barriers are 3.628 and 1.666. The paper gives an independent reason to think it types
-//! them so — p. 10028 says `O_R`'s angle was fitted to methyl vinyl ether's 118.3°, which only
-//! enters if that ether oxygen is `O_R`; typed `O_R` it relaxes to 118.05°, typed `O_3` to
-//! 107.8°. So the question may not be this rule's φ₀ at all but which oxygens it ever reaches.
-//! **The code is not changed on this evidence** — [`uff::assign`](crate::uff::assign) still
-//! types an oxygen on an sp² carbon `O_3` — and the maintainer decides.
+//! **The "sp³ group 6 – sp²" row is implemented as printed and is now almost never reached.** The
+//! paper is explicit — "eq 17 is used directly. For this case the periodicity (n) is 2 and the
+//! equilibrium angle φ₀ is 90°" — and with eq 15 that puts the minimum of the C–O torsion of an
+//! ester, an anisole or a carboxylic acid at 90°, with a 10 kcal/mol barrier at planarity. That is
+//! what this crate computed until the oxygen and sulfur of such a molecule were typed the way the
+//! paper types them: [`uff::assign`](crate::uff::assign) makes a divalent O or S with only single
+//! bonds next to an sp² atom `O_R` or `S_R`, both ends of the bond are then sp², and eq 17's planar
+//! sp²–sp² row applies instead. Measured before that change (`tests/the_papers_barriers.rs`):
+//! anisole's relaxed barrier was 19.9 kcal/mol under this row and 0.26 with it made planar, against
+//! the paper's 3.6, and thioanisole's 14.5 and 1.50 against 1.7; typed resonant they are 3.628 and
+//! 1.666. Aspirin's ester and acid, which this row turned perpendicular, are planar now. **The
+//! only atom left that reaches the row** is a three-coordinate oxonium oxygen on an sp² atom,
+//! which the resonant rule leaves `O_3` (a three-coordinate sulfur is refused); the test
+//! `the_torsion_rules_by_hand` holds the row's numbers through [`torsion_parameters`] directly.
 //!
 //! **Near a collinear centre the torsion is switched off, continuously.** "When angles about the
 //! central atoms approach 180°, the potential energy and derivative terms are set to zero as is
@@ -362,19 +356,6 @@ fn group6(t: UffType) -> bool {
     matches!(t.element(), Element::O | Element::S)
 }
 
-/// The two readings of the group-6 sp³–sp² rule, so that the one this crate does not use can be
-/// measured. See the module documentation; [`Group6OnSp2::AsPrinted`] is what the crate computes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Group6OnSp2 {
-    /// n = 2, φ₀ = 90°, as p. 10028 prints it: a perpendicular minimum.
-    #[default]
-    AsPrinted,
-    /// n = 2, φ₀ = 180°, eq 17's barrier unchanged: a planar minimum — the reading under which
-    /// the rule's minimum would be DREIDING's, as the paper says its minima are. **Not the
-    /// default and not a claim**; it exists to measure the question, and the maintainer decides.
-    Planar,
-}
-
 /// The torsion rule for a bond J–K of UFF bond order `order` between types `j` and `k`, where
 /// `j_has_sp2_neighbour` says whether J has an sp² neighbour other than K, and likewise for K —
 /// the propene exception's test. `None` when the paper gives the bond no torsion: either centre
@@ -386,25 +367,6 @@ pub fn torsion_parameters(
     order: f64,
     j_has_sp2_neighbour: bool,
     k_has_sp2_neighbour: bool,
-) -> Option<TorsionParameters> {
-    torsion_parameters_with(
-        j,
-        k,
-        order,
-        j_has_sp2_neighbour,
-        k_has_sp2_neighbour,
-        Group6OnSp2::AsPrinted,
-    )
-}
-
-/// [`torsion_parameters`] under either reading of the group-6 sp³–sp² rule.
-pub fn torsion_parameters_with(
-    j: UffType,
-    k: UffType,
-    order: f64,
-    j_has_sp2_neighbour: bool,
-    k_has_sp2_neighbour: bool,
-    group6_on_sp2: Group6OnSp2,
 ) -> Option<TorsionParameters> {
     use Hybridisation::{Sp2, Sp3};
     const DEG: f64 = std::f64::consts::PI / 180.0;
@@ -452,11 +414,7 @@ pub fn torsion_parameters_with(
                 (k, j, j_has_sp2_neighbour)
             };
             if group6(sp3) && !group6(sp2) {
-                let phi0 = match group6_on_sp2 {
-                    Group6OnSp2::AsPrinted => 90.0,
-                    Group6OnSp2::Planar => 180.0,
-                };
-                p(TorsionCase::Group6Sp3Sp2, eq17(), 2, phi0)
+                p(TorsionCase::Group6Sp3Sp2, eq17(), 2, 90.0)
             } else if sp2_has_sp2 {
                 p(TorsionCase::Propene, PROPENE_BARRIER, 3, 180.0)
             } else {

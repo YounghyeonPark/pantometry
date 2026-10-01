@@ -243,7 +243,8 @@ fn a_converged_minimiser_stays_put() {
 /// comparison that went through a unit conversion would never match, so every step would start
 /// again as steepest descent — still monotone, still converging, and slow. That happened while
 /// this was written: aspirin took more than 6000 steps and stopped at 18.806 kcal/mol instead of
-/// 18.573. After eight steps of aspirin from the dictionary, the history is full.
+/// 18.573 (with the typing of then; see the changelog). After eight steps of aspirin from the
+/// dictionary, the history is full.
 #[test]
 fn the_curvature_history_survives_between_steps() {
     let c = Component::from_ccd(AIN).expect("AIN parses");
