@@ -108,6 +108,74 @@ protects nothing.
   is what step 1d's anisole barrier against Table II will test. Ethane's rigid-rotation barrier is
   3.082 kcal/mol (torsion 2.119, van der Waals 0.963); Table II's 2.90 is relaxed, and that
   comparison waits for the minimiser.
+- **`pantometry-forcefield` minimises, and a run of `Molecule` is the molecule relaxing frame by
+  frame.** New module `minimise`: L-BFGS (memory 8) with an Armijo backtracking line search,
+  chosen over FIRE because a step is taken only if it lowers the energy, so **the energy never
+  rises** — tested step by step — and over steepest descent because a molecule's Hessian spans
+  bonds at ~700 kcal mol⁻¹ Å⁻² to rotors at ~1. Converged means the largest per-atom force is at
+  most the tolerance; when no step lowers the energy in floating point it says `Stalled` and does
+  not move. `ForceField::minimise`, `Molecule::minimise`, and `Domain::step` as one iteration, with
+  `max force`, `rms force`, `converged` and `minimiser steps` readings and a checkpoint that
+  restores the minimiser's history too. `DihedralRestraint` holds a dihedral for relaxed scans.
+  Only `+ − × ÷ sqrt` in the unrestrained minimiser (a restraint adds `atan2`): aspirin's minimum
+  is bit-identical in debug and release on one machine (FNV-1a `dac2edd5b0a72aa3` after 443
+  steps, both). Not across platforms: the energy calls the platform's `cos` per torsion and `ln`,
+  `sin`, `cos`, `asin` at construction, so the digest is printed, not pinned. Checked against minima known exactly, each
+  within the displacement its final force allows (`|F|/k`, or `|F|/λ_min` from a measured Hessian):
+  a C–C bond at 1.514000000000000 Å, water at its natural lengths and θ₀ = 104.51°, methane the
+  regular tetrahedron; methanol's minimum the same from a moved and turned start; the restraint's
+  force against central differences. **Found while writing it:** the step compared its input
+  with the last point through a metres → Å round trip, which is not bit-exact, so every step
+  discarded its history and the minimiser was steepest descent — still monotone, still
+  converging: aspirin had not converged after 6000 steps (18.806 kcal/mol, force 0.12); compared
+  in metres, 443 steps to 18.573. Nothing caught it; `the_curvature_history_survives_between_steps`
+  does now. **And a review found the L-BFGS itself was not checked**: a reversed pairing in the
+  two-loop recursion converged aspirin in 1562 steps to a different minimum (18.8037 kcal/mol), and
+  a fixed `H₀` and an ignored history were caught only by accident. `two_loop` is now compared with
+  the dense BFGS update (agreement 2.2e-16), and L-BFGS with the same minimiser at memory 0 —
+  steepest descent with the same search, 13904 steps to 18.8037 against L-BFGS's 443 to 18.5734;
+  an ignored history would make the two runs the same arithmetic. The closed-form minima now check
+  the force independently of the minimiser's report — water and methane passed a minimiser
+  stopping at 1e4 times the tolerance — and accept a stall only below the force at which rounding
+  makes a correct minimiser stall, `2 √(λ_max δE)`, instead of failing it. **The paper's Table II,
+  relaxed** (scans at 30°, golden-section refinement, restraint energy ≤ 1e-14 kcal/mol at every
+  asserted row's extrema): ethane 2.8976 against 2.90, CH₃NH₂ 1.979 against
+  2.0, CH₃PH₂ 2.027, CH₃OH 1.036 against 1.0, CH₃SH 1.300 against 1.3, trans HO–OH 1.678 against
+  1.7, trans and cis HS–SH 6.822 and 7.216 against 6.8 and 7.2 — eight rows within half the last
+  printed figure, asserted. Not asserted, with reasons recorded: cis HO–OH 6.52 against 6.6;
+  acetaldehyde 0.17 against 0.83 (the propene rule's six terms cancel to a constant); isoprene and
+  ethylbenzene, where the table does not say which rotation (neither the central bond nor the
+  methyl agrees); and anisole and thioanisole — **19.9 and 14.5 under the group-6 rule as printed,
+  0.26 and 1.50 with it made planar, and 3.628 and 1.666 with the heteroatom typed `O_R` and
+  `S_R`, against the paper's 3.6 and 1.7.** **What the eight asserted rows can see is the paper's
+  fit, not its method**: p. 10029 says the `C_3`–sp³ barriers were fitted and H₂O₂ and H₂S₂ are
+  compromise values, and the rows it names as tests of eq 17 are the ones that do not agree. They
+  are blind to the combination rule (every 1-4 pair in them is H···H; propane's C–C in the structure
+  comparison is the asserted check that sees a C···H pair, and arithmetic combination moves it to
+  1.5271 against 1.526), to `V_O` anywhere from about 0.006 to 0.021 and to `V_S` = 0.448 (held
+  instead by the transcription check of Table III), and to eq 17's constants, held by hand values.
+  The paper gives no calculated number for eq 17 at bond order above one — it fitted the 5 and 4.18
+  to vibrational modes and to N,N-dimethylformamide's ΔH‡ = 19.7 kcal/mol, with no residual — so
+  none is asserted; DMF's relaxed barrier, 19.807 kcal/mol, is printed for information. The paper's methyl vinyl ether points the same way: its
+  `O_R` angle was fitted to that molecule's 118.3°, typed `O_R` it relaxes to 118.05°, typed `O_3`
+  to 107.8°. **The paper's Figures 4–7 under both signs of `r_EN`, and without it**: of 24
+  heteronuclear bonds the subtracted sign is nearer the paper than the added one for all 24 —
+  which alone would also hold if the paper had used no correction, so the correction dropped is
+  the third reading: subtracted is nearer than none for all 24, and none nearer than added for all
+  24. 36 measures agree to the printed figure —
+  dimethyl ether C–O 1.4096 against 1.410 (1.4497 added), trimethylamine C–N 1.4708 against 1.471,
+  N-methylformamide C–N 1.3660 against 1.365; added, a C=O is 0.04 Å long. **Both questions are
+  measured and neither is changed in the code**: `Variant` switches them for measuring, its default
+  is unchanged, and the maintainer decides. Aspirin relaxed from the dictionary's ideal geometry:
+  223.10 → 18.57 kcal/mol (van der Waals 173.28 → 13.68, torsion 30.67 → 1.63), O4–H1 1.645 →
+  4.242 Å, heavy-atom RMSD to the crystal (`1OXR`) 0.905 Å at the start and 1.113 Å relaxed, with
+  the ester and the acid's hydrogen turned perpendicular by the group-6 rule; typed `O_R`, 0.894
+  Å. Twenty more Chemical Component Dictionary entries in `components/`, each with its SHA-256
+  and held to its own formula; nine molecules the dictionary lacks hand-built under `tests/` and
+  labelled so; N,N-dimethylformamide among the twenty, for the eq 17 measurement. Fig 6's dimethyl ether
+  methyl, printed 1.109 and 1.113, was compared as one mean against 1.111; it is now the shortest
+  and longest C–H, 1.1094 and 1.1130. 97 tests in the crate; each of seventeen sabotages was caught,
+  and the review's eleven were rerun before and after the changes it asked for.
 
 ### Fixed
 

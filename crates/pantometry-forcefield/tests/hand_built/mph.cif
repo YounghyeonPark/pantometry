@@ -1,0 +1,34 @@
+# HAND-BUILT, not from the Chemical Component Dictionary: methylphosphine.
+# The dictionary has no entry for it. Staggered.
+# Written by a z-matrix from rough bond lengths and angles; every test minimises it before
+# reading any geometry, so only its conformer and its bonds carry information.
+data_MPH
+_chem_comp.id MPH
+_chem_comp.name "methylphosphine"
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.type_symbol
+_chem_comp_atom.charge
+_chem_comp_atom.pdbx_aromatic_flag
+_chem_comp_atom.pdbx_model_Cartn_x_ideal
+_chem_comp_atom.pdbx_model_Cartn_y_ideal
+_chem_comp_atom.pdbx_model_Cartn_z_ideal
+MPH P P 0 N 0.0000 0.0000 0.0000
+MPH C C 0 N 1.8600 0.0000 0.0000
+MPH HP1 H 0 N -0.1731 1.3500 0.4050
+MPH HP2 H 0 N -0.1731 0.2858 -1.3801
+MPH H1 H 0 N 2.2238 -0.8826 0.5261
+MPH H2 H 0 N 2.2238 -0.0144 -1.0274
+MPH H3 H 0 N 2.2238 0.8969 0.5013
+loop_
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+P C SING N
+P HP1 SING N
+P HP2 SING N
+C H1 SING N
+C H2 SING N
+C H3 SING N

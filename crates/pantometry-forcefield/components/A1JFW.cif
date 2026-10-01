@@ -1,0 +1,119 @@
+data_A1JFW
+# 
+_chem_comp.id                                    A1JFW 
+_chem_comp.name                                  methoxybenzene 
+_chem_comp.type                                  non-polymer 
+_chem_comp.pdbx_type                             HETAIN 
+_chem_comp.formula                               "C7 H8 O" 
+_chem_comp.mon_nstd_parent_comp_id               ? 
+_chem_comp.pdbx_synonyms                         ? 
+_chem_comp.pdbx_formal_charge                    0 
+_chem_comp.pdbx_initial_date                     2025-06-05 
+_chem_comp.pdbx_modified_date                    2026-03-27 
+_chem_comp.pdbx_ambiguous_flag                   N 
+_chem_comp.pdbx_release_status                   REL 
+_chem_comp.pdbx_replaced_by                      ? 
+_chem_comp.pdbx_replaces                         ? 
+_chem_comp.formula_weight                        108.138 
+_chem_comp.one_letter_code                       ? 
+_chem_comp.three_letter_code                     A1JFW 
+_chem_comp.pdbx_model_coordinates_details        ? 
+_chem_comp.pdbx_model_coordinates_missing_flag   N 
+_chem_comp.pdbx_ideal_coordinates_details        Corina 
+_chem_comp.pdbx_ideal_coordinates_missing_flag   N 
+_chem_comp.pdbx_model_coordinates_db_code        9RG3 
+_chem_comp.pdbx_subcomponent_list                ? 
+_chem_comp.pdbx_processing_site                  PDBE 
+_chem_comp.pdbx_pcm                              ? 
+# 
+loop_
+_chem_comp_atom.comp_id 
+_chem_comp_atom.atom_id 
+_chem_comp_atom.alt_atom_id 
+_chem_comp_atom.type_symbol 
+_chem_comp_atom.charge 
+_chem_comp_atom.pdbx_align 
+_chem_comp_atom.pdbx_aromatic_flag 
+_chem_comp_atom.pdbx_leaving_atom_flag 
+_chem_comp_atom.pdbx_stereo_config 
+_chem_comp_atom.pdbx_n_terminal_atom_flag 
+_chem_comp_atom.pdbx_backbone_atom_flag 
+_chem_comp_atom.pdbx_c_terminal_atom_flag 
+_chem_comp_atom.model_Cartn_x 
+_chem_comp_atom.model_Cartn_y 
+_chem_comp_atom.model_Cartn_z 
+_chem_comp_atom.pdbx_model_Cartn_x_ideal 
+_chem_comp_atom.pdbx_model_Cartn_y_ideal 
+_chem_comp_atom.pdbx_model_Cartn_z_ideal 
+_chem_comp_atom.pdbx_component_atom_id 
+_chem_comp_atom.pdbx_component_comp_id 
+_chem_comp_atom.pdbx_ordinal 
+A1JFW C1  C1 C 0 1 Y N N N N N -14.059 11.682 -3.302 -1.254 1.363  0.000  C1  A1JFW 1  
+A1JFW C2  C2 C 0 1 Y N N N N N -13.682 13.019 -3.257 -2.218 0.371  -0.000 C2  A1JFW 2  
+A1JFW C3  C3 C 0 1 Y N N N N N -13.967 13.782 -2.134 -1.844 -0.960 -0.000 C3  A1JFW 3  
+A1JFW C4  C4 C 0 1 Y N N N N N -14.632 13.206 -1.059 -0.506 -1.303 -0.000 C4  A1JFW 4  
+A1JFW C5  C5 C 0 1 Y N N N N N -15.018 11.874 -1.107 0.463  -0.310 -0.000 C5  A1JFW 5  
+A1JFW C6  C6 C 0 1 Y N N N N N -14.728 11.112 -2.227 0.086  1.025  0.000  C6  A1JFW 6  
+A1JFW C03 C7 C 0 1 N N N N N N -14.855 11.113 1.130  2.723  0.430  -0.000 C03 A1JFW 7  
+A1JFW O01 O1 O 0 1 N N N N N N -15.669 11.270 -0.022 1.781  -0.644 0.000  O01 A1JFW 8  
+A1JFW H1  H1 H 0 1 N N N N N N -13.831 11.086 -4.174 -1.548 2.402  -0.004 H1  A1JFW 9  
+A1JFW H2  H2 H 0 1 N N N N N N -13.167 13.464 -4.096 -3.264 0.637  0.000  H2  A1JFW 10 
+A1JFW H3  H3 H 0 1 N N N N N N -13.673 14.820 -2.096 -2.599 -1.732 0.000  H3  A1JFW 11 
+A1JFW H4  H4 H 0 1 N N N N N N -14.850 13.798 -0.182 -0.214 -2.342 0.000  H4  A1JFW 12 
+A1JFW H5  H5 H 0 1 N N N N N N -15.023 10.074 -2.264 0.838  1.800  0.000  H5  A1JFW 13 
+A1JFW H6  H6 H 0 1 N N N N N N -15.439 10.634 1.930  2.576  1.042  -0.890 H6  A1JFW 14 
+A1JFW H7  H7 H 0 1 N N N N N N -13.987 10.484 0.883  2.576  1.042  0.890  H7  A1JFW 15 
+A1JFW H8  H8 H 0 1 N N N N N N -14.507 12.100 1.470  3.735  0.025  0.000  H8  A1JFW 16 
+# 
+loop_
+_chem_comp_bond.comp_id 
+_chem_comp_bond.atom_id_1 
+_chem_comp_bond.atom_id_2 
+_chem_comp_bond.value_order 
+_chem_comp_bond.pdbx_aromatic_flag 
+_chem_comp_bond.pdbx_stereo_config 
+_chem_comp_bond.pdbx_ordinal 
+A1JFW C1  C2  DOUB Y N 1  
+A1JFW C1  C6  SING Y N 2  
+A1JFW C2  C3  SING Y N 3  
+A1JFW C6  C5  DOUB Y N 4  
+A1JFW C3  C4  DOUB Y N 5  
+A1JFW C5  C4  SING Y N 6  
+A1JFW C5  O01 SING N N 7  
+A1JFW O01 C03 SING N N 8  
+A1JFW C1  H1  SING N N 9  
+A1JFW C2  H2  SING N N 10 
+A1JFW C3  H3  SING N N 11 
+A1JFW C4  H4  SING N N 12 
+A1JFW C6  H5  SING N N 13 
+A1JFW C03 H6  SING N N 14 
+A1JFW C03 H7  SING N N 15 
+A1JFW C03 H8  SING N N 16 
+# 
+loop_
+_pdbx_chem_comp_descriptor.comp_id 
+_pdbx_chem_comp_descriptor.type 
+_pdbx_chem_comp_descriptor.program 
+_pdbx_chem_comp_descriptor.program_version 
+_pdbx_chem_comp_descriptor.descriptor 
+A1JFW InChI            InChI                1.06  InChI=1S/C7H8O/c1-8-7-5-3-2-4-6-7/h2-6H,1H3 
+A1JFW InChIKey         InChI                1.06  RDOXTESZEPMUJZ-UHFFFAOYSA-N                 
+A1JFW SMILES_CANONICAL CACTVS               3.385 COc1ccccc1                                  
+A1JFW SMILES           CACTVS               3.385 COc1ccccc1                                  
+A1JFW SMILES_CANONICAL "OpenEye OEToolkits" 2.0.7 COc1ccccc1                                  
+A1JFW SMILES           "OpenEye OEToolkits" 2.0.7 COc1ccccc1                                  
+# 
+_pdbx_chem_comp_identifier.comp_id           A1JFW 
+_pdbx_chem_comp_identifier.type              "SYSTEMATIC NAME" 
+_pdbx_chem_comp_identifier.program           "OpenEye OEToolkits" 
+_pdbx_chem_comp_identifier.program_version   2.0.7 
+_pdbx_chem_comp_identifier.identifier        methoxybenzene 
+# 
+loop_
+_pdbx_chem_comp_audit.comp_id 
+_pdbx_chem_comp_audit.action_type 
+_pdbx_chem_comp_audit.date 
+_pdbx_chem_comp_audit.processing_site 
+A1JFW "Create component" 2025-06-05 PDBE 
+A1JFW "Initial release"  2026-04-01 RCSB 
+# 

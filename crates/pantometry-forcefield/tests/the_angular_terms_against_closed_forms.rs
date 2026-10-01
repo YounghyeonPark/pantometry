@@ -1172,3 +1172,33 @@ fn the_switch_slope_on_both_ends() {
         );
     }
 }
+
+/// **The planar reading of the group-6 rule moves its minimum and nothing else**: φ₀ = 180°
+/// instead of 90°, with the same n = 2 and eq 17's V; and on every other row the two readings
+/// agree. It exists to measure the open question (see `the_papers_barriers`), so what it changes
+/// is pinned here.
+#[test]
+fn the_planar_reading_moves_only_the_minimum() {
+    use pantometry_forcefield::angular::{torsion_parameters_with, Group6OnSp2};
+    for (j, k, order, js, ks) in [
+        (UffType::O3, UffType::CR, 1.0, false, true),
+        (UffType::C2, UffType::S3Divalent, 1.0, true, false),
+        (UffType::C3, UffType::C3, 1.0, false, false),
+        (UffType::CR, UffType::CR, 1.5, true, true),
+        (UffType::C3, UffType::C2, 1.0, false, true),
+    ] {
+        let printed = torsion_parameters_with(j, k, order, js, ks, Group6OnSp2::AsPrinted)
+            .expect("a torsion");
+        let planar =
+            torsion_parameters_with(j, k, order, js, ks, Group6OnSp2::Planar).expect("a torsion");
+        assert_eq!(printed.case, planar.case);
+        assert_eq!(printed.barrier, planar.barrier);
+        assert_eq!(printed.periodicity, planar.periodicity);
+        if printed.case == TorsionCase::Group6Sp3Sp2 {
+            assert_eq!(printed.equilibrium, 90.0 * DEG);
+            assert_eq!(planar.equilibrium, 180.0 * DEG);
+        } else {
+            assert_eq!(printed.equilibrium, planar.equilibrium);
+        }
+    }
+}

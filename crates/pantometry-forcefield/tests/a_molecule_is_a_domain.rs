@@ -37,21 +37,27 @@ fn the_bodies_are_the_atoms_with_their_names_and_bonds() {
     assert!((o1.x().to_si() - 1.731e-10).abs() < 1e-22);
 }
 
+/// **It runs, balances, and relaxes**: three kernel steps are three minimiser iterations, so the
+/// atoms move and the energy falls; the ledger stays empty and balanced, because a minimisation
+/// sends its energy nowhere (see [`Molecule`]).
 #[test]
-fn it_runs_balances_and_stays_where_it_is() {
-    let before: Vec<[f64; 3]> = {
+fn it_runs_balances_and_relaxes() {
+    let (before, e_before): (Vec<[f64; 3]>, f64) = {
         let m = aspirin();
-        (0..21).map(|i| m.at(i)).collect()
+        let e = m.evaluate().expect("supported").energy.total;
+        ((0..21).map(|i| m.at(i)).collect(), e)
     };
     let mut sim = Simulation::new(Schedule::OneWay).with(aspirin());
     for _ in 0..3 {
-        sim.advance(Time::s(1e-15)).expect("a static molecule runs");
+        sim.advance(Time::s(1e-15))
+            .expect("a minimising molecule runs");
     }
     let m = sim
         .domain_as::<Molecule>("aspirin")
         .expect("reachable as itself");
     let after: Vec<[f64; 3]> = (0..21).map(|i| m.at(i)).collect();
-    assert_eq!(before, after, "step 1a moves nothing");
+    assert_ne!(before, after, "three minimiser steps move the atoms");
+    assert!(m.evaluate().expect("supported").energy.total < e_before);
 
     let readings = m.readings();
     let value = |label: &str| {

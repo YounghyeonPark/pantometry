@@ -1,0 +1,38 @@
+# HAND-BUILT, not from the Chemical Component Dictionary: N-methylformamide.
+# The dictionary has no entry for it. The trans (Z) amide, methyl cis to the carbonyl oxygen, as the paper's Figure 7 draws it.
+# Written by a z-matrix from rough bond lengths and angles; every test minimises it before
+# reading any geometry, so only its conformer and its bonds carry information.
+data_NMF
+_chem_comp.id NMF
+_chem_comp.name "N-methylformamide"
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.type_symbol
+_chem_comp_atom.charge
+_chem_comp_atom.pdbx_aromatic_flag
+_chem_comp_atom.pdbx_model_Cartn_x_ideal
+_chem_comp_atom.pdbx_model_Cartn_y_ideal
+_chem_comp_atom.pdbx_model_Cartn_z_ideal
+NMF C C 0 N 0.0000 0.0000 0.0000
+NMF O O 0 N 1.2200 0.0000 0.0000
+NMF N N 0 N -0.7605 1.0799 0.3240
+NMF H H 0 N -0.5829 -0.8935 -0.2681
+NMF CM C 0 N -0.1435 2.3473 0.7042
+NMF HN H 0 N -1.7667 0.9956 0.2987
+NMF HM1 H 0 N -0.9209 3.0791 0.9237
+NMF HM2 H 0 N 0.4759 2.7109 -0.1157
+NMF HM3 H 0 N 0.4759 2.1995 1.5889
+loop_
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+C O DOUB N
+C N SING N
+C H SING N
+N CM SING N
+N HN SING N
+CM HM1 SING N
+CM HM2 SING N
+CM HM3 SING N

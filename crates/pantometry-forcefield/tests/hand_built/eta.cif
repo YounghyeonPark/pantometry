@@ -1,0 +1,36 @@
+# HAND-BUILT, not from the Chemical Component Dictionary: ethane.
+# The dictionary has no entry for it. Staggered.
+# Written by a z-matrix from rough bond lengths and angles; every test minimises it before
+# reading any geometry, so only its conformer and its bonds carry information.
+data_ETA
+_chem_comp.id ETA
+_chem_comp.name "ethane"
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.type_symbol
+_chem_comp_atom.charge
+_chem_comp_atom.pdbx_aromatic_flag
+_chem_comp_atom.pdbx_model_Cartn_x_ideal
+_chem_comp_atom.pdbx_model_Cartn_y_ideal
+_chem_comp_atom.pdbx_model_Cartn_z_ideal
+ETA C1 C 0 N 0.0000 0.0000 0.0000
+ETA C2 C 0 N 1.5300 0.0000 0.0000
+ETA H11 H 0 N -0.3638 0.9841 0.2952
+ETA H12 H 0 N -0.3638 -0.2364 -0.9999
+ETA H13 H 0 N -0.3638 -0.7478 0.7047
+ETA H21 H 0 N 1.8938 -0.9841 -0.2952
+ETA H22 H 0 N 1.8938 0.2364 0.9999
+ETA H23 H 0 N 1.8938 0.7478 -0.7047
+loop_
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+C1 C2 SING N
+C1 H11 SING N
+C1 H12 SING N
+C1 H13 SING N
+C2 H21 SING N
+C2 H22 SING N
+C2 H23 SING N

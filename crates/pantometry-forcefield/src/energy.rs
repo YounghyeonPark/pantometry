@@ -30,8 +30,19 @@
 //! n = 1.41, the minus gives 1.35684 Å and the printed plus 1.36845 Å, against 1.366. The order
 //! that would reproduce 1.366 exactly is 1.428 with the plus and 1.344 with the minus. **So the
 //! paper's own sentence favours the printed sign.** The minus stays, as the two-implementation
-//! consensus and the two minimised structures say; the question is open, and the minimisation step
-//! is what settles it. See [`natural_length`].
+//! consensus and the two minimised structures say. See [`natural_length`].
+//!
+//! **Measured once there was a minimiser** (`tests/the_papers_structures.rs`,
+//! `tests/the_papers_barriers.rs`): the paper's own *minimised* numbers, which are what its
+//! sentence about N-methylformamide's 1.366 Å is really about, agree with the minus. Of 24
+//! heteronuclear bonds in its Figures 4–7, the minus is nearer the paper than the plus for all 24,
+//! and nearer than no correction at all ([`ElectronegativitySign::Dropped`]) for all 24 — dimethyl
+//! ether's C–O 1.4096 Å against the printed 1.410 (1.4497 with the plus), N-methylformamide's
+//! C–N 1.3660 against 1.365 (1.3766), and a C=O 0.04 Å long with the plus. Of Table II's nine
+//! simple rotors, the minus reproduces eight to the printed figures, and the plus misses five of
+//! them. The natural length is not what the paper reports; the relaxed one is. **The code is not
+//! changed on this evidence**: the sign is the maintainer's decision, and [`Variant`] exists so
+//! that the comparison can be rerun.
 //!
 //! The bond order `n` is read from the dictionary's bond ([`bond_order`]): `SING` 1, `DOUB` 2,
 //! `TRIP` 3; **an aromatic bond 1.5** whatever its Kekulé order (p. 10027: "Intra-ring bonds of
@@ -83,7 +94,12 @@
 //! whatever length unit they are given, so they can be checked against the paper's ångström
 //! directly.
 
-use crate::angular::{inversion_parameters, torsion_parameters, Bend, Inversion, Torsion};
+use crate::angular::{
+    inversion_parameters, torsion_parameters_with, Bend, Group6OnSp2, Inversion, Torsion,
+};
+
+#[cfg(doc)]
+use crate::angular::torsion_parameters;
 use crate::ccd::{BondOrder, Component, Element, ANGSTROM};
 use crate::uff::{gmp_electronegativity, Hybridisation, UffType, KCAL_PER_MOL};
 use std::fmt;
@@ -163,13 +179,47 @@ pub fn electronegativity_correction(r_i: f64, chi_i: f64, r_j: f64, chi_j: f64) 
 /// **The minus on `r_EN` departs from the paper as printed**; see the module documentation for
 /// why, and for the one sentence in the paper that argues the other way.
 pub fn natural_length(a: UffType, b: UffType, n: f64) -> f64 {
+    natural_length_with(a, b, n, ElectronegativitySign::Subtracted)
+}
+
+/// Which sign eq 2's `r_EN` takes. [`ElectronegativitySign::Subtracted`] is what the crate
+/// computes; the other exists so that the question the module documentation leaves open can be
+/// measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ElectronegativitySign {
+    /// `r_IJ = r_I + r_J + r_BO − r_EN`, as Open Babel and RDKit compute it.
+    #[default]
+    Subtracted,
+    /// `r_IJ = r_I + r_J + r_BO + r_EN`, as eq 2 is printed. **Not the default and not a claim.**
+    AddedAsPrinted,
+    /// `r_IJ = r_I + r_J + r_BO`, no electronegativity correction at all: the baseline that says
+    /// whether the comparison of the two signs measures the sign or only the correction's size.
+    Dropped,
+}
+
+/// The readings of the paper this crate has not settled, together. `Variant::default()` is what
+/// [`ForceField::new`] builds; the others are for measuring the questions, not for use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Variant {
+    /// The sign of `r_EN` in eq 2.
+    pub electronegativity: ElectronegativitySign,
+    /// The group-6 sp³–sp² torsion's minimum.
+    pub group6_on_sp2: Group6OnSp2,
+}
+
+/// [`natural_length`] with `r_EN` taken with either sign.
+pub fn natural_length_with(a: UffType, b: UffType, n: f64, sign: ElectronegativitySign) -> f64 {
     let (ri, rj) = (a.table_i().r1, b.table_i().r1);
     let (ci, cj) = (
         gmp_electronegativity(a.element()),
         gmp_electronegativity(b.element()),
     );
-    let angstrom =
-        ri + rj + bond_order_correction(ri, rj, n) - electronegativity_correction(ri, ci, rj, cj);
+    let r_en = electronegativity_correction(ri, ci, rj, cj);
+    let angstrom = match sign {
+        ElectronegativitySign::Subtracted => ri + rj + bond_order_correction(ri, rj, n) - r_en,
+        ElectronegativitySign::AddedAsPrinted => ri + rj + bond_order_correction(ri, rj, n) + r_en,
+        ElectronegativitySign::Dropped => ri + rj + bond_order_correction(ri, rj, n),
+    };
     angstrom * ANGSTROM
 }
 
@@ -240,7 +290,18 @@ pub struct Stretch {
 impl Stretch {
     /// The term between types `a` and `b` at bond order `n`.
     pub fn new(atoms: [usize; 2], a: UffType, b: UffType, n: f64) -> Stretch {
-        let natural_length = natural_length(a, b, n);
+        Stretch::with_sign(atoms, a, b, n, ElectronegativitySign::Subtracted)
+    }
+
+    /// [`Stretch::new`] with `r_EN` taken with either sign.
+    pub fn with_sign(
+        atoms: [usize; 2],
+        a: UffType,
+        b: UffType,
+        n: f64,
+        sign: ElectronegativitySign,
+    ) -> Stretch {
+        let natural_length = natural_length_with(a, b, n, sign);
         Stretch {
             atoms,
             order: n,
@@ -372,6 +433,24 @@ impl ForceField {
     ///
     /// If `types` is not one per atom.
     pub fn new(component: &Component, types: &[UffType]) -> Result<ForceField, Unsupported> {
+        ForceField::with_variant(component, types, Variant::default())
+    }
+
+    /// [`ForceField::new`] under another reading of the two questions [`Variant`] names — for
+    /// measuring them. `with_variant(c, t, Variant::default())` is `new(c, t)`.
+    ///
+    /// # Errors
+    ///
+    /// As [`ForceField::new`].
+    ///
+    /// # Panics
+    ///
+    /// As [`ForceField::new`].
+    pub fn with_variant(
+        component: &Component,
+        types: &[UffType],
+        variant: Variant,
+    ) -> Result<ForceField, Unsupported> {
         let atoms = component.atoms();
         let n = atoms.len();
         assert_eq!(types.len(), n, "one UFF type per atom");
@@ -392,7 +471,13 @@ impl ForceField {
             .enumerate()
             .map(|(k, b)| {
                 let [i, j] = b.atoms;
-                Stretch::new(b.atoms, types[i], types[j], bond_order(component, types, k))
+                Stretch::with_sign(
+                    b.atoms,
+                    types[i],
+                    types[j],
+                    bond_order(component, types, k),
+                    variant.electronegativity,
+                )
             })
             .collect();
         // Each atom's neighbours with the stretch joining them, in bond order.
@@ -424,12 +509,13 @@ impl ForceField {
         let mut torsions = Vec::new();
         for s in &stretches {
             let [j, k] = s.atoms;
-            let Some(parameters) = torsion_parameters(
+            let Some(parameters) = torsion_parameters_with(
                 types[j],
                 types[k],
                 s.order,
                 has_sp2_neighbour(j, k),
                 has_sp2_neighbour(k, j),
+                variant.group6_on_sp2,
             ) else {
                 continue;
             };

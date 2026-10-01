@@ -1,0 +1,40 @@
+# HAND-BUILT, not from the Chemical Component Dictionary: s-trans-1,3-butadiene.
+# The dictionary has no entry for it. The s-trans conformer.
+# Written by a z-matrix from rough bond lengths and angles; every test minimises it before
+# reading any geometry, so only its conformer and its bonds carry information.
+data_BDE
+_chem_comp.id BDE
+_chem_comp.name "s-trans-1,3-butadiene"
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.type_symbol
+_chem_comp_atom.charge
+_chem_comp_atom.pdbx_aromatic_flag
+_chem_comp_atom.pdbx_model_Cartn_x_ideal
+_chem_comp_atom.pdbx_model_Cartn_y_ideal
+_chem_comp_atom.pdbx_model_Cartn_z_ideal
+BDE C1 C 0 N 0.0000 0.0000 0.0000
+BDE C2 C 0 N 1.3400 0.0000 0.0000
+BDE C3 C 0 N 2.1406 1.1809 0.3543
+BDE C4 C 0 N 3.4806 1.1809 0.3543
+BDE H11 H 0 N -0.5562 0.8867 0.2660
+BDE H12 H 0 N -0.5562 -0.8867 -0.2660
+BDE H2 H 0 N 1.8636 -0.9048 -0.2714
+BDE H3 H 0 N 1.6170 2.0856 0.6257
+BDE H41 H 0 N 4.0369 0.2942 0.0882
+BDE H42 H 0 N 4.0369 2.0676 0.6203
+loop_
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+C1 C2 DOUB N
+C2 C3 SING N
+C3 C4 DOUB N
+C1 H11 SING N
+C1 H12 SING N
+C2 H2 SING N
+C3 H3 SING N
+C4 H41 SING N
+C4 H42 SING N
