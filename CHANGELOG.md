@@ -71,6 +71,43 @@ protects nothing.
   to have most of its terms well above it; each of thirty-one sabotages was caught. **Found on the way:** the dictionary's
   ideal coordinates for aspirin put the acetyl oxygen O4 1.645 Å from ring hydrogen H1, and that
   one contact is 134 of aspirin's 173 kcal/mol of van der Waals energy there.
+- **`pantometry-forcefield` has all six of UFF's terms: angle bend, torsion and inversion join
+  the three, with analytic forces — and it still does not move.** New module `angular`, every
+  formula cited to its page and equation of Rappé et al. (1992) and read off the scanned pages.
+  Angle bend: the general three-term Fourier form of eqs 11–12, the special forms of eq 10 for
+  linear and trigonal centres, and the force constant of eq 13 from the two bonds' natural
+  lengths; which form a centre takes is decided by its Table I θ₀ (180° linear, exactly 120°
+  trigonal), so `N_2` and `O_R`, whose angles p. 10028 says were fitted, keep the general form.
+  **Eq 10 with n = 1 is a misprint**: `K (1 − cos θ)` has its minimum at 0°, and a linear centre's
+  is at 180°, so the linear term is `K (1 + cos θ)`. Torsion: eq 15 shared among the torsions
+  about each bond, with eq 16 and Table III for sp³–sp³, eq 17 for sp²–sp², and the paper's
+  sp²–sp³, group-6 and propene cases in a stated order, nothing about an sp centre, and resonant
+  types counted as sp². The paper's "set to zero" near a straight central angle is done as a
+  smoothstep from 170° to 180° so that neither the energy nor the force jumps — a number the
+  paper does not give. Inversion: eq 18 about each of the three bonds, divided by three; `C_2` and
+  `C_R` at 6 kcal/mol or 50 bonded to `O_2`; **no nitrogen at all**, as the paper says; and
+  phosphine's 22 kcal/mol barrier with ω₀ = 84.4339° derived from PH₃'s 93.8°. Checked against
+  closed forms: every angle form zero, flat and of curvature K at θ₀ for all twenty-two types; K
+  for methane's H–C–H (75.4988 kcal mol⁻¹ rad⁻²) and for H–C–Cl by hand; every torsion row by
+  hand; ethane's nine torsions summing to exactly 2.119 kcal/mol eclipsed; eq 17 at 38.974 for
+  ethylene's twist and 26.948 for benzene; the six-fold row on methyl isocyanate; the trigonal
+  form away from 120°; K read off the force field at bond orders 1.5 and 2 (222.595 and 170.396);
+  the switch against its documented formula on both central angles, across its edge, and its
+  slope at both ends; three-ring paths; inversion zero when flat and by hand when not, including
+  an asymmetric pyramid, and phosphine at 0 and 22. Forces against central differences on
+  aspirin, on a probe molecule built to put torsions inside the switch, a six-fold torsion and
+  two linear centres off their minimum and a pyramidal phosphorus, and on phosphine near its
+  minimum where `cos ω` ≈ 0.1, with the tolerance model extended to measured third derivatives
+  for the angular terms; 79 tests in the crate. Each of thirty-four sabotages was caught —
+  eight of them, from a review, passed the first version of these tests and were each closed
+  with the check that now fails them. **Found on the
+  way:** the paper's one explicit rule for an sp³ oxygen on an sp² atom — eq 17, n = 2, φ₀ = 90° —
+  puts the minimum of an ester's, an acid's and an anisole's C–O torsion at perpendicular, 10
+  kcal/mol below planar; implemented as written, it is 29.7 of aspirin's 30.7 kcal/mol of torsion
+  energy at the dictionary's planar geometry. The paper also says its minima are DREIDING's, which
+  is what step 1d's anisole barrier against Table II will test. Ethane's rigid-rotation barrier is
+  3.082 kcal/mol (torsion 2.119, van der Waals 0.963); Table II's 2.90 is relaxed, and that
+  comparison waits for the minimiser.
 
 ### Fixed
 

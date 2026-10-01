@@ -1,10 +1,10 @@
-//! Three of the Universal Force Field's energy terms, with their analytic forces.
+//! The Universal Force Field's energy, all six of its terms, with their analytic forces.
 //!
-//! Bond stretch, van der Waals and electrostatics, from Rappé et al., *J. Am. Chem. Soc.* **114**,
-//! 10024 (1992) — page and equation numbers below are that paper's. **Angle bend, torsion and
-//! inversion are not here yet**, so an energy from this module is not UFF's total energy and a
-//! geometry minimised against it would not be UFF's geometry. Nothing here minimises; that is a
-//! later step.
+//! Bond stretch, van der Waals and electrostatics here, and angle bend, torsion and inversion in
+//! [`crate::angular`], from Rappé et al., *J. Am. Chem. Soc.* **114**, 10024 (1992) — page and
+//! equation numbers below are that paper's. [`ForceField`] holds every term of one molecule and
+//! gives the energy by term and the force on every atom. Nothing here minimises; that is a later
+//! step, and so is the charge model, without which the electrostatic term is zero by default.
 //!
 //! # Bond stretch (eq 1a, p. 10025)
 //!
@@ -83,8 +83,9 @@
 //! whatever length unit they are given, so they can be checked against the paper's ångström
 //! directly.
 
+use crate::angular::{inversion_parameters, torsion_parameters, Bend, Inversion, Torsion};
 use crate::ccd::{BondOrder, Component, Element, ANGSTROM};
-use crate::uff::{gmp_electronegativity, UffType, KCAL_PER_MOL};
+use crate::uff::{gmp_electronegativity, Hybridisation, UffType, KCAL_PER_MOL};
 use std::fmt;
 
 #[cfg(doc)]
@@ -302,18 +303,37 @@ impl Pair {
 
 /// An energy, by term and in total, in joules per molecule.
 ///
-/// `total` is accumulated separately from the three terms, term by term as each is evaluated, so
+/// `total` is accumulated separately from the six terms, term by term as each is evaluated, so
 /// that the parts summing to the whole is a check on the bookkeeping rather than a definition.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Energy {
     /// Bond stretch.
     pub bond: f64,
+    /// Angle bend.
+    pub angle: f64,
+    /// Torsion.
+    pub torsion: f64,
+    /// Inversion.
+    pub inversion: f64,
     /// Van der Waals.
     pub van_der_waals: f64,
     /// Electrostatics.
     pub electrostatic: f64,
     /// Everything above.
     pub total: f64,
+}
+
+impl Energy {
+    /// Every field `NaN`: the energy of a molecule the force field refused.
+    pub const NAN: Energy = Energy {
+        bond: f64::NAN,
+        angle: f64::NAN,
+        torsion: f64::NAN,
+        inversion: f64::NAN,
+        van_der_waals: f64::NAN,
+        electrostatic: f64::NAN,
+        total: f64::NAN,
+    };
 }
 
 /// An energy and the force on every atom, `−∂E/∂r`, in newtons.
@@ -325,17 +345,24 @@ pub struct Evaluation {
     pub forces: Vec<[f64; 3]>,
 }
 
-/// The bond, van der Waals and electrostatic terms of one molecule, with every pair resolved.
+/// All six of UFF's terms for one molecule, with every bend, torsion, inversion and pair resolved.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ForceField {
     stretches: Vec<Stretch>,
+    bends: Vec<Bend>,
+    torsions: Vec<Torsion>,
+    inversions: Vec<Inversion>,
     pairs: Vec<Pair>,
     charges: Vec<f64>,
 }
 
 impl ForceField {
-    /// The terms of `component` typed as `types`: one [`Stretch`] per bond, and one [`Pair`] for
-    /// every pair of atoms that is neither 1-2 nor 1-3. Charges start at zero.
+    /// The terms of `component` typed as `types`: one [`Stretch`] per bond; one [`Bend`] per pair
+    /// of bonds sharing an atom; a [`Torsion`] for every I–J–K–L about each bond the rules of
+    /// [`torsion_parameters`] give a barrier, sharing it; three [`Inversion`]s for each
+    /// three-coordinate atom [`inversion_parameters`] gives one; and one [`Pair`] for every pair
+    /// of atoms that is neither 1-2 nor 1-3. Charges start at zero. Every list is in the
+    /// component's atom and bond order, so the result is the same on every run.
     ///
     /// # Errors
     ///
@@ -359,7 +386,7 @@ impl ForceField {
                 }
             }
         }
-        let stretches = component
+        let stretches: Vec<Stretch> = component
             .bonds()
             .iter()
             .enumerate()
@@ -368,6 +395,77 @@ impl ForceField {
                 Stretch::new(b.atoms, types[i], types[j], bond_order(component, types, k))
             })
             .collect();
+        // Each atom's neighbours with the stretch joining them, in bond order.
+        let mut adjacent: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+        for (k, s) in stretches.iter().enumerate() {
+            let [i, j] = s.atoms;
+            adjacent[i].push((j, k));
+            adjacent[j].push((i, k));
+        }
+        let length = |k: usize| stretches[k].natural_length;
+
+        let mut bends = Vec::new();
+        for (j, around) in adjacent.iter().enumerate() {
+            for (p, &(i, ki)) in around.iter().enumerate() {
+                for &(k, kk) in &around[p + 1..] {
+                    bends.push(Bend::new(
+                        [i, j, k],
+                        [types[i], types[j], types[k]],
+                        length(ki),
+                        length(kk),
+                    ));
+                }
+            }
+        }
+
+        let sp2 = |t: UffType| t.hybridisation() == Some(Hybridisation::Sp2);
+        let has_sp2_neighbour =
+            |a: usize, not: usize| adjacent[a].iter().any(|&(o, _)| o != not && sp2(types[o]));
+        let mut torsions = Vec::new();
+        for s in &stretches {
+            let [j, k] = s.atoms;
+            let Some(parameters) = torsion_parameters(
+                types[j],
+                types[k],
+                s.order,
+                has_sp2_neighbour(j, k),
+                has_sp2_neighbour(k, j),
+            ) else {
+                continue;
+            };
+            let mut paths = Vec::new();
+            for &(i, _) in &adjacent[j] {
+                for &(l, _) in &adjacent[k] {
+                    if i != k && l != j && i != l {
+                        paths.push([i, j, k, l]);
+                    }
+                }
+            }
+            let m = paths.len();
+            torsions.extend(paths.into_iter().map(|atoms| Torsion {
+                atoms,
+                parameters,
+                torsions_about_bond: m,
+            }));
+        }
+
+        let mut inversions = Vec::new();
+        for (i, around) in adjacent.iter().enumerate() {
+            if let [(a, _), (b, _), (c, _)] = around[..] {
+                let to_o2 = around.iter().any(|&(o, _)| types[o] == UffType::O2);
+                if let Some((force_constant, coefficients)) = inversion_parameters(types[i], to_o2)
+                {
+                    for [j, k, l] in [[b, c, a], [c, a, b], [a, b, c]] {
+                        inversions.push(Inversion {
+                            atoms: [i, j, k, l],
+                            force_constant,
+                            coefficients,
+                        });
+                    }
+                }
+            }
+        }
+
         let mut excluded = vec![false; n * n];
         for i in 0..n {
             for (j, _) in component.neighbours(i) {
@@ -387,6 +485,9 @@ impl ForceField {
         }
         Ok(ForceField {
             stretches,
+            bends,
+            torsions,
+            inversions,
             pairs,
             charges: vec![0.0; n],
         })
@@ -406,6 +507,21 @@ impl ForceField {
     /// One bond-stretch term per bond, in the component's bond order.
     pub fn stretches(&self) -> &[Stretch] {
         &self.stretches
+    }
+
+    /// One angle-bend term per pair of bonds sharing an atom.
+    pub fn bends(&self) -> &[Bend] {
+        &self.bends
+    }
+
+    /// Every torsion term, grouped by central bond in the component's bond order.
+    pub fn torsions(&self) -> &[Torsion] {
+        &self.torsions
+    }
+
+    /// Every inversion term, three per centre that has one.
+    pub fn inversions(&self) -> &[Inversion] {
+        &self.inversions
     }
 
     /// Every non-bonded pair — neither 1-2 nor 1-3 — with `atoms[0] < atoms[1]`.
@@ -441,19 +557,34 @@ impl ForceField {
         let mut forces = vec![[0.0; 3]; at.len()];
         // The force on atom i of a term E(r), r = |r_i − r_j|, is −(dE/dr) (r_i − r_j)/r, and
         // atom j's is its negative.
-        let mut push = |[i, j]: [usize; 2], d: [f64; 3], de_dr: f64, r: f64| {
+        fn push(forces: &mut [[f64; 3]], [i, j]: [usize; 2], d: [f64; 3], de_dr: f64, r: f64) {
             let g = -de_dr / r;
             for k in 0..3 {
                 forces[i][k] += g * d[k];
                 forces[j][k] -= g * d[k];
             }
-        };
+        }
         for s in &self.stretches {
             let (d, r) = separation(at, s.atoms);
             let (energy, de_dr) = s.at(r);
             e.bond += energy;
             e.total += energy;
-            push(s.atoms, d, de_dr, r);
+            push(&mut forces, s.atoms, d, de_dr, r);
+        }
+        for b in &self.bends {
+            let energy = b.accumulate(at, &mut forces);
+            e.angle += energy;
+            e.total += energy;
+        }
+        for t in &self.torsions {
+            let energy = t.accumulate(at, &mut forces);
+            e.torsion += energy;
+            e.total += energy;
+        }
+        for v in &self.inversions {
+            let energy = v.accumulate(at, &mut forces);
+            e.inversion += energy;
+            e.total += energy;
         }
         for p in &self.pairs {
             let (d, r) = separation(at, p.atoms);
@@ -468,7 +599,7 @@ impl ForceField {
                 e.electrostatic += q;
                 e.total += q;
             }
-            push(p.atoms, d, de_dr, r);
+            push(&mut forces, p.atoms, d, de_dr, r);
         }
         Evaluation { energy: e, forces }
     }

@@ -6,17 +6,19 @@
 //! The aim, over the steps that follow this one, is molecular mechanics on drug-sized molecules —
 //! an energy, its minimum, and which conformations are stable — with every term checkable.
 //!
-//! **This step computes an energy, but not all of UFF's, and nothing moves yet.** What is here:
+//! **This step computes UFF's whole energy, but nothing moves yet.** What is here:
 //!
 //! - [`Component::from_ccd`] reads one entry of the wwPDB Chemical Component Dictionary, strictly:
 //!   every malformed or unsupported input is a [`CcdError`] naming what it refused. See [`ccd`].
 //! - [`uff::assign`] gives every atom its Universal Force Field type from its element, its bond
 //!   orders and the dictionary's aromatic flags, and [`UffType::parameters`] gives each type's
 //!   Table I row in SI. See [`uff`] for the citation, the table and the rules.
-//! - [`ForceField`] holds three of UFF's terms — harmonic bond stretch, Lennard-Jones van der
-//!   Waals, and Coulomb electrostatics with 1-2 and 1-3 exclusions — and gives the energy, term by
-//!   term, and the analytic force on every atom. See [`energy`] for the equations, the page each
-//!   is on, and the one place this departs from the paper as printed.
+//! - [`ForceField`] holds all six of UFF's terms — harmonic bond stretch, angle bend, torsion,
+//!   inversion, Lennard-Jones van der Waals, and Coulomb electrostatics with 1-2 and 1-3
+//!   exclusions — and gives the energy, term by term, and the analytic force on every atom. See
+//!   [`energy`] and [`angular`] for the equations, the page each is on, and the places this
+//!   departs from the paper as printed: the sign of `r_EN`, the sign of the linear angle term,
+//!   and a torsion switched off continuously rather than abruptly near a straight angle.
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, and
 //!   the energy terms as readings.
@@ -34,15 +36,18 @@
 //! `½ k Δr²` away from it; `C_3–C_3` is 1.514 Å; the paper's own worked Si–O correction is
 //! reproduced; the van der Waals minimum is `−D_IJ` at `x_IJ` and crosses zero at `x_IJ / 2^(1/6)`;
 //! two unit charges at 1 Å are 332.0637 kcal/mol; the exclusions leave exactly the 1-4 pair of a
-//! four-atom chain. The forces against central finite differences of the energy, to a tolerance
-//! derived from the step; the energy against translation and rotation; and the net force against
-//! zero.
+//! four-atom chain. Every angle form is zero with zero slope at θ₀ and has curvature `K` there,
+//! with `K` worked by hand for methane; ethane's nine torsions sum to a barrier of exactly
+//! `V_C_3` = 2.119 kcal/mol; eq 17 by hand for ethylene and benzene; the inversion is zero when
+//! planar and matches a hand value when not. The forces against central finite differences of
+//! the energy, to a tolerance derived from the step; the energy against translation and rotation;
+//! and the net force against zero.
 //!
 //! # What is deliberately not in it
 //!
-//! - **No angle bend, torsion or inversion yet**, so the energy here is not UFF's total and a
-//!   geometry relaxed against it would not be UFF's geometry. **No motion and no minimisation**:
-//!   [`Molecule::step`](Domain::step) leaves the atoms where the file put them.
+//! - **No motion and no minimisation**: [`Molecule::step`](Domain::step) leaves the atoms where
+//!   the file put them, so nothing here has yet been compared with a structure or barrier the
+//!   paper *minimised* — its Table II barriers are relaxed, and a rigid rotation is not.
 //! - **The electronegativities are not from their primary source.** χ is transcribed from Open
 //!   Babel, which copies RDKit; the paper it comes from has not been read. [`uff`] says so where
 //!   the values are, and what the one partial check pins.
@@ -61,10 +66,12 @@
 
 #![deny(missing_docs)]
 
+pub mod angular;
 pub mod ccd;
 pub mod energy;
 pub mod uff;
 
+pub use angular::{Bend, Inversion, Torsion};
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported};
 pub use uff::{Parameters, TableI, UffType};
@@ -87,10 +94,10 @@ use pantometry_units::{LengthVec, Qty, Time};
 ///
 /// `atoms`, `heavy atoms`, `bonds` and `formal charge`, and the energy at the current positions in
 /// **kcal/mol** — the paper's unit and the one every reader of a force field compares in — as
-/// `energy`, `bond stretch`, `van der Waals` and `electrostatic`. `energy` is the sum of the three
-/// and **not** UFF's total, which has angle, torsion and inversion terms this crate does not yet
-/// have. For a molecule [`ForceField::new`] refuses, the four energy readings are `NaN` and
-/// [`Molecule::force_field`] says why.
+/// `energy`, `bond stretch`, `angle bend`, `torsion`, `inversion`, `van der Waals` and
+/// `electrostatic`. `energy` is UFF's total, the sum of the six. For a molecule
+/// [`ForceField::new`] refuses, the seven energy readings are `NaN` and [`Molecule::force_field`]
+/// says why.
 #[derive(Clone, Debug)]
 pub struct Molecule {
     name: String,
@@ -254,12 +261,7 @@ impl Domain for Molecule {
         let atoms = self.component.atoms();
         let heavy = atoms.iter().filter(|a| a.element != Element::H).count();
         let charge: i32 = atoms.iter().map(|a| a.charge).sum();
-        let e = self.evaluate().map(|ev| ev.energy).unwrap_or(Energy {
-            bond: f64::NAN,
-            van_der_waals: f64::NAN,
-            electrostatic: f64::NAN,
-            total: f64::NAN,
-        });
+        let e = self.evaluate().map(|ev| ev.energy).unwrap_or(Energy::NAN);
         let kcal = |joules: f64| joules / uff::KCAL_PER_MOL;
         vec![
             Reading::new(&self.name, "atoms", atoms.len() as f64, ""),
@@ -268,6 +270,9 @@ impl Domain for Molecule {
             Reading::new(&self.name, "formal charge", f64::from(charge), "e"),
             Reading::new(&self.name, "energy", kcal(e.total), "kcal/mol"),
             Reading::new(&self.name, "bond stretch", kcal(e.bond), "kcal/mol"),
+            Reading::new(&self.name, "angle bend", kcal(e.angle), "kcal/mol"),
+            Reading::new(&self.name, "torsion", kcal(e.torsion), "kcal/mol"),
+            Reading::new(&self.name, "inversion", kcal(e.inversion), "kcal/mol"),
             Reading::new(
                 &self.name,
                 "van der Waals",

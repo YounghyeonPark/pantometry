@@ -70,7 +70,7 @@ fn it_runs_balances_and_stays_where_it_is() {
 }
 
 /// **The energy readings are the force field's energy, in kcal/mol**, and the total is the sum
-/// of the three terms read beside it. The conversion is one division by an exact constant, so the
+/// of the six terms read beside it. The conversion is one division by an exact constant, so the
 /// readings equal the evaluation divided by it, bit for bit.
 #[test]
 fn the_energy_is_read_out_in_kcal_per_mol() {
@@ -86,6 +86,9 @@ fn the_energy_is_read_out_in_kcal_per_mol() {
     for (label, joules) in [
         ("energy", e.total),
         ("bond stretch", e.bond),
+        ("angle bend", e.angle),
+        ("torsion", e.torsion),
+        ("inversion", e.inversion),
         ("van der Waals", e.van_der_waals),
         ("electrostatic", e.electrostatic),
     ] {

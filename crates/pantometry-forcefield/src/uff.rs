@@ -150,6 +150,17 @@ pub enum UffType {
     I,
 }
 
+/// A hybridisation as the torsion rules use it. See [`UffType::hybridisation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Hybridisation {
+    /// Linear, `X_1`. A torsion about a bond to one is zero (p. 10029).
+    Sp,
+    /// Trigonal: `X_2`, and the resonant `X_R`.
+    Sp2,
+    /// Tetrahedral, `X_3`.
+    Sp3,
+}
+
 /// One row of Table I in the paper's own units. See [`UffType::table_i`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TableI {
@@ -320,6 +331,37 @@ impl UffType {
             _ => return None,
         };
         Some(kcal * KCAL_PER_MOL)
+    }
+
+    /// The hybridisation the torsion rules (p. 10028–29) read this type as, or `None` for a type
+    /// that has none — hydrogen and the halogens, which are never the centre of a torsion.
+    ///
+    /// The paper's own suffix decides it: `_3` is sp³, `_1` sp, and both `_2` and `_R` are sp².
+    /// **Resonant counts as sp²**, a reading and not a quotation: eq 17, the sp²–sp² barrier, was
+    /// fitted to benzene's vibrational modes among others (p. 10028), which only makes sense if an
+    /// aromatic `C_R` is an sp² centre; and the group-6 exception says "an sp² or resonant atom",
+    /// which is the one place the paper names the two separately. So `C_R`, `N_R`, `O_R` and `S_R`
+    /// are [`Hybridisation::Sp2`], as are the amide's `C_R` and `N_R`. `P_3+3`, `P_3+5` and
+    /// `S_3+2` are sp³.
+    pub fn hybridisation(self) -> Option<Hybridisation> {
+        match self {
+            UffType::C3
+            | UffType::N3
+            | UffType::O3
+            | UffType::P3Trivalent
+            | UffType::P3Pentavalent
+            | UffType::S3Divalent => Some(Hybridisation::Sp3),
+            UffType::CR
+            | UffType::C2
+            | UffType::NR
+            | UffType::N2
+            | UffType::OR
+            | UffType::O2
+            | UffType::SR
+            | UffType::S2 => Some(Hybridisation::Sp2),
+            UffType::C1 | UffType::N1 | UffType::O1 => Some(Hybridisation::Sp),
+            UffType::H | UffType::F | UffType::Cl | UffType::Br | UffType::I => None,
+        }
     }
 
     /// The sp² torsion constant `U`, in joules per molecule, by the element's period: 2, 1.25,
