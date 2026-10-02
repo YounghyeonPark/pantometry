@@ -985,3 +985,99 @@ fn the_panel_shapes_are_counted_where_they_are_named() {
         shapes,
     );
 }
+
+/// Every example file's name: the stem of each `.rs` directly under an `examples` directory in
+/// `crates/`, which is what `cargo run --example` takes.
+fn example_stems() -> std::collections::BTreeSet<String> {
+    let mut stems = std::collections::BTreeSet::new();
+    let mut stack = vec![root().join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in list(&dir).filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|x| x == "rs")
+                && path.parent().is_some_and(|p| p.ends_with("examples"))
+            {
+                let stem = path.file_stem().expect("a file has a stem");
+                stems.insert(stem.to_string_lossy().into_owned());
+            }
+        }
+    }
+    stems
+}
+
+/// The words of the shell loop that starts with `opener` in `text`: from after the opener to the
+/// `; do` that ends the list, across `\` continuations, with the continuations dropped.
+fn loop_words(text: &str, opener: &str, path: &str) -> Vec<String> {
+    let start = text
+        .find(opener)
+        .unwrap_or_else(|| panic!("{path} has no `{opener}` loop"))
+        + opener.len();
+    let end = text[start..]
+        .find("; do")
+        .unwrap_or_else(|| panic!("{path}'s `{opener}` loop never reaches `; do`"))
+        + start;
+    text[start..end]
+        .split_whitespace()
+        .filter(|w| *w != "\\")
+        .map(str::to_owned)
+        .collect()
+}
+
+/// **Every example runs, in CI and in both copies of the gate, and nothing else is run as one.**
+///
+/// An example is a test that prints: it asserts its numbers against a closed form, so it checks
+/// something only when it is run. Three lists say which are run — CI's loop, the gate in
+/// `CLAUDE.md`, and the gate in `CONTRIBUTING.md` — and nothing tied them to the files. Adding
+/// `aspirin_relaxes` meant editing all three by hand, and `unearned-pass-hunter` pointed out that
+/// a seventeenth example left out of them would be compiled by `clippy --all-targets`, run by
+/// nobody, and green everywhere.
+///
+/// `where_the_time_goes` is the one example no loop runs: it is a benchmark, which "measures
+/// rather than asserts", as `EXAMPLES.md` says. It is named here rather than matched by a rule,
+/// so a second exception has to be argued for in this test.
+#[test]
+fn every_example_is_run_and_only_examples_are() {
+    if !repository() {
+        return;
+    }
+    const NOT_RUN: &[&str] = &["where_the_time_goes"];
+    let stems = example_stems();
+    for name in NOT_RUN {
+        assert!(
+            stems.contains(*name),
+            "{name} is excused but is not an example any more"
+        );
+    }
+    let want: std::collections::BTreeSet<String> = stems
+        .iter()
+        .filter(|s| !NOT_RUN.contains(&s.as_str()))
+        .cloned()
+        .collect();
+    assert!(
+        want.len() >= 16,
+        "only {} examples found under crates/",
+        want.len()
+    );
+    for (path, opener) in [
+        (".github/workflows/ci.yml", "for example in "),
+        ("CLAUDE.md", "for e in "),
+        ("CONTRIBUTING.md", "for e in "),
+    ] {
+        let words = loop_words(&read(root().join(path)), opener, path);
+        let got: std::collections::BTreeSet<String> = words.iter().cloned().collect();
+        assert_eq!(
+            got.len(),
+            words.len(),
+            "{path}'s loop names an example twice: {words:?}"
+        );
+        let missing: Vec<_> = want.difference(&got).collect();
+        let extra: Vec<_> = got.difference(&want).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "{path}'s example loop is not the examples: never run {missing:?}, not an example \
+             {extra:?}"
+        );
+    }
+}
