@@ -249,7 +249,7 @@ pub fn usda_with(title: &str, frames: &[Frame], drawing: &mesh::Drawing) -> Stag
             } => {
                 let radius = mesh::body_radius(positions, bounds);
                 notes.push(format!(
-                    "{}: bodies drawn as spheres of radius {radius:.6} m — a size this run does \
+                    "{}: bodies drawn as spheres of radius {radius:.4e} m — a size this run does \
                      **not** carry. A body set records positions and a value, not an extent, so \
                      the radius is a quarter of the median distance to the nearest neighbour: a \
                      drawing convention, not a measurement",
@@ -669,7 +669,7 @@ fn write_curves(
 /// two writers say the same thing about the same [`Placed`] and only spell it differently.
 ///
 /// Empty when the placement is the identity — the byte every file this workspace had written
-/// until scene 30 placed two busbars, and thirty-one of the thirty-two shipped scenes still.
+/// until scene 30 placed two busbars, and thirty-two of the thirty-three shipped scenes still.
 fn write_xform(out: &mut String, place: Placed) {
     if place.is_here() {
         out.push_str("        uniform token[] xformOpOrder = []\n");
@@ -752,7 +752,7 @@ fn write_designed(out: &mut String, path: &str, name: &str, part: &mesh::Designe
 
 /// Every domain's scalars, as custom attributes with time samples.
 ///
-/// This is the half of a scene no picture reaches. Thirteen of the thirty-two shipped scenes have a
+/// This is the half of a scene no picture reaches. Thirteen of the thirty-three shipped scenes have a
 /// domain with no field and no bodies, and for several of them the scalar *is* the result — a
 /// winding whose resistance follows its own temperature draws nothing at all and is the whole
 /// subject of its scene.

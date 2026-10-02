@@ -1348,7 +1348,7 @@ impl App {
         // The chooser, which is the second half of the start screen rather than a window over
         // it: there is still nothing open, and the way back is a button on it.
         //
-        // **Two screens.** New project offers the thirty-two shipped scenes by what they are a
+        // **Two screens.** New project offers the thirty-three shipped scenes by what they are a
         // simulation of; `Custom…` opens the list of kinds. The first screen asked the kind
         // question directly and answered it in the format's vocabulary — `bar`, `block`, `hall` —
         // which is right for a file and wrong for somebody deciding what to make.
@@ -4376,8 +4376,13 @@ fn metres(m: f64) -> String {
         format!("{} m", trim(format!("{m:.3}")))
     } else if a >= 1e-3 {
         format!("{} mm", trim(format!("{:.3}", m * 1e3)))
-    } else {
+    } else if a >= 1e-6 {
         format!("{} um", trim(format!("{:.3}", m * 1e6)))
+    } else {
+        // **A molecule's scale bar read `0 um`.** Three decimals of a micron is a nanometre, and
+        // the bar under aspirin is a fifth of one, so it rounded to nothing — a scale that says
+        // the thing it measures has no size.
+        format!("{} nm", trim(format!("{:.3}", m * 1e9)))
     }
 }
 

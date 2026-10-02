@@ -14,9 +14,9 @@
 //! Rust cannot list an enum's variants, so no compiler check can prove this list is complete.
 //! What can be proved is that it agrees with a set maintained somewhere else entirely, and one
 //! exists: **every kind the format defines appears in at least one shipped scene.** Measured, not
-//! assumed — twenty-one variants, twenty-one distinct kinds across the thirty-two scenes. So the
+//! assumed — twenty-two variants, twenty-two distinct kinds across the thirty-three scenes. So the
 //! test compares the two sets **in both directions**, which is the same shape as
-//! `counts_in_prose`: a template with no scene fires one half, a twenty-second domain with a scene
+//! `counts_in_prose`: a template with no scene fires one half, a twenty-third domain with a scene
 //! fires the other.
 //!
 //! # Text, not a serialised `DomainSpec`
@@ -88,7 +88,7 @@ impl Template {
 /// The examples, keyed by the `kind` the scene format spells.
 ///
 /// Sorted by kind, so a menu built from this is in a stable order.
-pub const TEMPLATES: [Template; 21] = [
+pub const TEMPLATES: [Template; 22] = [
     Template {
         kind: "atoms",
         about: "A Lennard-Jones fluid in a periodic box",
@@ -196,6 +196,16 @@ pub const TEMPLATES: [Template; 21] = [
         frames: 24,
         json: r#"{ "kind": "lump", "name": "lump", "volume_cm3": 2.0, "thickness_mm": 6.0,
           "initial_c": 20.0, "ambient_c": 20.0, "area_cm2": 12.0 }"#,
+    },
+    Template {
+        kind: "molecule",
+        about: "A small molecule, every atom, relaxing under a force field",
+        // One minimiser iteration a frame, and aspirin's minimum takes 454 of them: a template
+        // that stopped short of that would open on a molecule that has not finished relaxing.
+        // The duration is a count of iterations, because a step of this kind is not a time.
+        duration_s: 500.0,
+        frames: 500,
+        json: r#"{ "kind": "molecule", "name": "molecule", "ccd": "structures/AIN.cif" }"#,
     },
     Template {
         kind: "network",

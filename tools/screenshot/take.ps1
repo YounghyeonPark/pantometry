@@ -30,6 +30,7 @@ public class Win {
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint f);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
 
@@ -55,6 +56,13 @@ public class Win {
     }
 }
 "@
+
+# **DPI-aware before any window is measured.** PowerShell is not, so on a display scaled to 150%
+# Windows hands it the window's rectangle divided by 1.5 while the editor, which is DPI-aware,
+# draws at full size: the bitmap was the window's top-left two thirds, enlarged, and it was saved
+# as a screenshot without complaint. Aware, the rectangle is the window's real one in pixels, and
+# a scaled display gives a larger picture of the same frame rather than a crop of it.
+if (-not [Win]::SetProcessDPIAware()) { throw "could not make this process DPI-aware -- the picture would be a crop" }
 
 $exe = Join-Path (Get-Location) "target\release\pantometry.exe"
 if (-not (Test-Path $exe)) { throw "no binary at $exe -- build it first" }

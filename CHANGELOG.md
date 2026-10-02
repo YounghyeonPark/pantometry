@@ -176,8 +176,38 @@ protects nothing.
   methyl, printed 1.109 and 1.113, was compared as one mean against 1.111; it is now the shortest
   and longest C–H, 1.1094 and 1.1130. 97 tests in the crate; each of seventeen sabotages was caught,
   and the review's eleven were rerun before and after the changes it asked for.
+- **A scene for the fourteenth domain: `33-aspirin-relaxing-out-of-a-clash`, and an example,
+  `aspirin_relaxes`.** `molecule` is the scene format's twenty-second kind: one Chemical Component
+  Dictionary entry named by `ccd`, a path beside the scene served the way `pdb` and `stl` are, so a
+  preset carries it (`WithFiles`) — the generator found the file by the rule it already had. The
+  build refuses an entry the force field cannot describe, naming the domain, the file and the atom,
+  because `Molecule::new` never fails and a scene asking for a relaxation would otherwise run with
+  nothing moving and NaN in the readings. The scene photographs every one of 500 minimiser steps,
+  so frame to frame is step to step: 185.672 → 29.583 kcal/mol, converged at step 454 with the
+  largest force 7.65e-5 kcal mol⁻¹ Å⁻¹, drawn ball-and-stick with the dictionary's 21 bonds.
+  **Checked against what minimisation guarantees and a published threshold, not a pinned energy**:
+  the energy never rises and a frame that moved is strictly lower; it ends converged; and the
+  O4–H1 contact, 1.645 Å at the start, opens past Bondi's radii less MolProbity's 0.4 Å
+  serious-clash overlap, 2.32 Å — to 2.666 Å, which is **still inside the Bondi contact of
+  2.72 Å** and inside UFF's own zero crossing for the pair, 2.831 Å, and is said rather than
+  asserted. The entry beside the scenes is a byte-for-byte copy of the crate's, held by a test.
+  The example prints the six terms before and after, the steps and the contact, and checks the
+  atoms against the entry's own `_chem_comp.formula`, the energy at every step, electrostatics
+  exactly zero with no charges given, the largest force recomputed from the forces, and the
+  contact against the same threshold from inside it. Each of twenty sabotages was caught. All
+  fourteen domains have a scene; 33 scenes, 22 kinds, 29 tiles, 16 examples run by CI and 17
+  example files. The scene is filed under the chooser's protein area, renamed *Molecules*: a
+  fourteenth area put the last one's tile below the fold of a 950-point window, which
+  `every_area_of_the_start_screen_lays_out_at_every_width` caught.
 
 ### Changed
+
+- **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as
+  diagnostics.** They describe the minimisation rather than the molecule, and the scene walk's pin
+  on the labels every scene emits is what asked: it refuses a new label until somebody decides
+  whether a sweep should compare it as an answer. 74 `(label, unit)` pairs now, 63 answers and 11
+  diagnostics, and 12 `(domain, label)` pairs; `pantometry verify` prints the four as solver
+  diagnostics and leaves them out of the window sweep's verdict.
 
 - **A conjugated ether, ester, acid or thioether oxygen or sulfur is `O_R` or `S_R`, not `O_3` or
   `S_3+2` — `pantometry-forcefield` had been typing it differently from the paper, and the 1d
@@ -214,6 +244,19 @@ protects nothing.
   sign. Each of the four sabotages of the new rule was caught.
 
 ### Fixed
+
+- **A molecule's scale read `0 um`.** The editor's scale bar and its inspector's extents had no
+  unit below the micron, so three decimals of one rounded aspirin — 0.81 × 0.40 × 0.94 nm — to
+  `0.001 x 0 x 0.001 um`, and its scale bar to `0 um`. Below a micron they say nanometres now. The
+  glTF and USD writers' note about the radius they draw bodies at had the same shape: `{:.6} m`
+  printed aspirin's as `0.000000 m`, a size of nothing, and is in scientific notation now.
+- **Five of the chooser's tiles are stale, and are left so on purpose.** Regenerating them for
+  scene 33 rewrote `06`, `07`, `14`, `25` and `31`, which no change to a scene had touched: the
+  renderer moved after they were drawn — `31` gained its backbone — and `14-a-world` falls from 170
+  lit pixels to 14, because a camera fitted to orbits a hundred million kilometres across draws
+  nothing of a 20 mm bar. That would put a third tile among the two `every_tile_decodes_to_something`
+  pins as sparse, so it is a decision about scene 14's picture and not part of adding scene 33;
+  `tools/presets/README.md` says so where it used to say the script reproduces the tiles.
 
 - **Xenon's reason for being out of the catalogue was stated and not measured.** The docs said
   its 10.8% miss on liquid density was an unsourced pair. A sourced one misses too: Beattie,

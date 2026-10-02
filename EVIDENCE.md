@@ -483,9 +483,10 @@ numerical rule separates this row from the others, because what separates it is 
 *means*.
 
 **A domain says which of its own readings describe the solve**, through `Domain::diagnostics`.
-Seven labels across six crates: a residual from `Conductor` and from elastic `Block`, a divergence
+Eleven labels across seven crates: a residual from `Conductor` and from elastic `Block`, a divergence
 and a cell Reynolds number from `Channel`, a `div B` from `Cavity`, a wavefunction norm from the
-quantum well, and a rigid-mode count and mode separation from `Protein`. They print their values
+quantum well, a rigid-mode count and mode separation from `Protein`, and the largest and the rms
+force, the converged flag and the step count from a minimising `Molecule`. They print their values
 with no percentage, get no order, and stay out of `Sweep::worst`, which the window sweep raises a
 finding on — held by a unit test that calls `compare` directly, because the filter was measured to
 be unreachable from any scene: deleting it left both workspaces green.
@@ -496,8 +497,8 @@ silence and needed three pins to hold: the labels the scenes emit, the length of
 the whole walk stayed green), and who emitted them — because keying on a label alone meant a *new*
 domain reporting `norm` as its **answer** would vanish from the sweep with nothing to say so.
 Asking the domain removes the first two problems by removing the list, and gives `(domain, label)`
-pairs, which is what the third needed. The scene walk pins the **59** `(label, unit)` pairs the
-thirty-two scenes emit — 52 answers and 7 diagnostics — and the **8** `(domain, label)` pairs, so
+pairs, which is what the third needed. The scene walk pins the **74** `(label, unit)` pairs the
+thirty-three scenes emit — 63 answers and 11 diagnostics — and the **12** `(domain, label)` pairs, so
 an arrival or a departure is a decision somebody made rather than a line nobody read.
 
 The near misses are the argument for a list rather than a heuristic: `invariant` is the energy an

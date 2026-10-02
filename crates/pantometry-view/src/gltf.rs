@@ -243,7 +243,7 @@ pub fn gltf_with(title: &str, frame: &Frame, drawing: &mesh::Drawing) -> Exporte
                 if positions.len() <= MAX_SPHERES {
                     let r = mesh::body_radius(positions, bounds);
                     notes.push(format!(
-                        "{}: bodies drawn as spheres of radius {r:.6} m — a **size this run does \
+                        "{}: bodies drawn as spheres of radius {r:.4e} m — a **size this run does \
                          not carry**. A body set records positions and a value, not an extent, so \
                          the radius is a quarter of the median distance to the nearest neighbour, \
                          which keeps them apart and is a drawing convention rather than a \

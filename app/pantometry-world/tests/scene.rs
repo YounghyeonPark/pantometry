@@ -1418,6 +1418,141 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: only {cleared:.1} mg of {dose_mg} cleared in twelve hours"
                 );
             }
+            // **A minimisation, held to what minimisation guarantees and to one fact about the
+            // molecule — none of them a pinned energy.**
+            //
+            // The relaxed energy is a property of this force field's minimum nearest the
+            // dictionary's geometry, and no closed form says what it should be, so nothing here
+            // compares against it. What *is* exact:
+            //
+            // - **The energy never rises.** The minimiser takes a step only when the Armijo
+            //   condition holds, so every accepted step lowers the energy and a refused one leaves
+            //   the atoms where they were. The scene photographs every step — `frames` is the step
+            //   count — so frame to frame *is* step to step, and a frame in which anything moved
+            //   must be strictly lower.
+            // - **It ends converged**: the largest force on any atom at most the tolerance the
+            //   domain minimises to, 1e-4 kcal/mol/Å. Not "or stalled": aspirin converges, in 454
+            //   iterations of the 500 this scene runs, and a stall here would be a change in the
+            //   minimiser worth a failure rather than a branch that accepts it.
+            // - **The clash opens.** The dictionary's ideal coordinates put the acetyl oxygen O4
+            //   1.645 Å from the ring hydrogen H1, and that one pair is 134 kcal/mol of the start's
+            //   van der Waals energy. The threshold is a published one and not a measurement of
+            //   this run: Bondi's van der Waals radii, 1.52 Å for O and 1.20 for H (J. Phys. Chem.
+            //   68, 441 (1964)), less the 0.4 Å overlap that MolProbity calls a serious clash
+            //   (Word et al., J. Mol. Biol. 285, 1735 (1999)) — 2.32 Å. Read off the *panel*, by the
+            //   atom names the dictionary gives them, because the picture is what claims it.
+            //
+            //   **It does not reach the Bondi contact distance, 2.72 Å, and that is not asserted
+            //   either way.** The relaxed pair sits at 2.666 Å, still inside UFF's own zero
+            //   crossing for O···H (2.831 Å): the ester is held planar by its conjugation, and
+            //   the minimum is a compromise between that and this contact.
+            "33-aspirin-relaxing-out-of-a-clash.json" => {
+                let reading = |frame: &pantometry_world::Frame, label: &str| {
+                    frame
+                        .readings
+                        .iter()
+                        .find(|r| r.domain == "aspirin" && r.label == label)
+                        .unwrap_or_else(|| panic!("{name}: no {label} reading"))
+                        .value
+                };
+                let points = |frame: &pantometry_world::Frame| match &frame.panels[0].data {
+                    pantometry_world::PanelData::Points {
+                        positions,
+                        labels,
+                        bonds,
+                        ..
+                    } => (positions.clone(), labels.clone(), bonds.clone()),
+                    _ => panic!("{name}: a molecule is bodies, not a field"),
+                };
+                assert_eq!(
+                    world.steps(),
+                    world.scene().frames,
+                    "{name}: every step has to be photographed for frame-to-frame to be \
+                     step-to-step"
+                );
+
+                // The energy never rises, and a frame that moved is strictly lower.
+                let mut moved = 0;
+                for (k, pair) in frames.windows(2).enumerate() {
+                    let (before, after) =
+                        (reading(&pair[0], "energy"), reading(&pair[1], "energy"));
+                    assert!(
+                        after <= before,
+                        "{name}: the energy rose at step {}: {after} kcal/mol after {before}",
+                        k + 1
+                    );
+                    if points(&pair[0]).0 != points(&pair[1]).0 {
+                        assert!(
+                            after < before,
+                            "{name}: step {} moved the atoms without lowering the energy",
+                            k + 1
+                        );
+                        moved += 1;
+                    }
+                }
+                let (start, end) = (reading(&frames[0], "energy"), reading(last, "energy"));
+                println!(
+                    "  {name}: {start:.3} -> {end:.3} kcal/mol, {moved} of {} frames moved",
+                    frames.len() - 1
+                );
+                assert!(moved > 0, "{name}: nothing moved in the whole run");
+
+                // The O4-H1 clash, at the start and at the end, by name.
+                let contact = |frame: &pantometry_world::Frame| {
+                    let (positions, labels, _) = points(frame);
+                    let at = |atom: &str| {
+                        let i = labels
+                            .iter()
+                            .position(|l| l == atom)
+                            .unwrap_or_else(|| panic!("{name}: no atom called {atom} drawn"));
+                        positions[i]
+                    };
+                    let (o, h) = (at("O4"), at("H1"));
+                    (0..3).map(|c| (o[c] - h[c]).powi(2)).sum::<f64>().sqrt() / 1e-10
+                };
+                const BONDI_O: f64 = 1.52;
+                const BONDI_H: f64 = 1.20;
+                const SERIOUS_OVERLAP: f64 = 0.4;
+                let clear = BONDI_O + BONDI_H - SERIOUS_OVERLAP;
+                let (opened_from, opened_to) = (contact(&frames[0]), contact(last));
+                println!(
+                    "  {name}: O4-H1 {opened_from:.3} -> {opened_to:.3} A against a clash \
+                     threshold of {clear:.2} A"
+                );
+                // The start is the clash, or the check below could pass on a molecule that never
+                // had one.
+                assert!(
+                    opened_from < clear,
+                    "{name}: O4-H1 starts at {opened_from:.3} A, which is not a clash"
+                );
+                assert!(
+                    opened_to > clear,
+                    "{name}: O4-H1 is {opened_to:.3} A at the end, still a serious clash \
+                     (closer than {clear:.2} A)"
+                );
+
+                // Converged, to the domain's own tolerance.
+                let force = reading(last, "max force");
+                assert!(
+                    reading(last, "converged") == 1.0 && force <= 1e-4,
+                    "{name}: the run ended unconverged, the largest force {force:.3e} kcal/mol/A \
+                     after {} minimiser steps",
+                    reading(last, "minimiser steps")
+                );
+
+                // Ball-and-stick: every bond the dictionary states is drawn, and nothing else.
+                let (_, labels, bonds) = points(last);
+                assert_eq!(
+                    labels.len() as f64,
+                    reading(last, "atoms"),
+                    "{name}: one body per atom"
+                );
+                assert_eq!(
+                    bonds.len() as f64,
+                    reading(last, "bonds"),
+                    "{name}: the panel draws a different number of bonds from the molecule's"
+                );
+            }
             // Kepler's third law, from the picture. The satellites are on circular orbits,
             // so `v = sqrt(GM/r)` and the fastest is the innermost: 7546 m/s at 7000 km
             // against Earth's mass, computed here and not read off the domain.
@@ -3419,7 +3554,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // would be compared across grids as though it converged to something, and nothing would say.
     // `verify::DIAGNOSTICS` was that list; `Domain::diagnostics` replaced it, so a domain now says
     // which of its own readings describe the solve. This is what stops the drift. It pins all
-    // **59** labels the thirty-two scenes emit, so a new one fails here and has to be decided
+    // **74** labels the thirty-three scenes emit, so a new one fails here and has to be decided
     // about.
     //
     // What the sweep did without it, on `17-a-busbar-with-a-notch`:
@@ -3458,6 +3593,10 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             .map(|(d, l)| format!("{d}/{l}"))
             .collect::<Vec<_>>(),
         [
+            "aspirin/converged",
+            "aspirin/max force",
+            "aspirin/minimiser steps",
+            "aspirin/rms force",
             "busbar/residual",
             "coolant/cell Reynolds",
             "coolant/divergence",
@@ -3483,12 +3622,16 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         named(&diagnostics),
         [
             "cell Reynolds []",
+            "converged []",
             "div B []",
             "divergence [m/s]",
+            "max force [kcal/mol/Å]",
+            "minimiser steps []",
             "mode separation []",
             "norm []",
             "residual []",
             "rigid modes []",
+            "rms force [kcal/mol/Å]",
         ],
         "the set of readings that describe the solve rather than the world has changed"
     );
@@ -3499,8 +3642,12 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "<x> [m]",
             "TDS [%]",
             "absorbed [J]",
+            "angle bend [kcal/mol]",
+            "atoms []",
             "baseplate [C]",
             "bed temperature [C]",
+            "bond stretch [kcal/mol]",
+            "bonds []",
             "cleared [mg]",
             "coldest [C]",
             "current [A]",
@@ -3509,14 +3656,19 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "dissipated [J]",
             "dissipating [W]",
             "electric [J]",
+            "electrostatic [kcal/mol]",
             "energy [J]",
+            "energy [kcal/mol]",
             "field energy [J]",
             "flow [g/s]",
+            "formal charge [e]",
             "free strain []",
             "generated [J]",
+            "heavy atoms []",
             "housing [C]",
             "in the body [mg]",
             "invariant [J]",
+            "inversion [kcal/mol]",
             "junction [C]",
             "kinetic energy [J]",
             "magnetic [J]",
@@ -3541,7 +3693,9 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "strain z []",
             "temperature [C]",
             "tissue [mg/L]",
+            "torsion [kcal/mol]",
             "unevenness []",
+            "van der Waals [kcal/mol]",
             "volume change []",
             "winding [C]",
             "work driven in [J]",

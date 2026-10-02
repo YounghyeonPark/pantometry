@@ -111,8 +111,9 @@ jobs:
   # two existed.
   #
   # **CI passes none, and that is now a decision rather than an omission.** The branch behind the
-  # argument had never run here, so it was measured: all fifteen runs pass and write between
-  # 21 KB and 5.2 MB, `pantometry-view`'s asset writers have eight test files of their own, and
+  # argument had never run here, so it was measured: all fifteen runs then pass and write between
+  # 21 KB and 5.2 MB (`aspirin_relaxes`, the sixteenth, came later and writes no asset),
+  # `pantometry-view`'s asset writers have eight test files of their own, and
   # the one thing those cannot see — the frame an individual example builds — is checked inside
   # the example, which asks the panel how many runs and how many vertices it kept. Running every
   # example twice would buy insurance against nothing that has happened.
@@ -128,7 +129,7 @@ jobs:
       - name: run every example
         run: |
           set -euo pipefail
-          for example in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots heat_in_three_dimensions room_in_three_dimensions busbar_rating optical_bench espresso_shot portafilter_flow ligand_binding agents_quickstart readme_check; do
+          for example in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots heat_in_three_dimensions room_in_three_dimensions busbar_rating optical_bench espresso_shot portafilter_flow ligand_binding aspirin_relaxes agents_quickstart readme_check; do
             echo "::group::$example"
             cargo run --locked --release --example "$example"
             echo "::endgroup::"
@@ -221,9 +222,10 @@ jobs:
           cargo fmt --all --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-      # The whole suite, which includes the **thirty-two** scenes and their closed-form checks.
+      # The whole suite, which includes the **thirty-three** scenes and their closed-form checks.
       # Those used to run in the library's `test` job; they moved with `pantometry-world` and this
-      # is where they are held now. That count said twenty-eight, then thirty, as scenes arrived.
+      # is where they are held now. That count said twenty-eight, then thirty, then thirty-two, as
+      # scenes arrived.
       #
       # **This was the long job, and its wall time says little about any one change.** Twelve runs
       # measured 38 to 78 minutes on the same kind of runner, and a first version of this comment

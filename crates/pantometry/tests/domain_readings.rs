@@ -179,4 +179,16 @@ fn a_declared_diagnostic_is_a_reading_the_domain_emits() {
         "a quantum well",
         &pantometry_quantum::Well::new("well", Mass::kg(9.109e-31), Length::nm(10.0), 64),
     );
+    // Four at once, and the one whose minimiser state is the declaration: a label renamed in
+    // `readings` and not here would leave `max force` compared across a sweep as an answer.
+    holds(
+        "a molecule",
+        &Molecule::new(
+            "aspirin",
+            Component::from_ccd(include_str!(
+                "../../pantometry-forcefield/components/AIN.cif"
+            ))
+            .expect("AIN parses"),
+        ),
+    );
 }

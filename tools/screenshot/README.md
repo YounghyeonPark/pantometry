@@ -34,6 +34,13 @@ than no guard.
 **The text is written through `System.IO.File`**, because `Set-Content -Encoding utf8` in PowerShell
 5.1 writes a byte-order mark and the file then differs from a fresh dump in its first three bytes.
 
+**The script declares itself DPI-aware before it measures a window.** PowerShell is not, so on a
+display scaled to 150% `GetWindowRect` returned the window's size divided by 1.5 while the editor,
+which is DPI-aware, drew at full size: the bitmap was the window's top-left two thirds, enlarged,
+and the script printed `wrote` as for any other picture. Aware, a scaled display gives a larger
+picture of the same frame — `docs/editor-protein.png` is 2272x1481 for that reason, and
+`docs/editor.png`, taken at 100%, is 1516x989.
+
 **The script is ASCII.** PowerShell 5.1 reads a `.ps1` without a byte-order mark as the system code
 page, so an em dash in a comment is a parse error at the line that contains it.
 

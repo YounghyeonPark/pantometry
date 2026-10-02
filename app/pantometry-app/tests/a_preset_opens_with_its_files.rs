@@ -1,8 +1,9 @@
 //! **Every preset, opened the way a person opens one, checks without an error.**
 //!
-//! The New-project screen offers the thirty-two shipped scenes, and picking one opens it as an
-//! unsaved `scene.json`. Two of them name a file beside themselves — the protein's
-//! `structures/1CRN.pdb` and the bracket's `parts/l-bracket.stl` — and an unsaved scene's "beside"
+//! The New-project screen offers the thirty-three shipped scenes, and picking one opens it as an
+//! unsaved `scene.json`. Three of them name a file beside themselves — the protein's
+//! `structures/1CRN.pdb`, the bracket's `parts/l-bracket.stl` and, since scene 33, aspirin's
+//! `structures/AIN.cif` — and an unsaved scene's "beside"
 //! is whatever directory the editor was started from. So the protein opened as
 //! `crambin: structures/1CRN.pdb (at structures/1CRN.pdb): The system cannot find the path
 //! specified` and a viewport saying the scene had no geometry.

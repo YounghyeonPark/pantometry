@@ -1383,8 +1383,12 @@ pub fn metres(m: f64) -> String {
         format!("{} m", body(m))
     } else if a >= 1e-3 {
         format!("{} mm", body(m * 1e3))
-    } else {
+    } else if a >= 1e-6 {
         format!("{} um", body(m * 1e6))
+    } else {
+        // Below a micron, three decimals of one is a nanometre and a molecule is a fraction of
+        // that: aspirin, relaxed, is 0.81 x 0.40 x 0.94 nm, and it read `0.001 x 0 x 0.001 um`.
+        format!("{} nm", body(m * 1e9))
     }
 }
 

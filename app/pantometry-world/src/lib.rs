@@ -1060,6 +1060,33 @@ pub enum DomainSpec {
         #[serde(default)]
         seed: u64,
     },
+    /// A small molecule, every atom of it, relaxing under the Universal Force Field.
+    ///
+    /// Read from one entry of the wwPDB Chemical Component Dictionary, typed for UFF and minimised
+    /// — see `pantometry_forcefield` for the force field, the typing rules and the places it
+    /// departs from the paper as printed. The atoms are drawn ball-and-stick with the bonds the
+    /// dictionary states, and the readings are the energy term by term and the force.
+    ///
+    /// # A step is a minimiser iteration, not a time step
+    ///
+    /// There is no dynamics here: no velocity, no temperature, and the step's length means
+    /// nothing. Each step is one L-BFGS iteration with an Armijo line search, so each frame is the
+    /// molecule further downhill and the `energy` reading **never rises**. The clock still ticks,
+    /// because a scene has one, and what it counts is iterations. A scene that wants to show the
+    /// whole relaxation states as many steps as the minimum takes; once there, the minimiser does
+    /// not move and the remaining frames are the minimum held.
+    ///
+    /// # It has no resolution, and that is not an omission
+    ///
+    /// The same reason a protein has none: the atoms are the data, and there is nothing between
+    /// two of them to subdivide. [`Scene::refined`] refuses it.
+    Molecule {
+        /// Domain name, and the handle the renderer uses to find it again.
+        name: String,
+        /// The dictionary entry, as a path beside the scene — the same rule `pdb` and `stl`
+        /// follow. One component per file, as RCSB serves it.
+        ccd: String,
+    },
     /// A drug moving between well-stirred compartments, and out of the body.
     ///
     /// The other domain with **no space at all**: a compartment is an apparent volume, not a
@@ -2177,6 +2204,7 @@ impl DomainSpec {
             | DomainSpec::Bounce { name, .. }
             | DomainSpec::Atoms { name, .. }
             | DomainSpec::Protein { name, .. }
+            | DomainSpec::Molecule { name, .. }
             | DomainSpec::Compartments { name, .. }
             | DomainSpec::Lump { name, .. }
             | DomainSpec::Network { name, .. }
@@ -2349,6 +2377,32 @@ impl DomainSpec {
                         + infusions.iter().map(|i| i.dose_mg).sum::<f64>()
                 ));
                 Box::new(model)
+            }
+            DomainSpec::Molecule { name, ccd } => {
+                let bytes = files.bytes(ccd).map_err(|e| format!("{name}: {e}"))?;
+                let text = String::from_utf8(bytes).map_err(|_| {
+                    format!("{name}: {ccd} is not text, so it is not a dictionary entry")
+                })?;
+                let component = pantometry::forcefield::Component::from_ccd(&text)
+                    .map_err(|e| format!("{name}: {ccd}: {e}"))?;
+                let molecule = pantometry::forcefield::Molecule::new(name.clone(), component);
+                // **Refused here rather than run.** `Molecule::new` never fails: a molecule the
+                // force field cannot describe is still read and drawn, its energy readings are
+                // NaN and it never moves. That is the right answer for a library caller who asked
+                // for the molecule; for a scene that asked for a *relaxation* it is a run that
+                // does nothing and says so only in a NaN, which is the failure this format
+                // refuses everywhere else.
+                if let Err(why) = molecule.force_field() {
+                    return Err(format!("{name}: {ccd}: {why}"));
+                }
+                let c = molecule.component();
+                log.notes.push(format!(
+                    "{name}: {} ({} atoms, {} bonds), typed for UFF",
+                    c.id(),
+                    c.atoms().len(),
+                    c.bonds().len()
+                ));
+                Box::new(molecule)
             }
             DomainSpec::Protein {
                 name,
@@ -5442,7 +5496,8 @@ impl DomainSpec {
             DomainSpec::Orbit { .. }
             | DomainSpec::Bounce { .. }
             | DomainSpec::Atoms { .. }
-            | DomainSpec::Protein { .. } => Placement::default(),
+            | DomainSpec::Protein { .. }
+            | DomainSpec::Molecule { .. } => Placement::default(),
             // No picture at all: sources, sinks, a lumped mass, a graph of nodes. Their result
             // is a reading, and `Domain::readings` collects it without anybody placing them.
             DomainSpec::Heater { .. }

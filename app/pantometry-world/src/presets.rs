@@ -1,4 +1,4 @@
-//! The thirty-two shipped scenes, offered as starting points.
+//! The thirty-three shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -20,7 +20,7 @@
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-two.
+//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-three.
 
 /// One scene, offered as a starting point.
 pub struct Preset {
@@ -45,9 +45,10 @@ pub struct Preset {
     pub json: &'static str,
     /// A picture of its last frame, as PNG, or `None` when there is nothing to draw.
     ///
-    /// **Three have none.** A `network` and two `winding`s report readings rather than places, so
-    /// a run of them carries no panel and there is nothing for the shell to render. They are
-    /// offered with their words and no tile, which is what they are.
+    /// **Four have none.** A `network`, two `winding`s and a compartment model report readings
+    /// rather than places, so a run of them carries no panel and there is nothing for the shell to
+    /// render. They are offered with their words and no tile, which is what they are. This said
+    /// three for as long as the compartment model has been a scene.
     pub thumb: Option<&'static [u8]>,
 }
 
@@ -92,8 +93,8 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
     ),
     (
         "proteins",
-        "Proteins",
-        "the collective motions of a fold, from a Protein Data Bank file",
+        "Molecules",
+        "a fold's collective motions, and a drug relaxed under a force field",
     ),
     (
         "medicine",
@@ -122,7 +123,7 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
 pub const AREA_COUNT: usize = 13;
 
 /// Every shipped scene, as a starting point.
-pub const PRESETS: [Preset; 32] = [
+pub const PRESETS: [Preset; 33] = [
     Preset {
         file: "01-room-mode.json",
         area: "rooms",
@@ -441,5 +442,20 @@ pub const PRESETS: [Preset; 32] = [
         files: &[],
         json: include_str!("../scenes/32-a-dose-distributing-and-leaving.json"),
         thumb: None,
+    },
+    Preset {
+        file: "33-aspirin-relaxing-out-of-a-clash.json",
+        area: "proteins",
+        title:
+            "aspirin relaxing from the dictionary's ideal coordinates, one minimiser step a frame",
+        kinds: &["molecule"],
+        files: &[(
+            "structures/AIN.cif",
+            include_bytes!("../scenes/structures/AIN.cif"),
+        )],
+        json: include_str!("../scenes/33-aspirin-relaxing-out-of-a-clash.json"),
+        thumb: Some(include_bytes!(
+            "../thumbnails/33-aspirin-relaxing-out-of-a-clash.png"
+        )),
     },
 ];

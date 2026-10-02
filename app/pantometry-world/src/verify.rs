@@ -543,10 +543,12 @@ pub fn connected_bodies(frame: &pantometry::scene::Frame) -> Vec<(String, usize,
 /// How much a halved coupling window may move a reading before it is a finding.
 ///
 /// **A chosen number, and the corpus it was chosen against is written down** — the same standing
-/// this workspace gives `crop_to_content`'s magnification cap. Measured over all thirty-two shipped
-/// scenes: twenty-two move by exactly 0.000%, three by 0.002–0.008% (kelvin rounding), and the
-/// rest by 0.144, 0.238, 0.275, 0.608, 0.674 and 0.966%. The gap between 0.275 and 0.608 is where
-/// this sits.
+/// this workspace gives `crop_to_content`'s magnification cap. Measured over all thirty-three
+/// shipped scenes: twenty-three move by exactly 0.000%, four by 0.002–0.008% (three of them kelvin
+/// rounding, and `32`'s dose, whose explicit Euler step is first order), and the rest by 0.144,
+/// 0.238, 0.275, 0.608, 0.674 and 0.966%. The gap between 0.275 and 0.608 is where this sits. It
+/// said thirty-two scenes over a list that added up to thirty-one, until `33` was measured and `32`
+/// with it: a minimiser does not move once converged, so halving the window changes nothing.
 ///
 /// The argument for half a percent rather than the gap being convenient: the report prints six
 /// decimals, and the shipped scenes assert their own closed forms to 0.02%, 1.6e-4 and 0.3%. A
@@ -570,7 +572,7 @@ const WINDOW_SHIFT: f64 = 0.005;
 /// arithmetic that changes nothing.
 ///
 /// **A chosen number, and the corpus it was chosen against is written down** — the same standing
-/// `WINDOW_SHIFT` above has. Measured over all thirty-two shipped scenes, of which eleven domains
+/// `WINDOW_SHIFT` above has. Measured over all thirty-three shipped scenes, of which eleven domains
 /// report both a peak and a coldest:
 ///
 /// ```text
@@ -1826,7 +1828,11 @@ impl DomainSpec {
             // *could* be doing the work is the cutoff, and `a_protein_sweeps_its_cutoff` sweeps
             // that instead — a motion that moved with the cutoff would be a statement about the
             // cutoff rather than about the fold.
-            | DomainSpec::Protein { .. } => None,
+            | DomainSpec::Protein { .. }
+            // A molecule is the same: its atoms are the data, and a minimiser's steps are not a
+            // discretisation of anything — the minimum it reaches is the force field's, at
+            // whatever step count gets there.
+            | DomainSpec::Molecule { .. } => None,
         };
         Ok(spec)
     }

@@ -1,9 +1,9 @@
 # Scenes
 
-Thirty-two worlds described as data, covering **thirteen** of the library's fourteen domains — `forcefield`, added after them, has none yet, and gets one when it has energies to show. Before it, `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-one of them
+Thirty-three worlds described as data, covering **all fourteen** of the library's domains — `forcefield`, the last to arrive, has one now that it has energies to show: aspirin relaxing out of a clash, `33`. Before it, `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-two of them
 one question at a time, and one that is actually a world. The count above this line used to read
 "twenty-seven of them ... and one", which is twenty-eight and was never the number of files in this
-directory; **nineteen** state a single kind of domain and thirteen state more, so no split of them
+directory; **twenty** state a single kind of domain and thirteen state more, so no split of them
 into "one physics" and "a world" was ever going to be a count of anything. Nothing here is Rust: the
 physics, the resolution, the coupling and the run length are all in the file, and the same
 binary runs all of them.
@@ -20,7 +20,7 @@ pointing at a node the scene defines. It reports a parse failure as `file:line:c
 keys that were expected, which is what an editor puts a squiggle under. CI runs it over every
 scene, because it would otherwise be the one entry point nothing exercises.
 
-Every file carries a `format` number, and **absence means 1** — which is what all thirty-two here
+Every file carries a `format` number, and **absence means 1** — which is what all thirty-three here
 are: nothing has yet changed what an existing key means. A version this build cannot read is refused
 rather than half-run: `deny_unknown_fields` catches a key that was *added*, but not one whose
 meaning changed, and that is what the number is for.
@@ -37,7 +37,7 @@ No second argument prints the numbers and checks them. A second argument writes 
 | `out.gltf` | The last frame as **surfaces** — a field's boundary, a body's sphere, with normals — for Blender, three.js or any glTF reader |
 | `out.usda` | The **whole run** as USD: geometry, colour and every domain's scalars, animated on a timeline, for usdview, Omniverse, Houdini or Maya |
 
-`.csv` is the one that reaches the domains a picture cannot. Thirteen of these thirty-two scenes have
+`.csv` is the one that reaches the domains a picture cannot. Thirteen of these thirty-three scenes have
 a domain with no field and no bodies, and for several the scalar *is* the result: `13` is about a
 winding whose resistance follows its own temperature, and it drew nothing at all. As a table it
 shows the feedback directly — 12.46 W at 25 °C rising to 16.01 W at 99 °C, with the resistance
@@ -66,7 +66,7 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. **Twenty-four** of the thirty-two scenes have geometry
+`.gltf` is the one that leaves this workspace. **Twenty-five** of the thirty-three scenes have geometry
 to export — bodies, ray paths, a 3D field as its cell centres — and the other **eight** are
 **refused with a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not
 something to put in a 3D viewer, and the message says which panel and why.
@@ -74,7 +74,9 @@ something to put in a 3D viewer, and the message says which panel and why.
 Those two were nineteen and ten, and had been wrong by three in each direction for long enough that
 nothing records when they stopped being right. The first moved again at 0.21.0, when a protein's
 alpha carbons became a thirty-first scene with bodies to export; the second did not, and moved
-when a compartment model with nothing to place became the thirty-second. Nothing counts them: `counts_in_prose.rs` guards the
+when a compartment model with nothing to place became the thirty-second. The first moved again when
+aspirin's atoms became a thirty-third scene with bodies to export, measured for that scene alone on
+2026-10-02 (a glTF of its 21 atoms as spheres; the bonds are not in it, because the glTF writer draws bodies and not what joins them). Nothing counts them: `counts_in_prose.rs` guards the
 *total* half of this sentence and says in its own doc why it leaves the numerator alone — a
 numerator is a different count with a different source, and this one needs every scene exported to
 establish. So it is a **release-time** count now, with the command in `RELEASING.md`, rather than a
@@ -342,6 +344,27 @@ beam. A flat reflectance would make the colour temperature irrelevant and the wh
 apparatus an expensive way to multiply by a constant, which is why the test compares 2800 K
 against 6500 K rather than checking one number.
 
+## A molecule — `pantometry-forcefield`
+
+| Scene | What it shows |
+| --- | --- |
+| `33-aspirin-relaxing-out-of-a-clash` | Aspirin, every one of its 21 atoms, read from the wwPDB Chemical Component Dictionary entry `AIN` sitting beside this file, typed for the Universal Force Field and **minimised**: one L-BFGS iteration a frame, 500 of them, drawn ball-and-stick with the 21 bonds the dictionary states. The dictionary's ideal coordinates put the acetyl oxygen `O4` **1.645 Å** from the ring hydrogen `H1`, a single pair worth 134 of the start's 173 kcal/mol of van der Waals energy; the run takes the whole from **185.67 to 29.58 kcal/mol** and converges in **454** iterations with the largest force on any atom 7.7e-5 kcal/mol/Å. **None of that is what it is checked against**, because no closed form says where this force field's minimum is. It is checked against what minimisation guarantees — the energy never rises, frame to frame, and a frame that moved is strictly lower — and against a published threshold rather than this run's number: the `O4`–`H1` contact opens past Bondi's radii less MolProbity's 0.4 Å serious-clash overlap, 2.32 Å, to 2.666 |
+
+**The second file in `structures/`, and the same rule as the first.** `AIN.cif` is a byte-for-byte
+copy of the entry `pantometry-forcefield` is checked against, as RCSB serves it, and a test holds the
+two together.
+
+**A step here is not a time.** A molecule's domain is a minimiser: no velocities, no temperature,
+and its stability limit is infinite. `duration_s` is 500 and `frames` is 500 so that each frame is
+one iteration and the clock reads iterations, which is also what makes "the energy never rises"
+checkable frame by frame rather than at whatever spacing a picture was taken. After 454 the
+minimiser has converged and does not move; the last 46 frames are the minimum, held.
+
+**It does not open to a contact.** 2.666 Å is still inside the Bondi sum, 2.72 Å, and inside UFF's own
+zero crossing for this pair, 2.831 Å: the ester is held planar by its conjugation, and the minimum
+is the compromise between that and this contact. Neither is asserted, because the minimum is the
+force field's answer and not a property of the method; the clash threshold is the claim.
+
 ## `frames` was a physics knob and is not any more
 
 A scene says `duration_s` and `frames`, and the run used to advance by `duration_s / frames`. Each
@@ -382,7 +405,7 @@ it is not an error estimate; `--deep`'s measured order is what tells the two apa
 ## Every one of them is run by CI
 
 A scene in this repository is a claim, and one that parses and then produces nonsense is worse
-than none at all. `tests/scene.rs` runs all thirty-two on every commit and asserts one number each —
+than none at all. `tests/scene.rs` runs all thirty-three on every commit and asserts one number each —
 chosen to be a property of the physics rather than of the file, so it would change if the
 library broke and not merely if the scene were edited. Adding a scene without a claim fails
 the test rather than passing quietly. CI also runs the real binary on the real files, which is

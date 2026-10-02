@@ -130,7 +130,7 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         blank.is_empty(),
         "these scenes rendered an empty canvas: {blank:?}"
     );
-    // **Pinned, in both directions.** Twenty-eight of the thirty-two draw; four carry no panel at
+    // **Pinned, in both directions.** Twenty-nine of the thirty-three draw; four carry no panel at
     // all, and every one of them is a graph rather than a place — a `network`, two `winding`s and
     // a compartment model, which report readings and not positions. A fifth arriving means either
     // a scene lost its geometry or a domain stopped reporting one, and both are worth a failure
@@ -152,7 +152,7 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
     // **Every scene landed in exactly one bucket.** The guard here was `drawn > 0 || skipped > 0`,
     // written against "a run in which every scene skipped would report nothing and pass" — and
     // `|| skipped > 0` admits precisely that run, which is CI's: `ci.yml` says the runner has no
-    // adapter, so all 28 drawable scenes skip and this passes on the second term. A disjunction
+    // adapter, so all 29 drawable scenes skip and this passes on the second term. A disjunction
     // cannot be false in the environment it was written to protect.
     //
     // Arithmetic instead. A scene that fell out of the walk — a `continue` added above, a bucket
@@ -164,12 +164,12 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         drawn + skipped + empty.len() + blank.len()
     );
     // And which machine this is, said rather than left to be inferred from a fold in a log. There
-    // is no middle: an adapter renders all 28 or there is none and all 28 skip. A run that drew 24
+    // is no middle: an adapter renders all 29 or there is none and all 29 skip. A run that drew 24
     // is a renderer that started refusing scenes, and under the old guard it was just a smaller
     // number.
     assert!(
-        (drawn == 28 && skipped == 0) || (drawn == 0 && skipped == 28),
-        "{drawn} drew and {skipped} skipped — with an adapter all 28 draw, without one all 28 skip"
+        (drawn == 29 && skipped == 0) || (drawn == 0 && skipped == 29),
+        "{drawn} drew and {skipped} skipped — with an adapter all 29 draw, without one all 29 skip"
     );
 }
 

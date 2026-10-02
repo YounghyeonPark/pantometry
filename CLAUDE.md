@@ -58,7 +58,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check
 for e in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots \
          heat_in_three_dimensions room_in_three_dimensions busbar_rating optical_bench \
-         espresso_shot portafilter_flow ligand_binding agents_quickstart readme_check; do
+         espresso_shot portafilter_flow ligand_binding aspirin_relaxes agents_quickstart readme_check; do
   cargo run --locked --release --example "$e"
 done
 # MSRV. No `--exclude` any more: everything in this workspace is published and every one of
@@ -86,7 +86,7 @@ CI does **not** cover `bindings/python` or `app/` from this gate — each has it
 procedure.
 
 **`app/` has its own gate and it is not optional.** Everything a person *runs* lives there — the
-CLI, the viewer, the editor and the GPU accelerator — and so do the thirty-two scenes and their
+CLI, the viewer, the editor and the GPU accelerator — and so do the thirty-three scenes and their
 closed-form checks, which used to run in the line above. Two workspaces, two gates:
 
 ```sh
@@ -205,7 +205,7 @@ earned and was not.
 | [app/viewer-core/README.md](app/viewer-core/README.md) | touching the viewer. Why it does not link `pantometry`, and the test that holds that now the workspace boundary does not |
 | [app/editor-core/README.md](app/editor-core/README.md) | touching the editor. Why it *does* link `pantometry`, the shaded viewport, and the two halves the platform rules keep apart |
 | [tools/screenshot/README.md](tools/screenshot/README.md) | changing the editor's interface. `docs/editor.png` is the one figure no command in CI can refresh, so it carries `docs/editor.txt` — the same frame through `--ui-dump` — and a test that fails when the picture is stale |
-| [tools/presets/README.md](tools/presets/README.md) | adding or removing a scene, or touching the New-project screen. It writes `presets.rs` and the 28 tiles the chooser draws, both of which are **committed** — one of the two exceptions to "nothing generated is committed", and what holds them against the scenes |
+| [tools/presets/README.md](tools/presets/README.md) | adding or removing a scene, or touching the New-project screen. It writes `presets.rs` and the 29 tiles the chooser draws, both of which are **committed** — one of the two exceptions to "nothing generated is committed", and what holds them against the scenes |
 | [tools/parts/README.md](tools/parts/README.md) | adding or changing a part a scene names. Six STL solids, **committed**, each checked against a closed form rather than against the script that wrote them — and the measurement of why a fan triangulation passes the volume and closed-mesh checks and fails only on area |
 | [tools/report-check/README.md](tools/report-check/README.md) | touching the HTML report's viewer. It is four hundred lines of JavaScript in a Rust string and this is the only thing that executes it — plus why a `vm.runInContext` harness measured a renderer 30x slower than it is |
 | [.claude/agents/README.md](.claude/agents/README.md) | adding a reviewer |

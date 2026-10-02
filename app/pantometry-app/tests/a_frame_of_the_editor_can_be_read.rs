@@ -371,28 +371,55 @@ fn the_chooser_offers_every_kind_the_format_defines() {
     let d = dump(&["--new", "--custom"]);
     assert_eq!(count(&d, "callbacks"), 0, "a viewport with no scene:\n{d}");
 
-    // **One frame of a scrollable list shows what fits in the frame.** Every kind is named — the
-    // names are compact enough that twenty-one of them clear the `Back` row at y=859 — and the
-    // descriptions run out before the list does. That was not true at twenty and the assertion
-    // said so; it is a fact about a 950-pixel window and a `ScrollArea`, not about the chooser
-    // forgetting anything, and `elided=0` in the dump says nothing was truncated.
-    let below_the_fold: Vec<&str> = pantometry_world::templates::TEMPLATES
+    // **One frame of a scrollable list shows what fits in the frame**, and at twenty-two kinds
+    // the list is taller than a 950-point window: `molecule` pushed `well`'s description below
+    // the `Back` row at y=859 and `winding` off it altogether, name and all. It was every name
+    // and all but one description at twenty-one, and every one of both at twenty. `elided=0` in
+    // the dump says nothing was truncated; it is a `ScrollArea`, and a user scrolls. So both sets
+    // are pinned at this size — one more is the list outgrowing the window again, one fewer the
+    // window or the row height changing — and what is *offered* is read from a frame tall enough
+    // to hold all of it, which is the list a person reaches by scrolling.
+    let named_below: Vec<&str> = pantometry_world::templates::TEMPLATES
+        .iter()
+        .filter(|t| {
+            !d.contains(&format!(
+                "  {}
+",
+                t.kind
+            ))
+        })
+        .map(|t| t.kind)
+        .collect();
+    let described_below: Vec<&str> = pantometry_world::templates::TEMPLATES
         .iter()
         .filter(|t| !d.contains(t.about))
         .map(|t| t.kind)
         .collect();
     assert_eq!(
-        below_the_fold,
-        vec!["winding"],
-        "the set of kinds whose description is off the bottom of one frame has changed. One \
-         more is a list that has outgrown the window again; one fewer is the window or the row \
-         height having changed, and both are worth reading rather than passing:\n{d}"
+        (named_below, described_below),
+        (vec!["winding"], vec!["well", "winding"]),
+        "the set of kinds below the bottom of one frame has changed. One more is a list that has \
+         outgrown the window again; one fewer is the window or the row height having changed, and \
+         both are worth reading rather than passing:
+{d}"
     );
+    let tall = dump(&["--new", "--custom", "--height", "1400"]);
+    assert_eq!(count(&tall, "elided"), 0, "{tall}");
     for t in pantometry_world::templates::TEMPLATES {
-        assert!(d.contains(t.kind), "{} is not offered:\n{d}", t.kind);
         assert!(
-            d.contains(t.about) || below_the_fold.contains(&t.kind),
-            "{} is offered with nothing said about it:\n{d}",
+            tall.contains(&format!(
+                "  {}
+",
+                t.kind
+            )),
+            "{} is not offered:
+{tall}",
+            t.kind
+        );
+        assert!(
+            tall.contains(t.about),
+            "{} is offered with nothing said about it:
+{tall}",
             t.kind
         );
     }

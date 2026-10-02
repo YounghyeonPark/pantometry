@@ -255,11 +255,13 @@ also pass it, then go and check *that*.
 
 ## Where to look next
 
-- **`examples/`** — thirteen worked problems that print their numbers and assert every one of
+- **`examples/`** — fourteen worked problems that print their numbers and assert every one of
   them. `cargo run --example melting`. Give any of them a path and it writes an SVG. Two are
   specifically about three dimensions: `heat_in_three_dimensions` and `room_in_three_dimensions`.
   `ligand_binding` is the one whose data somebody measured: two crystal structures of one enzyme,
-  open and closed on its inhibitor, and the model is shown only the open one.
+  open and closed on its inhibitor, and the model is shown only the open one. `aspirin_relaxes`
+  is the other molecule: every atom of a drug, typed for a force field and minimised out of the
+  clash its dictionary coordinates hold.
   `busbar_rating` is the one shaped like an engineer's working day rather than a demonstration —
   geometry to rating to production yield, every step checked. `optical_bench` is the one that
   draws the *instrument*: a folded doublet drawn as the surfaces its rays are traced against, as a

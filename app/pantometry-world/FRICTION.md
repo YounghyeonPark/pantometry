@@ -951,7 +951,7 @@ is not wrong. It passes every check it has, converges perfectly, conserves to tw
 answers a question one ordinary differential equation answers — and the report reads exactly like
 the report of a scene with a real gradient.
 
-Measured across all thirty-two shipped scenes, of which eleven domains report both a peak and a
+Measured across all thirty-three shipped scenes, of which eleven domains report both a peak and a
 coldest. The number is the last frame's `peak − coldest` over the range that domain's readings
 covered across the whole run:
 
@@ -1604,7 +1604,7 @@ one sample as a fact:
 ```
 
 The absolute wanders by a third between runs of the same tree; the **share does not**. That one
-test is `a_streamed_run_reads_back`, which drives all thirty-two scenes through the editor's streaming
+test is `a_streamed_run_reads_back`, which drives all thirty-three scenes through the editor's streaming
 path in a *debug* build, and the next three together are 300–400 s. A scene that gains a second
 gains it thirty times there before it costs anything anywhere else, and that is the number to act
 on.
@@ -1700,10 +1700,11 @@ one should be compared against.
 
 ## What this report does not cover
 
-**Thirteen of the fourteen domains have scenes** — findings 31 and after closed the last four of the
-eleven there were then, and the two domains added since have them too. `forcefield`, the fourteenth,
-has none yet. This said "eleven" through both of those two, and "all thirteen" was true until the
-fourteenth arrived. What is left is smaller and more specific.
+**All fourteen domains have scenes** — findings 31 and after closed the last four of the eleven
+there were then, and the three domains added since have them too: `forcefield`, the fourteenth, got
+`33-aspirin-relaxing-out-of-a-clash`. This said "eleven" through two of those three, "all thirteen"
+was true until the fourteenth arrived, and "thirteen of the fourteen" until it had a scene. What is
+left is smaller and more specific.
 
 **`TreeNBody`, `RigidBody` and the rest of mechanics.** Four types took `as_any` in this pass
 but only `NBody` and `ContactSystem` have scene variants, so Barnes-Hut and rigid rotation are

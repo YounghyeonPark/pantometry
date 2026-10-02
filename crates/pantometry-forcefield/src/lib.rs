@@ -132,7 +132,8 @@ use pantometry_units::{LengthVec, Qty, Time};
 /// `electrostatic`. `energy` is UFF's total, the sum of the six. `max force` and `rms force`
 /// (kcal mol⁻¹ Å⁻¹, per-atom force vectors), `converged` (1 or 0) and `minimiser steps`. For a
 /// molecule [`ForceField::new`] refuses, the energy and force readings are `NaN` and
-/// [`Molecule::force_field`] says why.
+/// [`Molecule::force_field`] says why. The last four are its [`Domain::diagnostics`]: they
+/// describe the minimisation, not the molecule.
 #[derive(Clone, Debug)]
 pub struct Molecule {
     name: String,
@@ -390,6 +391,14 @@ impl Domain for Molecule {
                 "",
             ),
         ]
+    }
+
+    /// The four that describe the minimisation rather than the molecule: `max force` and
+    /// `rms force` are its gradient, the residual a minimiser drives towards zero, and
+    /// `converged` and `minimiser steps` are its state. A sweep that compared them across runs as
+    /// though they converged to something would be measuring the stopping rule.
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &["max force", "rms force", "converged", "minimiser steps"]
     }
 
     fn as_bodies(&self) -> Option<&dyn Bodies> {

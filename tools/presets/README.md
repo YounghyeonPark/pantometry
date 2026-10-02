@@ -4,8 +4,8 @@
 
 | what | where | why it exists |
 | --- | --- | --- |
-| `presets.rs` | `app/pantometry-world/src/` | the thirty-two shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
-| 28 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 123 KiB in total and 4.4 KiB each. **Measured here rather than remembered**: this line said 282 KiB and 10.4 KiB each while the committed tiles were already this size, and regenerating them changed nothing but the count |
+| `presets.rs` | `app/pantometry-world/src/` | the thirty-three shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
+| 29 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 125 KiB in total and 4.3 KiB each. **Measured here rather than remembered**: this line said 282 KiB and 10.4 KiB each while the committed tiles were already this size, and regenerating them changed nothing but the count |
 
 ```sh
 cargo build --release --bin pantometry --manifest-path app/Cargo.toml
@@ -13,8 +13,20 @@ python tools/presets/make.py
 ```
 
 It runs every scene, renders the last frame with `pantometry view --thumbnail`, sweeps away any
-tile no scene names any more, writes the Rust and runs `rustfmt` over it. Running it against an
-unchanged tree then reproduces `presets.rs` byte for byte and rewrites the tiles identically.
+tile no scene names any more, writes the Rust and runs `rustfmt` over it. Running it twice
+reproduces `presets.rs` byte for byte and rewrites the tiles identically — measured on 2026-10-02,
+two runs, every tile's SHA-256 the same.
+
+**What it does not do is reproduce the committed tiles.** The same run rewrote five that no scene
+change had touched — `06`, `07`, `14`, `25` and `31` — because the renderer moved after they were
+drawn: `31` is the protein drawn with its backbone (1232 lit pixels against 275), which the run
+format did not carry when its tile was made. And `14-a-world` falls to **14** lit pixels against
+170: the world's bar and room are millimetres and metres beside orbits a hundred million kilometres
+across, and a camera fitted to the whole world draws the orbits' markers and nothing else. That
+would put a third tile under `every_tile_decodes_to_something`'s pair of sparse ones, which is a
+decision about scene 14's picture rather than a side effect of adding scene 33 — so the commit that
+added `33` kept those five as they were and committed only its own tile. Regenerating them is a
+change of its own.
 
 `python tools/presets/make.py --rust-only` writes `presets.rs` from the tiles already committed,
 without a binary and without rendering anything, for a change to the table that is not a change to
@@ -54,9 +66,10 @@ considered and each fails on something concrete:
 * **Ship without pictures.** That is what the screen was, and it is the thing the user said was
   hard to choose from twice.
 
-So the cost is 282 KiB in git, once per change to a scene, and the guard against the usual price
+So the cost is 125 KiB in git, once per change to a scene, and the guard against the usual price
 of a committed artefact — that it drifts from its source and nobody notices — is that the two
-generated things are checked against the scenes rather than against themselves:
+generated things are checked against the scenes rather than against themselves — `presets.rs`
+is; a tile's pixels are not, and only a regeneration would show one gone stale, as above:
 
 | check | where | what it would catch |
 | --- | --- | --- |
@@ -73,7 +86,8 @@ generated things are checked against the scenes rather than against themselves:
 twice. Both it and the `pantometry-app` row trace to one `eprintln!` — `this run has no panels at
 all`, which this script greps for and which the test greps for. And it is not a GPU render either
 way: that branch runs before an adapter is requested, which is why the live half still reports the
-same three on CI, where `ci.yml` says the runner has none.
+same four on CI — three motor scenes and the compartment model, scene 32, which this line
+said three for after it was added — where `ci.yml` says the runner has none.
 
 ## What is a judgement here and what is not
 
@@ -97,7 +111,7 @@ By rank because the threshold it replaced sat at 90 and the third-lowest tile is
 
 ## One group of tiles is the same picture, and the group that was a real defect is gone
 
-28 tiles, **26 distinct images**: `20`, `21` and `22` draw one image between them and nothing else
+29 tiles, **27 distinct images**: `20`, `21` and `22` draw one image between them and nothing else
 collides.
 
 **This paragraph said three groups and twenty-four distinct, and both were stale.** Measured by

@@ -41,6 +41,7 @@ AREA = {
     "18": "flow", "26": "flow",
     "08": "matter", "09": "matter", "28": "matter",
     "31": "proteins",
+    "33": "proteins",
     "32": "medicine",
     "27": "radio",
     "06": "orbits",
@@ -57,7 +58,7 @@ AREAS = [
     ("optics", "Light on a surface", "a beam, a lamp with a real spectrum, and a coating"),
     ("flow", "Flow", "pressure-driven water, and liquid through a packed bed"),
     ("matter", "Matter", "atoms in a lattice and out of one, and a particle in a well"),
-    ("proteins", "Proteins", "the collective motions of a fold, from a Protein Data Bank file"),
+    ("proteins", "Molecules", "a fold's collective motions, and a drug relaxed under a force field"),
     ("medicine", "A dose in a body", "compartments, clearance, and the curve a dose traces"),
     ("radio", "Resonant cavities", "Maxwell's equations on a Yee grid"),
     ("orbits", "Orbits", "bodies under their own gravity"),
@@ -65,7 +66,7 @@ AREAS = [
     ("everything", "All of it at once", "five domains, four crates, one clock and one audit"),
 ]
 
-HEADER = r"""//! The thirty-two shipped scenes, offered as starting points.
+HEADER = r"""//! The thirty-three shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -87,7 +88,7 @@ HEADER = r"""//! The thirty-two shipped scenes, offered as starting points.
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-two.
+//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-three.
 
 /// One scene, offered as a starting point.
 pub struct Preset {
@@ -112,9 +113,10 @@ pub struct Preset {
     pub json: &'static str,
     /// A picture of its last frame, as PNG, or `None` when there is nothing to draw.
     ///
-    /// **Three have none.** A `network` and two `winding`s report readings rather than places, so
-    /// a run of them carries no panel and there is nothing for the shell to render. They are
-    /// offered with their words and no tile, which is what they are.
+    /// **Four have none.** A `network`, two `winding`s and a compartment model report readings
+    /// rather than places, so a run of them carries no panel and there is nothing for the shell to
+    /// render. They are offered with their words and no tile, which is what they are. This said
+    /// three for as long as the compartment model has been a scene.
     pub thumb: Option<&'static [u8]>,
 }
 
@@ -257,8 +259,8 @@ def strings(value):
 
 def main():
     # `--rust-only` writes `presets.rs` from the tiles already committed, for a change to the
-    # table that is not a change to any picture. Rendering all twenty-eight again for it would
-    # put twenty-eight PNGs in a diff about something else.
+    # table that is not a change to any picture. Rendering all twenty-nine again for it would
+    # put twenty-nine PNGs in a diff about something else.
     if "--rust-only" in sys.argv[1:]:
         rows = rust(set(p.stem for p in THUMBS.glob("*.png")))
         print("%d presets written from the committed tiles" % len(rows))

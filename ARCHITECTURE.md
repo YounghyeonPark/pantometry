@@ -152,7 +152,7 @@ separately have no way to touch.
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
 | `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because its GPU and GUI stacks are 432 external crates against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
-| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty-two scenes across thirteen of the fourteen domains that CI runs — `pantometry-forcefield` has none yet. It exists to use the SDK from outside and write down where that is awkward |
+| `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty-three scenes across all fourteen domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
 
 The last three are the workspace's answer to the same question from three sides: what a
 simulation *is* (`pantometry-scene`), what a picture of one *is* (`pantometry-view`), and what it feels
@@ -921,7 +921,7 @@ but a test that fails if they ever stop being two limits of one physics.
    They are not different pipelines. A body and a field sample are points, and a point is two short
    segments in screen space, which is the pipeline that was already there — so `viewer_core::
    segments` grew two arms and the shell, the depth sort and the snapshot were not touched.
-   **Twenty-eight of the thirty-two draw now**; the other four are a `network`, two `winding`s and a compartment model,
+   **Twenty-nine of the thirty-three draw now**; the other four are a `network`, two `winding`s and a compartment model,
    whose domains report readings rather than places, and that set is pinned in both directions.
 
    The part worth keeping is what it nearly cost. *Where is sample `i` in the world* lived in

@@ -202,6 +202,9 @@ fn only_the_rows_with_geometry_offer_a_box() {
 fn a_length_keeps_its_zeros_when_they_are_not_after_a_point() {
     assert_eq!(editor_core::metres(0.5), "500 mm");
     assert_eq!(editor_core::metres(0.0005), "500 um");
+    // Below a micron: a molecule. Aspirin is 0.4 nm thick, which read `0 um` as a micron.
+    assert_eq!(editor_core::metres(4e-10), "0.4 nm");
+    assert_eq!(editor_core::metres(2.5e-7), "250 nm");
     assert_eq!(editor_core::metres(0.02), "20 mm");
     assert_eq!(editor_core::metres(1.2), "1.2 m");
     assert_eq!(editor_core::metres(0.0), "0 m");

@@ -179,7 +179,11 @@ fn every_preset_builds_from_the_files_it_carries() {
         carrying,
         [
             "29-a-designed-bracket-becomes-cells.json",
-            "31-a-protein-shaking-at-body-temperature.json"
+            "31-a-protein-shaking-at-body-temperature.json",
+            // A dictionary entry, which is the third kind of file a scene names: `stl`, `pdb`
+            // and now `ccd`. The generator found it by looking for any string that is a file
+            // beside the scenes, which is why it needed no change to see it.
+            "33-aspirin-relaxing-out-of-a-clash.json"
         ],
         "the set of presets that carry a file has changed"
     );
@@ -308,8 +312,8 @@ fn every_tile_decodes_to_something() {
     // A run in which every preset had `thumb: None` would light nothing and pass the loop above.
     assert_eq!(
         lit_by.len(),
-        28,
-        "28 presets carry a tile, and this run found {}",
+        29,
+        "29 presets carry a tile, and this run found {}",
         lit_by.len()
     );
     lit_by.sort_unstable();
@@ -330,7 +334,8 @@ fn every_tile_decodes_to_something() {
 ///
 /// A chooser whose pictures do not tell two scenes apart is a chooser with no pictures, and the
 /// per-tile checks above cannot see it: each of these decodes, is the right size, and is far from
-/// blank. Measured over the 27 committed tiles: **25 distinct images**.
+/// blank. Measured over the 29 committed tiles: **27 distinct images**. This said 27 and 25 while
+/// the assertion below held 28 and 26, which is the drift a number in a comment has.
 ///
 /// # One of the collisions was a real defect and this is how it was found
 ///
@@ -376,8 +381,8 @@ fn the_tiles_tell_the_scenes_apart_or_say_which_they_do_not() {
     );
     assert_eq!(
         by_bytes.len(),
-        26,
-        "28 tiles, and {} of them are distinct pictures",
+        27,
+        "29 tiles, and {} of them are distinct pictures",
         by_bytes.len()
     );
 }

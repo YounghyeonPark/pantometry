@@ -1,0 +1,12 @@
+{
+  "title": "aspirin relaxing from the dictionary's ideal coordinates, one minimiser step a frame",
+  "duration_s": 500.0,
+  "frames": 500,
+  "domains": [
+    {
+      "kind": "molecule",
+      "name": "aspirin",
+      "ccd": "structures/AIN.cif"
+    }
+  ]
+}
