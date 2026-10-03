@@ -4,7 +4,8 @@
 //! cargo run --release -- run.json
 //! ```
 //!
-//! Drag to rotate, scroll to zoom, space to play, left and right to scrub.
+//! Drag to rotate, scroll to zoom, space to play, left and right to scrub, F to frame each panel in
+//! turn. `--frame-panel NAME` opens framed on one panel, in the window or a snapshot.
 //!
 //! ```text
 //! cargo run --release -- run.json --snapshot out.ppm
@@ -87,7 +88,10 @@ pub fn run(args: &[String]) -> i32 {
         Some(p) => p.clone(),
         None => {
             eprintln!(
-                "usage: pantometry view <run.json> [--snapshot out.png [--frame N | --all-frames]]"
+                "usage: pantometry view <run.json> [--frame-panel NAME] [--snapshot out.png [--frame N | --all-frames]]"
+            );
+            eprintln!(
+                "  --frame-panel NAME frames one panel rather than the whole run; F cycles in the window"
             );
             eprintln!("  produced by `pantometry run <scene> out.json`, or by any run that calls");
             eprintln!("  pantometry_view::to_json");
@@ -128,7 +132,30 @@ pub fn run(args: &[String]) -> i32 {
         run.title,
         run.frames.len()
     );
-    println!("  drag to rotate, scroll to zoom, space to play, left/right to scrub");
+    println!(
+        "  drag to rotate, scroll to zoom, space to play, left/right to scrub, F to frame each panel in turn"
+    );
+
+    // **Which box the camera frames: the whole run, or one panel.** A run of several scales is
+    // unreadable framed whole -- scene 14 puts a 20 mm bar beside orbits spanning 2.7e11 m, and the
+    // bar is a point. Read here, before either mode, so the window and the snapshot frame alike.
+    let framed: Option<String> = {
+        let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+        match rest.iter().position(|a| *a == "--frame-panel") {
+            None => None,
+            Some(i) => match rest.get(i + 1) {
+                Some(name) if run.panels().iter().any(|p| p == name) => Some((*name).to_string()),
+                said => {
+                    eprintln!(
+                        "--frame-panel takes a panel this run has ({}); got {:?}",
+                        run.panels().join(", "),
+                        said
+                    );
+                    return 2;
+                }
+            },
+        }
+    };
 
     // Headless: render one frame to a texture, read it back, write a PPM. No window, no display,
     // so a machine with neither can still check that the renderer puts something on the canvas.
@@ -180,6 +207,7 @@ pub fn run(args: &[String]) -> i32 {
         let mut collected: Vec<Vec<u8>> = Vec::new();
         let mut size = (0u32, 0u32);
         let mut app = App::new(run, panel);
+        app.frame_on(framed.clone());
         app.frame = at;
         app.legend = !tile;
         let count = app.run.frames.len();
@@ -287,6 +315,7 @@ pub fn run(args: &[String]) -> i32 {
     let event_loop = EventLoop::new().expect("an event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::new(run, panel);
+    app.frame_on(framed);
     event_loop.run_app(&mut app).expect("the window runs");
     0
 }
@@ -295,6 +324,15 @@ pub fn run(args: &[String]) -> i32 {
 struct App {
     run: Run,
     panel: String,
+    /// The panel the window opened on, which the colour bar returns to when the framing does.
+    home: String,
+    /// The panel the camera is framed on, or `None` for the whole run.
+    ///
+    /// **One framing for everything drawn**, whichever this is: every panel is projected through
+    /// `framing`, so framing one panel moves nothing relative to anything else, and what is far
+    /// from it leaves the screen. The scale bar measures the framed box, because that is the box
+    /// the camera was fitted to.
+    framed: Option<String>,
     framing: Framing,
     camera: Camera,
     /// The run-wide range the shading is measured against.
@@ -440,44 +478,87 @@ struct Gpu {
 
 impl App {
     fn new(run: Run, panel: String) -> App {
-        // **The box every panel occupies, not the first one's.** A run can hold several and this
-        // shell draws all of them now; framing on one would put the others partly or wholly off
-        // the screen, which is how a picture loses something without saying it has.
-        let over_all = |run: &Run| {
-            let mut out = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
-            for name in run.panels() {
-                if let Some(b) = run.framing_of(&name) {
-                    for a in 0..3 {
-                        out[a] = out[a].min(b[a]);
-                        out[a + 3] = out[a + 3].max(b[a + 3]);
-                    }
-                }
-            }
-            (out[0] <= out[3]).then_some(out)
-        };
-        let whole = over_all(&run).unwrap_or([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
-        let framing = Framing::of(whole);
-        // Once, from the whole run. Re-fitting it per frame is what `Run::scale_of` exists to
-        // stop, and for a while nothing called it.
-        let span = run.scale_of(&panel).unwrap_or((0.0, 1.0));
-        // Framed to what is actually there. The window can still be zoomed; `--snapshot` cannot,
-        // and a fixed distance is a distance chosen for a cube.
-        let mut camera = Camera::default();
-        camera.fit(whole, &framing, 16.0 / 9.0, 0.85);
-        App {
+        let mut app = App {
             run,
+            home: panel.clone(),
             panel,
-            framing,
-            span,
-            widest: (whole[3] - whole[0])
-                .max(whole[4] - whole[1])
-                .max(whole[5] - whole[2]),
-            camera,
+            framed: None,
+            framing: Framing::of([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]),
+            span: (0.0, 1.0),
+            widest: 2.0,
+            camera: Camera::default(),
             legend: true,
             frame: 0,
             playing: true,
             dragging: None,
             gpu: None,
+        };
+        app.frame_on(None);
+        app
+    }
+
+    /// The box the camera frames: every panel's, or one panel's, over **every frame**.
+    ///
+    /// **The box every panel occupies, not the first one's**, by default. A run can hold several
+    /// and this shell draws all of them; framing on one unasked would put the others off the
+    /// screen, which is how a picture loses something without saying it has. Framing on one is
+    /// something a person asks for, with `--frame-panel` or `F`.
+    ///
+    /// Over every frame for the reason `Run::framing_of` gives: a camera framed to the current
+    /// frame follows a moving body and makes it look still. This is that function's loop with a
+    /// filter on it, kept on each panel's own box exactly as that one is.
+    fn box_of(run: &Run, which: Option<&str>) -> Option<[f64; 6]> {
+        let mut out = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        for name in run.panels() {
+            if which.is_some_and(|w| w != name) {
+                continue;
+            }
+            if let Some(b) = run.framing_of(&name) {
+                for a in 0..3 {
+                    out[a] = out[a].min(b[a]);
+                    out[a + 3] = out[a + 3].max(b[a + 3]);
+                }
+            }
+        }
+        (out[0] <= out[3]).then_some(out)
+    }
+
+    /// Frame the camera on one panel, or on the whole run with `None`.
+    ///
+    /// Sets the framing, the fit and the scale bar's denominator together, from one box, so the
+    /// three cannot describe different things. Framing a panel also hands it the colour bar,
+    /// because a reader who asked to look at the bar is asking about the bar's values; the whole
+    /// run hands it back to the panel the window opened on.
+    fn frame_on(&mut self, which: Option<String>) {
+        let whole = App::box_of(&self.run, which.as_deref())
+            .or_else(|| App::box_of(&self.run, None))
+            .unwrap_or([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
+        self.framing = Framing::of(whole);
+        self.panel = which.clone().unwrap_or_else(|| self.home.clone());
+        self.framed = which;
+        // Once, from the whole run. Re-fitting it per frame is what `Run::scale_of` exists to
+        // stop, and for a while nothing called it.
+        self.span = self.run.scale_of(&self.panel).unwrap_or((0.0, 1.0));
+        self.widest = (whole[3] - whole[0])
+            .max(whole[4] - whole[1])
+            .max(whole[5] - whole[2]);
+        // Framed to what is actually there. The window can still be zoomed; `--snapshot` cannot,
+        // and a fixed distance is a distance chosen for a cube. The angles are kept: changing
+        // what is framed is not turning to look at it from somewhere else.
+        self.camera.fit(whole, &self.framing, 16.0 / 9.0, 0.85);
+    }
+
+    /// The framing `F` steps to next: the whole run, then each panel in the order they appear,
+    /// then the whole run again.
+    fn next_framing(&self) -> Option<String> {
+        let names = self.run.panels();
+        match &self.framed {
+            None => names.first().cloned(),
+            Some(now) => names
+                .iter()
+                .position(|n| n == now)
+                .and_then(|i| names.get(i + 1))
+                .cloned(),
         }
     }
 
@@ -715,10 +796,17 @@ impl App {
         // the colour bar bottom right. One line of all four is 52 characters, which at this size
         // is three quarters of the canvas and ran off the edge — the first attempt drew it across
         // both bars and lost `ARROWS SCRUB` past the right-hand side.
-        for (k, hint) in ["DRAG ROTATE   SCROLL ZOOM", "SPACE PLAY   ARROWS SCRUB"]
-            .into_iter()
-            .enumerate()
-        {
+        //
+        // **A third line only while one panel is framed**, saying which: a picture of one panel
+        // with the rest gone off-screen is otherwise indistinguishable from a run that only had
+        // one. Not drawn for the whole run, so a whole-run picture is the one it always was and
+        // the committed figures `docs/README.md` refreshes by command are still true of it.
+        let framed = self
+            .framed
+            .as_ref()
+            .map(|name| format!("FRAMED ON {}   F NEXT", name.to_ascii_uppercase()));
+        let hints = ["DRAG ROTATE   SCROLL ZOOM", "SPACE PLAY   ARROWS SCRUB"];
+        for (k, hint) in hints.into_iter().chain(framed.as_deref()).enumerate() {
             let at = 0.94 - wide(hint);
             let y = 1.0 - row - 0.02 - (crate::glyphs::HEIGHT * small + GAP * 0.5) * k as f32;
             for (ax, ay, bx, by) in crate::glyphs::text(hint) {
@@ -824,6 +912,18 @@ impl App {
         // index and the rays came out the colours of glass. The legend still belongs to the
         // selected one, because a colour bar names one quantity and there is room for one bar.
         let span = self.run.scale_of(panel.name()).unwrap_or((0.0, 1.0));
+        // **Whether a point is between the planes a GPU would clip at.** Everything here is
+        // projected on the CPU and reaches the pass already in screen space, so nothing clips it:
+        // `Camera::project` clamps a point behind the eye to the near plane and hands back an
+        // enormous coordinate, and a triangle with such a corner is drawn across the window. That
+        // never happened while the framing was the whole run, because a fitted run is inside both
+        // planes. Framed on one panel of a run with several scales, nearly everything else is
+        // outside them. A primitive with any corner outside is dropped rather than cut, which
+        // loses the part of it that straddles a plane; nothing that does is the thing framed.
+        let seen = |p: [f64; 3]| {
+            self.camera
+                .sees(&self.camera.project(p, &self.framing, aspect))
+        };
         if let viewer_core::Panel::Surface { values, .. } = panel {
             let placed = panel.placed_surface_points();
             let faces = panel.surface_faces();
@@ -848,6 +948,10 @@ impl App {
             // alike rather than by two conventions.
             let key = [0.35f32, 0.45, 0.82];
             for t in &faces {
+                // Dropped whole when any corner is outside the clip planes -- see `seen` below.
+                if !t.iter().all(|&i| seen(placed[i])) {
+                    continue;
+                }
                 for &i in t {
                     let c = self.camera.project(placed[i], &self.framing, aspect);
                     let n = normals[i];
@@ -901,7 +1005,16 @@ impl App {
                     // floor under it, which is what keeps a face turned away from being black and
                     // a solid from reading as a silhouette.
                     let key = [0.35f32, 0.45, 0.82];
-                    for i in &shell.indices {
+                    let kept: Vec<u32> = shell
+                        .indices
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .filter(|t| t.iter().all(|&i| seen(shell.positions[i as usize])))
+                        .flatten()
+                        .copied()
+                        .collect();
+                    for i in &kept {
                         let i = *i as usize;
                         let p = shell.positions[i];
                         let c = self.camera.project(p, &self.framing, aspect);
@@ -925,6 +1038,9 @@ impl App {
         // inside the block that is drawn over it.
         if tris.is_empty() {
             for s in segments(panel, &self.camera, &self.framing, aspect, span) {
+                if !self.camera.sees(&s.from) || !self.camera.sees(&s.to) {
+                    continue;
+                }
                 let colour = ramp(s.shade);
                 out.push(Vertex {
                     position: [s.from.x as f32, s.from.y as f32, s.from.depth as f32],
@@ -1095,6 +1211,14 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::ArrowLeft) => {
                         self.playing = false;
                         self.frame = (self.frame + n - 1) % n;
+                    }
+                    PhysicalKey::Code(KeyCode::KeyF) => {
+                        let next = self.next_framing();
+                        self.frame_on(next);
+                        match &self.framed {
+                            Some(name) => println!("  framed on {name}"),
+                            None => println!("  framed on the whole run"),
+                        }
                     }
                     PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
                     _ => {}
@@ -1905,5 +2029,159 @@ mod tests {
                 "{label:?} has a character the glyph table draws as a box"
             );
         }
+    }
+
+    /// The width over height `App::new` fits at.
+    const ASPECT: f64 = 16.0 / 9.0;
+
+    /// The smallest run with scene 14's problem: a 20 mm bar of 61 samples, and two planets
+    /// 1.5e11 m away. Framed whole, the bar is `1e-13` of the framing.
+    fn two_scales() -> super::App {
+        let values: Vec<String> = (0..61)
+            .map(|i| format!("{}", 293.0 + i as f64 / 60.0))
+            .collect();
+        let json = format!(
+            r#"{{"format": 3, "title": "two scales", "frames": [{{"t": 0, "panels": [
+                {{"name": "bar", "unit": "K", "kind": "field", "nx": 61, "ny": 1, "nz": 1,
+                  "extent_m": [0, 0, 0, 0.02, 0, 0], "lattice": "centred",
+                  "values": [{}]}},
+                {{"name": "sky", "unit": "m/s", "kind": "points", "boxed": false,
+                  "bounds": [-1.0e11, -1.0e11, -1.0e10, 1.5e11, 1.0e11, 1.0e10],
+                  "positions": [1.5e11, 0, 0, -1.0e11, 1.0e11, 1.0e10],
+                  "values": [30000, 25000]}}],
+                "readings": []}}]}}"#,
+            values.join(", ")
+        );
+        let run = viewer_core::Run::from_json(&json).expect("the run parses");
+        let mut app = super::App::new(run, "bar".to_string());
+        app.legend = false;
+        app
+    }
+
+    /// One panel's line vertices, in normalised device coordinates, as they go to the GPU.
+    fn lines_of(app: &super::App, name: &str) -> Vec<[f32; 3]> {
+        let panel = app.run.frames[0]
+            .panels
+            .iter()
+            .find(|p| p.name() == name)
+            .expect("the panel is in the run");
+        let (_, lines) = app.panel_vertices(panel, ASPECT);
+        lines.iter().map(|v| v.position).collect()
+    }
+
+    /// The centre of each cross, as the GPU receives it: a horizontal arm's two ends, averaged.
+    fn crosses(lines: &[[f32; 3]]) -> Vec<(f32, f32)> {
+        lines
+            .chunks(4)
+            .map(|c| ((c[0][0] + c[1][0]) / 2.0, (c[0][1] + c[1][1]) / 2.0))
+            .collect()
+    }
+
+    /// **Framed on the bar, its 61 samples are 61 places on the screen.**
+    ///
+    /// They reach the GPU as `f32` screen positions, so this is after the narrowing. Framed whole,
+    /// the run's longest side is 2.5e11 m and the bar is `8e-14` of it: every one of its 61
+    /// crosses was drawn at **one** position, and the bar was a single `+`. Framed on itself it
+    /// spans most of the window: `Camera::fit` puts its outer end at 0.85 of the half-frame, and
+    /// the claim is that the 61 centres reach across at least 0.7 of the viewport along one axis.
+    #[test]
+    fn framing_one_panel_spreads_it_across_the_window() {
+        let mut app = two_scales();
+        let distinct = |c: &[(f32, f32)]| {
+            let mut seen: Vec<(f32, f32)> = Vec::new();
+            for p in c {
+                if !seen.contains(p) {
+                    seen.push(*p);
+                }
+            }
+            seen.len()
+        };
+        let whole = crosses(&lines_of(&app, "bar"));
+        println!(
+            "  framed whole, the bar's 61 samples are at {} places",
+            distinct(&whole)
+        );
+
+        app.frame_on(Some("bar".to_string()));
+        let framed = crosses(&lines_of(&app, "bar"));
+        assert_eq!(framed.len(), 61, "a sample was dropped");
+        assert_eq!(
+            distinct(&framed),
+            61,
+            "framed on the bar, its 61 samples reach the GPU at {} distinct positions",
+            distinct(&framed)
+        );
+        let reach = |axis: usize| {
+            let v: Vec<f32> = framed
+                .iter()
+                .map(|c| if axis == 0 { c.0 } else { c.1 })
+                .collect();
+            let lo = v.iter().copied().fold(f32::MAX, f32::min);
+            let hi = v.iter().copied().fold(f32::MIN, f32::max);
+            (hi - lo) / 2.0
+        };
+        let fraction = reach(0).max(reach(1));
+        println!("  framed on the bar, it spans {fraction:.4} of the viewport");
+        assert!(
+            fraction >= 0.7,
+            "framed on the bar, its samples span {fraction:.3e} of the viewport"
+        );
+        // The scale bar measures what is framed: a ruler for metres-across-the-run under a
+        // picture of a 20 mm bar is the wrong ruler by thirteen orders.
+        assert_eq!(app.widest, 0.02, "the scale bar is not the framed box's");
+    }
+
+    /// **What is far from the framed panel is not drawn**, and the whole run brings it back.
+    ///
+    /// Both planets are 7.5e12 bar-lengths away. A GPU would clip them; this shell projects on
+    /// the CPU and hands the pass screen positions, so nothing clipped them and a point behind
+    /// the eye — its depth clamped to the near plane by `Camera::project` — arrived at a coordinate
+    /// in the 1e14s. They are dropped by `Camera::sees` now. Framing the whole run again puts both
+    /// back inside the viewport.
+    #[test]
+    fn framing_one_panel_drops_what_is_far_and_the_whole_run_restores_it() {
+        let mut app = two_scales();
+        app.frame_on(Some("bar".to_string()));
+        let far = lines_of(&app, "sky");
+        assert!(
+            far.is_empty(),
+            "framed on the bar, the planets 1.5e11 m away were drawn: {far:?}"
+        );
+
+        app.frame_on(None);
+        assert_eq!(
+            app.panel, "bar",
+            "the colour bar did not return to the panel it opened on"
+        );
+        let back = crosses(&lines_of(&app, "sky"));
+        assert_eq!(
+            back.len(),
+            2,
+            "framed whole, the planets are not both drawn"
+        );
+        for (x, y) in back {
+            assert!(
+                x.abs() <= 1.0 && y.abs() <= 1.0,
+                "framed whole, a planet is off-screen at ({x}, {y})"
+            );
+        }
+        assert_eq!(app.widest, 2.5e11, "the scale bar is not the whole run's");
+    }
+
+    /// **F walks the whole run, then each panel in order, then the whole run again.**
+    #[test]
+    fn f_cycles_through_the_whole_run_and_each_panel() {
+        let mut app = two_scales();
+        let mut seen = vec![app.framed.clone()];
+        for _ in 0..3 {
+            let next = app.next_framing();
+            app.frame_on(next);
+            seen.push(app.framed.clone());
+        }
+        assert_eq!(
+            seen,
+            [None, Some("bar".into()), Some("sky".into()), None],
+            "F did not cycle whole, bar, sky, whole"
+        );
     }
 }

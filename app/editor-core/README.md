@@ -84,6 +84,16 @@ The viewport draws every placed extent as a wireframe, live from the text before
 frames — and **Verify** runs the battery from `pantometry-world verify` and shows the report the
 CLI prints, with the findings count in the window title. Drag to rotate, scroll to zoom.
 
+**View → Frame selection** (and **frame this** in the inspector) re-frames the viewport on the
+selection: its box becomes the framing every projection, handle, label, probe, shaded mesh and the
+scale bar share, so nothing moves relative to anything else and what is far from it goes off
+screen. **Fit view** returns to the whole scene. It used to move only the focal length and keep the
+whole scene's framing, on the argument that re-centring would move everything else — which is not
+true when every reader takes the same framing, and the old way could not show scene 14's 20 mm bar
+at all: it is `7.5e-14` of a framing spanning 2.7e11 m, both its ends narrowed to one `f32`, and
+the fit, measured from a centre 2.0e10 m away, put that one point on the top edge of the viewport.
+Framed on itself, its outer end lands at 0.85 of the half-frame and it spans 0.76 of the viewport.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

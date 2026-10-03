@@ -1506,6 +1506,11 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
         for panel in &f.panels {
             let scale = run.scale_of(panel.name());
             let bounds = panel.bounds();
+            // **The row's box is where the panel is drawn**, which is the world box and not the
+            // panel's own: `Node::bounds` says "in world metres", and "Frame selection" re-frames
+            // the viewport on it, so a placed panel's local box would frame empty space where the
+            // panel would be if it had no pose. The detail lines keep the panel's own box.
+            let world = panel.world_bounds();
             let mut detail: Vec<(String, String)> = vec![
                 ("unit".into(), panel.unit().to_string()),
                 ("samples".into(), panel.values().len().to_string()),
@@ -1606,7 +1611,7 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
                 kind,
                 parent: Some(group),
                 depth: 2,
-                bounds: Some(bounds),
+                bounds: Some(world),
                 unit: panel.unit().to_string(),
                 detail,
             });

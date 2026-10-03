@@ -799,6 +799,26 @@ impl Camera {
         self.distance + 2.0
     }
 
+    /// Whether a projected point lies between the near and far planes — the depth half of the
+    /// clip test [`Camera::matrix`] puts a GPU through.
+    ///
+    /// **For the painters that project on the CPU.** A GPU clips what is behind the eye or past
+    /// the far plane; [`Camera::project`] can only clamp, so a painter that draws its output as
+    /// given draws a point behind the eye at an enormous coordinate, and a point a billion
+    /// framings away wherever its direction happens to land. That never arose while the framing
+    /// was always the whole run, because nothing in a fitted run is outside these planes. It
+    /// arises the moment the framing is one object: framed on scene 14's 20 mm bar, one of its
+    /// planets is behind the eye, its depth is clamped to the near plane, and it projects to
+    /// `(-2.8e14, -8.8e14)` — and a box edge or a label anchored there is drawn from it.
+    ///
+    /// A CPU painter drops a primitive with any vertex that fails this, where a GPU would cut it
+    /// at the plane. That loses the part of a primitive that straddles a plane, which is the price
+    /// of not writing a clipper: framed on the same bar, the room's cells that reach past the far
+    /// plane are dropped whole rather than cut there.
+    pub fn sees(&self, q: &Projected) -> bool {
+        q.depth > Camera::NEAR && q.depth < self.far()
+    }
+
     /// The projection as a 4×4, column-major, ready for `glUniformMatrix4fv`.
     ///
     /// Clip space, so `w` is exactly the depth [`Camera::project`] reports and `x/w`, `y/w` are

@@ -2240,6 +2240,65 @@ impl App {
         self.pending_frame = true;
     }
 
+    /// The framing this paint draws in, after whatever the camera was asked to do since the last.
+    ///
+    /// **Frame selection re-frames: the selection's box becomes the framing.** It used to keep the
+    /// whole scene's framing and move only the focal length, on the argument that re-centring
+    /// "would move everything else relative to it". That argument is not true of this viewport:
+    /// every reader — the handles, the shaded batches, the flat painter, the labels, the scale bar,
+    /// the probe — takes the one framing settled here, so changing it moves nothing relative to
+    /// anything else. What it does move is the subject from the edge of `f32` to the middle of it.
+    ///
+    /// And that is the whole problem with the old design, measured on scene 14, which holds a
+    /// 20 mm bar, a 4.4 m room and orbits spanning 2.7e11 m. Under the world's framing the bar is
+    /// `7.5e-14` of a span: `Framing::local` puts both its ends on the same `f32`,
+    /// `[0.031563334, 0.06726968, -0.010378995]`, and no focal length separates two vertices that
+    /// are one number. `Camera::fit` also measured the box from the *framing's* centre, 2.0e10 m
+    /// from the bar, so "Frame selection" moved the bar to `(0.258, 0.850)` — the top edge of the
+    /// viewport — with its two ends `2.4e-13` of the viewport apart. The scene opened on three
+    /// planets' markers and the bar could not be looked at at all.
+    ///
+    /// Everything far from the selection goes off-screen, on the GPU by the clip planes and on the
+    /// CPU by `Camera::sees`. **Fit view** clears the hold and returns to the whole world.
+    ///
+    /// A selection with no size — one body — keeps the current framing and says so: a zero box
+    /// has no scale to frame at, and `Framing::of` would invent one metre for it.
+    fn settle_framing(&mut self, world: [f64; 6], aspect: f64) -> viewer_core::Framing {
+        if std::mem::take(&mut self.pending_frame) {
+            let want = self
+                .selected
+                .as_deref()
+                .and_then(|p| tree_bounds(&self.checked, self.run.as_ref(), p));
+            match want {
+                Some(b) if (0..3).any(|a| b[a + 3] > b[a]) => {
+                    let framing = viewer_core::Framing::of(b);
+                    self.framing_hold = Some(framing);
+                    self.camera.fit(b, &framing, aspect, 0.85);
+                    // A fit asked for in the same frame is overruled, as it always was: the
+                    // selection's fit used to run second and replace the world's.
+                    self.needs_fit = false;
+                    self.status = format!(
+                        "framed on {} — fit view returns to the whole scene",
+                        self.selected.as_deref().unwrap_or("the selection")
+                    );
+                    return framing;
+                }
+                Some(_) => self.status = "the selection has no size to frame".to_string(),
+                None => {}
+            }
+        }
+        if self.needs_fit {
+            self.framing_hold = None;
+        }
+        let framing = *self
+            .framing_hold
+            .get_or_insert_with(|| viewer_core::Framing::of(world));
+        if std::mem::take(&mut self.needs_fit) {
+            self.camera.fit(world, &framing, aspect, 0.85);
+        }
+        framing
+    }
+
     /// Whether a row is drawn, given what is hidden and whether the selection is soloed.
     ///
     /// Hiding is by **path prefix**, so hiding a domain hides its field and its readings with it,
@@ -2873,9 +2932,19 @@ impl App {
     /// of names and the alternative is keeping a copy of both. `DefaultHasher` is deterministic
     /// within a process, which is all a cache key needs — this is not a result, and nothing is
     /// pinned to it.
-    fn geometry_key(&self) -> u64 {
+    fn geometry_key(&self, framing: &viewer_core::Framing) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
+        // **The framing, because every vertex is framing-local.** `batches` subtracts the centre
+        // and divides by the span before anything narrows to `f32`, so a mesh built under one
+        // framing and drawn under another is in the wrong place by exactly their difference —
+        // while every label, handle and probe, which project afresh each paint, are in the right
+        // one. It was left out while the framing changed only alongside the text, and it did not:
+        // drag a domain, press Fit view, and the framing moved with nothing else in this key.
+        for c in framing.centre {
+            c.to_bits().hash(&mut h);
+        }
+        framing.span.to_bits().hash(&mut h);
         self.text.hash(&mut h);
         self.hidden.hash(&mut h);
         self.solo.hash(&mut h);
@@ -3362,11 +3431,10 @@ impl App {
         // view or moving a domain, and whichever claims it, the other must not also act on it.
         let bounds = self.world();
 
-        // Asking the camera to fit is asking the framing to follow the geometry again. Done here,
-        // above both readers of it, so the handles and the paint cannot disagree within a frame.
-        if self.needs_fit || self.pending_frame {
-            self.framing_hold = None;
-        }
+        // **The one framing this paint uses**, settled here and above every reader of it — the
+        // handles, the shaded batches and their cache key, the flat painter, the labels, the
+        // scale bar and the probe — so no two of them can disagree within a frame.
+        let framing = bounds.map(|world| self.settle_framing(world, aspect));
 
         // The translate handles, if a domain is selected and the scene has somewhere to put them.
         let mut moved: Option<(String, [f64; 3])> = None;
@@ -3375,10 +3443,7 @@ impl App {
         // `self.text` while the projection above still borrows `self.camera`.
         let mut turned: Option<(String, [f64; 3], f64)> = None;
         let mut holding = false;
-        if let (Some(b), Some(name)) = (bounds, self.selected_domain()) {
-            let framing = self
-                .framing_hold
-                .unwrap_or_else(|| viewer_core::Framing::of(b));
+        if let (Some(framing), Some(name)) = (framing, self.selected_domain()) {
             if let Some(origin) = self.handle_origin(&name) {
                 let to_screen = |p: [f64; 3]| {
                     let q = self.camera.project(p, &framing, aspect);
@@ -3557,7 +3622,7 @@ impl App {
                 .map(|rest| rest.split('/').next().unwrap_or(rest).to_string())
         });
 
-        let Some(bounds) = bounds else {
+        let Some(framing) = framing else {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -3567,28 +3632,12 @@ impl App {
             );
             return;
         };
-        let framing = *self
-            .framing_hold
-            .get_or_insert_with(|| viewer_core::Framing::of(bounds));
-        if self.needs_fit {
-            self.camera.fit(bounds, &framing, aspect, 0.85);
-            self.needs_fit = false;
-        }
-        // **Framing the selection keeps the whole scene's framing.** `Framing` is the run-wide
-        // centre and span every projection here shares, and re-centring it on one object would
-        // move everything else relative to it — the camera would appear to fit while the picture
-        // silently changed what it was of. So only the focal length moves: the selection's box is
-        // fitted *within* the scene's framing.
-        if self.pending_frame {
-            self.pending_frame = false;
-            let want = self
-                .selected
-                .as_deref()
-                .and_then(|p| tree_bounds(&self.checked, self.run.as_ref(), p));
-            if let Some(b) = want {
-                self.camera.fit(b, &framing, aspect, 0.85);
-            }
-        }
+        // Whether a projected point is between the planes the GPU clips at. The flat painter,
+        // the labels and the probe all project on the CPU, where `Camera::project` can only
+        // clamp; framed on one object, much of a scene of several scales is outside them, and a
+        // point behind the eye projects to an enormous coordinate that a box edge is drawn from
+        // and a label is clamped back onto the screen from. See `Camera::sees`.
+        let seen = |p: [f64; 3]| self.camera.sees(&self.camera.project(p, &framing, aspect));
 
         // **The shaded pass.** Everything with a surface goes to the GPU with a depth buffer;
         // everything that is a *number* — labels, the colour bar, the readout — stays on egui on
@@ -3596,7 +3645,7 @@ impl App {
         // and geometry has to be occluded by whatever is in front of it, and one painter cannot do
         // both.
         if self.shaded {
-            let key = self.geometry_key();
+            let key = self.geometry_key(&framing);
             if self.built != Some(key) {
                 let (solid, lines, probes, notes) = self.batches(&framing);
                 if let Ok(mut gpu) = self.gpu.lock() {
@@ -3725,6 +3774,9 @@ impl App {
             };
             if !self.shaded {
                 for (a, b) in editor_core::EDGES {
+                    if !seen(placed.corners[a]) || !seen(placed.corners[b]) {
+                        continue;
+                    }
                     painter.line_segment(
                         [to_screen(placed.corners[a]), to_screen(placed.corners[b])],
                         stroke,
@@ -3746,6 +3798,13 @@ impl App {
                 colour,
             );
             let at = to_screen(placed.corners[0]);
+            // **Only a corner that is on screen holds a label up.** The clamp below pulls a label
+            // in from just past the edge, which is what it is for; framed on one object, every
+            // other domain's corner is far outside the rect or behind the eye, and the clamp
+            // pulled each of their names onto the edge of a picture they are not in.
+            if !seen(placed.corners[0]) || !rect.expand(galley.rect.width()).contains(at) {
+                continue;
+            }
             let x =
                 at.x.min(rect.right() - galley.rect.width())
                     .max(rect.left());
@@ -3928,6 +3987,11 @@ impl App {
                         let _ = positions;
                         let depths: Vec<f64> = pts.iter().map(|p| project(*p).1).collect();
                         for i in editor_core::far_to_near(&depths) {
+                            // Neither drawn nor offered to the probe: a body the GPU clipped is
+                            // not under the cursor, wherever its direction happens to project.
+                            if !seen(pts[i]) {
+                                continue;
+                            }
                             let at = to_screen(pts[i]);
                             if !self.shaded {
                                 painter.circle_filled(at, 3.5, shade(values[i], scale));
@@ -3964,6 +4028,9 @@ impl App {
                             let placed = panel.placed_vertices();
                             for w in lo..hi.saturating_sub(1) {
                                 let (a, b) = (placed[w], placed[w + 1]);
+                                if !seen(a) || !seen(b) {
+                                    continue;
+                                }
                                 painter.line_segment(
                                     [to_screen(a), to_screen(b)],
                                     egui::Stroke::new(1.5_f32, shade(*value, scale)),
@@ -3982,6 +4049,9 @@ impl App {
                                 let value = values.get(t[0]).copied().unwrap_or(0.0);
                                 for k in 0..3 {
                                     let (a, b) = (placed[t[k]], placed[t[(k + 1) % 3]]);
+                                    if !seen(a) || !seen(b) {
+                                        continue;
+                                    }
                                     painter.line_segment(
                                         [to_screen(a), to_screen(b)],
                                         egui::Stroke::new(0.7_f32, shade(value, scale)),
@@ -4028,6 +4098,7 @@ impl App {
                             draw_field(
                                 &painter,
                                 &project,
+                                &seen,
                                 b,
                                 (*nx, *ny, *nz),
                                 values,
@@ -4039,7 +4110,7 @@ impl App {
                                 *lattice,
                             )
                         };
-                        if let Some(note) = note {
+                        if let Some(note) = note.filter(|_| seen(b.corners[0])) {
                             painter.text(
                                 to_screen(b.corners[0]),
                                 egui::Align2::LEFT_TOP,
@@ -4098,6 +4169,9 @@ impl App {
             // The shaded view's readout, from the cache rather than from a fresh mesh.
             if self.shaded {
                 for t in &self.shaded_probes {
+                    if !seen(t.at) {
+                        continue;
+                    }
                     let (at, depth) = project(t.at);
                     probe.offer(pointer, at, 6.0, depth, &t.path, || t.label.clone());
                 }
@@ -4399,6 +4473,7 @@ fn trim(s: String) -> String {
 fn draw_field(
     painter: &egui::Painter,
     project: &impl Fn([f64; 3]) -> (egui::Pos2, f64),
+    seen: &impl Fn([f64; 3]) -> bool,
     placed: &editor_core::PlacedBox,
     counts: (usize, usize, usize),
     values: &[f64],
@@ -4432,6 +4507,11 @@ fn draw_field(
     let stride = out.stride.max(1);
     for i in editor_core::far_to_near(&depths) {
         let s = &out.splats[i];
+        // A splat outside the planes the GPU clips at is neither painted nor offered to the
+        // probe -- see `Camera::sees`.
+        if !seen(s.at) {
+            continue;
+        }
         let (at, depth) = placed_at[i];
         let c = egui::Color32::from_rgba_unmultiplied(s.rgba[0], s.rgba[1], s.rgba[2], s.rgba[3]);
         painter.circle_filled(at, radius, c);
@@ -4692,5 +4772,227 @@ mod tests {
         let p = egui::pos2(50.0, 50.0);
         assert!(near_segment(egui::pos2(53.0, 54.0), p, p) - 5.0 < 1e-4);
         assert!(near_segment(p, p, p) < 1e-6);
+    }
+
+    /// The width over height these tests paint at, and the one the fit is told, as the viewport
+    /// tells it its own.
+    const ASPECT: f64 = 16.0 / 9.0;
+
+    /// Scene 14, run, with the bar selected and "Frame selection" pressed and painted once.
+    ///
+    /// A 20 mm bar, a 4.4 m room and three planets on orbits spanning 2.7e11 m, in one run: the
+    /// scene the editor opened on as three markers, with the bar nowhere to be seen.
+    fn scene_14_framed_on(path: &str) -> (App, viewer_core::Framing) {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pantometry-world/scenes/14-a-world.json");
+        let mut app = App::new(Some(scene.to_string_lossy().into_owned()));
+        app.run_here().expect("scene 14 runs");
+        let world = app.world().expect("scene 14 has geometry");
+        // The first paint, which fits the world as opening a file does.
+        let _ = app.settle_framing(world, ASPECT);
+        app.selected = Some(path.to_string());
+        app.frame_selection();
+        let framing = app.settle_framing(world, ASPECT);
+        (app, framing)
+    }
+
+    /// The GPU's view of a framing-local vertex: `Camera::matrix` applied in `f32`, as the
+    /// shader does, then divided through by `w`. Returns the normalised device position and
+    /// whether the clip test keeps it.
+    fn on_the_gpu(camera: &viewer_core::Camera, local: [f32; 3]) -> ([f32; 2], bool) {
+        let m = camera.matrix(ASPECT);
+        let v = [local[0], local[1], local[2], 1.0f32];
+        let mut clip = [0.0f32; 4];
+        for (row, out) in clip.iter_mut().enumerate() {
+            *out = (0..4).map(|col| m[4 * col + row] * v[col]).sum();
+        }
+        let w = clip[3];
+        let kept = w > 0.0 && (0..3).all(|a| clip[a].abs() <= w);
+        ([clip[0] / w, clip[1] / w], kept)
+    }
+
+    /// **Framed on the bar, the bar fills the viewport.** Measured through `Camera::project`,
+    /// which is what the labels, the handles, the probe and the flat painter use.
+    ///
+    /// Two claims. The exact one: `Camera::fit` is linear in the focal length, so the end that
+    /// projects furthest out lands at **0.85** of the half-frame, which is the `fill` asked for,
+    /// to rounding. The other is the stated fraction: the bar spans at least **0.7** of the
+    /// viewport along its longer screen axis. Measured at 0.760 — the far end, seen in
+    /// perspective from the default camera, lands at 0.67 rather than 0.85 — so 0.7 is the floor
+    /// of "fills most of it" and not a tolerance on a number.
+    ///
+    /// Fitting within the world's framing, which is what this used to do, put the bar's two ends
+    /// `2.4e-13` of the viewport apart, and both at `(0.258, 0.850)` — on the edge of the frame,
+    /// not in the middle of it. The fit measured the box from the framing's centre, 2.0e10 m
+    /// away, so it moved a point to the edge, and a focal length cannot spread a point.
+    #[test]
+    fn framing_the_bar_fills_the_viewport_with_it() {
+        let (app, framing) = scene_14_framed_on("/run/bar");
+        let a = app.camera.project([0.0, 0.0, 0.0], &framing, ASPECT);
+        let b = app.camera.project([0.02, 0.0, 0.0], &framing, ASPECT);
+        let fraction = ((b.x - a.x).abs() / 2.0).max((b.y - a.y).abs() / 2.0);
+        let outer = a.x.abs().max(a.y.abs()).max(b.x.abs()).max(b.y.abs());
+        println!(
+            "  the bar spans {fraction:.4} of the viewport: ends at ({:.4}, {:.4}) and ({:.4}, {:.4})",
+            a.x, a.y, b.x, b.y
+        );
+        assert!(
+            (outer - 0.85).abs() < 1e-12,
+            "the bar's outer end is at {outer} of the half-frame, and the fit asked for 0.85"
+        );
+        assert!(
+            fraction >= 0.7,
+            "framed on the bar, its two ends span {fraction:.3e} of the viewport, not 0.7"
+        );
+        assert!(
+            app.camera.sees(&a) && app.camera.sees(&b),
+            "the bar's ends are outside the clip planes"
+        );
+    }
+
+    /// **The bar's ends are two vertices after the narrowing to `f32` the GPU path does.**
+    ///
+    /// Read from what `batches` uploads — the bar's placed box in the line batch — and put
+    /// through the camera's matrix in `f32`, as the shader does. Under the world's framing both
+    /// ends of a 20 mm bar sit `7.5e-14` of a span from each other, which is below one `f32` step
+    /// at a coordinate of `0.07`: the upload held one number twice, and the two ends were the
+    /// same point at any focal length.
+    #[test]
+    fn the_bars_two_ends_survive_the_narrowing_to_f32() {
+        let (app, framing) = scene_14_framed_on("/run/bar");
+        let at = app
+            .checked
+            .boxes
+            .iter()
+            .position(|b| b.name == "bar")
+            .expect("scene 14 places a bar");
+        // Every box is drawn here and each pushes its eight corners in order.
+        assert!(app.checked.boxes.iter().all(|b| app.draws(&b.name)));
+        let (_, lines, _, _) = app.batches(&framing);
+        let corner = |k: usize| {
+            let i = 3 * (8 * at + k);
+            [
+                lines.positions[i],
+                lines.positions[i + 1],
+                lines.positions[i + 2],
+            ]
+        };
+        // Corner 0 is the low one and bit 0 steps along x, which is the bar's length.
+        let (lo, hi) = (corner(0), corner(1));
+        assert_ne!(lo, hi, "the bar's two ends were uploaded as one f32 vertex");
+        let ((p, kept_p), (q, kept_q)) = (on_the_gpu(&app.camera, lo), on_the_gpu(&app.camera, hi));
+        let apart = ((q[0] - p[0]).abs() / 2.0).max((q[1] - p[1]).abs() / 2.0);
+        println!("  on the GPU the bar's ends are {apart:.4} of the viewport apart");
+        assert!(kept_p && kept_q, "the bar's ends are clipped: {p:?} {q:?}");
+        // The same 0.7 as the test above, because it is the same picture through the other path:
+        // `one_camera_two_paths` holds the matrix and `project` to 2.4e-7 of each other.
+        assert!(
+            apart >= 0.7,
+            "after the f32 matrix the bar's ends are {apart:.3e} of the viewport apart"
+        );
+    }
+
+    /// **What is far from the selection goes off-screen**, on both paths.
+    ///
+    /// The three planets are 6e10 to 1.5e11 m from a bar 20 mm long. The GPU clips them — every
+    /// one fails the matrix's clip test — and the CPU painters, which can only clamp, are told
+    /// not to draw them by `Camera::sees`. The second half is the one that needed code: one of
+    /// the three is behind the eye, `project` clamps its depth to the near plane and puts it at
+    /// about `(-2.8e14, -8.8e14)`, and the flat painter drew from there.
+    #[test]
+    fn framed_on_the_bar_the_planets_are_not_drawn() {
+        let (app, framing) = scene_14_framed_on("/run/bar");
+        let view = app.run.as_ref().expect("a run");
+        let frame = &view.run.frames[view.frame];
+        let sky = frame
+            .panels
+            .iter()
+            .find(|p| p.name() == "sky")
+            .expect("scene 14 has a sky");
+        let bodies = sky.placed_positions();
+        // Body 0 is the sun, at the origin, which is the bar's own end; the rest are planets.
+        let planets: Vec<[f64; 3]> = bodies
+            .iter()
+            .copied()
+            .filter(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() > 1e9)
+            .collect();
+        assert_eq!(planets.len(), 3, "scene 14 has three planets: {bodies:?}");
+        for p in &planets {
+            let (_, kept) = on_the_gpu(&app.camera, framing.local(*p));
+            let q = app.camera.project(*p, &framing, ASPECT);
+            println!(
+                "  planet at {p:?}: depth {:.3e}, on screen at ({:.3}, {:.3})",
+                q.depth, q.x, q.y
+            );
+            assert!(
+                !kept,
+                "the GPU would draw a planet framed on the bar: {p:?}"
+            );
+            assert!(
+                !app.camera.sees(&q),
+                "the CPU painters would draw a planet framed on the bar: {p:?} at ({}, {})",
+                q.x,
+                q.y
+            );
+        }
+    }
+
+    /// **Fit view returns to the whole world**, framing and focal length both.
+    ///
+    /// The framing the hold carries after Fit view is the world's, and the camera is the one a
+    /// fresh file opens on — so every body, the three planets included, is back inside the
+    /// viewport.
+    #[test]
+    fn fit_view_returns_from_the_selection_to_the_world() {
+        let (mut app, framed) = scene_14_framed_on("/run/bar");
+        let world = app.world().expect("geometry");
+        assert_ne!(
+            framed,
+            viewer_core::Framing::of(world),
+            "the bar was not framed"
+        );
+        // What the Fit view button and the strip's `fit view` do.
+        app.needs_fit = true;
+        let framing = app.settle_framing(world, ASPECT);
+        assert_eq!(framing, viewer_core::Framing::of(world));
+        let mut fresh = viewer_core::Camera::default();
+        fresh.fit(world, &framing, ASPECT, 0.85);
+        assert_eq!(
+            app.camera.scale, fresh.scale,
+            "the focal length is not the world's"
+        );
+
+        let view = app.run.as_ref().expect("a run");
+        let sky = view.run.frames[view.frame]
+            .panels
+            .iter()
+            .find(|p| p.name() == "sky")
+            .expect("a sky");
+        for p in sky.placed_positions() {
+            let q = app.camera.project(p, &framing, ASPECT);
+            assert!(
+                app.camera.sees(&q) && q.x.abs() <= 1.0 && q.y.abs() <= 1.0,
+                "after Fit view a body is off-screen: {p:?} at ({}, {})",
+                q.x,
+                q.y
+            );
+        }
+    }
+
+    /// **The shaded meshes are rebuilt when the framing changes**, because they are built in it.
+    ///
+    /// Every vertex `batches` uploads is framing-local, and the cache key held the text, the
+    /// selection, the frame and the level — so a framing that moved with nothing else kept the
+    /// old meshes under a camera fitted to the new one. That already happened before this
+    /// change: drag a domain, then press Fit view.
+    #[test]
+    fn the_geometry_cache_follows_the_framing() {
+        let (app, framed) = scene_14_framed_on("/run/bar");
+        let world = viewer_core::Framing::of(app.world().expect("geometry"));
+        assert_ne!(
+            app.geometry_key(&framed),
+            app.geometry_key(&world),
+            "two framings, one cache key: the meshes built in one are drawn in the other"
+        );
     }
 }

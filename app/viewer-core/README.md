@@ -5,9 +5,34 @@ cd app
 cargo run --release -- ../../out.json                       # a window
 cargo run --release -- ../../out.json --snapshot out.ppm             # one frame, no window
 cargo run --release -- ../../out.json --snapshot out.ppm --frame 30  # a frame worth looking at
+cargo run --release -- ../../out.json --snapshot out.ppm --frame-panel bar   # one panel framed
 ```
 
-Drag to rotate, scroll to zoom, space to play, left and right to scrub.
+Drag to rotate, scroll to zoom, space to play, left and right to scrub, **F** to frame each panel
+in turn and then the whole run again. `--frame-panel NAME` opens framed on one panel, in the
+window or in a snapshot, and refuses a name the run does not have with the names it does.
+
+## Framing one panel, because zoom cannot
+
+The window frames every panel at once, which is the right default and was the only choice. Scene
+14 holds a 20 mm bar, a 4.4 m room and orbits spanning 2.7e11 m, and framed whole the bar is
+`7.5e-14` of the framing: its 61 samples reached the GPU at **one** `f32` position, so it was a
+single `+`. Zoom cannot help — `Camera::zoom` clamps the distance to 1.2..9, and no focal length
+spreads one point into two.
+
+Framing a panel makes its box the framing: every panel is still projected through that one
+framing, so nothing moves relative to anything else, the scale bar measures the framed box, and the
+colour bar goes to the framed panel. What is far away leaves the screen. This shell projects on the
+CPU and hands the pass screen positions, so nothing clipped it — one of scene 14's planets is behind
+the eye when the bar is framed, and `Camera::project` clamps such a point to the near plane, which
+put it at `(-2.8e14, -8.8e14)`. A primitive with a corner outside the near or far plane is dropped,
+by `Camera::sees`, rather than cut at it the way a GPU would; framed on the bar, the room's cells
+that reach past the far plane go whole.
+
+Measured with `--snapshot` on scene 14: **13 318** lit pixels framed whole, **400 616** framed on
+the bar — most of them the room the bar lies along the edge of, which is not far from it but
+touching it. A whole-run snapshot is byte-identical to what it was before this existed, on the
+three committed fixtures and on scene 14, so the figures `docs/README.md` refreshes are still true.
 
 The input is what any run writes: `pantometry-world <scene> out.json`, or anything that calls
 `pantometry_view::to_json`. Two of the shipped scenes and the `optical_bench` example are committed

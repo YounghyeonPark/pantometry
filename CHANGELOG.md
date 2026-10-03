@@ -245,6 +245,37 @@ protects nothing.
 
 ### Fixed
 
+- **Scene 14's bar could not be looked at, in the editor or the viewer.** The scene holds a 20 mm
+  bar, a 4.4 m room and orbits spanning 2.7e11 m, and both shells framed everything at once, so it
+  opened on three planets' markers. Zoom cannot help — `Camera::zoom` clamps the distance to
+  1.2..9 — and the editor's **Frame selection** could not either: it kept the world's framing and
+  moved only the focal length, on the argument that re-centring "would move everything else
+  relative to it". Under that framing the bar is `7.5e-14` of a span, `Framing::local` put both its
+  ends on one `f32` (`[0.031563334, 0.06726968, -0.010378995]`), and `Camera::fit`, measuring from
+  the framing's centre 2.0e10 m away, moved that one point to `(0.258, 0.850)`, the top edge of the
+  viewport, with its ends `2.4e-13` of the viewport apart. The argument was not true of this
+  viewport: every reader takes the one framing. **Frame selection now makes the selection's box
+  the framing**, settled once per paint above every reader — handles, shaded batches, flat painter,
+  labels, scale bar, probe — and the bar's outer end lands at 0.85 of the half-frame with the bar
+  spanning 0.76 of the viewport, on `project` and through the `f32` matrix alike. **Fit view**
+  returns to the world. Two things the old framing had hidden came with it:
+  - **The shaded meshes' cache key did not hold the framing**, though every vertex is built in it,
+    so a framing that moved with nothing else drew the old meshes under the new camera. It was
+    reachable before this change: drag a domain, then press Fit view.
+  - **The CPU paths drew what a GPU clips.** `Camera::project` can only clamp, and framed on the
+    bar one planet is behind the eye and projects to `(-2.8e14, -8.8e14)`; box edges were drawn
+    from there and labels were clamped back onto the screen from there. `Camera::sees` is the
+    depth half of the clip test, and the flat painter, the labels, the probe and the viewer drop
+    what fails it.
+  The outliner's run rows also carried each panel's own box where `Node::bounds` promises the world
+  box, which a re-framing would have aimed at empty space for any placed panel.
+- **The viewer can frame one panel**: `--frame-panel NAME`, and `F` in the window to step through
+  the whole run and each panel. Framed whole, the bar's 61 samples reached the GPU at one position;
+  framed on it, at 61. A `--snapshot` of scene 14 lights **13 318** pixels framed whole and
+  **400 616** framed on the bar — most of them the room the bar lies along, which touches it. A
+  whole-run snapshot is byte-identical to the previous binary's on the three committed fixtures and
+  on scene 14. Every new test was run against the old behaviour and fails on it; the cull, the
+  cache key and Fit view's return were each sabotaged separately and each was caught.
 - **A molecule's scale read `0 um`.** The editor's scale bar and its inspector's extents had no
   unit below the micron, so three decimals of one rounded aspirin — 0.81 × 0.40 × 0.94 nm — to
   `0.001 x 0 x 0.001 um`, and its scale bar to `0 um`. Below a micron they say nanometres now. The
