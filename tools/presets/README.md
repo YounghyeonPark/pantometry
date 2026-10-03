@@ -17,16 +17,20 @@ tile no scene names any more, writes the Rust and runs `rustfmt` over it. Runnin
 reproduces `presets.rs` byte for byte and rewrites the tiles identically — measured on 2026-10-02,
 two runs, every tile's SHA-256 the same.
 
-**What it does not do is reproduce the committed tiles.** The same run rewrote five that no scene
-change had touched — `06`, `07`, `14`, `25` and `31` — because the renderer moved after they were
-drawn: `31` is the protein drawn with its backbone (1232 lit pixels against 275), which the run
-format did not carry when its tile was made. And `14-a-world` falls to **14** lit pixels against
-170: the world's bar and room are millimetres and metres beside orbits a hundred million kilometres
-across, and a camera fitted to the whole world draws the orbits' markers and nothing else. That
-would put a third tile under `every_tile_decodes_to_something`'s pair of sparse ones, which is a
-decision about scene 14's picture rather than a side effect of adding scene 33 — so the commit that
-added `33` kept those five as they were and committed only its own tile. Regenerating them is a
-change of its own.
+**The committed tiles are the script's output again**, and for a while they were not. Adding scene
+33 rewrote five that no scene change had touched — `06`, `07`, `14`, `25` and `31` — because the
+renderer had moved after they were drawn, and that commit kept the old five. Regenerating them was
+its own change, and it found a renderer defect: **`25` came out a solid block of one colour.** The
+viewer coloured every field on the *selected* panel's scale, and scene 25's displacement, some
+1e-6 m, was painted on its temperature's, from 300 K — every value fell off the bottom.
+`a_field_takes_its_own_scale_and_not_the_selected_panels` holds the fix, and `18`, the other scene
+with two fields, moved with it. The rest moved because the renderer did: `31` is the protein with
+its backbone, 1232 lit pixels against 275. `14-a-world` falls to **14** against 170, for the reason
+below.
+
+**A tile's pixels are held by nothing but a regeneration.** No test compares a committed tile with
+a fresh render, so the only way to know one is current is to run this and see what `git status`
+says.
 
 `python tools/presets/make.py --rust-only` writes `presets.rs` from the tiles already committed,
 without a binary and without rendering anything, for a change to the table that is not a change to
@@ -69,7 +73,7 @@ considered and each fails on something concrete:
 So the cost is 125 KiB in git, once per change to a scene, and the guard against the usual price
 of a committed artefact — that it drifts from its source and nobody notices — is that the two
 generated things are checked against the scenes rather than against themselves — `presets.rs`
-is; a tile's pixels are not, and only a regeneration would show one gone stale, as above:
+is; a tile's pixels are not, as above:
 
 | check | where | what it would catch |
 | --- | --- | --- |
@@ -97,17 +101,19 @@ scene is filed under, and what that application is called on screen. A reader ca
 assignment — one that did would only repeat it. What *is* asserted is that every area is named and
 non-empty and that every scene is placed.
 
-## Two tiles are nearly empty, and that is the renderer being honest
+## Three tiles are nearly empty, and that is the renderer being honest
 
-`07-bouncing-ball` lights 5 pixels of 37 440 and `06-orbits` lights 29, against 10 704 for a room
-mode. Both are a handful of point bodies, and a point is drawn as a cross about 1.2% of the frame
+`07-bouncing-ball` lights 7 pixels of 37 440, `14-a-world` 14 and `06-orbits` 31, against 10 704 for
+a room mode. `14` is a 20 mm bar and a 4.4 m room beside orbits 1.5e11 m across, framed together,
+so it opens on three planets' markers: the tile is what the scene shows, and seeing the bar means
+framing the bar. The other two are a handful of point bodies, and a point is drawn as a cross about 1.2% of the frame
 across whatever the camera is fitted to — so cropping harder does not rescue them. Measured: at a
 twentyfold magnification cap the bouncing ball is a small cross in the middle of a grey field,
 which is a picture of the *marker* rather than of the run. `crop_to_content` caps at three for that
-reason, and `every_tile_decodes_to_something` pins those two **by rank** — the two lowest, with
-their counts — so a third one arriving is a failure rather than something to notice on the screen.
-By rank because the threshold it replaced sat at 90 and the third-lowest tile is 94: four pixels of
-37 440, which is not a margin.
+reason, and `every_tile_decodes_to_something` pins those three **by rank** — the three lowest,
+with their counts — so a fourth one arriving is a failure rather than something to notice on the
+screen. By rank because the threshold it replaced sat at 90 and the next tile was then 94: four
+pixels of 37 440, which is not a margin. It is 170 now.
 
 ## One group of tiles is the same picture, and the group that was a real defect is gone
 

@@ -893,7 +893,7 @@ impl App {
                         *lattice,
                         values,
                         unit,
-                        Some(self.span),
+                        Some(span),
                         None,
                     );
                     // **Lambert on the CPU**, because the camera already projects here and the
@@ -1700,6 +1700,50 @@ fn fs(v: Out) -> @location(0) vec4<f32> {
 #[cfg(test)]
 mod tests {
     use super::{ends_that_fit, numbered, scale_bar, scale_label};
+
+    /// **A field is coloured on its own scale whichever panel is selected.**
+    ///
+    /// `panel_vertices` worked out each panel's own span — its comment said so — and then handed
+    /// the field branch `self.span`, the selected panel's. Scene 25 has a temperature in kelvin and
+    /// a displacement in metres on one grid: the displacement, some 1e-6 m, was painted on a scale
+    /// running from 300 K, every value fell off the bottom of it, and the tile showed a solid
+    /// block of the coldest colour where it had shown the temperature. A per-panel colour is the
+    /// same colour whichever panel happens to own the legend, so the two renderings must agree.
+    #[test]
+    fn a_field_takes_its_own_scale_and_not_the_selected_panels() {
+        let field = |name: &str, unit: &str, values: [f64; 8]| {
+            format!(
+                r#"{{"name": "{name}", "unit": "{unit}", "kind": "field", "nx": 2, "ny": 2,
+                    "nz": 2, "extent_m": [0, 0, 0, 0.01, 0.01, 0.01], "values": {values:?}}}"#
+            )
+        };
+        let hot = field("hot", "K", [300., 310., 320., 330., 340., 350., 360., 400.]);
+        let small = field(
+            "small",
+            "m",
+            [1e-6, 1.1e-6, 1.2e-6, 1.3e-6, 1.4e-6, 1.5e-6, 1.6e-6, 2e-6],
+        );
+        let json = format!(
+            r#"{{"format": 3, "title": "two scales", "frames": [{{"t": 0, "panels": [{hot}, {small}],
+                "readings": []}}]}}"#
+        );
+        let colours = |selected: &str| {
+            let run = viewer_core::Run::from_json(&json).expect("the run parses");
+            let app = super::App::new(run, selected.to_string());
+            let panel = &app.run.frames[0].panels[1];
+            let (tris, _) = app.panel_vertices(panel, 16.0 / 9.0);
+            assert!(!tris.is_empty(), "a 2x2x2 field draws a shell");
+            tris.iter().map(|v| v.colour).collect::<Vec<_>>()
+        };
+        let (owned, alone) = (colours("hot"), colours("small"));
+        let differ = owned.iter().zip(&alone).filter(|(a, b)| a != b).count();
+        assert!(
+            owned.len() == alone.len() && differ == 0,
+            "the metres field changed colour when the kelvin field owned the legend: {differ} of \
+             {} vertices differ",
+            alone.len()
+        );
+    }
 
     /// **A colour bar's two ends do not run through each other, at any width they need.**
     ///

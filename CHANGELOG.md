@@ -250,13 +250,17 @@ protects nothing.
   `0.001 x 0 x 0.001 um`, and its scale bar to `0 um`. Below a micron they say nanometres now. The
   glTF and USD writers' note about the radius they draw bodies at had the same shape: `{:.6} m`
   printed aspirin's as `0.000000 m`, a size of nothing, and is in scientific notation now.
-- **Five of the chooser's tiles are stale, and are left so on purpose.** Regenerating them for
-  scene 33 rewrote `06`, `07`, `14`, `25` and `31`, which no change to a scene had touched: the
-  renderer moved after they were drawn — `31` gained its backbone — and `14-a-world` falls from 170
-  lit pixels to 14, because a camera fitted to orbits a hundred million kilometres across draws
-  nothing of a 20 mm bar. That would put a third tile among the two `every_tile_decodes_to_something`
-  pins as sparse, so it is a decision about scene 14's picture and not part of adding scene 33;
-  `tools/presets/README.md` says so where it used to say the script reproduces the tiles.
+- **The viewer coloured every field on the selected panel's scale.** `panel_vertices` worked out
+  each panel's own span, as its comment said, and handed the field branch `self.span` instead.
+  Scene 25 has a temperature in kelvin and a displacement in metres on one grid, and the
+  displacement, some 1e-6 m, was painted on a scale from 300 K: its tile was a solid block of the
+  coldest colour, which no test noticed. `a_field_takes_its_own_scale_and_not_the_selected_panels`
+  renders one field with each of two panels selected and fails on the old line with every vertex
+  the bottom colour. Found by regenerating the chooser's tiles, which adding scene 33 had found
+  stale: `06`, `07`, `14`, `25` and `31` had been drawn before the renderer moved, and `18` moved
+  with this fix. They are the script's output again. `14-a-world` falls from 170 lit pixels to 14
+  and is pinned as the third sparse tile: a 20 mm bar beside orbits 1.5e11 m across, framed
+  together, opens on three planets' markers, and the tile now says what the scene shows.
 
 - **Xenon's reason for being out of the catalogue was stated and not measured.** The docs said
   its 10.8% miss on liquid density was an unsourced pair. A sourced one misses too: Beattie,

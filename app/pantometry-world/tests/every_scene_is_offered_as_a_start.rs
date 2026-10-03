@@ -265,21 +265,27 @@ fn a_preset_has_a_picture_unless_its_scene_has_nothing_to_draw() {
 /// is silently *stretched*, and a PNG of nothing but the background is a grey rectangle that reads
 /// as a scene which failed rather than as a scene with little in it.
 ///
-/// # The two sparse ones are pinned by rank, not by a threshold
+/// # The three sparse ones are pinned by rank, not by a threshold
 ///
 /// "Not background" is counted the way the renderer's own snapshot count is: pixels differing from
 /// the corner, out of 37 440. The bottom of the spread is very low — `07-bouncing-ball` lights
-/// **5** and `06-orbits` **29**, against 10 704 for a room mode. Both are a handful of point
-/// bodies, and a point is a cross about 1.2% of the frame across whatever the camera is fitted to,
+/// **7**, `14-a-world` **14** and `06-orbits` **31**, against 10 704 for a room mode. Two are a
+/// handful of point bodies, and a point is a cross about 1.2% of the frame across whatever the camera is fitted to,
 /// so magnifying the crop does not rescue them: measured at a twentyfold cap, the bouncing ball is
 /// a small cross in the middle of a grey field, which is a picture of the *marker*.
 /// `crop_to_content` caps at three for that reason and this is the cost of it.
 ///
+/// **`14-a-world` is the third, and it is an honest picture of the scene.** It holds a 20 mm bar, a
+/// 4.4 m room and orbits 1.5e11 m across, and the viewer frames every panel at once, so what the
+/// scene opens on is three planets' markers and nothing else. Its old tile was the bar alone,
+/// drawn when the renderer drew one panel; regenerated, it says what opening the scene shows. The
+/// way to see the bar is to frame the bar, which is a change to the viewer and not to this tile.
+///
 /// This was a `SPARSE = 90` threshold, and the third-lowest tile lights **94** — four pixels of
 /// 37 440 of headroom, so a hair's movement in one scene's render would have fired an assertion
 /// saying "the set of nearly-empty tiles has changed", which would have been a lie about which
-/// thing moved. Rank has no such edge: the two lowest are named with their counts, and the third
-/// is required to be clear of them.
+/// thing moved. Rank has no such edge: the lowest are named with their counts, and the next is
+/// required to be clear of them — 170 now, for the two bars.
 #[test]
 fn every_tile_decodes_to_something() {
     /// What the chooser draws a tile at, and what `pantometry view --thumbnail` writes.
@@ -318,15 +324,19 @@ fn every_tile_decodes_to_something() {
     );
     lit_by.sort_unstable();
     assert_eq!(
-        &lit_by[..2],
-        &[(5, "07-bouncing-ball.json"), (29, "06-orbits.json")],
-        "the two sparsest tiles are not the two that were measured"
+        &lit_by[..3],
+        &[
+            (7, "07-bouncing-ball.json"),
+            (14, "14-a-world.json"),
+            (31, "06-orbits.json")
+        ],
+        "the three sparsest tiles are not the three that were measured"
     );
     assert!(
-        lit_by[2].0 >= 90,
-        "the third-sparsest tile is {} at {} pixels, down among the two that are a single body",
-        lit_by[2].1,
-        lit_by[2].0
+        lit_by[3].0 >= 90,
+        "the fourth-sparsest tile is {} at {} pixels, down among the three that are markers",
+        lit_by[3].1,
+        lit_by[3].0
     );
 }
 
