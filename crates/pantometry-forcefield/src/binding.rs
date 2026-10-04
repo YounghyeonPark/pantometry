@@ -10,6 +10,9 @@
 //! and of solvent-accessible areas ([`Binding::desolvation`]), and the ligand relaxed in the pocket
 //! with every protein atom held ([`Binding::minimise_ligand`]). [`Binding::ligand_at`] moves the
 //! ligand rigidly, which is what a path out of the pocket and a congener series need.
+//! [`Binding::relaxing_hydrogens`] relaxes each of the three systems' own hydrogens on its frozen
+//! heavy atoms, and every one of those quantities is then taken with each system at its own
+//! positions.
 //!
 //! # The choices, and why
 //!
@@ -66,6 +69,67 @@
 //! then bit for bit the whole complex's. Vacuum because the polar GB term on a truncated pocket is
 //! the cutoff-sensitive one, and minimising on it would move the pose by an artefact of the cut.
 //!
+//! # Hydrogens relaxed in each system
+//!
+//! **Why.** Every hydrogen here was placed, not measured: the protein's by 2c-1's rules, whose rotor
+//! step clears heavy atoms only, and the ligand's by superposing its dictionary template. Neither
+//! placement sees the other partner's hydrogens, and at the crystal pose three of the nine T4
+//! lysozyme L99A complexes of `tests/the_congener_series.rs` clash hydrogen to hydrogen: indene's
+//! H12 is 1.41 Å from Val111's HG13 in 183L, and van der Waals is +224 kcal/mol. A crystal-pose
+//! ΔE_bind there measures the placement.
+//!
+//! **What [`Binding::relaxing_hydrogens`] does.** In each of the three systems — the complex, the
+//! pocket alone and the ligand alone — it minimises that system's own energy over its free
+//! hydrogens with every other atom frozen ([`Minimiser::with_frozen`]), and then
+//!
+//! `ΔE_bind = E(complex, H relaxed) − E(pocket, its own H relaxed) − E(ligand, its own H relaxed)`.
+//!
+//! **Why this is the consistent definition.** ΔE_bind is the energy of the reaction pocket +
+//! ligand → complex, and each side of a reaction is taken at its own minimum. Relaxing the complex
+//! alone and taking the fragments at the complex's positions — what 2c-3a reported — leaves in the
+//! fragments' energies whatever the complex's hydrogens bent to make room for the partner, and
+//! calls that strain binding: the apo pocket would not have it. With each fragment at its own
+//! minimum, the difference is the cross terms at the complex's positions plus a **reorganisation**,
+//! `[E(pocket) at the complex's positions − at its own] + [the same for the ligand]`, the price of
+//! the bound hydrogen arrangement, which [`Interaction::reorganisation`] reports and the tests
+//! check is exactly that.
+//!
+//! **Each fragment starts from where the complex left it.** A minimiser finds the minimum downhill
+//! from its start, and two different starts on the same flat landscape — a hydroxyl's or a
+//! methyl's rotor far from the ligand — can stop at different minima for reasons that have nothing
+//! to do with binding, which would put a rotamer's energy into ΔE_bind as noise. Started from the
+//! complex, a fragment moves only where the partner's removal pushes it, so the reorganisation is
+//! never negative (the minimiser does not raise the energy it minimises) and vanishes when the
+//! partner exerts no force: far away, each fragment takes no step at all and its positions are the
+//! complex's to the bit, which the tests assert. What this does not do is search: a fragment whose
+//! own best arrangement is in another basin than the complex's is not found there.
+//!
+//! **Which hydrogens are free** ([`Binding::free_hydrogens`]): every ligand hydrogen, and each
+//! pocket hydrogen whose heavy parent is within the cutoff of a ligand atom where the binding was
+//! built — the pocket's own rule, atom by atom. The rest, on the outer side of residues the cutoff
+//! reaches, are held where 2c-1 placed them in all three systems. **This is a truncation, and it
+//! has a measured cost.** The held hydrogens do feel the ligand — at the relaxed complex the
+//! partner's force on them is 0.001–0.14 kcal mol⁻¹ Å⁻¹ on four entries measured, nearly all of it
+//! above the tolerance — so holding them leaves part of the pocket's response out. On benzene at
+//! 6 Å, 106 of the pocket's 167 hydrogens are free; freeing all 167 moves the relaxed ΔE_bind from
+//! −16.14 to −16.39 kcal/mol and the reorganisation from +2.62 to +4.03, and the minimised ΔE_bind
+//! from −22.55 to −22.54. On the other eight at 6 Å the relaxed ΔE_bind moves by at most 0.10, and
+//! at 8 Å by at most 0.03. The rule is kept because it is the pocket's own and because the outer
+//! hydrogens relax against the cut as much as against the ligand — a backbone amide whose peptide
+//! partner is gone, a rotor facing missing neighbours — not because they carry nothing.
+//! [`Binding::relaxing_hydrogens_of`] takes any mask, which is how the cost was measured.
+//!
+//! **The tolerance is [`Binding::HYDROGEN_TOLERANCE`], 2e-3 kcal mol⁻¹ Å⁻¹, not the 1e-4 a
+//! ligand alone is minimised to**, because at 1e-4 the minimiser stalled on the series, where the
+//! rounding of a sum of 5·10⁴ terms or more can hide the last steps' decrease. That constant gives
+//! the evidence, which is empirical, and the test that holds what the looser tolerance costs.
+//!
+//! **The charges are not recomputed**: QEq's, at the positions the binding was built with, as
+//! everywhere in this module. **Minimised from a relaxed complex**, the pocket's free hydrogens move
+//! with the ligand and each fragment is relaxed again afterwards ([`Binding::minimise_ligand`]), so
+//! the binding stays relaxed; moving the ligand rigidly ([`Binding::ligand_at`]) gives an unrelaxed
+//! binding, since the complex's hydrogens were relaxed against the ligand where it was.
+//!
 //! # What it measures, on benzene in T4 lysozyme L99A (PDB 181L)
 //!
 //! `tests/benzene_in_its_pocket.rs`, kcal/mol. At the crystal pose in the 6 Å pocket, ΔE_bind in
@@ -82,10 +146,17 @@
 //! 1.89 Å contact between a benzene H and Val111's HG13, which that rule, scoring heavy atoms
 //! only, could not see.
 //!
+//! **With each system's hydrogens relaxed** the closest benzene–protein H–H is 2.07 Å, and ΔE_bind
+//! in vacuum is −16.14: cross terms −18.76 (van der Waals −17.17, Coulomb −1.58) and a
+//! reorganisation of +2.62 (pocket +1.06, benzene +1.56). The polar desolvation is +8.34 and the
+//! buried area −291.4 Å². Minimised from there, benzene moves 0.90 Å RMSD, against 0.81 from the
+//! crystal's hydrogens, and ΔE_bind is −22.55 against −22.35, of which +0.57 is reorganisation.
+//!
 //! # What it is not
 //!
-//! A binding *energy* at one geometry, not a free energy: no entropy, no protein flexibility, no
-//! ligand strain against its own solution minimum, no water in the pocket but GB's continuum.
+//! A binding *energy* at one geometry, not a free energy: no entropy, no protein flexibility
+//! beyond its hydrogens, no ligand strain against its own solution minimum (the ligand alone keeps
+//! its bound heavy atoms), no water in the pocket but GB's continuum.
 //! With QEq charges, OBC II over-solvates small molecules (see [`crate::solvation`]), so the
 //! solvated estimate is not quantitative.
 //!
@@ -212,29 +283,73 @@ impl fmt::Display for BindingError {
 
 impl std::error::Error for BindingError {}
 
-/// ΔE_bind in vacuum at one geometry, joules per molecule.
+/// ΔE_bind in vacuum, joules per molecule: at one geometry shared by the three systems, or, for a
+/// binding whose hydrogens are relaxed ([`Binding::relaxing_hydrogens`]), with each system at its
+/// own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Interaction {
-    /// The van der Waals energy of every protein–ligand pair, summed directly.
+    /// The van der Waals energy of every protein–ligand pair at the complex's positions, summed
+    /// directly.
     pub van_der_waals: f64,
-    /// The Coulomb energy (ε = 1) of every protein–ligand pair, summed directly.
+    /// The Coulomb energy (ε = 1) of every protein–ligand pair at the complex's positions, summed
+    /// directly.
     pub electrostatic: f64,
-    /// `E(complex) − E(pocket) − E(ligand)`, term by term, from three whole evaluations: the
-    /// definition, and in exact arithmetic `van_der_waals` and `electrostatic` in those two fields
-    /// and zero in the other four. In floating point it carries the rounding of the pocket's whole
-    /// energy, which the direct sums do not.
+    /// What each fragment's own energy loses when its hydrogens go from where they are in the
+    /// complex to where they relax with the partner gone, term by term: `[E(pocket) at the
+    /// complex's positions − E(pocket) at its own] + [the same for the ligand]`. **Exactly zero
+    /// in every field, and not computed, when the three systems share positions** — the crystal
+    /// pose, or any binding not relaxed. Never negative in its total for a relaxed binding, up to
+    /// rounding: each fragment's relaxation starts from the complex's positions and the minimiser
+    /// does not raise the energy it minimises.
+    pub reorganisation: Energy,
+    /// `E(complex) − E(pocket) − E(ligand)`, term by term, from three whole evaluations, each at
+    /// its own system's positions: the definition. In exact arithmetic it is the cross terms in the
+    /// van der Waals and Coulomb fields plus [`Interaction::reorganisation`] in every field. In
+    /// floating point it carries the rounding of the pocket's whole energy, which the direct sums
+    /// do not.
     pub difference: Energy,
 }
 
 impl Interaction {
-    /// `van_der_waals + electrostatic`: ΔE_bind from the cross terms.
+    /// `van_der_waals + electrostatic + reorganisation.total`: ΔE_bind from the cross terms and the
+    /// fragments' own hydrogens. For a binding at shared positions the last is exactly zero, and
+    /// this is the cross terms alone, to the bit.
     pub fn total(&self) -> f64 {
-        self.van_der_waals + self.electrostatic
+        self.van_der_waals + self.electrostatic + self.reorganisation.total
     }
 }
 
-/// The solvation part of binding at one geometry: OBC II and the nonpolar surface term, each as
-/// complex − pocket − ligand. Energies in joules per molecule, areas in m².
+/// Where the three hydrogen relaxations of a [`Binding`] stopped: see
+/// [`Binding::relaxing_hydrogens`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct HydrogenRelaxation {
+    /// Which atoms were free, complex order: hydrogens only. Every other atom was frozen in every
+    /// system.
+    pub free: Vec<bool>,
+    /// The tolerance each relaxation was asked to converge to, newtons.
+    pub tolerance: f64,
+    /// The most steps each relaxation was allowed.
+    pub max_steps: usize,
+    /// The complex's: its free hydrogens relaxed — or, after [`Binding::minimise_ligand`], the
+    /// ligand minimised with them.
+    pub complex: Progress,
+    /// The pocket alone's free hydrogens, relaxed from where the complex left them.
+    pub pocket: Progress,
+    /// The ligand alone's hydrogens, relaxed from where the complex left them.
+    pub ligand: Progress,
+}
+
+/// The fragments' own positions, when they are not the complex's.
+#[derive(Clone, Debug)]
+struct Apart {
+    relaxation: HydrogenRelaxation,
+    pocket: Vec<[f64; 3]>,
+    ligand: Vec<[f64; 3]>,
+}
+
+/// The solvation part of binding, each system at its own positions — one geometry, unless the
+/// hydrogens are relaxed: OBC II and the nonpolar surface term, each as complex − pocket −
+/// ligand. Energies in joules per molecule, areas in m².
 #[derive(Clone, Debug, PartialEq)]
 pub struct Desolvation {
     /// ΔG_GB of the complex.
@@ -248,7 +363,7 @@ pub struct Desolvation {
     pub polar: f64,
     /// Each atom's solvent-accessible area in the complex, complex order.
     pub areas_bound: Vec<f64>,
-    /// Each atom's area in its own fragment, complex order.
+    /// Each atom's area in its own fragment at the fragment's own positions, complex order.
     pub areas_apart: Vec<f64>,
     /// ΔSASA, `Σ (bound − apart)`: the area binding buries, negative.
     pub buried_area: f64,
@@ -275,6 +390,7 @@ struct Model {
     ligand: ForceField,
     in_pocket: ForceField,
     crystal: Vec<[f64; 3]>,
+    near_hydrogens: Vec<bool>,
 }
 
 /// A ligand in a rigid pocket: see the module documentation.
@@ -285,9 +401,31 @@ struct Model {
 pub struct Binding {
     model: Arc<Model>,
     at: Vec<[f64; 3]>,
+    apart: Option<Apart>,
 }
 
 impl Binding {
+    /// The tolerance hydrogens are relaxed to here, newtons: 2e-3 kcal mol⁻¹ Å⁻¹, twenty times
+    /// [`crate::Molecule::DEFAULT_TOLERANCE`]. **The justification is empirical.** At 1e-4 the
+    /// minimiser stalled four times on the congener series — no step lowered the energy in floating
+    /// point — at 1.6–4.3e-4 kcal mol⁻¹ Å⁻¹, while 1e-4 did converge on benzene's 6 Å pocket. At
+    /// 2e-3 every one of the series' relaxations and minimisations from a relaxed complex converged
+    /// (the nine entries at 6 and 8 Å), and on benzene at 6 Å the result agrees with 1e-4's to
+    /// within half the last digit printed: a test asserts it (ΔE_bind and the reorganisation to
+    /// 5e-3 kcal/mol, the minimised pose to 5e-4 Å).
+    ///
+    /// **Why a pocket stalls, as a scale and not a bound.** The line search accepts a step only
+    /// when the energy falls, and a pocket's energy is a sum of 0.5–4·10⁵ terms whose rounding moves
+    /// it under a 1e-9 Å nudge by an amount δE that varies from nudge to nudge: a median of 3.6e-12
+    /// kcal/mol over 300 nudges of benzene's 6 Å pocket and a maximum of 2.1e-11 there, single draws
+    /// of up to 1.8e-10 on the 8 Å pockets, and the largest of 300 about six times the first.
+    /// Removing a residual force `g` along an N–H or O–H stretch (`k` ≈ 1190 kcal mol⁻¹ Å⁻²,
+    /// measured) lowers the energy by `g²/2k`, so `√(4 k δE)` — from 1.3e-4 up to about 2e-3
+    /// kcal mol⁻¹ Å⁻¹ over that spread of δE — is
+    /// the order of the force below which the decrease can drown in the noise. That is where the
+    /// stalls were, and it does not say where any one run will stop.
+    pub const HYDROGEN_TOLERANCE: f64 = 2e-3 * crate::minimise::KCAL_PER_MOL_ANGSTROM;
+
     /// The pocket of `system` within `cutoff` metres of its ligand, at the system's coordinates,
     /// with QEq charges on the pocket and the ligand separately. See the module documentation for
     /// every choice.
@@ -377,7 +515,18 @@ impl Binding {
         let ligand_ff = build(&lc, &lt, ql.charges.clone())?;
         let moving: Vec<bool> = (0..system_atoms.len()).map(|k| k >= pocket_len).collect();
         let in_pocket = complex.touching(&moving);
+        // A hydrogen is near when it is the ligand's, or its heavy parent is within the cutoff of
+        // the ligand: the pocket's own rule, atom by atom.
+        let near_hydrogens: Vec<bool> = system_atoms
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| {
+                atoms[i].element == Element::H
+                    && (k >= pocket_len || whole.neighbours(i).any(|(j, _)| near(j)))
+            })
+            .collect();
         Ok(Binding {
+            apart: None,
             at: crystal.clone(),
             model: Arc::new(Model {
                 cutoff,
@@ -395,6 +544,7 @@ impl Binding {
                 ligand: ligand_ff,
                 in_pocket,
                 crystal,
+                near_hydrogens,
             }),
         })
     }
@@ -474,6 +624,39 @@ impl Binding {
         &self.at[self.model.pocket_len..]
     }
 
+    /// The pocket alone's positions, metres, at which its energy, its solvation and its areas are
+    /// taken: the complex's first [`Binding::pocket_len`], bit for bit, unless the hydrogens are
+    /// relaxed, and then the pocket's own relaxed hydrogens on the same heavy atoms.
+    pub fn pocket_alone_positions(&self) -> &[[f64; 3]] {
+        match &self.apart {
+            Some(a) => &a.pocket,
+            None => &self.at[..self.model.pocket_len],
+        }
+    }
+
+    /// The ligand alone's positions, metres: [`Binding::ligand_positions`], bit for bit, unless
+    /// the hydrogens are relaxed, and then the ligand's own relaxed hydrogens on the same heavy
+    /// atoms.
+    pub fn ligand_alone_positions(&self) -> &[[f64; 3]] {
+        match &self.apart {
+            Some(a) => &a.ligand,
+            None => self.ligand_positions(),
+        }
+    }
+
+    /// The hydrogens [`Binding::relaxing_hydrogens`] frees, complex order: every hydrogen of the
+    /// ligand, and every hydrogen of the pocket whose heavy parent is within the cutoff of a ligand
+    /// atom where the binding was built — the pocket's own rule, applied to atoms instead of
+    /// residues. See the module documentation for why the rest are held.
+    pub fn free_hydrogens(&self) -> &[bool] {
+        &self.model.near_hydrogens
+    }
+
+    /// Where the hydrogen relaxations stopped, if this binding's hydrogens are relaxed.
+    pub fn hydrogen_relaxation(&self) -> Option<&HydrogenRelaxation> {
+        self.apart.as_ref().map(|a| &a.relaxation)
+    }
+
     /// The ligand's positions in the system it was built from — the crystal pose, for an entry.
     pub fn crystal_ligand(&self) -> &[[f64; 3]] {
         &self.model.crystal[self.model.pocket_len..]
@@ -501,6 +684,10 @@ impl Binding {
 
     /// The same binding with the ligand moved by `motion` about its current centroid; the pocket
     /// and every charge unchanged. Cheap: the force fields are shared.
+    ///
+    /// **Not relaxed**, even when `self` is: the complex's hydrogens were relaxed against the
+    /// ligand where it was, so the moved binding's three systems share its positions again, as an
+    /// unrelaxed binding's do, and [`Binding::relaxing_hydrogens`] relaxes them at the new pose.
     pub fn ligand_at(&self, motion: &RigidMotion) -> Binding {
         let c = self.ligand_centroid();
         let mut at = self.at.clone();
@@ -510,11 +697,13 @@ impl Binding {
         Binding {
             model: Arc::clone(&self.model),
             at,
+            apart: None,
         }
     }
 
     /// The same binding with the ligand's atoms at `at` (metres, ligand order) — a conformer, or
-    /// one atom displaced. The pocket and every charge unchanged.
+    /// one atom displaced. The pocket and every charge unchanged. Not relaxed, as
+    /// [`Binding::ligand_at`] is not.
     ///
     /// # Panics
     ///
@@ -527,32 +716,161 @@ impl Binding {
         Binding {
             model: Arc::clone(&self.model),
             at: all,
+            apart: None,
         }
     }
 
     /// The same binding with **every** atom, protein and ligand, moved by `motion` about the
     /// ligand's centroid: the same complex in another frame, whose ΔE_bind is the same — which the
-    /// tests check.
+    /// tests check. A relaxed binding's fragments move with it and it stays relaxed.
     pub fn moved(&self, motion: &RigidMotion) -> Binding {
         let c = self.ligand_centroid();
+        let turn = |at: &[[f64; 3]]| at.iter().map(|&p| motion.apply(c, p)).collect();
         Binding {
             model: Arc::clone(&self.model),
-            at: self.at.iter().map(|&p| motion.apply(c, p)).collect(),
+            at: turn(&self.at),
+            apart: self.apart.as_ref().map(|a| Apart {
+                relaxation: a.relaxation.clone(),
+                pocket: turn(&a.pocket),
+                ligand: turn(&a.ligand),
+            }),
         }
     }
 
-    /// ΔE_bind in vacuum at the current positions: the cross terms summed directly, and the
-    /// three-evaluation difference. See [`Interaction`].
+    /// The same binding with **each system's own hydrogens relaxed**, every heavy atom frozen in
+    /// all three, the hydrogens [`Binding::free_hydrogens`] marks free: see
+    /// [`Binding::relaxing_hydrogens_of`].
+    pub fn relaxing_hydrogens(&self, max_steps: usize, tolerance: f64) -> Binding {
+        self.relaxing_hydrogens_of(&self.model.near_hydrogens, max_steps, tolerance)
+    }
+
+    /// The same binding with each system's own hydrogens relaxed, the ones `free` marks (complex
+    /// order) free and every other atom frozen ([`Minimiser::with_frozen`]), each relaxation for at
+    /// most `max_steps` steps or until the largest force on a free atom is at most `tolerance`
+    /// newtons. In order:
+    ///
+    /// 1. **the complex**, from its current positions;
+    /// 2. **the pocket alone** and **the ligand alone**, each from where the complex left its
+    ///    atoms, on its own force field.
+    ///
+    /// Then `ΔE_bind = E(complex) − E(pocket) − E(ligand)` is taken with each system at its own
+    /// relaxed positions ([`Binding::interaction`]), and so are the solvation and the areas
+    /// ([`Binding::desolvation`]). See the module documentation for why this is the consistent
+    /// definition and why the fragments start from the complex. The charges are not recomputed:
+    /// they are QEq's at the positions the binding was built with, as everywhere in this module.
+    /// [`HydrogenRelaxation`] says where each stopped; nothing here asserts that they converged.
+    /// **A tolerance below [`Binding::HYDROGEN_TOLERANCE`] may stall** rather than converge, for the
+    /// reason given there.
+    ///
+    /// # Panics
+    ///
+    /// If `free` is not one per atom, or marks an atom that is not a hydrogen.
+    pub fn relaxing_hydrogens_of(
+        &self,
+        free: &[bool],
+        max_steps: usize,
+        tolerance: f64,
+    ) -> Binding {
+        assert_eq!(free.len(), self.at.len(), "one mark per atom");
+        for (k, &f) in free.iter().enumerate() {
+            assert!(
+                !f || self.model.elements[k] == Element::H,
+                "atom {k} is marked free and is not a hydrogen"
+            );
+        }
+        let mut at = self.at.clone();
+        let complex = relax(&self.model.complex, free, &mut at, max_steps, tolerance);
+        let mut b = Binding {
+            model: Arc::clone(&self.model),
+            at,
+            apart: None,
+        };
+        b.relax_fragments(free.to_vec(), complex, max_steps, tolerance);
+        b
+    }
+
+    /// Relaxes the pocket alone and the ligand alone from the complex's current positions, and
+    /// records the three relaxations.
+    fn relax_fragments(
+        &mut self,
+        free: Vec<bool>,
+        complex: Progress,
+        max_steps: usize,
+        tolerance: f64,
+    ) {
+        let n0 = self.model.pocket_len;
+        let mut pocket = self.at[..n0].to_vec();
+        let mut ligand = self.at[n0..].to_vec();
+        let p = relax(
+            &self.model.pocket,
+            &free[..n0],
+            &mut pocket,
+            max_steps,
+            tolerance,
+        );
+        let l = relax(
+            &self.model.ligand,
+            &free[n0..],
+            &mut ligand,
+            max_steps,
+            tolerance,
+        );
+        self.apart = Some(Apart {
+            relaxation: HydrogenRelaxation {
+                free,
+                tolerance,
+                max_steps,
+                complex,
+                pocket: p,
+                ligand: l,
+            },
+            pocket,
+            ligand,
+        });
+    }
+
+    /// ΔE_bind in vacuum at the current positions — each system's own, for a relaxed binding: the
+    /// cross terms summed directly, the fragments' reorganisation, and the three-evaluation
+    /// difference. See [`Interaction`].
     pub fn interaction(&self) -> Interaction {
         let n0 = self.model.pocket_len;
         let (vdw, elec) = self.cross(&self.model.charges, None);
         let e_c = self.model.complex.energy(&self.at);
-        let e_p = self.model.pocket.energy(&self.at[..n0]);
-        let e_l = self.model.ligand.energy(&self.at[n0..]);
+        let e_p = self.model.pocket.energy(self.pocket_alone_positions());
+        let e_l = self.model.ligand.energy(self.ligand_alone_positions());
         let d = |c: f64, p: f64, l: f64| c - p - l;
+        let reorganisation = match self.apart {
+            None => Energy::default(),
+            Some(_) => {
+                let p0 = self.model.pocket.energy(&self.at[..n0]);
+                let l0 = self.model.ligand.energy(&self.at[n0..]);
+                let r = |p: f64, pr: f64, l: f64, lr: f64| (p - pr) + (l - lr);
+                Energy {
+                    bond: r(p0.bond, e_p.bond, l0.bond, e_l.bond),
+                    angle: r(p0.angle, e_p.angle, l0.angle, e_l.angle),
+                    torsion: r(p0.torsion, e_p.torsion, l0.torsion, e_l.torsion),
+                    inversion: r(p0.inversion, e_p.inversion, l0.inversion, e_l.inversion),
+                    van_der_waals: r(
+                        p0.van_der_waals,
+                        e_p.van_der_waals,
+                        l0.van_der_waals,
+                        e_l.van_der_waals,
+                    ),
+                    electrostatic: r(
+                        p0.electrostatic,
+                        e_p.electrostatic,
+                        l0.electrostatic,
+                        e_l.electrostatic,
+                    ),
+                    solvation: 0.0,
+                    total: r(p0.total, e_p.total, l0.total, e_l.total),
+                }
+            }
+        };
         Interaction {
             van_der_waals: vdw,
             electrostatic: elec,
+            reorganisation,
             difference: Energy {
                 bond: d(e_c.bond, e_p.bond, e_l.bond),
                 angle: d(e_c.angle, e_p.angle, e_l.angle),
@@ -566,9 +884,9 @@ impl Binding {
         }
     }
 
-    /// The force the pocket puts on each ligand atom — `−∇` of the cross terms with respect to
-    /// that atom, which is `−∇ ΔE_bind` since nothing else in ΔE_bind moves with the ligand —
-    /// newtons, in ligand order.
+    /// The force the pocket puts on each ligand atom — `−∇` of the cross terms at the complex's
+    /// positions with respect to that atom, which is `−∇ ΔE_bind` for an unrelaxed binding, since
+    /// nothing else in ΔE_bind moves with the ligand — newtons, in ligand order.
     pub fn interaction_forces(&self) -> Vec<[f64; 3]> {
         let mut forces = vec![[0.0; 3]; self.at.len() - self.model.pocket_len];
         self.cross(&self.model.charges, Some(&mut forces));
@@ -634,8 +952,9 @@ impl Binding {
         self.model.ligand.energy(self.ligand_positions())
     }
 
-    /// The solvation part of binding at the current positions: OBC II on the complex, the pocket
-    /// and the ligand with the binding's charges, and the solvent-accessible areas by
+    /// The solvation part of binding at the current positions — each system's own, for a relaxed
+    /// binding: OBC II on the complex, the pocket and the ligand with the binding's charges, and
+    /// the solvent-accessible areas by
     /// [`surface_area`] at `points` points per atom, Bondi radii and a 1.4 Å probe. See
     /// [`Desolvation`].
     ///
@@ -658,18 +977,24 @@ impl Binding {
         let n0 = self.model.pocket_len;
         let el = &self.model.elements;
         let q = charges;
-        let gb = |range: std::ops::Range<usize>| {
-            GeneralizedBorn::new(&el[range.clone()]).energy(&q[range.clone()], &self.at[range])
-        };
         let n = self.at.len();
-        let (complex, pocket, ligand) = (gb(0..n), gb(0..n0), gb(n0..n));
-        let radii: Vec<f64> = el.iter().map(|&e| intrinsic_radius(e)).collect();
-        let area = |range: std::ops::Range<usize>| {
-            surface_area(&radii[range.clone()], &self.at[range], PROBE_RADIUS, points)
+        // Each system at its own positions: the complex's, and the pocket's and the ligand's alone.
+        let systems: [(std::ops::Range<usize>, &[[f64; 3]]); 3] = [
+            (0..n, &self.at),
+            (0..n0, self.pocket_alone_positions()),
+            (n0..n, self.ligand_alone_positions()),
+        ];
+        let gb = |(range, at): &(std::ops::Range<usize>, &[[f64; 3]])| {
+            GeneralizedBorn::new(&el[range.clone()]).energy(&q[range.clone()], at)
         };
-        let areas_bound = area(0..n);
-        let mut areas_apart = area(0..n0);
-        areas_apart.extend(area(n0..n));
+        let (complex, pocket, ligand) = (gb(&systems[0]), gb(&systems[1]), gb(&systems[2]));
+        let radii: Vec<f64> = el.iter().map(|&e| intrinsic_radius(e)).collect();
+        let area = |(range, at): &(std::ops::Range<usize>, &[[f64; 3]])| {
+            surface_area(&radii[range.clone()], at, PROBE_RADIUS, points)
+        };
+        let areas_bound = area(&systems[0]);
+        let mut areas_apart = area(&systems[1]);
+        areas_apart.extend(area(&systems[2]));
         let buried_area: f64 = areas_bound
             .iter()
             .zip(&areas_apart)
@@ -691,8 +1016,28 @@ impl Binding {
     /// ([`Minimiser::with_frozen`]), the ligand's own energy plus the interaction, in vacuum at
     /// the fixed charges, until the largest force on a ligand atom is at most `tolerance` newtons
     /// or `max_steps` steps have been taken. Says where it stopped.
+    ///
+    /// **For a relaxed binding** ([`Binding::relaxing_hydrogens`]) the free hydrogens of the pocket
+    /// move with the ligand, every heavy atom of the pocket still frozen, so the complex stays at
+    /// a minimum in everything its relaxation freed; then the pocket alone and the ligand alone
+    /// are relaxed again from where the complex left them, with the relaxation's own steps and
+    /// tolerance, and the binding is still relaxed. The progress returned is the complex's, and is
+    /// also [`HydrogenRelaxation::complex`].
     pub fn minimise_ligand(&mut self, max_steps: usize, tolerance: f64) -> Progress {
         let n0 = self.model.pocket_len;
+        if let Some(a) = self.apart.take() {
+            let r = a.relaxation;
+            let free: Vec<bool> = (0..self.at.len()).map(|k| k >= n0 || r.free[k]).collect();
+            let p = relax(
+                &self.model.complex,
+                &free,
+                &mut self.at,
+                max_steps,
+                tolerance,
+            );
+            self.relax_fragments(r.free, p, r.max_steps, r.tolerance);
+            return p;
+        }
         let frozen: Vec<bool> = (0..self.at.len()).map(|k| k < n0).collect();
         let mut m = Minimiser::new(tolerance).with_frozen(frozen);
         let ff = &self.model.in_pocket;
@@ -702,6 +1047,27 @@ impl Binding {
         }
         p
     }
+}
+
+/// Minimises `ff` over the atoms `free` marks, every other atom frozen, from `at` in place. The
+/// force field minimised is `ff` less its terms among frozen atoms alone — a constant while they
+/// do not move — so the force on a free atom is `ff`'s bit for bit, and [`Progress::energy`] is
+/// the reduced force field's.
+fn relax(
+    ff: &ForceField,
+    free: &[bool],
+    at: &mut [[f64; 3]],
+    max_steps: usize,
+    tolerance: f64,
+) -> Progress {
+    let reduced = ff.touching(free);
+    let frozen: Vec<bool> = free.iter().map(|f| !f).collect();
+    let mut m = Minimiser::new(tolerance).with_frozen(frozen);
+    let mut p = m.step(&reduced, &[], at);
+    while p.status == Status::Running && p.steps < max_steps {
+        p = m.step(&reduced, &[], at);
+    }
+    p
 }
 
 fn centroid(at: &[[f64; 3]]) -> [f64; 3] {

@@ -433,86 +433,98 @@ fn far_polar_bound(b: &Binding, coulomb_bound: f64) -> f64 {
 /// the other.
 #[test]
 fn far_away_the_binding_energy_vanishes_inside_its_tails() {
-    let b = crystal();
-    let u = [1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
     for far in [1e3, 1e4] {
-        let moved = b.ligand_at(&RigidMotion::translation([
-            far * ANGSTROM * u[0],
-            far * ANGSTROM * u[1],
-            far * ANGSTROM * u[2],
-        ]));
-        let at = moved.positions();
-        let q = moved.charges();
-        let c = moved.ligand_centroid();
-        let lig = moved.ligand_range();
-        let a = lig.clone().map(|j| distance(at[j], c)).fold(0.0, f64::max);
-        let r_min = (0..moved.pocket_len())
-            .map(|i| distance(at[i], c))
-            .fold(f64::INFINITY, f64::min);
-        let total_q: f64 = lig.clone().map(|j| q[j]).sum();
-        let mut mu = [0.0; 3];
-        for j in lig.clone() {
-            for k in 0..3 {
-                mu[k] += q[j] * (at[j][k] - c[k]);
-            }
-        }
-        let mu = len(mu);
-        let abs_l: f64 = lig.clone().map(|j| q[j].abs()).sum();
-        let abs_p: f64 = (0..moved.pocket_len()).map(|i| q[i].abs()).sum();
-        let k = coulomb(1.0, 1.0, 1.0);
-        let coulomb_bound = k
-            * abs_p
-            * (total_q.abs() / r_min + mu / (r_min * r_min) + a * a * abs_l / (r_min - a).powi(3));
-        let vdw_bound: f64 = cross_pairs(&moved)
-            .iter()
-            .map(|t| 3.0 * t.2.well * (t.2.distance / (r_min - a)).powi(6))
-            .sum();
-        let i = moved.interaction();
-        let allowance = difference_allowance(&moved)[6];
-        assert!(
-            i.van_der_waals.abs() <= vdw_bound,
-            "{far} Å: van der Waals {:e} past {vdw_bound:e}",
-            i.van_der_waals
-        );
-        assert!(
-            i.electrostatic.abs() <= coulomb_bound,
-            "{far} Å: Coulomb {:e} past {coulomb_bound:e}",
-            i.electrostatic
-        );
-        assert!(
-            i.difference.total.abs() <= coulomb_bound + vdw_bound + allowance,
-            "{far} Å: difference {:e}",
-            i.difference.total
-        );
-        // Solvation too: no grown sphere of one partner reaches the other's, so every atom's
-        // surface points and neighbours are its fragment's and its area the same bits; and the
-        // polar desolvation inside `far_polar_bound`.
-        let d = moved.desolvation(POINTS);
-        assert_eq!(d.areas_bound, d.areas_apart, "{far} Å");
-        assert_eq!(d.buried_area, 0.0);
-        let polar_bound = far_polar_bound(&moved, coulomb_bound);
-        assert!(
-            d.polar.abs() <= polar_bound,
-            "{far} Å: polar desolvation {:e} past {polar_bound:e}",
-            d.polar
-        );
-        eprintln!(
-            "{far} Å away: polar desolvation {:.3e} kcal/mol (bound {:.3e})",
-            kcal(d.polar),
-            kcal(polar_bound)
-        );
-        eprintln!(
-            "{far} Å away: van der Waals {:.3e} (bound {:.3e}), Coulomb {:.3e} (bound {:.3e}, \
-             of which the charge {:.1e} e and dipole {:.3e} e Å), difference {:.3e} kcal/mol",
-            kcal(i.van_der_waals),
-            kcal(vdw_bound),
-            kcal(i.electrostatic),
-            kcal(coulomb_bound),
-            total_q,
-            mu / ANGSTROM,
-            kcal(i.difference.total)
-        );
+        far_field_holds(&far_away(crystal(), far), far, "shared positions");
     }
+}
+
+/// `b` with its ligand moved `far` Å along (1, 2, 2)/3.
+fn far_away(b: &Binding, far: f64) -> Binding {
+    let u = [1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
+    b.ligand_at(&RigidMotion::translation([
+        far * ANGSTROM * u[0],
+        far * ANGSTROM * u[1],
+        far * ANGSTROM * u[2],
+    ]))
+}
+
+/// The far-field assertions of [`far_away_the_binding_energy_vanishes_inside_its_tails`] on one
+/// binding whose ligand is `far` Å away. Every bound is computed from [`Binding::positions`], so
+/// for a relaxed binding the caller must first have shown each fragment's positions to be the
+/// complex's.
+fn far_field_holds(moved: &Binding, far: f64, label: &str) {
+    let at = moved.positions();
+    let q = moved.charges();
+    let c = moved.ligand_centroid();
+    let lig = moved.ligand_range();
+    let a = lig.clone().map(|j| distance(at[j], c)).fold(0.0, f64::max);
+    let r_min = (0..moved.pocket_len())
+        .map(|i| distance(at[i], c))
+        .fold(f64::INFINITY, f64::min);
+    let total_q: f64 = lig.clone().map(|j| q[j]).sum();
+    let mut mu = [0.0; 3];
+    for j in lig.clone() {
+        for k in 0..3 {
+            mu[k] += q[j] * (at[j][k] - c[k]);
+        }
+    }
+    let mu = len(mu);
+    let abs_l: f64 = lig.clone().map(|j| q[j].abs()).sum();
+    let abs_p: f64 = (0..moved.pocket_len()).map(|i| q[i].abs()).sum();
+    let k = coulomb(1.0, 1.0, 1.0);
+    let coulomb_bound = k
+        * abs_p
+        * (total_q.abs() / r_min + mu / (r_min * r_min) + a * a * abs_l / (r_min - a).powi(3));
+    let vdw_bound: f64 = cross_pairs(moved)
+        .iter()
+        .map(|t| 3.0 * t.2.well * (t.2.distance / (r_min - a)).powi(6))
+        .sum();
+    let i = moved.interaction();
+    let allowance = difference_allowance(moved)[6];
+    assert!(
+        i.van_der_waals.abs() <= vdw_bound,
+        "{far} Å: van der Waals {:e} past {vdw_bound:e}",
+        i.van_der_waals
+    );
+    assert!(
+        i.electrostatic.abs() <= coulomb_bound,
+        "{far} Å: Coulomb {:e} past {coulomb_bound:e}",
+        i.electrostatic
+    );
+    assert!(
+        i.difference.total.abs() <= coulomb_bound + vdw_bound + allowance,
+        "{far} Å: difference {:e}",
+        i.difference.total
+    );
+    // Solvation too: no grown sphere of one partner reaches the other's, so every atom's
+    // surface points and neighbours are its fragment's and its area the same bits; and the
+    // polar desolvation inside `far_polar_bound`.
+    let d = moved.desolvation(POINTS);
+    assert_eq!(d.areas_bound, d.areas_apart, "{far} Å");
+    assert_eq!(d.buried_area, 0.0);
+    let polar_bound = far_polar_bound(moved, coulomb_bound);
+    assert!(
+        d.polar.abs() <= polar_bound,
+        "{far} Å: polar desolvation {:e} past {polar_bound:e}",
+        d.polar
+    );
+    eprintln!(
+        "{far} Å away, {label}: polar desolvation {:.3e} kcal/mol (bound {:.3e})",
+        kcal(d.polar),
+        kcal(polar_bound)
+    );
+    eprintln!(
+        "{far} Å away, {label}: van der Waals {:.3e} (bound {:.3e}), Coulomb {:.3e} (bound \
+             {:.3e}, of which the charge {:.1e} e and dipole {:.3e} e Å), difference {:.3e} \
+             kcal/mol",
+        kcal(i.van_der_waals),
+        kcal(vdw_bound),
+        kcal(i.electrostatic),
+        kcal(coulomb_bound),
+        total_q,
+        mu / ANGSTROM,
+        kcal(i.difference.total)
+    );
 }
 
 /// **A rigid motion is the one it is named for**, against closed forms. A quarter turn about z
@@ -697,9 +709,12 @@ fn gb_rebuilt(el: &[Element], q: &[f64], at: &[[f64; 3]]) -> (f64, f64, usize) {
     (e, s, n)
 }
 
-/// **The desolvation is rebuilt from its parts**, at the crystal pose and at the minimised one:
-/// ΔG_GB of the complex, the pocket and the ligand against [`gb_rebuilt`] on each fragment's own
-/// atoms at the binding's current positions, to `2 (n + 10) ε Σ|t|` — both sums of `n` terms each
+/// **The desolvation is rebuilt from its parts**, at the crystal pose and at the minimised one,
+/// and on the relaxed binding and the one minimised from it, where each fragment has positions of
+/// its own: ΔG_GB of the complex, the pocket and the ligand against [`gb_rebuilt`] on each
+/// fragment's own atoms at **that system's own positions** — the complex's, then
+/// `pocket_alone_positions` and `ligand_alone_positions`, which on a relaxed binding are asserted
+/// to differ from the complex's — to `2 (n + 10) ε Σ|t|` — both sums of `n` terms each
 /// within about ten ε of itself — and the polar term as their difference, with the three
 /// allowances added; each atom's area against [`surface_area`] run here on the complex and on
 /// each fragment, bit for bit; and ΔSASA as the sum over every atom of bound minus apart, bit for
@@ -709,20 +724,39 @@ fn gb_rebuilt(el: &[Element], q: &[f64], at: &[[f64; 3]]) -> (f64, f64, usize) {
 #[test]
 fn the_desolvation_is_rebuilt_from_its_parts() {
     use pantometry_forcefield::solvation::{intrinsic_radius, surface_area, PROBE_RADIUS};
-    for (name, b) in [("crystal", crystal()), ("minimised", &minimised().0)] {
+    for (name, b) in [
+        ("crystal", crystal()),
+        ("minimised", &minimised().0),
+        ("relaxed", relaxed()),
+        ("relaxed and minimised", &relaxed_minimised().0),
+    ] {
         let d = b.desolvation(POINTS);
         let (n0, n) = (b.pocket_len(), b.positions().len());
+        let own = [
+            b.positions(),
+            b.pocket_alone_positions(),
+            b.ligand_alone_positions(),
+        ];
+        if b.hydrogen_relaxation().is_some() {
+            assert_ne!(
+                own[1],
+                &b.positions()[..n0],
+                "{name}: the pocket alone is the complex's"
+            );
+            assert_ne!(
+                own[2],
+                &b.positions()[n0..],
+                "{name}: the ligand alone is the complex's"
+            );
+        }
         let mut allowances = 0.0;
         let mut rebuilt = [0.0; 3];
         for (k, (range, got)) in [(0..n, d.complex), (0..n0, d.pocket), (n0..n, d.ligand)]
             .into_iter()
             .enumerate()
         {
-            let (e, sum_abs, terms) = gb_rebuilt(
-                &b.elements()[range.clone()],
-                &b.charges()[range.clone()],
-                &b.positions()[range],
-            );
+            let (e, sum_abs, terms) =
+                gb_rebuilt(&b.elements()[range.clone()], &b.charges()[range], own[k]);
             let allowance = 2.0 * (terms as f64 + 10.0) * EPS * sum_abs;
             assert!(
                 (got - e).abs() <= allowance,
@@ -746,12 +780,12 @@ fn the_desolvation_is_rebuilt_from_its_parts() {
             d.polar
         );
         let radii: Vec<f64> = b.elements().iter().map(|&e| intrinsic_radius(e)).collect();
-        let area = |r: std::ops::Range<usize>| {
-            surface_area(&radii[r.clone()], &b.positions()[r], PROBE_RADIUS, POINTS)
+        let area = |r: std::ops::Range<usize>, at: &[[f64; 3]]| {
+            surface_area(&radii[r], at, PROBE_RADIUS, POINTS)
         };
-        let bound = area(0..n);
-        let mut apart = area(0..n0);
-        apart.extend(area(n0..n));
+        let bound = area(0..n, own[0]);
+        let mut apart = area(0..n0, own[1]);
+        apart.extend(area(n0..n, own[2]));
         assert_eq!(d.areas_bound, bound, "{name}");
         assert_eq!(d.areas_apart, apart, "{name}");
         let buried: f64 = bound.iter().zip(&apart).map(|(b, a)| b - a).sum();
@@ -1177,4 +1211,741 @@ fn the_placed_hydrogens_share_of_the_move() {
         relaxed.ligand_rmsd() / ANGSTROM,
         minimised().0.ligand_rmsd() / ANGSTROM
     );
+}
+
+// --- Each system's own hydrogens relaxed ---------------------------------------------------------
+
+/// The most steps one hydrogen relaxation may take: over a hundred times the 155 the complex's
+/// took when measured, so that reaching it is a failure to converge and not a stop.
+const RELAX_STEPS: usize = 20000;
+
+/// The tolerance hydrogens are relaxed to, and benzene minimised to from a relaxed complex:
+/// [`Binding::HYDROGEN_TOLERANCE`], 2e-3 kcal mol⁻¹ Å⁻¹, which says why it is not 1e-4.
+const H_TOL: f64 = Binding::HYDROGEN_TOLERANCE;
+
+/// The closest a ligand hydrogen may come to a pocket hydrogen in a relaxed complex, Å. Physical,
+/// not fitted: at 1.8 Å UFF's own H···H pair is repulsive by about +11 kcal/mol (computed in
+/// [`no_ligand_hydrogen_clashes_with_a_pocket_hydrogen_once_relaxed`]), so a contact closer than
+/// this is a clash a minimum would not keep. The crystal pose's closest is 1.89 Å here, and 1.41 Å
+/// for indene in 183L.
+const H_H_CONTACT: f64 = 1.8;
+
+/// The crystal binding with each system's own hydrogens relaxed, once.
+fn relaxed() -> &'static Binding {
+    static R: OnceLock<Binding> = OnceLock::new();
+    R.get_or_init(|| crystal().relaxing_hydrogens(RELAX_STEPS, H_TOL))
+}
+
+/// The relaxed binding with benzene then minimised in the pocket, its free hydrogens with it, once.
+fn relaxed_minimised() -> &'static (Binding, Progress) {
+    static M: OnceLock<(Binding, Progress)> = OnceLock::new();
+    M.get_or_init(|| {
+        let mut b = relaxed().clone();
+        let p = b.minimise_ligand(5000, H_TOL);
+        (b, p)
+    })
+}
+
+/// One of a binding's three systems: name, force field, its own positions, and the complex index
+/// of its first atom.
+type SystemView<'a> = (&'static str, &'a ForceField, &'a [[f64; 3]], usize);
+
+/// The three systems of `b`.
+fn systems(b: &Binding) -> [SystemView<'_>; 3] {
+    [
+        ("complex", b.force_field(), b.positions(), 0),
+        (
+            "pocket",
+            b.pocket_force_field(),
+            b.pocket_alone_positions(),
+            0,
+        ),
+        (
+            "ligand",
+            b.ligand_force_field(),
+            b.ligand_alone_positions(),
+            b.pocket_len(),
+        ),
+    ]
+}
+
+/// Every field of `m` at once: the term count and `Σ|t|` of the running total.
+fn all_terms(m: &[(usize, f64); 6]) -> (usize, f64) {
+    m.iter()
+        .fold((0usize, 0.0f64), |(n, s), &(a, b)| (n + a, s + b))
+}
+
+/// The rounding of one evaluation's running total, `n ε Σ|t|` over every term at once.
+fn total_rounding(ff: &ForceField, at: &[[f64; 3]]) -> f64 {
+    sum_rounding(all_terms(&magnitudes(ff, at)))
+}
+
+/// The closest ligand hydrogen to a pocket hydrogen at the complex's positions, Å.
+fn closest_hydrogens(b: &Binding) -> f64 {
+    let (el, at) = (b.elements(), b.positions());
+    let mut best = f64::INFINITY;
+    for l in b.ligand_range().filter(|&l| el[l] == Element::H) {
+        for p in (0..b.pocket_len()).filter(|&p| el[p] == Element::H) {
+            best = best.min(distance(at[l], at[p]));
+        }
+    }
+    best / ANGSTROM
+}
+
+/// **Relaxing the hydrogens moves the free hydrogens and nothing else, to the bit, in each of the
+/// three systems.** The mask is the rule, recomputed here from the system's own bonds: every
+/// ligand hydrogen, and every pocket hydrogen whose heavy parent is within the cutoff of a ligand
+/// atom. Then every atom it holds — every heavy atom, and every pocket hydrogen beyond the cutoff
+/// — is at its crystal position bit for bit in the complex, the pocket alone and the ligand alone,
+/// and in each system some free hydrogen did move, so the test cannot pass by nothing moving.
+/// After benzene is minimised from the relaxed complex, every pocket atom the mask holds is still
+/// at its crystal position in the complex and in the pocket alone, and the ligand alone's heavy
+/// atoms are the minimised complex's, bit for bit.
+#[test]
+fn relaxing_hydrogens_moves_the_free_hydrogens_and_nothing_else() {
+    let c = crystal();
+    let s = system();
+    let atoms = s.component().atoms();
+    let ligand = s.atoms_in(pantometry_forcefield::Part::Ligand);
+    let n0 = c.pocket_len();
+    let free = c.free_hydrogens();
+    for (k, &i) in c.system_atoms().iter().enumerate() {
+        let near = |j: usize| {
+            ligand
+                .iter()
+                .any(|&l| distance(atoms[j].at, atoms[l].at) < POCKET * ANGSTROM)
+        };
+        let want = atoms[i].element == Element::H
+            && (k >= n0 || s.component().neighbours(i).any(|(j, _)| near(j)));
+        assert_eq!(free[k], want, "atom {k} ({})", atoms[i].name);
+    }
+    let count = |r: std::ops::Range<usize>| free[r].iter().filter(|&&f| f).count();
+    let hydrogens = c.elements()[..n0]
+        .iter()
+        .filter(|&&e| e == Element::H)
+        .count();
+    eprintln!(
+        "free hydrogens: {} of the pocket's {hydrogens}, and all {} of benzene's",
+        count(0..n0),
+        count(c.ligand_range())
+    );
+    let r = relaxed();
+    assert_eq!(r.hydrogen_relaxation().expect("relaxed").free, free);
+    for (name, _, at, first) in systems(r) {
+        let mut moved = 0;
+        for (k, p) in at.iter().enumerate() {
+            let i = first + k;
+            let same = p.map(f64::to_bits) == c.positions()[i].map(f64::to_bits);
+            if free[i] {
+                moved += usize::from(!same);
+            } else {
+                assert!(same, "{name}: held atom {i} moved");
+            }
+        }
+        assert!(moved > 0, "{name}: no free hydrogen moved");
+        eprintln!("{name}: {moved} hydrogens moved, every other atom held to the bit");
+    }
+    // And each fragment's own relaxation moved hydrogens from where the complex left them: a
+    // fragment never relaxed would sit at the complex's relaxed positions and pass the loop above.
+    for (name, own, complex, first) in [
+        (
+            "pocket",
+            r.pocket_alone_positions(),
+            &r.positions()[..n0],
+            0,
+        ),
+        (
+            "ligand",
+            r.ligand_alone_positions(),
+            r.ligand_positions(),
+            n0,
+        ),
+    ] {
+        let moved = (0..own.len())
+            .filter(|&k| free[first + k] && own[k] != complex[k])
+            .count();
+        assert!(
+            moved > 0,
+            "{name}: no hydrogen moved from the complex's relaxed positions"
+        );
+        eprintln!("{name} alone: {moved} hydrogens moved from the complex's relaxed positions");
+    }
+    assert_eq!(r.ligand_rmsd(), 0.0);
+    let (m, _) = relaxed_minimised();
+    assert_eq!(m.hydrogen_relaxation().expect("still relaxed").free, free);
+    for at in [m.positions(), m.pocket_alone_positions()] {
+        for i in (0..n0).filter(|&i| !free[i]) {
+            assert_eq!(
+                at[i].map(f64::to_bits),
+                c.positions()[i].map(f64::to_bits),
+                "minimised: pocket atom {i} moved"
+            );
+        }
+    }
+    for (k, i) in m.ligand_range().enumerate() {
+        if !free[i] {
+            assert_eq!(
+                m.ligand_alone_positions()[k].map(f64::to_bits),
+                m.positions()[i].map(f64::to_bits),
+                "the ligand alone's heavy atom {k} is not the complex's"
+            );
+        }
+    }
+    assert!(m.ligand_rmsd() > 0.1 * ANGSTROM, "{}", m.ligand_rmsd());
+}
+
+/// **Each system's free hydrogens are converged on that system's own force field**: the largest
+/// force on a free atom — evaluated by the complex's, the pocket's or the ligand's whole force
+/// field at its own positions, not the reduced one the minimiser used, and with every held atom's
+/// force left out — is at most the tolerance, and each relaxation says it converged. After
+/// minimisation the ligand's every atom counts as free in the complex. **And each relaxation had
+/// work to do**: at its start (the crystal for the complex, the relaxed complex for each fragment)
+/// some free atom is over a hundred tolerances.
+#[test]
+fn each_systems_free_hydrogens_are_converged() {
+    let n0 = crystal().pocket_len();
+    for (name, b, minimised) in [
+        ("relaxed", relaxed(), false),
+        ("relaxed and minimised", &relaxed_minimised().0, true),
+    ] {
+        let r = b.hydrogen_relaxation().expect("relaxed");
+        for (sys, ff, at, first) in systems(b) {
+            let progress = match sys {
+                "complex" => r.complex,
+                "pocket" => r.pocket,
+                _ => r.ligand,
+            };
+            assert_eq!(
+                progress.status,
+                Status::Converged,
+                "{name} {sys}: {progress:?}"
+            );
+            let forces = ff.evaluate(at).forces;
+            let worst = forces
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| {
+                    let i = first + k;
+                    r.free[i] || (minimised && sys == "complex" && i >= n0)
+                })
+                .map(|(_, f)| len(*f))
+                .fold(0.0f64, f64::max);
+            assert!(
+                worst <= H_TOL,
+                "{name} {sys}: a free atom feels {:e} kcal/mol/Å",
+                worst / KCAL_PER_MOL_ANGSTROM
+            );
+            eprintln!(
+                "{name} {sys}: {} steps, largest free force {:.2e} kcal/mol/Å",
+                progress.steps,
+                worst / KCAL_PER_MOL_ANGSTROM
+            );
+        }
+    }
+    let (c, r) = (crystal(), relaxed());
+    let h = r.hydrogen_relaxation().expect("relaxed");
+    for (sys, p) in [("pocket", h.pocket), ("ligand", h.ligand)] {
+        assert!(
+            p.steps > 0,
+            "{sys}: the fragment's relaxation took no step at the crystal pose"
+        );
+    }
+    let free = c.free_hydrogens();
+    for (sys, ff, start, first) in [
+        ("complex", c.force_field(), c.positions(), 0),
+        ("pocket", c.pocket_force_field(), &r.positions()[..n0], 0),
+        ("ligand", c.ligand_force_field(), r.ligand_positions(), n0),
+    ] {
+        let worst = ff
+            .evaluate(start)
+            .forces
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| free[first + k])
+            .map(|(_, f)| len(*f))
+            .fold(0.0f64, f64::max);
+        assert!(worst > 100.0 * H_TOL, "{sys}: {worst:e} at the start");
+        eprintln!(
+            "{sys}: largest free force at the start {:.3} kcal/mol/Å",
+            worst / KCAL_PER_MOL_ANGSTROM
+        );
+    }
+}
+
+/// **Each relaxation lowers its own system's energy**, the minimiser's guarantee: the complex's
+/// against the crystal, and each fragment's against where the complex left it — which is why the
+/// reorganisation is never negative. The minimiser compares energies of its reduced force field,
+/// which differs from the whole one by a constant in exact arithmetic, so each comparison here,
+/// on the whole force field, is allowed twice the two evaluations' summation rounding. The same
+/// after the ligand is minimised from the relaxed complex.
+#[test]
+fn each_relaxation_lowers_its_own_energy() {
+    let n0 = crystal().pocket_len();
+    for (name, start, b) in [
+        ("relaxed", crystal(), relaxed()),
+        ("relaxed and minimised", relaxed(), &relaxed_minimised().0),
+    ] {
+        for (sys, ff, before, after) in [
+            ("complex", b.force_field(), start.positions(), b.positions()),
+            (
+                "pocket",
+                b.pocket_force_field(),
+                &b.positions()[..n0],
+                b.pocket_alone_positions(),
+            ),
+            (
+                "ligand",
+                b.ligand_force_field(),
+                b.ligand_positions(),
+                b.ligand_alone_positions(),
+            ),
+        ] {
+            let (e0, e1) = (ff.energy(before).total, ff.energy(after).total);
+            let allowance = 2.0 * (total_rounding(ff, before) + total_rounding(ff, after));
+            assert!(
+                e1 <= e0 + allowance,
+                "{name} {sys}: {e1:e} J after against {e0:e} J before, allowance {allowance:e}"
+            );
+            eprintln!(
+                "{name} {sys}: {:.4} → {:.4} kcal/mol, lowered {:.4} (allowance {:.1e})",
+                kcal(e0),
+                kcal(e1),
+                kcal(e0 - e1),
+                kcal(allowance)
+            );
+        }
+    }
+}
+
+/// **With each system at its own positions, ΔE_bind is the cross terms at the complex's positions
+/// plus the fragments' reorganisation, exactly.** Every bond, angle, torsion, inversion and
+/// within-fragment pair of the complex is the same term as in its fragment, so in exact
+/// arithmetic `E(complex) = E(pocket) + E(ligand) + cross` at the complex's positions, and
+///
+/// `E(complex) − E(pocket at its own) − E(ligand at its own) = cross + [E(pocket) at the complex's
+/// − at its own] + [the same for the ligand]`,
+///
+/// field by field. Checked with every part evaluated here — the cross sums over every pair built
+/// in the test, the five energies by the fragments' force fields — to the rounding of the five
+/// running sums, the cross sums and the subtractions. And the crate's `reorganisation` is those
+/// two brackets, to the rounding of their four evaluations. **The identity holds for any
+/// fragment positions**, relaxed or not: it catches an energy taken at the wrong positions or a
+/// bracket left out, and says nothing about whether the fragments' positions are their minima,
+/// which the convergence and moved-hydrogen tests hold. **An unrelaxed binding's
+/// reorganisation is exactly zero** and its total the cross terms to the bit, so 2c-2's numbers
+/// are untouched; and moving a relaxed binding's ligand makes it unrelaxed.
+#[test]
+fn the_relaxed_binding_energy_is_the_cross_terms_and_the_reorganisation() {
+    let names = [
+        "bond",
+        "angle",
+        "torsion",
+        "inversion",
+        "van der Waals",
+        "electrostatic",
+        "total",
+    ];
+    let fields = |e: &pantometry_forcefield::Energy| {
+        [
+            e.bond,
+            e.angle,
+            e.torsion,
+            e.inversion,
+            e.van_der_waals,
+            e.electrostatic,
+            e.total,
+        ]
+    };
+    for (name, b) in [
+        ("relaxed", relaxed()),
+        ("relaxed and minimised", &relaxed_minimised().0),
+    ] {
+        let n0 = b.pocket_len();
+        let at = b.positions();
+        let (pa, la) = (b.pocket_alone_positions(), b.ligand_alone_positions());
+        let (fc, fp, fl) = (
+            b.force_field(),
+            b.pocket_force_field(),
+            b.ligand_force_field(),
+        );
+        // The complex, the pocket and the ligand at their own positions, then the pocket and the
+        // ligand at the complex's.
+        let e = [
+            fields(&fc.energy(at)),
+            fields(&fp.energy(pa)),
+            fields(&fl.energy(la)),
+            fields(&fp.energy(&at[..n0])),
+            fields(&fl.energy(&at[n0..])),
+        ];
+        let m = [
+            magnitudes(fc, at),
+            magnitudes(fp, pa),
+            magnitudes(fl, la),
+            magnitudes(fp, &at[..n0]),
+            magnitudes(fl, &at[n0..]),
+        ];
+        let rounding = |s: usize, k: usize| {
+            if k < 6 {
+                sum_rounding(m[s][k])
+            } else {
+                sum_rounding(all_terms(&m[s]))
+            }
+        };
+        let x = cross_pairs(b);
+        let cross_vdw: f64 = x.iter().map(|t| t.2.energy(t.4)).sum();
+        let cross_elec: f64 = x.iter().map(|t| t.3).sum();
+        let abs_vdw: f64 = x.iter().map(|t| t.2.energy(t.4).abs()).sum();
+        let abs_elec: f64 = x.iter().map(|t| t.3.abs()).sum();
+        let i = b.interaction();
+        let got = fields(&i.difference);
+        let reorganisation = fields(&i.reorganisation);
+        // The crate's cross sums are the complex's, at the complex's positions.
+        let n = x.len() as f64;
+        assert!((i.van_der_waals - cross_vdw).abs() <= 2.0 * n * EPS * abs_vdw);
+        assert!((i.electrostatic - cross_elec).abs() <= 2.0 * n * EPS * abs_elec);
+        for k in 0..7 {
+            let reorg = (e[3][k] - e[1][k]) + (e[4][k] - e[2][k]);
+            let n = x.len();
+            let (cross, cross_rounding) = match k {
+                4 => (cross_vdw, sum_rounding((n, abs_vdw))),
+                5 => (cross_elec, sum_rounding((n, abs_elec))),
+                6 => (
+                    cross_vdw + cross_elec,
+                    sum_rounding((2 * n, abs_vdw + abs_elec)),
+                ),
+                _ => (0.0, 0.0),
+            };
+            let sums: f64 = (0..5).map(|s| rounding(s, k)).sum();
+            let operands: f64 = e.iter().map(|f| f[k].abs()).sum::<f64>() + cross.abs();
+            let allowance = sums + cross_rounding + 4.0 * EPS * operands;
+            let err = (got[k] - (cross + reorg)).abs();
+            assert!(
+                err <= allowance,
+                "{name} {}: difference {:e} J against cross {cross:e} + reorganisation {reorg:e}, \
+                 off {err:e} > {allowance:e}",
+                names[k],
+                got[k]
+            );
+            let reorg_allowance = (1..5).map(|s| rounding(s, k)).sum::<f64>()
+                + 4.0 * EPS * (1..5).map(|s| e[s][k].abs()).sum::<f64>();
+            assert!(
+                (reorganisation[k] - reorg).abs() <= reorg_allowance,
+                "{name} {}: reorganisation {:e} against {reorg:e}",
+                names[k],
+                reorganisation[k]
+            );
+            if k == 6 {
+                eprintln!(
+                    "{name}: ΔE_bind {:.4} kcal/mol = cross {:.4} (vdW {:.4}, elec {:.4}) + \
+                     reorganisation {:.4} (pocket {:.4}, ligand {:.4}); the three-evaluation \
+                     difference agrees to {:.1e}, {:.3} of its allowance",
+                    kcal(i.total()),
+                    kcal(cross),
+                    kcal(cross_vdw),
+                    kcal(cross_elec),
+                    kcal(reorg),
+                    kcal(e[3][6] - e[1][6]),
+                    kcal(e[4][6] - e[2][6]),
+                    kcal(err),
+                    err / allowance
+                );
+            }
+        }
+    }
+    // Unrelaxed: no reorganisation, the fragments at the complex's positions, to the bit.
+    let c = crystal();
+    let i = c.interaction();
+    assert!(c.hydrogen_relaxation().is_none());
+    assert_eq!(i.reorganisation, pantometry_forcefield::Energy::default());
+    assert_eq!(
+        i.total().to_bits(),
+        (i.van_der_waals + i.electrostatic).to_bits()
+    );
+    assert_eq!(c.pocket_alone_positions(), &c.positions()[..c.pocket_len()]);
+    assert_eq!(c.ligand_alone_positions(), c.ligand_positions());
+    let moved = relaxed().ligand_at(&RigidMotion::translation([ANGSTROM, 0.0, 0.0]));
+    assert!(moved.hydrogen_relaxation().is_none());
+    assert_eq!(
+        moved.pocket_alone_positions(),
+        &moved.positions()[..moved.pocket_len()]
+    );
+    assert_eq!(moved.ligand_alone_positions(), moved.ligand_positions());
+}
+
+/// **Far away, the relaxed binding energy vanishes too, and each fragment's relaxation is the
+/// complex's exactly.** A fragment's relaxation starts from the complex's relaxed positions, where
+/// the force on each of its free atoms is the complex's force there less the partner's. The
+/// complex converged, so the first is at most the tolerance, and far away the second is tiny: so
+/// when `|F_complex| + |F_partner| ≤` the tolerance on every free atom — **the bound, asserted
+/// here** — the fragment's minimiser is converged at its first evaluation and takes no step. Each
+/// fragment's positions are then the complex's bit for bit, the reorganisation is exactly zero in
+/// every field, and ΔE_bind, the polar desolvation and the buried area are those of a binding at
+/// shared positions, inside the same tail bounds
+/// ([`far_away_the_binding_energy_vanishes_inside_its_tails`]). The partner's force is built here
+/// from every cross pair.
+///
+/// **At 10⁴ and 10⁵ Å, not 10³.** The condition fails only when the complex happens to stop within
+/// the partner's force of the tolerance, and where the complex stops is not controlled: measured,
+/// at 0.95 of it. At 10³ Å the pocket's net +1 still pulls on a benzene hydrogen with 3.3e-5
+/// kcal mol⁻¹ Å⁻¹, 1.7% of the tolerance; at 10⁴ Å it is 3.3e-7 and at 10⁵ Å 3.3e-9, so the window
+/// the condition could fail in is 1.7e-4 of the tolerance and less.
+#[test]
+fn far_away_the_relaxed_binding_energy_vanishes_inside_its_tails() {
+    for far in [1e4, 1e5] {
+        let moved = far_away(crystal(), far).relaxing_hydrogens(RELAX_STEPS, H_TOL);
+        let r = moved.hydrogen_relaxation().expect("relaxed");
+        assert_eq!(r.complex.status, Status::Converged, "{:?}", r.complex);
+        assert!(r.complex.steps > 0);
+        let at = moved.positions();
+        let n = at.len();
+        let mut partner = vec![[0.0f64; 3]; n];
+        for (p, l, pair, e, rr) in cross_pairs(&moved) {
+            let (d1, _, _) = pair_derivatives(&pair, e, rr);
+            let d = sub(at[l], at[p]);
+            for k in 0..3 {
+                partner[l][k] -= d1 * d[k] / rr;
+                partner[p][k] += d1 * d[k] / rr;
+            }
+        }
+        let forces = moved.force_field().evaluate(at).forces;
+        let (mut worst, mut worst_partner) = (0.0f64, 0.0f64);
+        for i in (0..n).filter(|&i| r.free[i]) {
+            worst = worst.max(len(forces[i]) + len(partner[i]));
+            worst_partner = worst_partner.max(len(partner[i]));
+        }
+        assert!(
+            worst <= H_TOL,
+            "{far} Å: |F_complex| + |F_partner| reaches {:e} kcal/mol/Å",
+            worst / KCAL_PER_MOL_ANGSTROM
+        );
+        for (sys, p) in [("pocket", r.pocket), ("ligand", r.ligand)] {
+            assert_eq!((p.status, p.steps), (Status::Converged, 0), "{far} Å {sys}");
+        }
+        assert_eq!(moved.pocket_alone_positions(), &at[..moved.pocket_len()]);
+        assert_eq!(moved.ligand_alone_positions(), moved.ligand_positions());
+        assert_eq!(
+            moved.interaction().reorganisation,
+            pantometry_forcefield::Energy::default()
+        );
+        eprintln!(
+            "{far} Å away, hydrogens relaxed in {} steps: largest |F_complex| + |F_partner| on a \
+             free atom {:.3e} kcal/mol/Å, of which the partner's at most {:.1e}; the fragments \
+             took no step",
+            r.complex.steps,
+            worst / KCAL_PER_MOL_ANGSTROM,
+            worst_partner / KCAL_PER_MOL_ANGSTROM
+        );
+        far_field_holds(&moved, far, "hydrogens relaxed");
+    }
+}
+
+/// **A relaxed binding moved whole stays relaxed, its fragments moved with it**: each fragment's
+/// every position is the motion applied to it about the ligand's centroid, bit for bit, as
+/// [`RigidMotion::apply`] gives it here.
+#[test]
+fn a_relaxed_binding_moved_whole_takes_its_fragments_with_it() {
+    let r = relaxed();
+    let motion = RigidMotion::rotation([0.3, -0.5, 0.8], 2.1).then_translate([
+        7.0 * ANGSTROM,
+        -3.0 * ANGSTROM,
+        11.0 * ANGSTROM,
+    ]);
+    let m = r.moved(&motion);
+    let c = r.ligand_centroid();
+    assert_eq!(m.hydrogen_relaxation(), r.hydrogen_relaxation());
+    for (moved, original) in [
+        (m.pocket_alone_positions(), r.pocket_alone_positions()),
+        (m.ligand_alone_positions(), r.ligand_alone_positions()),
+        (m.positions(), r.positions()),
+    ] {
+        let want: Vec<[f64; 3]> = original.iter().map(|&p| motion.apply(c, p)).collect();
+        assert_eq!(moved, &want[..]);
+    }
+    eprintln!(
+        "relaxed ΔE_bind {:.6} kcal/mol, {:.6} in the moved frame",
+        kcal(r.interaction().total()),
+        kcal(m.interaction().total())
+    );
+}
+
+/// **Relaxed, no ligand hydrogen is within 1.8 Å of a pocket hydrogen** ([`H_H_CONTACT`]): in the
+/// relaxed complex and after benzene is minimised from it. Reported: the crystal pose's closest,
+/// and UFF's H···H energy at the threshold, which is asserted repulsive.
+#[test]
+fn no_ligand_hydrogen_clashes_with_a_pocket_hydrogen_once_relaxed() {
+    let c = crystal();
+    let h = c
+        .ligand_range()
+        .find(|&l| c.elements()[l] == Element::H)
+        .expect("a hydrogen");
+    let pair = Pair::new([0, 1], c.types()[h], c.types()[h]);
+    let at_threshold = kcal(pair.energy(H_H_CONTACT * ANGSTROM));
+    assert!(at_threshold > 0.0, "{at_threshold}");
+    for (name, b) in [
+        ("relaxed", relaxed()),
+        ("relaxed and minimised", &relaxed_minimised().0),
+    ] {
+        let d = closest_hydrogens(b);
+        assert!(d >= H_H_CONTACT, "{name}: closest H–H {d} Å");
+        eprintln!("{name}: closest ligand–pocket H–H {d:.3} Å");
+    }
+    eprintln!(
+        "crystal pose: closest ligand–pocket H–H {:.3} Å; UFF's H···H at {H_H_CONTACT} Å is \
+         {at_threshold:+.2} kcal/mol",
+        closest_hydrogens(c)
+    );
+}
+
+/// **What relaxing the hydrogens does to benzene's numbers**, reported: the crystal pose against
+/// each system relaxed, and the minimised poses, with every pocket hydrogen free instead of the
+/// rule's — the measurement behind holding the ones beyond the cutoff. Ignored: relaxations and
+/// minimisations of the whole complex, seconds unoptimised and 0.5 s with `--release`.
+#[test]
+#[ignore = "relaxations and minimisations of the whole complex; 0.5 s with --release -- --ignored"]
+fn relaxing_the_hydrogens_on_benzene() {
+    let c = crystal();
+    let all: Vec<bool> = c.elements().iter().map(|&e| e == Element::H).collect();
+    for (name, b) in [
+        ("rule", relaxed().clone()),
+        (
+            "every hydrogen free",
+            c.relaxing_hydrogens_of(&all, RELAX_STEPS, H_TOL),
+        ),
+    ] {
+        let mut m = b.clone();
+        let p = m.minimise_ligand(5000, H_TOL);
+        assert_eq!(p.status, Status::Converged);
+        for (pose, x) in [("relaxed", &b), ("relaxed and minimised", &m)] {
+            let i = x.interaction();
+            let d = x.desolvation(POINTS);
+            eprintln!(
+                "{name}, {pose}: vdW {:.3} elec {:.3} reorganisation {:+.3} ΔE vacuum {:.3} \
+                 polar {:+.3} ΔSASA {:.1} Å² nonpolar {:+.3} total {:.3} kcal/mol; RMSD {:.3} Å; \
+                 closest H–H {:.3} Å",
+                kcal(i.van_der_waals),
+                kcal(i.electrostatic),
+                kcal(i.reorganisation.total),
+                kcal(i.total()),
+                kcal(d.polar),
+                d.buried_area / (ANGSTROM * ANGSTROM),
+                kcal(d.nonpolar),
+                kcal(i.total() + d.polar + d.nonpolar),
+                x.ligand_rmsd() / ANGSTROM,
+                closest_hydrogens(x)
+            );
+        }
+    }
+    let i = c.interaction();
+    let d = c.desolvation(POINTS);
+    eprintln!(
+        "crystal: ΔE vacuum {:.3} polar {:+.3} total {:.3}; minimised unrelaxed RMSD {:.3} Å, ΔE \
+         {:.3}",
+        kcal(i.total()),
+        kcal(d.polar),
+        kcal(i.total() + d.polar + d.nonpolar),
+        minimised().0.ligand_rmsd() / ANGSTROM,
+        kcal(minimised().0.interaction().total())
+    );
+}
+
+/// 2c-2's tolerance, 1e-4 kcal mol⁻¹ Å⁻¹, which does converge on benzene's 6 Å pocket.
+const TIGHT: f64 = 1e-4 * KCAL_PER_MOL_ANGSTROM;
+
+/// For two configurations of one system, `Σ_i (|F_a,i| + |F_b,i|) |x_a,i − x_b,i|` over every atom,
+/// joules: if both lie in one convex basin, `E_a − E_b` lies between `g_b · (x_a − x_b)` and
+/// `g_a · (x_a − x_b)`, so this bounds `|E_a − E_b|`. Atoms in the same place add nothing; a
+/// minimised ligand's heavy atoms, which differ between two runs, add their whole forces.
+fn convexity_bound(ff: &ForceField, a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
+    let (fa, fb) = (ff.evaluate(a).forces, ff.evaluate(b).forces);
+    (0..a.len())
+        .map(|i| (len(fa[i]) + len(fb[i])) * distance(a[i], b[i]))
+        .sum()
+}
+
+/// **The hydrogen tolerance moves no digit this crate prints.** Benzene's 6 Å pocket is relaxed,
+/// and minimised from the relaxed complex, at 2c-2's 1e-4 kcal mol⁻¹ Å⁻¹ — which converges here,
+/// as it does not on every pocket — and at [`Binding::HYDROGEN_TOLERANCE`]. The claim the looser
+/// tolerance has to earn is the one the tables make: **ΔE_bind and the reorganisation agree to
+/// half their last printed digit, 5e-3 kcal/mol, and the minimised pose to half of its, 5e-4 Å**
+/// (RMS displacement between the two minimised ligands, which bounds the RMSDs' difference by the
+/// triangle inequality). And each system's two energies agree within [`convexity_bound`] — what
+/// two converged points in one convex basin can differ by, from their own forces and
+/// displacements — plus the rounding of the four evaluations, which a run that stopped in another
+/// basin would not.
+#[test]
+fn the_hydrogen_tolerance_moves_no_printed_digit() {
+    let tight = crystal().relaxing_hydrogens(RELAX_STEPS, TIGHT);
+    let h = tight.hydrogen_relaxation().expect("relaxed");
+    for (sys, p) in [
+        ("complex", h.complex),
+        ("pocket", h.pocket),
+        ("ligand", h.ligand),
+    ] {
+        assert_eq!(p.status, Status::Converged, "at 1e-4, {sys}: {p:?}");
+    }
+    let mut tight_min = tight.clone();
+    let p = tight_min.minimise_ligand(5000, TIGHT);
+    assert_eq!(p.status, Status::Converged, "at 1e-4, minimised: {p:?}");
+    for (name, a, b) in [
+        ("relaxed", relaxed(), &tight),
+        ("relaxed and minimised", &relaxed_minimised().0, &tight_min),
+    ] {
+        let (ia, ib) = (a.interaction(), b.interaction());
+        let d_e = kcal((ia.total() - ib.total()).abs());
+        let d_r = kcal((ia.reorganisation.total - ib.reorganisation.total).abs());
+        assert!(d_e <= 5e-3, "{name}: ΔE_bind moved {d_e:e} kcal/mol");
+        assert!(
+            d_r <= 5e-3,
+            "{name}: the reorganisation moved {d_r:e} kcal/mol"
+        );
+        for (sys, ff, at_a, at_b) in [
+            ("complex", a.force_field(), a.positions(), b.positions()),
+            (
+                "pocket",
+                a.pocket_force_field(),
+                a.pocket_alone_positions(),
+                b.pocket_alone_positions(),
+            ),
+            (
+                "ligand",
+                a.ligand_force_field(),
+                a.ligand_alone_positions(),
+                b.ligand_alone_positions(),
+            ),
+        ] {
+            let bound = convexity_bound(ff, at_a, at_b)
+                + 2.0 * (total_rounding(ff, at_a) + total_rounding(ff, at_b));
+            let diff = (ff.energy(at_a).total - ff.energy(at_b).total).abs();
+            assert!(
+                diff <= bound,
+                "{name} {sys}: energies differ by {:e} kcal/mol, past {:e}",
+                kcal(diff),
+                kcal(bound)
+            );
+            eprintln!(
+                "{name} {sys}: 2e-3 against 1e-4 differ by {:.1e} kcal/mol, convexity bound {:.1e}",
+                kcal(diff),
+                kcal(bound)
+            );
+        }
+        let lig = a.ligand_range();
+        let rms = (lig
+            .clone()
+            .map(|k| distance(a.positions()[k], b.positions()[k]).powi(2))
+            .sum::<f64>()
+            / lig.len() as f64)
+            .sqrt();
+        assert!(
+            rms <= 5e-4 * ANGSTROM,
+            "{name}: the ligand moved {:e} Å RMS between the two tolerances",
+            rms / ANGSTROM
+        );
+        eprintln!(
+            "{name}: ΔE_bind {d_e:.1e}, reorganisation {d_r:.1e} kcal/mol apart, ligand {:.1e} Å RMS \
+             apart; RMSD {:.4} against {:.4} Å",
+            rms / ANGSTROM,
+            a.ligand_rmsd() / ANGSTROM,
+            b.ligand_rmsd() / ANGSTROM
+        );
+    }
 }

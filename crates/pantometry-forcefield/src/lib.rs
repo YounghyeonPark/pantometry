@@ -44,7 +44,12 @@
 //!   E(pocket) − E(ligand)` at fixed geometry — in vacuum exactly the protein–ligand cross terms,
 //!   which is tested — with OBC II's polar desolvation and the buried area beside it, and
 //!   minimises the ligand in the rigid pocket with every protein atom frozen
-//!   ([`Minimiser::with_frozen`]). [`RigidMotion`] moves the ligand. See [`binding`].
+//!   ([`Minimiser::with_frozen`]). [`RigidMotion`] moves the ligand.
+//!   [`Binding::relaxing_hydrogens`] relaxes each of the three systems' own hydrogens on its frozen
+//!   heavy atoms — the complex, then the pocket alone and the ligand alone from where the complex
+//!   left them — and every quantity is then taken with each system at its own positions, so the
+//!   vacuum ΔE_bind is the cross terms plus a hydrogen reorganisation that is tested to be exactly
+//!   that. See [`binding`].
 //! - **The congener series** (`tests/the_congener_series.rs`): the nine T4 lysozyme L99A entries
 //!   of Morton and Matthews (1995) — benzene, benzofuran, indene, isobutylbenzene, indole,
 //!   n-butylbenzene, p-xylene, o-xylene and ethylbenzene — are built by the same pipeline with no
@@ -178,7 +183,10 @@
 //!   with the cutoff, so the ligands that bind best are the ones it penalises most. **At the
 //!   crystal pose the placed hydrogens decide the vacuum ΔE** for three of the nine: indene's
 //!   H12 is 1.41 Å from Val111's HG13, which puts van der Waals at +224 kcal/mol. Neither
-//!   placement sees the other partner's hydrogens.
+//!   placement sees the other partner's hydrogens, and [`Binding::relaxing_hydrogens`] is the
+//!   fix: relaxed, no ligand hydrogen is within 1.94 Å of a protein hydrogen in any of the nine.
+//!   It does not make the series rank: relaxed and minimised, the vacuum ΔE correlates at
+//!   r = +0.48 at 6 Å, interval [−0.27, +0.87], and the solvated total at r = −0.81.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.
@@ -196,7 +204,9 @@ pub mod solvation;
 pub mod uff;
 
 pub use angular::{Bend, Inversion, Torsion};
-pub use binding::{Binding, BindingError, Desolvation, Interaction, RigidMotion};
+pub use binding::{
+    Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
+};
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};

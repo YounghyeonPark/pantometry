@@ -10,8 +10,13 @@
 //! ligand's dictionary entry is held to the molecule by its bond graph, written here by hand from
 //! the chemistry. Then every entry is built, and the rule makes His31 +1 in each.
 //!
+//! **Each system's hydrogens are relaxed** ([`Binding::relaxing_hydrogens`], step A-1) as well as
+//! taken as placed: at the crystal pose three of the nine clash hydrogen to hydrogen, and the
+//! relaxed columns are the ones that measure binding rather than the placement.
+//!
 //! **What is asserted about the binding energies is only what must hold**: van der Waals
-//! attraction, buried area, frozen atoms, convergence, and 181L's numbers as 2c-2 committed them.
+//! attraction, buried area, frozen atoms, convergence, no hydrogen–hydrogen contact under 1.8 Å
+//! once relaxed, and 181L's numbers as 2c-2 committed them.
 //! **No correlation with experiment is asserted.** The series is nine ligands of one size whose
 //! measured ΔG spans 2.1 kcal/mol; a correlation measured on nine points has a 95% interval that
 //! the series test computes and prints, and it is wide.
@@ -24,7 +29,7 @@ mod protein;
 use pantometry_forcefield::minimise::KCAL_PER_MOL_ANGSTROM;
 use pantometry_forcefield::uff::KCAL_PER_MOL;
 use pantometry_forcefield::{
-    Binding, Component, Element, Histidine, Minimiser, Part, Selection, Status, System,
+    Binding, Component, Element, Histidine, Part, Selection, Status, System,
 };
 use protein::*;
 use std::collections::BTreeMap;
@@ -590,11 +595,29 @@ fn the_statistics_against_closed_forms() {
 
 // --- The series ---------------------------------------------------------------------------------
 
+/// The most steps one hydrogen relaxation may take: reaching it is a failure to converge.
+const RELAX_STEPS: usize = 20000;
+
+/// The tolerance hydrogens are relaxed to, and each ligand minimised to from a relaxed complex:
+/// [`Binding::HYDROGEN_TOLERANCE`], 2e-3 kcal mol⁻¹ Å⁻¹. At 2c-2's 1e-4 the minimiser stalled four
+/// times on these pockets, where their energies' rounding can hide a step's decrease; that
+/// constant gives the evidence, which is empirical, and the 6 Å table this test prints compares
+/// the two tolerances on all nine. The ligand minimised from the crystal keeps 2c-2's
+/// [`TOLERANCE`].
+const H_TOL: f64 = Binding::HYDROGEN_TOLERANCE;
+
+/// The closest a ligand hydrogen may come to a pocket hydrogen once relaxed, Å: where UFF's H···H
+/// pair is already +11 kcal/mol, as `benzene_in_its_pocket.rs` computes.
+const H_H_CONTACT: f64 = 1.8;
+
 /// The binding terms at one pose, kcal/mol and Å².
 #[derive(Clone, Copy, Debug)]
 struct Terms {
     vdw: f64,
     elec: f64,
+    reorganisation: f64,
+    /// The ligand's part of `reorganisation`; the rest is the pocket's.
+    reorganisation_ligand: f64,
     polar: f64,
     area: f64,
     nonpolar: f64,
@@ -607,6 +630,13 @@ impl Terms {
         Terms {
             vdw: kcal(i.van_der_waals),
             elec: kcal(i.electrostatic),
+            reorganisation: kcal(i.reorganisation.total),
+            reorganisation_ligand: kcal(
+                b.ligand_force_field().energy(b.ligand_positions()).total
+                    - b.ligand_force_field()
+                        .energy(b.ligand_alone_positions())
+                        .total,
+            ),
             polar: kcal(d.polar),
             area: d.buried_area / (ANGSTROM * ANGSTROM),
             nonpolar: kcal(d.nonpolar),
@@ -614,7 +644,7 @@ impl Terms {
     }
 
     fn vacuum(&self) -> f64 {
-        self.vdw + self.elec
+        self.vdw + self.elec + self.reorganisation
     }
 
     fn total(&self) -> f64 {
@@ -625,10 +655,10 @@ impl Terms {
 /// A contact: its distance in Å and the two atoms' names in the system.
 type Contact = (f64, String, String);
 
-/// The closest pair of a ligand hydrogen and a pocket hydrogen at `at` (complex order): the
-/// distance in Å and the two atoms' names in the system.
-fn closest_hydrogens(s: &System, b: &Binding, at: &[[f64; 3]]) -> Contact {
-    let (el, ids) = (b.elements(), b.system_atoms());
+/// The closest pair of a ligand hydrogen and a pocket hydrogen in `b`'s complex: the distance in Å
+/// and the two atoms' names in the system.
+fn closest_hydrogens(s: &System, b: &Binding) -> Contact {
+    let (el, ids, at) = (b.elements(), b.system_atoms(), b.positions());
     let mut best = (f64::INFINITY, 0, 0);
     for l in b.ligand_range().filter(|&l| el[l] == Element::H) {
         for p in (0..b.pocket_len()).filter(|&p| el[p] == Element::H) {
@@ -642,70 +672,102 @@ fn closest_hydrogens(s: &System, b: &Binding, at: &[[f64; 3]]) -> Contact {
     (best.0, name(best.1), name(best.2))
 }
 
-/// The crystal's heavy atoms with **every hydrogen relaxed**, protein's and ligand's, on the
-/// complex's whole force field: `(van der Waals, Coulomb)` of ΔE_bind there, kcal/mol, from the
-/// three force fields' term-by-term difference at the relaxed positions, and the closest H–H
-/// contact before and after. Not a [`Binding`] (whose pocket cannot move), so not solvated.
-///
-/// **Why it is here.** At the crystal pose both partners' hydrogens are placed — the ligand's by
-/// its template, the protein's by 2c-1's rules, whose rotor step clears heavy atoms only — and
-/// neither placement sees the other's hydrogens. On three of the nine entries that leaves an H–H
-/// contact UFF scores in the hundreds of kcal/mol (183L's indene H12 1.41 Å from Val111's HG13),
-/// so the crystal pose's vacuum ΔE measures the placement, not the binding. Relaxing hydrogens
-/// alone keeps every measured coordinate.
-fn hydrogens_relaxed(s: &System, b: &Binding) -> ((f64, f64), Contact, Contact) {
-    let frozen: Vec<bool> = b.elements().iter().map(|&e| e != Element::H).collect();
-    let mut at = b.positions().to_vec();
-    let before = closest_hydrogens(s, b, &at);
-    let ff = b.force_field();
-    let mut m = Minimiser::new(TOLERANCE).with_frozen(frozen);
-    let mut p = m.step(ff, &[], &mut at);
-    while p.status == Status::Running && p.steps < 50000 {
-        p = m.step(ff, &[], &mut at);
-    }
-    assert_eq!(p.status, Status::Converged, "hydrogens relaxed: {p:?}");
-    let n0 = b.pocket_len();
-    let (c, q, l) = (
-        ff.energy(&at),
-        b.pocket_force_field().energy(&at[..n0]),
-        b.ligand_force_field().energy(&at[n0..]),
-    );
-    let after = closest_hydrogens(s, b, &at);
-    (
-        (
-            kcal(c.van_der_waals - q.van_der_waals - l.van_der_waals),
-            kcal(c.electrostatic - q.electrostatic - l.electrostatic),
-        ),
-        before,
-        after,
-    )
-}
-
-/// One entry at one cutoff: the crystal pose, the crystal's heavy atoms with every hydrogen
-/// relaxed, and the ligand minimised in the frozen pocket.
+/// One entry at one cutoff: the crystal pose; each system's hydrogens relaxed
+/// ([`Binding::relaxing_hydrogens`]), and the same with every pocket hydrogen free instead of the
+/// rule's; the ligand minimised in the frozen pocket from the crystal, as 2c-2 and 2c-3a did; and
+/// minimised from the relaxed complex, its free hydrogens with it.
 struct Measured {
     residues: usize,
     atoms: usize,
     pocket_charge: i32,
     crystal: Terms,
-    relaxed: (f64, f64),
     contact: Contact,
-    relaxed_contact: f64,
+    relaxed: Terms,
+    relaxed_contact: Contact,
+    every_hydrogen_free: f64,
     minimised: Terms,
     rmsd: f64,
+    relaxed_minimised: Terms,
+    relaxed_rmsd: f64,
+    relaxed_minimised_contact: f64,
     steps: usize,
+    /// At 6 Å: the relaxed and the relaxed-minimised ΔE_bind and pose again at 2c-2's 1e-4, as
+    /// `(|ΔE relaxed|, |ΔE minimised|, ligand RMS displacement Å, every run converged)`.
+    tight: Option<(f64, f64, f64, bool)>,
 }
 
-/// Builds the pocket, measures the crystal pose, relaxes every hydrogen and measures the vacuum
-/// terms, minimises the ligand in the frozen pocket and measures again — asserting the facts that
-/// must hold whatever the energies are: ΔSASA negative at both poses, every protein atom unmoved
-/// to the bit, the minimiser converged, and van der Waals attractive at the minimised pose and
-/// with the hydrogens relaxed. **Not at the crystal pose**, where it is not a fact: see
-/// [`hydrogens_relaxed`].
+/// Asserts that `b`'s three relaxations converged, and that every atom they hold is where `start`
+/// has it, bit for bit, in all three systems — every pocket atom the mask holds always, and the
+/// ligand's heavy atoms too unless `ligand_moved`, in which case the ligand alone's heavy atoms are
+/// the complex's. **A stall is a failure**, every-hydrogen-free comparison included: a stall means
+/// the force is still above the tolerance, so accepting one would accept it at any force.
+fn assert_relaxed(
+    (code, cutoff, pose): (&str, f64, &str),
+    start: &Binding,
+    b: &Binding,
+    ligand_moved: bool,
+) {
+    let r = b.hydrogen_relaxation().expect("relaxed");
+    for (sys, p) in [
+        ("complex", r.complex),
+        ("pocket", r.pocket),
+        ("ligand", r.ligand),
+    ] {
+        assert_eq!(
+            p.status,
+            Status::Converged,
+            "{code} {cutoff} Å {pose} {sys}: {p:?}"
+        );
+    }
+    let n0 = b.pocket_len();
+    let held = |i: usize| !r.free[i];
+    for (sys, at, first) in [
+        ("complex", b.positions(), 0),
+        ("pocket", b.pocket_alone_positions(), 0),
+        ("ligand", b.ligand_alone_positions(), n0),
+    ] {
+        for (k, p) in at.iter().enumerate() {
+            let i = first + k;
+            if !held(i) {
+                continue;
+            }
+            let want = if ligand_moved && i >= n0 {
+                if sys == "complex" {
+                    continue;
+                }
+                b.positions()[i]
+            } else {
+                start.positions()[i]
+            };
+            assert_eq!(
+                p.map(f64::to_bits),
+                want.map(f64::to_bits),
+                "{code} {cutoff} Å {sys}: held atom {i} moved"
+            );
+        }
+    }
+}
+
+/// Builds the pocket and measures every pose, asserting the facts that must hold whatever the
+/// energies are: ΔSASA negative at the two poses whose systems share positions (the crystal and
+/// the unrelaxed minimum), every held atom unmoved to the bit, every relaxation and minimisation
+/// converged, van der Waals attractive at every relaxed or minimised pose, and **no ligand
+/// hydrogen within 1.8 Å of a pocket hydrogen once relaxed**. Not van der Waals at the crystal
+/// pose, where the placed hydrogens clash: that is the defect the relaxation removes.
 fn measure(e: &Entry, s: &System, cutoff: f64) -> Measured {
     let b = Binding::new(s, cutoff * ANGSTROM).unwrap_or_else(|err| panic!("{}: {err}", e.code));
     let crystal = Terms::of(&b);
-    let (relaxed, contact, after) = hydrogens_relaxed(s, &b);
+    let contact = closest_hydrogens(s, &b);
+
+    let r = b.relaxing_hydrogens(RELAX_STEPS, H_TOL);
+    assert_relaxed((e.code, cutoff, "relaxed"), &b, &r, false);
+    let relaxed = Terms::of(&r);
+    let relaxed_contact = closest_hydrogens(s, &r);
+    let all: Vec<bool> = b.elements().iter().map(|&x| x == Element::H).collect();
+    let every = b.relaxing_hydrogens_of(&all, RELAX_STEPS, H_TOL);
+    assert_relaxed((e.code, cutoff, "every H free"), &b, &every, false);
+    let every_hydrogen_free = kcal(every.interaction().total());
+
     let mut m = b.clone();
     let p = m.minimise_ligand(20000, TOLERANCE);
     assert_eq!(p.status, Status::Converged, "{} {cutoff} Å: {p:?}", e.code);
@@ -719,6 +781,14 @@ fn measure(e: &Entry, s: &System, cutoff: f64) -> Measured {
         );
     }
     let minimised = Terms::of(&m);
+
+    let mut rm = r.clone();
+    let q = rm.minimise_ligand(20000, H_TOL);
+    assert_eq!(q.status, Status::Converged, "{} {cutoff} Å: {q:?}", e.code);
+    assert_relaxed((e.code, cutoff, "relaxed, minimised"), &b, &rm, true);
+    let relaxed_minimised = Terms::of(&rm);
+    let relaxed_minimised_contact = closest_hydrogens(s, &rm).0;
+
     for (pose, t) in [("crystal", &crystal), ("minimised", &minimised)] {
         assert!(
             t.area < 0.0,
@@ -727,9 +797,20 @@ fn measure(e: &Entry, s: &System, cutoff: f64) -> Measured {
             t.area
         );
     }
+    for (pose, d) in [
+        ("hydrogens relaxed", relaxed_contact.0),
+        ("relaxed and minimised", relaxed_minimised_contact),
+    ] {
+        assert!(
+            d >= H_H_CONTACT,
+            "{} {cutoff} Å {pose}: closest H–H {d} Å",
+            e.code
+        );
+    }
     for (pose, vdw) in [
         ("minimised", minimised.vdw),
-        ("hydrogens relaxed", relaxed.0),
+        ("hydrogens relaxed", relaxed.vdw),
+        ("relaxed and minimised", relaxed_minimised.vdw),
     ] {
         assert!(vdw < 0.0, "{} {cutoff} Å {pose}: vdW {vdw}", e.code);
     }
@@ -738,12 +819,41 @@ fn measure(e: &Entry, s: &System, cutoff: f64) -> Measured {
         atoms: b.positions().len(),
         pocket_charge: b.formal_charges().0,
         crystal,
-        relaxed,
         contact,
-        relaxed_contact: after.0,
+        relaxed,
+        relaxed_contact,
+        every_hydrogen_free,
         minimised,
         rmsd: m.ligand_rmsd() / ANGSTROM,
-        steps: p.steps,
+        relaxed_minimised,
+        relaxed_rmsd: rm.ligand_rmsd() / ANGSTROM,
+        relaxed_minimised_contact,
+        steps: q.steps,
+        tight: (cutoff == 6.0).then(|| {
+            let t = b.relaxing_hydrogens(RELAX_STEPS, TOLERANCE);
+            let mut tm = t.clone();
+            let p = tm.minimise_ligand(20000, TOLERANCE);
+            let h = [t.hydrogen_relaxation(), tm.hydrogen_relaxation()];
+            let converged = p.status == Status::Converged
+                && h.iter().flatten().all(|h| {
+                    [h.complex, h.pocket, h.ligand]
+                        .iter()
+                        .all(|x| x.status == Status::Converged)
+                });
+            let lig = rm.ligand_range();
+            let rms = (lig
+                .clone()
+                .map(|k| len(sub(rm.positions()[k], tm.positions()[k])).powi(2))
+                .sum::<f64>()
+                / lig.len() as f64)
+                .sqrt();
+            (
+                (kcal(t.interaction().total()) - relaxed.vacuum()).abs(),
+                (kcal(tm.interaction().total()) - relaxed_minimised.vacuum()).abs(),
+                rms / ANGSTROM,
+                converged,
+            )
+        }),
     }
 }
 
@@ -813,25 +923,29 @@ fn statistics(label: &str, exp: &[f64], calc: &[f64]) -> String {
 }
 
 /// **The series, against experiment, reported and not asserted.** For each entry and each of 6 and
-/// 8 Å: the rigid-pocket ΔE in vacuum, the polar and nonpolar desolvation and their total at the
-/// crystal pose with its closest H–H contact; the vacuum ΔE with every hydrogen relaxed on the
-/// crystal's heavy atoms ([`hydrogens_relaxed`]); and the crystal-pose quantities again after the
-/// ligand is minimised in the frozen pocket, with the pose's RMSD. Asserted in [`measure`], and
-/// listed there; and 181L's numbers as 2c-2 committed them. Then Pearson's r and Spearman's ρ of each column against ΔG°_exp, each with its 95%
-/// Fisher interval, the slope of the column on ΔG°_exp, and its RMS about ΔG°_exp after the mean
-/// offset is removed — printed, because nine points cannot carry a claim. Ignored: two cutoffs of
-/// nine entries is eighteen pairs of QEq solves and twice as many minimisations, 100 s with
-/// `--release`, and unoptimised it would be many times that.
+/// 8 Å: the crystal pose with its closest H–H contact; each system's hydrogens relaxed, with the
+/// reorganisation, the solvation at each system's own positions and the closest H–H after; the
+/// vacuum ΔE with every pocket hydrogen free instead; the ligand minimised from the crystal (2c-3a's
+/// column); and minimised from the relaxed complex, with its RMSD. Asserted in [`measure`] and
+/// listed there; and 181L's numbers as 2c-2 committed them. Then Pearson's r and Spearman's ρ of
+/// each column against ΔG°_exp, each with its 95% Fisher interval, the slope of the column on
+/// ΔG°_exp, and its RMS about ΔG°_exp after the mean offset is removed — printed, because nine
+/// points cannot carry a claim. Ignored: two cutoffs of nine entries is eighteen pairs of QEq solves
+/// and many relaxations and minimisations, minutes with `--release`, and unoptimised it would be
+/// many times that.
 #[test]
-#[ignore = "nine entries at two cutoffs: QEq and a minimisation each; minutes with --release -- --ignored"]
+#[ignore = "nine entries at two cutoffs: QEq, relaxations and minimisations each; minutes with --release -- --ignored"]
 fn the_congener_series_against_experiment() {
     let exp: Vec<f64> = ENTRIES.iter().map(|e| e.dg.0).collect();
     for cutoff in [6.0, 8.0] {
         eprintln!(
             "\n{cutoff} Å, kcal/mol:\n| entry | ligand | ΔG°exp | residues | atoms | pocket q | \
-             vdW | elec | ΔE vac | polar | ΔSASA Å² | nonpolar | total | closest H–H Å | \
-             H relaxed: vdW | elec | ΔE vac | closest H–H Å | → RMSD Å | steps | vdW | elec | \
-             ΔE vac | polar | ΔSASA Å² | nonpolar | total |"
+             crystal: vdW | elec | ΔE vac | polar | total | closest H–H Å | relaxed: vdW | elec | \
+             reorg (ligand's) | ΔE vac | polar | ΔSASA Å² | nonpolar | total | closest H–H Å | \
+             every H free: \
+             ΔE vac | minimised from crystal: RMSD Å | ΔE vac | total | relaxed, minimised: RMSD Å \
+             | steps | vdW | elec | reorg (ligand's) | ΔE vac | polar | ΔSASA Å² | nonpolar | total | closest \
+             H–H Å |"
         );
         let mut rows = Vec::new();
         for e in &ENTRIES {
@@ -840,11 +954,12 @@ fn the_congener_series_against_experiment() {
             if e.code == "181L" {
                 assert_181l_unchanged(cutoff, &m);
             }
-            let (c, n) = (&m.crystal, &m.minimised);
+            let (c, r, n, q) = (&m.crystal, &m.relaxed, &m.minimised, &m.relaxed_minimised);
             eprintln!(
-                "| {} | {} | {:.2} ± {:.2} | {} | {} | {:+} | {:.2} | {:.2} | {:.2} | {:+.2} | {:.1} \
-                 | {:.2} | {:.2} | {:.2} ({} to {}) | {:.2} | {:.2} | {:.2} | {:.2} | {:.3} | {} | \
-                 {:.2} | {:.2} | {:.2} | {:+.2} | {:.1} | {:.2} | {:.2} |",
+                "| {} | {} | {:.2} ± {:.2} | {} | {} | {:+} | {:.2} | {:.2} | {:.2} | {:+.2} | {:.2} \
+                 | {:.2} ({} to {}) | {:.2} | {:.2} | {:+.2} ({:+.2}) | {:.2} | {:+.2} | {:.1} | {:.2} | \
+                 {:.2} | {:.2} ({} to {}) | {:.2} | {:.3} | {:.2} | {:.2} | {:.3} | {} | {:.2} | \
+                 {:.2} | {:+.2} ({:+.2}) | {:.2} | {:+.2} | {:.1} | {:.2} | {:.2} | {:.2} |",
                 e.code,
                 e.name,
                 e.dg.0,
@@ -856,27 +971,51 @@ fn the_congener_series_against_experiment() {
                 c.elec,
                 c.vacuum(),
                 c.polar,
-                c.area,
-                c.nonpolar,
                 c.total(),
                 m.contact.0,
                 m.contact.1,
                 m.contact.2,
-                m.relaxed.0,
-                m.relaxed.1,
-                m.relaxed.0 + m.relaxed.1,
-                m.relaxed_contact,
+                r.vdw,
+                r.elec,
+                r.reorganisation,
+                r.reorganisation_ligand,
+                r.vacuum(),
+                r.polar,
+                r.area,
+                r.nonpolar,
+                r.total(),
+                m.relaxed_contact.0,
+                m.relaxed_contact.1,
+                m.relaxed_contact.2,
+                m.every_hydrogen_free,
                 m.rmsd,
-                m.steps,
-                n.vdw,
-                n.elec,
                 n.vacuum(),
-                n.polar,
-                n.area,
-                n.nonpolar,
-                n.total()
+                n.total(),
+                m.relaxed_rmsd,
+                m.steps,
+                q.vdw,
+                q.elec,
+                q.reorganisation,
+                q.reorganisation_ligand,
+                q.vacuum(),
+                q.polar,
+                q.area,
+                q.nonpolar,
+                q.total(),
+                m.relaxed_minimised_contact
             );
             rows.push(m);
+        }
+        if cutoff == 6.0 {
+            eprintln!(
+                "\n6 Å at {:.0e} against 2c-2's 1e-4 kcal/mol/Å, where 1e-4 converges:\n| entry | \
+                 |ΔE relaxed| | |ΔE relaxed, minimised| | ligand RMS apart Å | 1e-4 converged |",
+                H_TOL / KCAL_PER_MOL_ANGSTROM
+            );
+            for (e, m) in ENTRIES.iter().zip(&rows) {
+                let (a, b, c, ok) = m.tight.expect("measured at 6 Å");
+                eprintln!("| {} | {a:.1e} | {b:.1e} | {c:.1e} | {ok} |", e.code);
+            }
         }
         let col = |f: &dyn Fn(&Measured) -> f64| rows.iter().map(f).collect::<Vec<f64>>();
         eprintln!(
@@ -887,12 +1026,28 @@ fn the_congener_series_against_experiment() {
         for (label, calc) in [
             ("ΔE vacuum, crystal", col(&|m| m.crystal.vacuum())),
             ("total, crystal", col(&|m| m.crystal.total())),
+            ("ΔE vacuum, hydrogens relaxed", col(&|m| m.relaxed.vacuum())),
+            ("total, hydrogens relaxed", col(&|m| m.relaxed.total())),
             (
-                "ΔE vacuum, hydrogens relaxed",
-                col(&|m| m.relaxed.0 + m.relaxed.1),
+                "ΔE vacuum, every hydrogen free",
+                col(&|m| m.every_hydrogen_free),
             ),
-            ("ΔE vacuum, minimised", col(&|m| m.minimised.vacuum())),
-            ("total, minimised", col(&|m| m.minimised.total())),
+            (
+                "ΔE vacuum, minimised from crystal",
+                col(&|m| m.minimised.vacuum()),
+            ),
+            (
+                "total, minimised from crystal",
+                col(&|m| m.minimised.total()),
+            ),
+            (
+                "ΔE vacuum, relaxed and minimised",
+                col(&|m| m.relaxed_minimised.vacuum()),
+            ),
+            (
+                "total, relaxed and minimised",
+                col(&|m| m.relaxed_minimised.total()),
+            ),
         ] {
             eprintln!("{}", statistics(label, &exp, &calc));
         }

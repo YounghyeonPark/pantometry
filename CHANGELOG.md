@@ -640,7 +640,175 @@ protects nothing.
   its offset, and the slope's denominator. The 7 on the series: one pocket atom unfrozen, ΔSASA's
   sign, the cross van der Waals' sign, hydrogens not relaxed, the hydrogen relaxation cut to 5
   steps, the minimiser cut to 20 steps, and the surface tension at 0.0051. The last is caught only by 181L's committed numbers. 200 tests in
-  the crate, and five ignored.
+  the crate, and five ignored. *Superseded by step A-1 below: the "hydrogens relaxed" pose was a
+  test helper outside `Binding`, with no solvation and the fragments taken at the complex's
+  positions. `Binding::relaxing_hydrogens` replaces it, and the two sabotages of that helper went
+  with it.*
+- **`pantometry-forcefield` relaxes each system's own hydrogens as part of the binding
+  calculation, and the three crystal-pose hydrogen clashes are gone — step A-1.** **What was
+  wrong**: every hydrogen in a `Binding` is placed, the protein's by 2c-1's rotor rule (which
+  scores heavy atoms only) and the ligand's by its template, and neither placement sees the other
+  partner's. At the crystal pose three of the nine T4 lysozyme L99A complexes clash hydrogen to
+  hydrogen: indene (183L) H12–Val111 HG13 at 1.41 Å, van der Waals **+224.4 kcal/mol**;
+  n-butylbenzene (186L) 1.65 Å, +80.8; ethylbenzene (1NHB) 1.64 Å, +12.8. 2c-3a worked around
+  this in a test helper outside `Binding`. That helper relaxed every hydrogen on the complex's
+  force field and took the fragments at the complex's positions. A `Binding` could not move a
+  pocket atom, so that pose had no solvation numbers. Its fragments also kept whatever their
+  hydrogens had bent to make room for the partner, strain the apo pocket would not have, and
+  counted it as binding. **New**: `Binding::relaxing_hydrogens(max_steps, tolerance)` and
+  `relaxing_hydrogens_of(mask, …)`. Each relaxes, in each of the three systems, that system's own
+  hydrogens with every heavy atom frozen (`Minimiser::with_frozen`): first the complex, then the
+  pocket alone and the ligand alone, each from where the complex left it. Then `ΔE_bind =
+  E(complex, H relaxed) − E(pocket, its own H relaxed) − E(ligand, its own H relaxed)`, and the OBC
+  II solvation and ΔSASA are taken at each system's own positions. `Binding` holds the fragments'
+  positions beside the complex's (`pocket_alone_positions`, `ligand_alone_positions`).
+  `Interaction::reorganisation` is new: `[E(pocket) at the complex's positions − at its own] +
+  [the same for the ligand]`, term by term. `Interaction::total()` adds it. Also new:
+  `HydrogenRelaxation` (where each of the three stopped), `free_hydrogens()` and
+  `Binding::HYDROGEN_TOLERANCE`. **An unrelaxed binding is unchanged to the bit**: its
+  reorganisation is exactly zero and not computed, its fragments' positions are the complex's
+  slices, and 2c-2's committed 181L numbers are still asserted by the series. `minimise_ligand`
+  on a relaxed binding moves the pocket's free hydrogens with the ligand (heavy atoms still
+  frozen), relaxes both fragments again, and stays relaxed. `ligand_at` returns an unrelaxed binding, since its
+  hydrogens were relaxed against the old pose. `moved` carries the fragments with it. **The
+  choices**, each stated in the `binding` module documentation:
+  - **Each fragment at its own minimum** is the consistent definition, because ΔE_bind is a
+    reaction energy and each side is taken at its own minimum.
+  - **Each fragment starts from the complex's relaxed hydrogens, not from the placement.**
+    Started apart, two minimisers on the same flat rotor landscape can stop in different minima
+    for reasons unrelated to binding. Started from the complex, a fragment moves only where the
+    partner's removal pushes it. The reorganisation is then never negative, and it vanishes
+    exactly when the partner exerts no force. This is not a search: a fragment whose best
+    arrangement lies in another basin is not found there.
+  - **Pocket hydrogens beyond the cutoff are held — a truncation, with a measured cost.** A pocket
+    hydrogen is free only when its heavy parent is within the cutoff of a ligand atom, which is
+    the pocket's own rule applied to atoms; on benzene that frees 106 of the pocket's 167. The
+    held ones do feel the ligand: at the relaxed complex the partner's force on them is 0.001–0.14
+    kcal mol⁻¹ Å⁻¹ on four entries measured, nearly all of it above the tolerance. Freeing all of
+    them moves benzene's relaxed ΔE by 0.25 kcal/mol at 6 Å and its reorganisation by 1.4 (+2.62 to
+    +4.03). On the other eight the relaxed ΔE moves by at most 0.10 at 6 Å and 0.03 at 8 Å, and
+    benzene's relaxed-and-minimised ΔE by 0.016. The rule is kept because it is the pocket's own
+    and because the outer hydrogens relax against the cut as well as against the ligand, not
+    because they carry no information.
+  - **The tolerance is 2e-3 kcal mol⁻¹ Å⁻¹, not 2c-2's 1e-4, and the reason is empirical.** At
+    1e-4 the minimiser stalled four times on the series, at 1.57, 1.61, 1.74 and 4.27e-4
+    kcal mol⁻¹ Å⁻¹, and 2e-3 converges on all 18 entry-cutoff pairs: every relaxation and every
+    minimisation from a relaxed complex, every-hydrogen-free comparison included. **Against 1e-4
+    on benzene at 6 Å, where 1e-4 converges, a test asserts that the looser tolerance moves no
+    printed digit**: ΔE_bind and the reorganisation within 5e-3 kcal/mol (measured 6e-7 relaxed,
+    2.8e-5 minimised), the minimised ligand within 5e-4 Å RMS (measured 1.7e-4). Each system's
+    two energies also lie within a convexity bound computed from their own forces and
+    displacements. The series prints the same comparison for all nine at 6 Å: the relaxed ΔE
+    within 6e-7 on eight and 0.040 on p-xylene, whose two runs end in neighbouring minima; the
+    minimised ΔE within 3.2e-4; the minimised ligands within 4.2e-4 Å RMS. **Why a pocket stalls,
+    as a scale and not a bound**: these energies are sums of 0.5–3.8·10⁵ terms whose totals reach
+    −39,600 kcal/mol, and a 1e-9 Å nudge of one free atom moves the sum by a rounding noise δE that
+    varies from nudge to nudge. Over 300 nudges of benzene's 6 Å pocket the median is 3.6e-12
+    kcal/mol and the largest 2.1e-11, about six times the first draw; single draws on the 8 Å
+    pockets reach 1.8e-10. The last steps along an N–H or O–H stretch (k ≈ 1190 kcal mol⁻¹ Å⁻²,
+    measured) lower the energy by only `g²/2k`, so `√(4kδE)`, between 1.3e-4 and about 2e-3 over
+    that spread, is the order of the force below which the decrease can drown in the noise. That
+    is where the stalls were. It does not predict where a given run stops: 1e-4 converges on
+    benzene at 6 Å, where the formula gives 3.2e-4. **A stall is now a failure everywhere in the
+    series**, since accepting one accepted it at any force. The first version allowed the
+    every-hydrogen-free comparison to stall, and with its tolerance sabotaged to 1e-6 every one of
+    those relaxations stalled and the series passed.
+  - The charges stay QEq's at the crystal's positions, as everywhere in `binding`.
+
+  **Checked by identities and exact facts**, in `benzene_in_its_pocket.rs` (eight new default
+  tests and one ignored), and on all nine entries in the series:
+  - the mask is the rule, recomputed from the system's bonds. Every atom it holds — every heavy
+    atom, and every pocket hydrogen beyond the cutoff — is at its crystal position bit for bit in
+    the complex, the pocket alone and the ligand alone. The ligand alone's heavy atoms are the
+    minimised complex's bit for bit. In each system some hydrogen moved from the crystal (112, 106
+    and 6 on benzene), and in each fragment some hydrogen moved from where the complex left it
+    (106 and 6). Each fragment's relaxation took steps at the crystal pose;
+  - each system's free atoms are converged on that system's **whole** force field (not the reduced
+    one the minimiser used), heavy atoms' forces excluded: the largest is 1.8e-3 against 2e-3. Each
+    relaxation had work to do, with a free atom at 113, 21 and 13 kcal mol⁻¹ Å⁻¹ at its start;
+  - each relaxation lowers its own system's energy, to twice the two evaluations' summation
+    rounding: the complex by 74.6 kcal/mol, the pocket by 1.06 and benzene by 1.56;
+  - **ΔE_relaxed = the cross terms at the complex's positions + the pocket's and the ligand's
+    reorganisation**, field by field. Every part is evaluated in the test (the cross sums over all
+    310 × 12 pairs, the five energies by the fragments' force fields), to the rounding of the
+    sums. The difference agrees to 2.7e-13 kcal/mol relaxed and 3.4e-12 relaxed and minimised. The
+    crate's `reorganisation` is the two brackets. The identity holds for any fragment positions,
+    so it catches an energy taken at the wrong positions or a missing bracket, not fragments left
+    unrelaxed;
+  - **the desolvation is rebuilt at each system's own positions** on the relaxed binding and the
+    one minimised from it, as 2c-2's test does at the crystal and minimised poses: ΔG_GB of each
+    system from `born_radii` and eq 2–3, every atom's area, and ΔSASA bit for bit. The fragments'
+    positions are asserted to differ from the complex's;
+  - **far away the fragments' relaxations are the complex's exactly.** Each fragment starts where
+    the force on it is the complex's less the partner's. The test asserts the bound `|F_complex| +
+    |F_partner| ≤ tolerance` on every free atom, from which the fragments take no step: their
+    positions are the complex's bit for bit and the reorganisation is exactly zero. ΔE_bind, the
+    polar term and ΔSASA then lie inside 2c-2's tail bounds. This uses 10⁴ and 10⁵ Å, not 10³: at
+    10³ Å the pocket's +1 still pulls a benzene hydrogen with 3.3e-5 kcal mol⁻¹ Å⁻¹, against
+    3.3e-7 at 10⁴;
+  - a relaxed binding moved whole takes its fragments with it, bit for bit;
+  - **relaxed, no ligand hydrogen is within 1.8 Å of a pocket hydrogen**. At that distance UFF's
+    H···H pair is +11.2 kcal/mol, which the test computes and asserts repulsive. Measured minima
+    are 1.94 Å relaxed (indene) and 2.14 Å relaxed and minimised, against 1.41 at the crystal pose.
+
+  Seventeen sabotages, each restored by copying the original back, touching it and checking its
+  SHA-256, and each caught by the check it targeted. Four came from `numerics-reviewer`, and each
+  passed every test before its fix and is caught after it: `HYDROGEN_TOLERANCE` at 1e-1 (by the
+  tolerance test), the desolvation's fragments put back at the complex's slices (by the rebuilt
+  desolvation), both fragment relaxations skipped (caught before only by the convergence test,
+  now also by the moved-from-the-complex check and the rebuilt desolvation), and the
+  every-hydrogen-free relaxation at 1e-6 (by the series, now that a stall fails). The other
+  thirteen: a heavy atom unfrozen; the mask taken from
+  the hydrogen's own distance and not its parent's; the pocket's relaxation cut to 5 steps; the
+  pocket relaxed into a copy and reported converged, which only the whole-force-field force check
+  sees; a ligand hydrogen displaced 0.1 Å after relaxing; the ligand alone's energy at the
+  complex's positions; the reorganisation without the ligand's bracket; the pocket relaxed from
+  the placement and not the complex, which only the far-field test sees (106 steps); `ligand_at`
+  keeping the relaxation; `moved` leaving the pocket behind; `minimise_ligand` not relaxing the
+  fragments again; an unrelaxed ligand alone at the crystal pose; and the complex left unrelaxed,
+  caught by the H–H threshold on 183L at 1.41 Å. **Before and after, 6 Å, kcal/mol**:
+
+  | entry | closest H–H Å, crystal → relaxed → relaxed and minimised | vdW crystal → relaxed | ΔE vac crystal | relaxed: ΔE vac (reorganisation, ligand's share) | total | RMSD Å from crystal H → from relaxed | ΔE vac minimised from crystal H → from relaxed | total minimised from relaxed |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 181L benzene | 1.89 → 2.07 → 2.33 | −11.29 → −17.17 | −12.43 | −16.14 (+2.62, +1.56) | −9.25 | 0.809 → 0.902 | −22.35 → −22.55 | −15.86 |
+  | 182L benzofuran | 1.85 → 2.03 → 2.29 | −14.04 → −24.23 | −16.69 | −25.18 (+2.68, +1.34) | −14.59 | 0.566 → 0.511 | −27.65 → −29.38 | −18.53 |
+  | 183L indene | **1.41** → 1.94 → 2.14 | **+224.44** → −16.66 | +222.95 | −7.26 (+11.38, +4.22) | +2.68 | 0.749 → 0.629 | −24.18 → −24.25 | −14.11 |
+  | 184L isobutylbenzene | 1.68 → 2.12 → 2.18 | −6.50 → −34.40 | −7.16 | −33.20 (+2.56, +0.79) | −17.13 | 0.667 → 0.643 | −33.16 → −32.06 | −13.05 |
+  | 185L indole | 1.97 → 2.05 → 2.16 | −20.31 → −22.89 | −22.21 | −23.30 (+2.15, +0.73) | −13.23 | 0.148 → 0.209 | −26.54 → −25.67 | −15.30 |
+  | 186L n-butylbenzene | **1.65** → 1.95 → 2.21 | **+80.80** → −13.50 | +79.79 | +8.80 (+23.80, +12.50) | +26.12 | 0.551 → 0.509 | −30.02 → −29.16 | −10.23 |
+  | 187L p-xylene | 1.88 → 2.03 → 2.27 | −14.00 → −25.06 | −14.01 | −23.12 (+2.33, +1.08) | −13.56 | 0.483 → 0.443 | −29.64 → −28.31 | −18.56 |
+  | 188L o-xylene | 1.87 → 2.06 → 2.19 | −18.39 → −24.02 | −19.12 | −21.91 (+2.92, +1.19) | −12.75 | 0.446 → 0.398 | −29.14 → −28.63 | −19.28 |
+  | 1NHB ethylbenzene | **1.64** → 2.12 → 2.19 | **+12.77** → −23.55 | +11.95 | −16.00 (+8.85, +3.20) | −4.06 | 0.370 → 0.403 | −27.51 → −26.76 | −14.70 |
+
+  **The clash is gone and van der Waals is attractive in every entry, but on the crystal's heavy
+  atoms two complexes still pay for it.** Indene's relaxed hydrogens cost +11.4 kcal/mol of
+  reorganisation and n-butylbenzene's +23.8, of which +12.5 is the ligand's own. The crystal
+  heavy-atom pose is tighter than UFF's 2.886 Å hydrogen allows, and minimising the ligand
+  releases it (+1.5 and +5.4). The cross terms alone, 2c-3a's "hydrogens relaxed" column, were
+  −18.62 and −14.99. That column is reproduced exactly: benzene's cross terms with every hydrogen
+  free are −20.42 here as there. What it left out was this reorganisation. **The pose moves
+  little**: −0.12 to +0.09 Å RMSD against the pose minimised from the placed hydrogens. The
+  minimised vacuum ΔE moves by −1.73 to +1.33 kcal/mol, partly because it now includes the
+  reorganisation that remains (+0.57 to +5.36). **Against ΔG°exp, n = 9, 95% Fisher intervals**
+  (computed as 2c-3a did; nothing asserted):
+
+  | column | 6 Å Pearson r | Spearman ρ | slope | RMS after offset | 8 Å Pearson r | Spearman ρ | slope | RMS after offset |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | ΔE vac, relaxed | −0.33 [−0.82, +0.43] | −0.15 [−0.75, +0.59] | −5.30 | 11.76 | −0.32 [−0.81, +0.44] | −0.15 [−0.75, +0.59] | −5.03 | 11.65 |
+  | total, relaxed | −0.52 [−0.88, +0.22] | −0.17 [−0.76, +0.58] | −9.27 | 13.18 | −0.56 [−0.89, +0.17] | −0.18 [−0.77, +0.56] | −10.50 | 13.84 |
+  | ΔE vac, relaxed and minimised | +0.48 [−0.27, +0.87] | +0.40 [−0.38, +0.85] | +1.84 | 2.49 | +0.51 [−0.23, +0.88] | +0.45 [−0.33, +0.86] | +2.03 | 2.55 |
+  | total, relaxed and minimised | −0.81 [−0.96, −0.33] | −0.80 [−0.96, −0.27] | −3.16 | 3.38 | −0.87 [−0.97, −0.50] | −0.70 [−0.93, −0.04] | −4.90 | 4.65 |
+
+  Beside 2c-3a's minimised columns (+0.46 and −0.77 at 6 Å, unchanged here), **relaxing the
+  hydrogens does not make the series rank.** The vacuum intervals still contain zero. With n = 9,
+  r must pass 0.666 to differ from zero at the two-sided 5% level. The solvated total still
+  correlates on the wrong side, for 2c-3a's reason: the polar term grows with the ligand and with
+  the cutoff. At the crystal's heavy atoms the relaxed columns anticorrelate weakly. The driver is
+  n-butylbenzene: it binds best, and its +23.8 reorganisation makes its relaxed ΔE the worst,
+  +8.80. The series test is updated to the relaxed `Binding`, with the every-hydrogen-free
+  comparison and the ligand's share of the reorganisation as columns. It takes 112 s with
+  `--release -- --ignored`. The benzene file's default tests take 13.4–13.8 s unoptimised, against
+  13 s before. 208 tests in the crate, and six ignored.
 
 ### Changed
 
