@@ -191,6 +191,9 @@ pub enum Coordinates {
     /// `model_Cartn_*`: the component as observed in a deposited structure, used only because at
     /// least one atom had no ideal coordinate.
     Model,
+    /// Not a dictionary entry's at all: a PDB entry's heavy atoms with hydrogens placed on them,
+    /// assembled by [`crate::pdb::System::from_pdb`].
+    Structure,
 }
 
 /// One atom of a component.
@@ -503,7 +506,22 @@ impl Component {
         })
     }
 
-    /// The component's code in the dictionary, `AIN`.
+    /// A component assembled from parts already checked by the caller — [`crate::pdb`]'s, whose
+    /// atom names are unique by construction and whose bonds join distinct atoms once each.
+    pub(crate) fn assembled(id: String, atoms: Vec<Atom>, bonds: Vec<Bond>) -> Component {
+        Component {
+            id,
+            name: None,
+            formula: None,
+            formal_charge: None,
+            atoms,
+            bonds,
+            coordinates: Coordinates::Structure,
+        }
+    }
+
+    /// The component's code in the dictionary, `AIN`; for an assembled structure, the PDB entry's
+    /// code, `181L`.
     pub fn id(&self) -> &str {
         &self.id
     }

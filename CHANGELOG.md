@@ -346,6 +346,97 @@ protects nothing.
   relabelled a documented measurement — it calls no crate code — and the pair integral gains the
   case `s > r` with `ρ̃ > s − r`. An unverified sentence that AMBER's integral has the inside term
   is removed. 140 tests in the crate.
+- **`pantometry-forcefield` reads a protein and its ligand into one typed system: T4 lysozyme
+  L99A with benzene, PDB 181L — step 2c-1 of the binding energy.** New module `pdb`:
+  `System::from_pdb(text, templates, &Selection)` reads a PDB-format entry (fixed columns, the
+  simpler of the two formats to read strictly) and gives back one `Component` that `uff::assign`,
+  `ForceField::new`, `qeq` and `solvation` take unchanged, with every atom marked `Part::Protein`
+  or `Part::Ligand`. Bond orders, aromatic flags and hydrogens come from the dictionary entries of
+  the twenty amino acids and the ligand, passed in; `Coordinates::Structure` is new and says so.
+  It does not depend on `pantometry-protein`: no domain does on another. **Hydrogens** are carried
+  from each template by Horn's closed-form quaternion superposition (deterministic Jacobi), **not
+  of the whole residue but of the hydrogen's parent and its heavy neighbours** — a fragment that
+  never spans a torsion — because the whole-residue fit misses by up to 1.94 Å (Arg8; mean
+  0.89 Å) where a side chain's χ angles are not the dictionary conformer's; the fragments fit to
+  0.029 Å on average and 0.106 Å at worst (Trp126's CA). The backbone amide H is rebuilt on the
+  external bisector of `C(i−1)–N–CA` at the template's N–H length, and a rotor (methyl, hydroxyl,
+  NH₃⁺) is turned in 10° steps to the step whose nearest heavy atom is farthest: **the
+  dictionary's own torsion put Lys162's HZ3 1.495 Å from Asp159's OD1**, which the rule clears;
+  186 rotor hydrogens moved. **Protonation at pH 7 by a stated table on the templates' own state,
+  which is mixed**: every template is a free amino acid (NH₂, COOH), Asp and Glu are drawn neutral
+  and Lys, Arg and His charged (+1), so Asp/Glu lose HD2/HE2 (−1), Lys and Arg are kept (+1), the
+  termini are NH₃⁺ (an `H3` added) and COO⁻, and **a histidine with either ring N within 3.2 Å
+  of an Asp or Glu carboxylate O is a salt bridge, doubly protonated (+1); any other is neutral on
+  Nε2**. **T4 lysozyme's one histidine, His31, has Nδ1 2.66 Å from Asp70's Oδ2, so it is +1** —
+  the pair of Anderson, Becktel and Dahlquist, "pH-Induced Denaturation of Proteins: A Single Salt
+  Bridge Contributes 3–5 kcal/mol to the Free Energy of Folding of T4 Lysozyme", *Biochemistry*
+  29, 2403 (1990), title and citation verified, body not read. **The rule was first written the
+  other way round** — neutral, with the H on the ring N facing the carboxylate — which made His31
+  δ-protonated and the total +8; a carboxylate at 2.66 Å is an ion pair, and the rule now says so.
+  `Selection::histidine` sets any of the three states for one residue. **Strict**: more than one model, an
+  insertion code, a hydrogen in the file, an atom the template lacks or of another element, a
+  residue missing any heavy atom (every name listed), a chain break by number or by a C–N past
+  2.0 Å, a residue that is not `SEQRES`'s, an unnamed `HETATM` residue, a ligand other than once,
+  an N-terminal proline, a template without the atoms the rules name, and a sulfur with two
+  disulfide partners are each a `PdbError` naming it. Disulfides are found by SG–SG ≤ 2.5 Å and are
+  divalent `S_3+2`, not the hypervalent sulfur `ForceField::new` refuses. **181L**: 162 of 164
+  residues modelled (Asn163 and Leu164 are `REMARK 465`'s, so Lys162 is the C-terminus and its
+  `OXT`, the one heavy atom not read, is placed by the same superposition); 136 waters, two
+  chlorides and one 2-hydroxyethyl disulfide dropped and counted; no alternate locations;
+  2616 atoms (2604 protein, 12 benzene), 161 peptide bonds, no disulfide (C54T, C97A); **formal
+  charge +9**: Arg 13 + Lys 13 − Asp 10 − Glu 8 = +8 counted from `SEQRES`, and His31 +1 by the
+  rule applied in the test to the file's coordinates. Typed with no
+  refusal — `C_3` 509, `C_R` 276, `C_2` 32, `N_R` 182, `N_3` 40, `N_2` 13, `O_2` 196, `O_3` 37,
+  `O_R` 6, `S_3+2` 5, `H_` 1320 — and `ForceField::new` builds 3 413 030 pairs. **Two typings the
+  rules give, known and left for 2c-2**: a carboxylate is one `O_2` and one `O_3`, not two
+  equivalent oxygens, and arginine's guanidinium is `N_3`, `N_3`, `N_2` around a `C_2`, not
+  resonant; both follow from the Kekulé structure the dictionary writes. **QEq on the pocket**
+  (benzene and the 18 residues within 6 Å: 322 atoms, total +1): converged in 31 solves, none at
+  a bound, 8.5 s unoptimised, and unchanged by His31's charge, which is outside it; its 322 atoms,
+  +1, empty bound list and His31's absence are asserted. Within 8 Å — 43 residues and benzene,
+  719 atoms, +3 — benzene's charges move by at most 0.0023 e (C −0.10 to −0.12 e, H +0.095 to
+  +0.146 e), asserted ≤ 0.004 e by a test ignored by default because it takes 66 s unoptimised
+  (9.5 s with `--release -- --ignored`). The 0.004 e first reported was measured before rotors
+  were turned. **Open**:
+  the hydrogen iteration takes 31 solves on both pockets, against the paper's six to ten; it
+  converges, and why it is slower is not yet known. The whole protein is
+  not solved here: the N³ scaling of the pocket puts it past an hour unoptimised. **Checked
+  against the entry and closed forms, not pinned outputs**: every template heavy atom present at
+  the file's coordinates bit for bit; the sequence `SEQRES`'s and the unmodelled residues
+  `REMARK 465`'s; one bond per hydrogen; every heavy atom's Kekulé bond orders equal to its
+  valence with its formal charge; each residue's formula the textbook residue's adjusted by the
+  rule; the total the sequence's; residues − 1 peptide bonds; one N-terminus at residue 1 and one
+  C-terminus at 162; the placement rules run on the atoms they name — 158 backbone H (161 residues
+  after the first, less three prolines, counted from `SEQRES`) and one N-terminal H3, which makes
+  more than 100° with each of the other three bonds (measured 111.7–112.4°); every superposed
+  hydrogen at its template's bond length — asserted below 1e-12 relative, measured 1.0e-14, the
+  rounding of coordinates near 50 Å — and within `asin(2 √k rmsd / |X − P|)` of its template's angle
+  to each heavy neighbour — the bound its own fit earns by the triangle inequality, met at 0.585
+  of it at worst (8.65°, Trp126 HA–CA–N); the backbone H coplanar, equidistant in angle and
+  external; every fit no worse than a three-atom frame superposition built in the test **and no
+  better than distances allow** — `rmsd ≥ max |Δd_ij| / √(2k)`, from `|Δd_ij| ≤ |e_i| + |e_j|`
+  and `Σ |e|² = k rmsd²`, held for every whole-residue and fragment fit (the whole-residue fits
+  sit at 1.32 or more times it), so a residual reported as zero is caught; every rotor's chosen
+  step at least as clear as the dictionary's torsion, put back in the test by its reported turn,
+  every turn whole 10° steps (72 rotors, 186 hydrogens), and Lys162's NH₃⁺ named: 1.495 Å from
+  Asp159's OD1 at the dictionary's torsion and 1.923 Å turned, asserted > 1.8; and no hydrogen
+  within 1.5 Å of a heavy atom. **Measured, not hidden**: one contact below 1.6 Å
+  (Thr54 H to Asp47 OD1, 1.540 Å, from an N···O of 2.53 Å in the crystal), 14 below 1.8, 66
+  below 2.0, 131 below 2.2. A disulfide is checked on two cysteines built for it. Every refusal is
+  fed its input, the two template guards — a histidine without its CE1–NE2 bond, a methionine
+  with an H3 already — included. Each of forty sabotages was caught, each restored by copying the
+  original back, touched, and its SHA-256 checked. **Eight passed, or were caught only by
+  accident, until a test was added for them**: a dropped type's atoms counted once per residue
+  (181L's repeated types are one atom each, so a second 8-atom HED was added); the δ histidine's
+  Kekulé structure left unmoved (once the rule stopped reaching Nδ1 on 181L, only the overrides do,
+  so their valence is now checked); the backbone rule switched off and a rotor keeping its worst
+  step, each caught only by the clash test; the N-terminal H3 pointed inward; the whole-residue
+  RMSD reported as zero; hydrogen's QEq range narrowed so charges clamp; and the entry's code
+  ignored. A review (`unearned-pass-hunter`) found the last six; each now fails a test of its own
+  rule, run before and after the fix. Fixtures: the twenty amino acids and `BNZ` from the dictionary
+  and 181L as fetched, each with its SHA-256 in `components/README.md`, beside the eight other
+  entries of the 1995 papers (182L–188L, 1NHB) recorded and not used. 185 tests in the
+  crate, and one ignored.
 
 ### Changed
 

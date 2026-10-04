@@ -4,6 +4,8 @@
 //! meaningless without failing one. The dictionary entries state their formula; the hand-built
 //! ones are checked against the formula of the molecule their first line names, typed here.
 
+mod protein;
+
 use pantometry_forcefield::{uff, Component, Element};
 use std::collections::BTreeMap;
 
@@ -41,6 +43,7 @@ fn check(id: &str, text: &str, stated: &str) {
 
 #[test]
 fn every_component_is_the_molecule_it_says() {
+    let mut seen: Vec<&str> = Vec::new();
     for (id, text) in [
         ("NME", include_str!("../components/NME.cif")),
         ("MOH", include_str!("../components/MOH.cif")),
@@ -62,6 +65,27 @@ fn every_component_is_the_molecule_it_says() {
         ("TME", include_str!("../components/TME.cif")),
         ("6AC", include_str!("../components/6AC.cif")),
         ("DMF", include_str!("../components/DMF.cif")),
+        ("ALA", include_str!("../components/ALA.cif")),
+        ("ARG", include_str!("../components/ARG.cif")),
+        ("ASN", include_str!("../components/ASN.cif")),
+        ("ASP", include_str!("../components/ASP.cif")),
+        ("CYS", include_str!("../components/CYS.cif")),
+        ("GLN", include_str!("../components/GLN.cif")),
+        ("GLU", include_str!("../components/GLU.cif")),
+        ("GLY", include_str!("../components/GLY.cif")),
+        ("HIS", include_str!("../components/HIS.cif")),
+        ("ILE", include_str!("../components/ILE.cif")),
+        ("LEU", include_str!("../components/LEU.cif")),
+        ("LYS", include_str!("../components/LYS.cif")),
+        ("MET", include_str!("../components/MET.cif")),
+        ("PHE", include_str!("../components/PHE.cif")),
+        ("PRO", include_str!("../components/PRO.cif")),
+        ("SER", include_str!("../components/SER.cif")),
+        ("THR", include_str!("../components/THR.cif")),
+        ("TRP", include_str!("../components/TRP.cif")),
+        ("TYR", include_str!("../components/TYR.cif")),
+        ("VAL", include_str!("../components/VAL.cif")),
+        ("BNZ", include_str!("../components/BNZ.cif")),
     ] {
         let c = Component::from_ccd(text).expect("parses");
         let stated = c
@@ -70,6 +94,14 @@ fn every_component_is_the_molecule_it_says() {
             .to_string();
         assert_eq!(c.id(), id);
         check(id, text, &stated);
+        seen.push(id);
+    }
+    // Every template the protein tests use is held here too, so the two lists cannot drift.
+    for code in protein::CODES {
+        assert!(
+            seen.contains(&code),
+            "{code} is a protein template and is not checked here"
+        );
     }
     for (id, text, stated) in [
         ("ethane", include_str!("hand_built/eta.cif"), "C2 H6"),

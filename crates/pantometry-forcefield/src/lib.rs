@@ -32,6 +32,13 @@
 //!   force through the Born radii at fixed charges. [`ForceField::with_generalized_born`] adds it
 //!   to the energy and the force; vacuum stays the default. A Shrake–Rupley surface gives the
 //!   paper's nonpolar term beside it, as a number, not a force.
+//! - [`System::from_pdb`] reads a protein chain and its ligand out of a PDB entry and makes them one
+//!   [`Component`] the rest of this crate takes unchanged: hydrogens placed by superposing each
+//!   residue's dictionary template on the crystal, bonds with orders (peptide bonds and disulfides
+//!   included), formal charges at pH 7 by stated rules, and every atom marked [`Part::Protein`] or
+//!   [`Part::Ligand`]. Strict, as the dictionary reader is: a missing heavy atom, a gap in a chain,
+//!   a residue that is not the sequence's or an unnamed `HETATM` residue is a [`PdbError`] that
+//!   names it. See [`pdb`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step**, so a run
@@ -72,6 +79,16 @@
 //! radius exactly and Kirkwood's series shows it 5.73% long; eq 6 with eq 8's constants; the
 //! paper's 30 Å bound; and the force against central differences. See [`solvation`].
 //!
+//! A protein against its own entry: T4 lysozyme L99A with benzene (PDB 181L) has every heavy atom
+//! its templates name at the file's coordinates bit for bit, its sequence is `SEQRES`'s with the
+//! two residues `REMARK 465` lists as unlocated, each residue's formula after protonation is the
+//! textbook residue's adjusted by the rule, every heavy atom's bond orders meet its valence with its
+//! formal charge, and the total, +9, is `Arg + Lys − Asp − Glu` counted from `SEQRES` and the
+//! salt-bridged His31 the rule makes +1. Every
+//! placed hydrogen keeps its template's bond length exactly and its angles within a bound its own
+//! fit earns, no hydrogen is within 1.5 Å of a heavy atom, every superposition is no worse than one
+//! built by hand from three atoms, and every refusal is fed the input it refuses.
+//!
 //! The minimiser against geometry whose minimum is known exactly: a diatomic relaxes to eq 2's
 //! natural length, water to its two natural lengths and θ₀ (no non-bonded pair is left in
 //! either), and methane to the regular tetrahedron — each to within the displacement its final
@@ -89,6 +106,7 @@
 //! Those are not correctly rounded and are not required to be the same function on two
 //! machines, so no digest of a minimum is pinned; see [`minimise`]. [`qeq`]'s integrals call
 //! `exp`, with the same consequence for a charge, and [`solvation`] calls `exp`, `ln` and `tanh`.
+//! [`pdb`]'s superposition is arithmetic and `sqrt`, but turning a rotor calls `sin` and `cos`.
 //!
 //! # What is deliberately not in it
 //!
@@ -101,9 +119,14 @@
 //!   paper's own minimised structures did (see [`energy`]). The other question 1d left open, the
 //!   group-6 sp³–sp² torsion's minimum, was settled by typing a conjugated O or S resonant as the
 //!   paper does, after which the row it asked about is reached only by an oxonium oxygen.
-//! - **No ring perception, no bond-order guessing, no protonation.** The dictionary states
-//!   aromaticity, bond orders and explicit hydrogens, and a second opinion computed here could
-//!   only disagree with it. A file without bonds is refused, not guessed at.
+//! - **No ring perception, no bond-order guessing, no protonation of a dictionary entry.** The
+//!   dictionary states aromaticity, bond orders and explicit hydrogens, and a second opinion
+//!   computed here could only disagree with it. A file without bonds is refused, not guessed at.
+//!   The one place protonation is decided is [`pdb`], for the twenty amino acids at pH 7, by a
+//!   table of stated rules applied to the dictionary's templates — no pKa is computed, a histidine
+//!   in a salt bridge is +1 by a stated geometric rule and any other is neutral, and no
+//!   hydrogen-bond network
+//!   is optimised.
 //! - **No elements beyond H, C, N, O, F, P, S, Cl, Br and I**, and no hypervalent sulfur types —
 //!   [`uff::assign`] documents the sulfone gap.
 //! - **No charges unless asked for, no solvent unless asked for, no binding energies.**
@@ -136,6 +159,7 @@ pub mod angular;
 pub mod ccd;
 pub mod energy;
 pub mod minimise;
+pub mod pdb;
 pub mod qeq;
 pub mod solvation;
 pub mod uff;
@@ -144,6 +168,7 @@ pub use angular::{Bend, Inversion, Torsion};
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
+pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use qeq::{Charges, Qeq, QeqError};
 pub use solvation::{GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
