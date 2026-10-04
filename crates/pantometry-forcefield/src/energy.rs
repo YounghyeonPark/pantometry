@@ -3,8 +3,9 @@
 //! Bond stretch, van der Waals and electrostatics here, and angle bend, torsion and inversion in
 //! [`crate::angular`], from Rappé et al., *J. Am. Chem. Soc.* **114**, 10024 (1992) — page and
 //! equation numbers below are that paper's. [`ForceField`] holds every term of one molecule and
-//! gives the energy by term and the force on every atom. Nothing here minimises; that is a later
-//! step, and so is the charge model, without which the electrostatic term is zero by default.
+//! gives the energy by term and the force on every atom. Nothing here minimises — see
+//! [`crate::minimise`] — and the charges are an input, zero by default; [`crate::qeq`] computes the
+//! ones UFF prescribes.
 //!
 //! # Bond stretch (eq 1a, p. 10025)
 //!
@@ -74,10 +75,10 @@
 //! `E = 332.0637 Q_i Q_j / (ε R_ij)` kcal/mol, with Q in elementary charges, R in Å and ε = 1.
 //! **The charges are an input, and default to zero.** The paper (p. 10031) obtained the valence
 //! parameters without partial charges and takes charges, when it uses them, from charge
-//! equilibration; that charge model is step 2. Until it arrives a molecule built here has no
-//! electrostatic energy unless a caller supplies charges with [`ForceField::with_charges`], and
-//! a dictionary's *formal* charges are deliberately not used, because they are not partial
-//! charges.
+//! equilibration. A molecule built here has no electrostatic energy unless a caller supplies
+//! charges — its own with [`ForceField::with_charges`], or QEq's at a stated geometry with
+//! [`ForceField::with_qeq_charges`], fixed there (see [`crate::qeq`]) — and a dictionary's *formal*
+//! charges are deliberately not used as partial charges; QEq takes only their sum, as the total.
 //!
 //! # Exclusions (p. 10031, "G. Nonbonded Exclusions")
 //!
@@ -413,6 +414,8 @@ pub struct ForceField {
     inversions: Vec<Inversion>,
     pairs: Vec<Pair>,
     charges: Vec<f64>,
+    elements: Vec<Element>,
+    total_charge: i32,
 }
 
 impl ForceField {
@@ -573,6 +576,8 @@ impl ForceField {
             inversions,
             pairs,
             charges: vec![0.0; n],
+            elements: atoms.iter().map(|a| a.element).collect(),
+            total_charge: atoms.iter().map(|a| a.charge).sum(),
         })
     }
 
@@ -585,6 +590,34 @@ impl ForceField {
         assert_eq!(charges.len(), self.charges.len(), "one charge per atom");
         self.charges = charges;
         self
+    }
+
+    /// The same terms with **charge-equilibration (QEq) charges** computed at positions `at`
+    /// (metres) — Rappé and Goddard's, the charges UFF prescribes — for the total charge the
+    /// dictionary states atom by atom. See [`crate::qeq`].
+    ///
+    /// **The charges are fixed at `at`.** They are computed once, here, and the force field then
+    /// treats them as constants: its electrostatic force is the derivative at fixed charges, which
+    /// is how the QEq paper uses them ("solved once for a given structure"), and not the derivative
+    /// of an energy whose charges move with the atoms. Call this again at a geometry that has moved
+    /// far. [`ForceField::new`]'s zero charges stay the default, because UFF's valence parameters
+    /// were obtained without charges (p. 10031).
+    ///
+    /// # Errors
+    ///
+    /// Any [`QeqError`](crate::qeq::QeqError).
+    ///
+    /// # Panics
+    ///
+    /// If `at` is not one position per atom, or a position is not finite.
+    pub fn with_qeq_charges(self, at: &[[f64; 3]]) -> Result<ForceField, crate::qeq::QeqError> {
+        assert_eq!(at.len(), self.charges.len(), "one position per atom");
+        let charges = crate::qeq::Qeq::default().equilibrate(
+            &self.elements,
+            at,
+            f64::from(self.total_charge),
+        )?;
+        Ok(self.with_charges(charges.charges))
     }
 
     /// One bond-stretch term per bond, in the component's bond order.

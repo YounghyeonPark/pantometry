@@ -22,6 +22,11 @@
 //! - [`ForceField::minimise`] relaxes a geometry: L-BFGS with an Armijo line search, so the
 //!   energy never rises, to a stated force. [`DihedralRestraint`] holds a dihedral while the
 //!   rest relaxes, which is how the paper's torsion barriers are compared. See [`minimise`].
+//! - [`qeq`] computes charge-equilibration charges (Rappé and Goddard 1991), the ones UFF
+//!   prescribes, at a stated geometry: the exact Slater Coulomb integrals, hydrogen's
+//!   charge-dependent orbital iterated as the paper does, and each misprint and ambiguity in the
+//!   paper settled by reproducing its tables. [`ForceField::with_qeq_charges`] puts them in the
+//!   electrostatic term, fixed at that geometry; zero charges stay the default.
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step**, so a run
@@ -48,6 +53,13 @@
 //! the energy, to a tolerance derived from the step; the energy against translation and rotation;
 //! and the net force against zero.
 //!
+//! QEq against closed forms — every `ns` self-repulsion as an exact fraction, Roothaan's 1s–1s
+//! `J(R)`, `J → 1/R`, very unequal exponents against independent references, the paper's
+//! two-atom eq 18, both ends of the range clamping, the total charge, rigid-motion invariance —
+//! and against its own paper: Table II's eighteen alkali halides, Table III's four hydrogens and
+//! 36 Table IV charges at stated experimental geometries, each to its printed precision plus its
+//! measured sensitivity to the geometry. See [`qeq`].
+//!
 //! The minimiser against geometry whose minimum is known exactly: a diatomic relaxes to eq 2's
 //! natural length, water to its two natural lengths and θ₀ (no non-bonded pair is left in
 //! either), and methane to the regular tetrahedron — each to within the displacement its final
@@ -63,7 +75,8 @@
 //! `sqrt` exactly, but this crate also calls the platform's `cos`, `sin`, `ln`, `asin` and, under a
 //! restraint, `atan2` — on every torsion evaluation as well as when a [`ForceField`] is built.
 //! Those are not correctly rounded and are not required to be the same function on two
-//! machines, so no digest of a minimum is pinned; see [`minimise`].
+//! machines, so no digest of a minimum is pinned; see [`minimise`]. [`qeq`]'s integrals call
+//! `exp`, with the same consequence for a charge.
 //!
 //! # What is deliberately not in it
 //!
@@ -76,18 +89,19 @@
 //!   paper's own minimised structures did (see [`energy`]). The other question 1d left open, the
 //!   group-6 sp³–sp² torsion's minimum, was settled by typing a conjugated O or S resonant as the
 //!   paper does, after which the row it asked about is reached only by an oxonium oxygen.
-//! - **The electronegativities are not from their primary source.** χ is transcribed from Open
-//!   Babel, which copies RDKit; the paper it comes from has not been read. [`uff`] says so where
-//!   the values are, and what the one partial check pins.
 //! - **No ring perception, no bond-order guessing, no protonation.** The dictionary states
 //!   aromaticity, bond orders and explicit hydrogens, and a second opinion computed here could
 //!   only disagree with it. A file without bonds is refused, not guessed at.
 //! - **No elements beyond H, C, N, O, F, P, S, Cl, Br and I**, and no hypervalent sulfur types —
 //!   [`uff::assign`] documents the sulfone gap.
-//! - **No charge model, no solvent, no binding energies.** Electrostatics is computed from
-//!   charges a caller supplies, and they default to zero — the paper's charges come from charge
-//!   equilibration, which is the next step. A hypervalent sulfur is refused by name
-//!   ([`Unsupported`]) rather than given the wrong radius.
+//! - **No charges unless asked for, no solvent, no binding energies.** Electrostatics is computed
+//!   from charges a caller supplies, and they default to zero, because UFF's valence parameters
+//!   were fitted without them (p. 10031 of the UFF paper). QEq's are an option
+//!   ([`ForceField::with_qeq_charges`]), **fixed at the geometry they were computed for**: the
+//!   force treats them as constants, as the QEq paper uses them, so a minimisation with them does
+//!   not re-equilibrate as it moves. Not here: charges that follow the geometry, QEq's
+//!   polarisation extensions, and the generalized Born solvation that is the next step. A
+//!   hypervalent sulfur is refused by name ([`Unsupported`]) rather than given the wrong radius.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.
@@ -98,12 +112,14 @@ pub mod angular;
 pub mod ccd;
 pub mod energy;
 pub mod minimise;
+pub mod qeq;
 pub mod uff;
 
 pub use angular::{Bend, Inversion, Torsion};
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
+pub use qeq::{Charges, Qeq, QeqError};
 pub use uff::{Parameters, TableI, UffType};
 
 use pantometry_core::{Bodies, Domain, Exchange, Kind, Ledger, Reading, Violation};

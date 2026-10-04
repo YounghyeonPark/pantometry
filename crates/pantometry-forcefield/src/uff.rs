@@ -62,14 +62,17 @@
 //! | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 //! | 4.528 | 5.343 | 6.899 | 8.741 | 10.874 | 5.463 | 6.928 | 8.564 | 7.790 | 6.822 |
 //!
-//! **Provenance, stated as it is.** These numbers are transcribed from Open Babel's
-//! `data/UFF.prm`, which says it copies RDKit's. The UFF paper takes χ from the
-//! charge-equilibration paper — A. K. Rappé and W. A. Goddard III, *J. Phys. Chem.* **95**, 3358
-//! (1991) — and **that paper has not been read for this crate.** One partial check exists: the UFF
-//! paper's worked example (p. 10027) gives the Si–`O_3_z` correction as 0.0533 Å, and eq 4 with
-//! Open Babel's χ_Si 4.168 and χ_O 8.741 and Table I's r_Si 1.117 and r_O_3_z 0.528 gives
-//! 0.05325 Å. That pins χ_O (and χ_Si, which this crate does not ship) to the printed precision;
-//! it says nothing about the other nine. The test `the_papers_silicon_oxygen_example` carries it.
+//! **Provenance.** These numbers were first transcribed from Open Babel's `data/UFF.prm`, which
+//! says it copies RDKit's, while the paper they come from had not been read. It has now: the UFF
+//! paper takes χ from the charge-equilibration paper — A. K. Rappé and W. A. Goddard III,
+//! *J. Phys. Chem.* **95**, 3358 (1991) — whose **Table I (p. 3359) prints all ten, equal to these
+//! exactly**, citing the GMP paper (its ref 9). Hydrogen's 4.528 is Table I's 4.5280, fitted in
+//! that paper to experimental charges (eq 22, p. 3361). The test
+//! `uffs_electronegativities_are_table_i` holds the two tables to each other: [`crate::qeq`] reads
+//! the same χ from its own transcription of Table I. The partial check made before the paper was
+//! read still stands: the UFF paper's worked example (p. 10027) gives the Si–`O_3_z` correction as
+//! 0.0533 Å, and eq 4 with χ_Si 4.168 (Table I's) and χ_O 8.741 and Table I's r_Si 1.117 and
+//! r_O_3_z 0.528 gives 0.05325 Å. The test `the_papers_silicon_oxygen_example` carries it.
 //!
 //! # Torsion barriers
 //!
@@ -389,7 +392,7 @@ impl UffType {
 /// Left in eV rather than converted, because the one place it enters — eq 4's `r_EN` — is
 /// homogeneous of degree zero in χ: scaling every χ by one factor leaves `r_EN` unchanged, so the
 /// unit cancels and a conversion would only add a rounding. See the module documentation for the
-/// table and for where these numbers come from, which is **not** their primary source.
+/// table and its source, the QEq paper's Table I.
 pub fn gmp_electronegativity(element: Element) -> f64 {
     match element {
         Element::H => 4.528,

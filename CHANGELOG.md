@@ -199,6 +199,83 @@ protects nothing.
   example files. The scene is filed under the chooser's protein area, renamed *Molecules*: a
   fourteenth area put the last one's tile below the fold of a 950-point window, which
   `every_area_of_the_start_screen_lays_out_at_every_width` caught.
+- **`pantometry-forcefield` computes charge-equilibration (QEq) charges, the ones UFF prescribes —
+  as an option; the default stays zero.** New module `qeq`, from Rappé and Goddard, *J. Phys.
+  Chem.* 95, 3358 (1991), read off the scanned pages: Table I's χ, J, R and ζ for the ten
+  elements; the shielded Coulomb `J_AB` as the exact Coulomb integral between normalised `ns`
+  Slater densities (n = 1 for H, 2 for C–F, 3 for P–Cl, 4 for Br, 5 for I), a finite sum of
+  closed forms whose `∫ v^q e^(−δv)` part is a one-signed power series in `(ζ_A − ζ_B)R`, so equal
+  and nearly equal exponents lose nothing; Table I's idempotential on the diagonal, not the Slater
+  self-integral (carbon's 2s self-repulsion is 8.615 eV against J⁰ 10.126); the dense linear solve
+  by Gaussian elimination with partial pivoting, no dependency; the eq 5/5′ ranges with the
+  paper's fix-at-the-boundary procedure and eq 13; and hydrogen's charge-dependent `ζ_H = ζ⁰ + Q_H`
+  (eq 20), in **every** J it enters, with `J_HH(Q)` (eq 21), iterated from zero to 10⁻¹⁰ e.
+  `qeq::charges(&component, &at)` takes the dictionary's formal charges as the total;
+  `ForceField::with_qeq_charges(&at)` puts them in the electrostatic term, **fixed at that
+  geometry**: the force treats them as constants, which is the paper's usage. **Three things the
+  paper does not say plainly, each settled by reproducing its numbers.** (1) **Eq 12 prints
+  `C_1j = Q_j`; it is `C_1j = 1`**, the row that is eq 9. (2) **Table I's printed ζ is not the ζ
+  the paper's charges were computed with.** It is eq 17 with the fitted λ = 0.4913 — the λ each
+  printed value implies is 0.49123–0.49129 for C, N, F, P, S, Cl, Br and I — while hydrogen's
+  1.0698 is λ = ½ and oxygen's 0.9745 is neither (λ = 0.49280; it is 0.4913 at R = 0.667 Å, not the
+  printed 0.669). The paper rounds to λ = ½ (eq 17′), and only that reproduces Table III: HF's
+  hydrogen 0.4623 against 0.462, 0.4568 with the printed ζ; H₂O 0.3531 against 0.353 (0.3453); NH₃
+  0.2412 against 0.243 (0.2295); CH₄ 0.1497 against 0.149 (0.1342). (3) **The paper's charges are
+  its iteration, not the stationary point of its eq 23**: eq 23's derivative puts `1.5 Q/ζ⁰` where
+  the iteration has `Q/ζ⁰`, and gives HF's hydrogen 0.405. **Provenance closed:** the crate's GMP
+  χ, transcribed from Open Babel, equal Table I exactly for all ten elements, which prints them
+  citing the GMP paper (its ref 9) — `uff`'s note that they were not from their primary source
+  is replaced. Checked against closed forms: every `ns` self-repulsion for n = 1 to 5 against the
+  exact fractions 5/8, 93/256, 793/3072, 26333/131072 and 43191/262144 of ζ (from
+  `J = 2 ∫ p q / r`, a different sum from the code's); two unequal 1s exponents at one centre;
+  Roothaan's equal-exponent 1s–1s `J(R)` at eight distances; `J·R = 1` to 8 ε at 120 bohr for
+  every n pair (`14.39964` eV Å, the paper's 14.4); six points of very unequal exponents at a
+  distance against two references that share no code with the crate — a SymPy closed form for
+  1s–1s and a 40-digit Fourier quadrature — to 10⁻¹² relative; symmetry under exchanging the atoms
+  (the arithmetic is asymmetric); positivity and `J < 1/R`; continuity at R = 0; nearly equal
+  exponents to first order; eq 18 for C–O, C–F and C–Cl; both ends of a heavy atom's range (F
+  pushed below −1, C above +4) and of hydrogen's (±1, through the iteration), with eq 13 for the
+  rest; total charge to `n ε Σ|Q|` at 0, ±1; aspirin's charges unchanged by a rigid motion to
+  6e-16 e; eq 8's equal chemical potentials to 2e-12 eV; the matrix positive definite; and every
+  error reached by an input that should reach it. **Against the paper**: Table II's eighteen
+  alkali-halide charges by eq 18 (Na, K, Rb with Cl, Br, I, both λ columns, Huber–Herzberg r_e)
+  to 0.00048 e against 0.0005 — the only physical check of the 4s and 5s integrals; all four
+  Table III rows and 36 Table IV rows over seventeen molecules at stated experimental geometries
+  (NIST CCCBDB and WebBook, each citing its source), every one within half its last printed
+  figure plus `Σ |∂Q/∂g| δg`. For HF and HCl δ is 10⁻⁴ Å, Huber–Herzberg's precision, so they are
+  held to the printed figure alone: HF 0.4623 against 0.462. For polyatomics δ is 0.01 Å per
+  length and 1° per angle — **an assumed allowance, stated as one**: it was set after a Python
+  reproduction had shown the misses, not derived from these molecules' r_e/r_0/r_s spreads, and
+  the smallest common scale of it at which every row passes is 0.962 (formamide's carbon, 0.0125
+  against 0.0128); `∂Q/∂g` is measured with the code under test. None missed. Every molecule's
+  charges are checked against eq 8 at default settings. **The paper disagrees with itself**
+  twice on p. 3361: its text gives H₂CO's carbon 0.21 and H₂O's hydrogen 0.36, where Table IV
+  prints 0.19 and 0.35 and Table III 0.353; the tables are compared (0.1968 here). An unlabelled
+  Table IV row under PH₃ is left out. The paper's "six to ten iterations" is aspirin's 6 at 10⁻²
+  e and 8 at 10⁻³; 26 at 10⁻¹⁰. **Aspirin at its UFF minimum**: O1 −0.703, O2 −0.445, O3 −0.542,
+  O4 −0.496, C7 +0.603, C8 +0.589, HO1 +0.354; UFF's electrostatic energy with them at that fixed
+  geometry −83.88 kcal/mol, against a total of 29.58 without charges. No asserted number moved.
+  **A review found the first version's tests could not see five defects**, each now a test that
+  fails without it and was shown passing before: n capped at 3 (no check reached 4s or 5s), a
+  default tolerance of 10⁻² (HF's hydrogen then 0.4601, inside the generous diatomic allowance),
+  the upper clamp fixing at the lower bound, a branch of the integral returning zero, and a NaN
+  total charge coming back `Ok` with NaN charges (`max` discards a NaN and `<=` is false of one;
+  now `QeqError::NonFinite`). **And the new checks found a defect in the integral**: expanding
+  the shielding polynomial about the origin of the integration rectangle loses `R^(2m−1)` to
+  cancellation when one density is compact and the other diffuse, and 4s(ζ 8) against 2s(ζ 0.7)
+  at 8 bohr came out 5.4 × 10⁻¹⁰ relative wrong (3.7 × 10⁻⁷ of the shielding term). Above
+  `|ζ_A − ζ_B| R` = 2 it is now expanded about the corner where the weight is, and the
+  antiderivative branch is gone; the switch is where the two expansions' f64 errors, measured
+  against the same formula at 60 digits over nineteen cases, are comparable, and the worst either
+  then makes is 4.0 × 10⁻¹⁴ relative. **Found on the way:** two neutral hydrogens are singular at
+  0.7915 Å, where `J_HH` equals J⁰_HH — longer than H₂'s 0.741 Å bond, so at its bond length eq
+  6′'s form for moving charge between them is negative at fixed orbitals and QEq's zero for H₂ is
+  a stationary point, not a minimum. Each of sixteen sabotages of the first version was caught —
+  eleven of them by the paper's own tables — and each of the eight for the review's items since; chlorine's n,
+  which Table IV cannot see (n = 2 gives HCl 0.3203, nearer the printed 0.32), Table II does
+  (NaCl, KCl and RbCl off by 0.0011–0.0013). Sabotage runs use `--no-fail-fast`: the first did
+  not, and `cargo test` stopped at the first failing binary, so "caught by the paper" was not a
+  measurement until it was rerun. 122 tests in the crate.
 
 ### Changed
 
