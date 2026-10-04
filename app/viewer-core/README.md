@@ -21,8 +21,9 @@ single `+`. Zoom cannot help — `Camera::zoom` clamps the distance to 1.2..9, a
 spreads one point into two.
 
 Framing a panel makes its box the framing: every panel is still projected through that one
-framing, so nothing moves relative to anything else, the scale bar measures the framed box, and the
-colour bar goes to the framed panel. What is far away leaves the screen. This shell projects on the
+framing, so nothing moves relative to anything else, the scale bar is read off the camera fitted
+to the framed box — `Camera::across_per_metre`, two points at its centre square to the view — and
+the colour bar goes to the framed panel. What is far away leaves the screen. This shell projects on the
 CPU and hands the pass screen positions, so nothing clipped it — one of scene 14's planets is behind
 the eye when the bar is framed, and `Camera::project` clamps such a point to the near plane, which
 put it at `(-2.8e14, -8.8e14)`. A primitive with a corner outside the near or far plane is dropped,

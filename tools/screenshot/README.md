@@ -38,8 +38,8 @@ than no guard.
 display scaled to 150% `GetWindowRect` returned the window's size divided by 1.5 while the editor,
 which is DPI-aware, drew at full size: the bitmap was the window's top-left two thirds, enlarged,
 and the script printed `wrote` as for any other picture. Aware, a scaled display gives a larger
-picture of the same frame — `docs/editor-protein.png` is 2272x1481 for that reason, and
-`docs/editor.png`, taken at 100%, is 1516x989.
+picture of the same frame — both figures are 2272x1481 for that reason, where `docs/editor.png`
+was 1516x989 when it was taken at 100%.
 
 **The script is ASCII.** PowerShell 5.1 reads a `.ps1` without a byte-order mark as the system code
 page, so an em dash in a comment is a parse error at the line that contains it.

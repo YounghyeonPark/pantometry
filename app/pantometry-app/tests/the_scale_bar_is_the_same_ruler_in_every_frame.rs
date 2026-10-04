@@ -12,10 +12,11 @@
 //!
 //! # Why this is not the unit test beside it
 //!
-//! `the_bar_covers_the_metres_it_names` checks the arithmetic, and `scale_bar` now takes the
-//! run's longest side and nothing else, so it *cannot* be handed a frame's box. Both of those are
-//! about the function. This is about the wiring — that what reaches it is the run's box — and the
-//! only way to see the wiring is to render two frames and measure the bar in each.
+//! `the_bar_measures_what_the_geometry_measures` checks the bar against drawn geometry, and
+//! `scale_bar` now takes the camera's metres-to-screen and nothing else, so it *cannot* be handed
+//! a frame's box. Both of those are about the function. This is about the wiring — that what
+//! reaches it is the camera fitted once over the run — and the only way to see the wiring is to
+//! render two frames and measure the bar in each.
 //!
 //! The test that was here before this one asked whether the bar's *label* named a positive
 //! length. It did, in all forty-eight frames.
@@ -32,11 +33,11 @@
 /// moving looks like — `PanelData::surface` computes a panel's bounds from its own positions, so
 /// a solid that swings has a box that swings with it.
 ///
-/// The boxes are 1.0 and 1.49 along their longest side. Both fall in the same rung of the bar's
-/// ladder, so the *label* is `0.5 M` in both frames and only the bar's length could differ: with
-/// the frame's box it is `0.5/1.0 * 0.5 = 0.250` of the half-width against `0.5/1.49 * 0.5 =
-/// 0.168`, a bar half again as long in the first frame for the same stated metres. With the run's
-/// box, which is the union, both are 0.168.
+/// The boxes are 1.0 and 1.49 along their longest side. When the bar was sized by a box, both
+/// fell in the same rung of its ladder, so the *label* was `0.5 M` in both frames and only the
+/// bar's length could differ: with the frame's box it was `0.5/1.0 * 0.5 = 0.250` of the
+/// half-width against `0.5/1.49 * 0.5 = 0.168`, a bar half again as long in the first frame for
+/// the same stated metres. It is read off the camera now, which is fitted once over the union.
 ///
 /// **Two runs with different values**, because a run whose colour range was flat used to draw no
 /// legend at all — the viewer returned early on `hi <= lo` and the scale bar went with the colour

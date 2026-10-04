@@ -154,3 +154,53 @@ fn the_depth_buffer_runs_the_right_way() {
         previous = z;
     }
 }
+
+/// **A metre at the framing's centre is the length the projection's own constants say.**
+///
+/// `Camera::project` divides by the depth and multiplies by `0.6 * scale`, and at the centre the
+/// depth is the camera's distance, so one metre square to the view is `0.6 * scale / (distance *
+/// aspect * span)` of the width-relative device `x`. That is a closed form read off the
+/// projection's definition, and `across_per_metre` measures it a different way -- by projecting
+/// two points -- so the two agreeing over every case says the measurement probes where it says.
+///
+/// And the same length **upright**: a metre along the screen's own up direction, taken from the
+/// matrix's second row, covers `aspect` times as much device `y`, which is the same number of
+/// pixels. A ruler that read differently turned on its side would not be one ruler.
+///
+/// The floor is f64 rounding through a dozen operations on order-one numbers, so `1e-12`.
+#[test]
+fn a_metre_at_the_centre_is_what_the_projection_says() {
+    for (camera, frame, aspect) in cases() {
+        let per = camera
+            .across_per_metre(&frame, aspect)
+            .expect("the centre of every framing here is inside the clip planes");
+        let closed = 0.6 * camera.scale / (camera.distance * aspect * frame.span);
+        assert!(
+            (per - closed).abs() <= 1e-12 * closed,
+            "{per:e} per metre across, against {closed:e} from the projection's constants, for \
+             {camera:?} on {frame:?} at {aspect}"
+        );
+
+        let m = camera.matrix(aspect);
+        let up = [m[1] as f64, m[5] as f64, m[9] as f64];
+        let norm = (up[0] * up[0] + up[1] * up[1] + up[2] * up[2]).sqrt();
+        let probe = frame.span;
+        let c = frame.centre;
+        let a = camera.project(c, &frame, aspect);
+        let b = camera.project(
+            [
+                c[0] + probe * up[0] / norm,
+                c[1] + probe * up[1] / norm,
+                c[2] + probe * up[2] / norm,
+            ],
+            &frame,
+            aspect,
+        );
+        let upright = (b.y - a.y) / probe / aspect;
+        // The direction came through an `f32` matrix, so its floor is that type's rounding.
+        assert!(
+            (upright - per).abs() <= 1e-6 * per,
+            "a metre upright is {upright:e} and across {per:e}, for {camera:?} at {aspect}"
+        );
+    }
+}

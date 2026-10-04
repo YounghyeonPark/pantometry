@@ -3842,8 +3842,9 @@ impl App {
         scale_bar(
             &painter,
             floor,
-            &project,
-            &framing,
+            self.camera
+                .across_per_metre(&framing, aspect)
+                .map(|per| per * f64::from(rect.width()) * 0.5),
             ui.visuals().weak_text_color(),
         );
 
@@ -4390,25 +4391,25 @@ fn colour_bar(
 
 /// A bar of known length in model metres, so the viewport says how big the thing is.
 ///
-/// Measured by projecting two points a known distance apart at the centre of the framing and
-/// reading how far they land apart on screen, then rounding that length down a 1-2-5 ladder —
-/// the same reason the report's ticks use one, which is that a bar labelled 0.3714 m is a bar
-/// nobody reads.
+/// `px_per_metre` is [`viewer_core::Camera::across_per_metre`] in pixels: a length square to the
+/// view at the framing's centre, which is the one length a ruler can name. The length is then
+/// rounded down a 1-2-5 ladder — the same reason the report's ticks use one, which is that a bar
+/// labelled 0.3714 m is a bar nobody reads.
+///
+/// **It probed along world +x**, through the same projector as the geometry, and read the screen
+/// distance as the scale. World +x is foreshortened by however the view is turned and lies off the
+/// centre's depth, so at the camera every scene opens on (azimuth 0.7, elevation 0.4) the bar
+/// measured 0.65 of the true scale and was drawn at 65% of the length its label named — a ruler
+/// that changed length as the view turned.
 fn scale_bar(
     painter: &egui::Painter,
     rect: egui::Rect,
-    project: &impl Fn([f64; 3]) -> (egui::Pos2, f64),
-    framing: &viewer_core::Framing,
+    px_per_metre: Option<f64>,
     colour: egui::Color32,
 ) {
-    let c = framing.centre;
-    let probe = framing.span.max(f64::MIN_POSITIVE);
-    let a = project(c).0;
-    let b = project([c[0] + probe, c[1], c[2]]).0;
-    let px_per_metre = ((b - a).length() as f64) / probe;
-    if !(px_per_metre.is_finite() && px_per_metre > 0.0) {
+    let Some(px_per_metre) = px_per_metre.filter(|p| p.is_finite() && *p > 0.0) else {
         return;
-    }
+    };
     // Aim for about a fifth of the window, then round down to 1, 2 or 5 times a power of ten.
     let want = (rect.width() as f64 * 0.2) / px_per_metre;
     let mag = 10f64.powf(want.log10().floor());

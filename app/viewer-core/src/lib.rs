@@ -888,6 +888,49 @@ impl Camera {
             depth,
         }
     }
+
+    /// How far one metre reaches across the screen, in normalised device `x`, at the framing's
+    /// centre and square to the view. `None` when the centre is outside the clip planes or the
+    /// answer is not a positive number.
+    ///
+    /// **Measured through [`Camera::project`], the function the geometry goes through**, by
+    /// projecting the framing's centre and a point one span from it along the screen's own right
+    /// direction. A scale bar sized any other way is a second idea of the projection, and the
+    /// viewer had one: it assumed half the screen was half the subject, which ignores the focal
+    /// length [`Camera::fit`] chooses and the perspective. Framed on scene 14's 20 mm bar, its
+    /// `10 MM` ruler came out 137 px against a bar 1018 px long, 3.7 times short.
+    ///
+    /// **Square to the view, and at the centre's depth**, because that is the one length a scale
+    /// bar can name: both probes are at the same distance from the eye, so the perspective divide
+    /// is the same for both and the answer is exact rather than a linearisation. A probe along a
+    /// world axis is foreshortened by however that axis is turned, and moves off the centre's depth
+    /// as well. A length nearer the eye than the centre is drawn longer than this, and one further
+    /// away shorter, which is what perspective means and no single ruler can undo.
+    ///
+    /// The `x` of the result is width-relative, so a renderer drawing in pixels multiplies by half
+    /// the width; the vertical scale is the same length in pixels, because the projection divides
+    /// `x` by the aspect for exactly that reason.
+    pub fn across_per_metre(&self, frame: &Framing, aspect: f64) -> Option<f64> {
+        let r = self.rotation();
+        // One span, so the probe is the subject's own size and its difference from the centre is
+        // order one in device units -- nowhere near either end of an f64.
+        let probe = frame.span.max(1e-12);
+        let c = frame.centre;
+        let right = [
+            c[0] + probe * r[0][0],
+            c[1] + probe * r[0][1],
+            c[2] + probe * r[0][2],
+        ];
+        let (a, b) = (
+            self.project(c, frame, aspect),
+            self.project(right, frame, aspect),
+        );
+        if !self.sees(&a) {
+            return None;
+        }
+        let per = (b.x - a.x) / probe;
+        (per.is_finite() && per > 0.0).then_some(per)
+    }
 }
 
 /// A projected point.

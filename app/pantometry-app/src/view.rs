@@ -337,14 +337,6 @@ struct App {
     camera: Camera,
     /// The run-wide range the shading is measured against.
     span: (f64, f64),
-    /// The longest side of the box the camera was fitted to, over the **whole run**.
-    ///
-    /// **The scale bar's denominator, and it used to be this frame's box.** The camera is fitted
-    /// once over every frame, so metres-per-pixel is fixed; a bar sized by the frame's own box is
-    /// therefore the wrong length by the ratio of the two, and says so nowhere. Measured on the
-    /// committed animation before this field existed: a bar labelled `2 NM` ran 108 px at the
-    /// ends of the swing and 119 in the middle.
-    widest: f64,
     frame: usize,
     /// Whether a legend is drawn over the picture.
     ///
@@ -396,34 +388,47 @@ fn ends_that_fit(ends: f32, bar: f32, em: f32, aspect: f32) -> f32 {
     }
 }
 
+/// The shortest the scale bar is drawn, in normalised device `x`: a twelfth of the width.
+///
+/// Rounding *up* a 1-2-5 ladder from here gives at most 2.5 times this, so the bar is always
+/// between 0.167 and 0.417 of the half-width -- the range it had when it was a fraction of the
+/// subject, now earned on the screen rather than assumed.
+const SHORTEST_BAR: f64 = 1.0 / 6.0;
+
 /// A round number of metres, and how much of the screen's half-width it covers.
 ///
-/// **It takes the run's longest side and nothing else**, which is the point. The camera is fitted
-/// once over every frame of the run, so metres-per-pixel is fixed for the whole animation; the
-/// bar used to divide by *this frame's* bounding box, which made it the wrong length by the ratio
-/// of the two in every frame. Measured on the committed protein animation before this existed: a
-/// bar labelled `2 NM` ran 108 px at the ends of the swing and 119 in the middle — 1.102, the
-/// inverse of the frames' own boxes at 1.100. A ruler that changes length is not a ruler, and
-/// nothing about the picture said so.
+/// **It takes the camera's metres-to-screen and nothing else**, which is
+/// [`viewer_core::Camera::across_per_metre`]: two points a known distance apart at the framing's
+/// centre, square to the view, projected through the same `Camera::project` every vertex goes
+/// through. So the bar is the length of what it names *in the picture*, and follows a zoom.
 ///
-/// A function that cannot be handed a frame's box cannot be given the wrong one.
+/// **It assumed half the screen was half the subject**, and it was not. That ignored the focal
+/// length `Camera::fit` chooses — the whole point of which is that the subject does *not* land at
+/// a fixed fraction — and the perspective at the distance the camera stands. Measured framed on
+/// scene 14's 20 mm bar: the bar 1018 px long on screen, the `10 MM` ruler under it 137 px, 3.7
+/// times short. The test beside this encoded the same identity, so it agreed with it.
 ///
-/// The length is a round fraction of the *object* rather than of the screen, because the camera's
-/// zoom is not in the run file and the object's size is. `None` when there is nothing to measure.
-fn scale_bar(widest: f64) -> Option<(f64, f32)> {
-    if !widest.is_finite() || widest <= 0.0 {
+/// **And it still cannot be handed a frame's box.** The camera is fitted once over every frame of
+/// the run, which is what fixed a ruler that ran 108 px at the ends of the protein's swing and 119
+/// in the middle under one `2 NM`; it takes the camera now, which is fitted once, rather than the
+/// box, which was.
+///
+/// `None` when there is nothing to measure.
+fn scale_bar(per_metre: f64) -> Option<(f64, f32)> {
+    if !per_metre.is_finite() || per_metre <= 0.0 {
         return None;
     }
-    let raw = widest / 3.0;
+    let raw = SHORTEST_BAR / per_metre;
+    if !raw.is_finite() || raw <= 0.0 {
+        return None;
+    }
     let decade = 10f64.powf(raw.log10().floor());
     let nice = [1.0, 2.0, 5.0, 10.0]
         .into_iter()
         .map(|m| m * decade)
         .find(|n| *n >= raw)
         .unwrap_or(decade);
-    // The framing puts the subject one unit across, so a length in metres is that fraction of the
-    // subject and the camera's own scale carries it to the screen.
-    Some((nice, (nice / widest) as f32 * 0.5))
+    Some((nice, (nice * per_metre) as f32))
 }
 
 /// The scale bar's label: a round number of metres with the SI prefix that number is near.
@@ -485,7 +490,6 @@ impl App {
             framed: None,
             framing: Framing::of([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]),
             span: (0.0, 1.0),
-            widest: 2.0,
             camera: Camera::default(),
             legend: true,
             frame: 0,
@@ -525,10 +529,11 @@ impl App {
 
     /// Frame the camera on one panel, or on the whole run with `None`.
     ///
-    /// Sets the framing, the fit and the scale bar's denominator together, from one box, so the
-    /// three cannot describe different things. Framing a panel also hands it the colour bar,
-    /// because a reader who asked to look at the bar is asking about the bar's values; the whole
-    /// run hands it back to the panel the window opened on.
+    /// Sets the framing and the fit together, from one box, so the two cannot describe different
+    /// things; the scale bar is read off the camera this fits, so it cannot either. Framing a
+    /// panel also hands it the colour bar, because a reader who asked to look at the bar is
+    /// asking about the bar's values; the whole run hands it back to the panel the window opened
+    /// on.
     fn frame_on(&mut self, which: Option<String>) {
         let whole = App::box_of(&self.run, which.as_deref())
             .or_else(|| App::box_of(&self.run, None))
@@ -539,13 +544,18 @@ impl App {
         // Once, from the whole run. Re-fitting it per frame is what `Run::scale_of` exists to
         // stop, and for a while nothing called it.
         self.span = self.run.scale_of(&self.panel).unwrap_or((0.0, 1.0));
-        self.widest = (whole[3] - whole[0])
-            .max(whole[4] - whole[1])
-            .max(whole[5] - whole[2]);
         // Framed to what is actually there. The window can still be zoomed; `--snapshot` cannot,
         // and a fixed distance is a distance chosen for a cube. The angles are kept: changing
         // what is framed is not turning to look at it from somewhere else.
         self.camera.fit(whole, &self.framing, 16.0 / 9.0, 0.85);
+    }
+
+    /// The scale bar: a round number of metres, and how much of the half-width it covers.
+    ///
+    /// Read off the camera and the framing as they are now, at the aspect being drawn, so a zoom
+    /// or a framed panel moves it with the picture.
+    fn ruler(&self, aspect: f64) -> Option<(f64, f32)> {
+        scale_bar(self.camera.across_per_metre(&self.framing, aspect)?)
     }
 
     /// The framing `F` steps to next: the whole run, then each panel in the order they appear,
@@ -692,12 +702,12 @@ impl App {
         // **The scale bar**, bottom left: a round number of metres across the object, so a reader
         // knows whether they are looking at a die or a room.
         //
-        // **From the run's box and not this frame's**, which is the whole of what `scale_bar`
-        // takes and the reason it takes only that: the camera is fitted once over every frame, so
-        // a bar sized by a frame's own contents is the wrong length by the ratio between them and
-        // looks exactly like a bar. The colour scale learned this first — `Run::scale_of`, twenty
-        // lines above — and the ruler did not.
-        if let Some((nice, across)) = scale_bar(self.widest) {
+        // **From the camera, and not from a box.** It was the run's longest side, on the
+        // assumption that half the screen is half the subject, which the fit's focal length makes
+        // false — 3.7 times short framed on scene 14's bar. Before that it was this frame's box,
+        // which the camera is not fitted to either. `scale_bar` takes how far a metre at the
+        // framing's centre reaches on this screen, which is the only number a ruler can be.
+        if let Some((nice, across)) = self.ruler(aspect) {
             let (sx, sy) = (-0.94f32, -0.79);
             quad(&mut tris, sx, sy, sx + across, sy + 0.008, ink);
             for x in [sx, sx + across] {
@@ -1899,28 +1909,135 @@ mod tests {
         assert_eq!(ends_that_fit(12.0, bar, em, aspect), em);
     }
 
-    /// **The bar is the length its label says, and the label is a round number.**
+    /// The scale bar's metres per half-width, against the drawn geometry's, on two points placed
+    /// symmetrically about the framing's centre a known distance apart.
     ///
-    /// The test written for this before checked that the *label* named a positive length. It did,
-    /// in every frame of an animation where the bar itself ran 108 px at one end of the swing and
-    /// 119 in the middle under an unchanged `2 NM` -- because the bar divided by the frame's box
-    /// while the camera divided by the run's. A label is not a length.
+    /// **The geometry is what reached the GPU**: the two crosses' centres and depths as `f32`
+    /// vertices out of `panel_vertices`, not a call to the function the bar uses. A segment of
+    /// length `l` through the centre has its ends at depths `d_a` and `d_b`, and the part of it
+    /// square to the view is `h = sqrt(l^2 - ((d_b - d_a) * span)^2)`. Each end lands
+    /// `(h / 2) * k * D / d` from the centre's image, where `k` is the bar's metres-to-screen at
+    /// the centre's depth `D` -- which is the camera's distance, by the projection's definition --
+    /// so the drawn length is `(h / 2) * k * D * (1 / d_a + 1 / d_b)`, exactly, and solving for
+    /// `k` gives what the ruler must say. No linearisation: perspective is in it, and so is the
+    /// foreshortening of a segment that is not square to the view.
+    ///
+    /// Returns `(bar, geometry, tolerance)`, each a relative quantity.
+    fn bar_against_geometry(app: &super::App, name: &str, length_m: f64) -> (f64, f64, f64) {
+        let lines = lines_of(app, name);
+        assert!(
+            lines.len() >= 8,
+            "{name} drew {} line vertices",
+            lines.len()
+        );
+        let (first, last) = (&lines[..4], &lines[lines.len() - 4..]);
+        let centre = |c: &[[f32; 3]]| ((c[0][0] + c[1][0]) / 2.0, (c[0][1] + c[1][1]) / 2.0);
+        let ((ax, ay), (bx, by)) = (centre(first), centre(last));
+        let (da, db) = (first[0][2] as f64, last[0][2] as f64);
+        // In half-widths both ways: device `y` is a half-height, and the projection divides `x`
+        // by the aspect so that a pixel is a pixel in both directions.
+        let dx = (bx - ax) as f64;
+        let dy = (by - ay) as f64 / ASPECT;
+        let drawn = (dx * dx + dy * dy).sqrt();
+        let along = (db - da) * app.framing.span;
+        let square = (length_m * length_m - along * along).sqrt();
+        let depth = app.camera.distance;
+        let geometry = drawn / (square / 2.0 * depth * (1.0 / da + 1.0 / db));
+
+        let (nice, across) = app.ruler(ASPECT).expect("a framed run has a ruler");
+        let bar = across as f64 / nice;
+        // **Earned from `f32`.** Every vertex coordinate and depth, and the bar's own width, is an
+        // `f32` of order one, so each carries at most half an `f32` epsilon relative to unity; the
+        // two crosses' centres are an average of two such numbers. The drawn length is a
+        // difference of coordinates no larger than 1, so its relative error is that epsilon times
+        // `1 / drawn`. Eight epsilons against unity in all, divided by the shorter of the two
+        // lengths measured, bounds it -- a few parts in a million here, where the old identity
+        // was out by a factor of 3.7.
+        let tolerance = 8.0 * f32::EPSILON as f64 / drawn.min(across as f64);
+        (bar, geometry, tolerance)
+    }
+
+    /// A box of known size, 30 x 10 x 5 mm well away from the origin, marked by a body at each of
+    /// two opposite corners -- its space diagonal, which runs through the framing's centre.
+    fn a_box() -> super::App {
+        let json = r#"{"format": 3, "title": "a box", "frames": [{"t": 0, "panels": [
+            {"name": "corners", "unit": "K", "kind": "points", "boxed": false,
+             "bounds": [0.2, -0.1, 0.05, 0.23, -0.09, 0.055],
+             "positions": [0.2, -0.1, 0.05, 0.23, -0.09, 0.055],
+             "values": [1, 2]}],
+            "readings": []}]}"#;
+        let run = viewer_core::Run::from_json(json).expect("the run parses");
+        let mut app = super::App::new(run, "corners".to_string());
+        app.legend = false;
+        app
+    }
+
+    /// **The bar covers, on the screen, the metres it names: measured against the geometry.**
+    ///
+    /// The test that was here checked `across * widest * 2 == nice` -- "half the screen is half
+    /// the subject" -- which is the identity the bar was computed from, so it could not disagree
+    /// with it. The identity was false: `Camera::fit` sets the focal length so the subject lands
+    /// wherever its furthest corner says, and framed on scene 14's 20 mm bar the `10 MM` ruler
+    /// was 137 px under a bar 1018 px long.
+    ///
+    /// So this draws things of a known size and measures them: a box's diagonal from the opening
+    /// camera, turned and zoomed in and out -- a ruler that does not follow a zoom is the wrong
+    /// one after the first scroll -- and scene 14's bar framed on itself.
     #[test]
-    fn the_bar_covers_the_metres_it_names() {
-        for exponent in -11..=3 {
+    fn the_bar_measures_what_the_geometry_measures() {
+        let diagonal = (0.03f64 * 0.03 + 0.01 * 0.01 + 0.005 * 0.005).sqrt();
+        let mut cases: Vec<(String, super::App, &str, f64)> = Vec::new();
+        cases.push(("a box, as it opens".into(), a_box(), "corners", diagonal));
+        let mut turned = a_box();
+        turned.camera.turn(1.1, -0.5);
+        cases.push(("a box, turned".into(), turned, "corners", diagonal));
+        let mut near = a_box();
+        near.camera.zoom(0.6);
+        cases.push(("a box, zoomed in".into(), near, "corners", diagonal));
+        let mut far = a_box();
+        far.camera.zoom(2.9);
+        cases.push(("a box, zoomed out".into(), far, "corners", diagonal));
+        // Scene 14's problem: the run's bar, framed on itself. The 61 samples are cell-centred,
+        // so the first and last sit half a cell in from each end and symmetric about the centre.
+        let mut bar = two_scales();
+        bar.frame_on(Some("bar".to_string()));
+        cases.push((
+            "scene 14's bar, framed".into(),
+            bar,
+            "bar",
+            0.02 * 60.0 / 61.0,
+        ));
+
+        for (what, app, name, length) in &cases {
+            let (bar, geometry, tolerance) = bar_against_geometry(app, name, *length);
+            let off = (bar - geometry).abs() / geometry;
+            let (nice, across) = app.ruler(ASPECT).expect("a ruler");
+            println!(
+                "  {what}: {} over {across:.4} of the half-width; the bar says {bar:.6e} per \
+                 metre, the geometry {geometry:.6e} ({off:.1e} apart, {tolerance:.1e} allowed)",
+                scale_label(nice)
+            );
+            assert!(
+                off <= tolerance,
+                "{what}: the scale bar draws {bar:e} of the half-width per metre and the geometry \
+                 is drawn at {geometry:e} -- {:.3}x -- so the bar does not cover the {} it names",
+                bar / geometry,
+                scale_label(nice)
+            );
+        }
+    }
+
+    /// **The number on the bar is round, and the bar is a readable length**, at every scale from
+    /// a molecule to a solar system.
+    ///
+    /// Of `scale_bar` alone, so given how far a metre reaches rather than measuring it: one, two
+    /// or five times a decade, and between a twelfth and five twelfths of the width.
+    #[test]
+    fn the_bar_is_round_and_readable_at_every_scale() {
+        for exponent in -3..=13 {
             for mantissa in [1.0, 1.7, 3.0, 4.9, 7.3, 9.9] {
-                let widest = mantissa * 10f64.powi(exponent);
-                let (nice, across) = scale_bar(widest).expect("a box has a bar");
-                // The framing puts the subject one unit across, so half the screen is half the
-                // subject: the bar covers `nice` metres exactly when this identity holds. The
-                // fraction is an f32, so the floor is that type's epsilon and not f64's.
-                let covered = across as f64 * widest * 2.0;
-                assert!(
-                    (covered - nice).abs() <= 8.0 * f32::EPSILON as f64 * nice,
-                    "a bar of {across} covers {covered:e} m on a {widest:e} m box, labelled {nice:e}"
-                );
-                // And the number on it is one, two or five times a decade -- a ruler nobody has
-                // to divide in their head.
+                let per_metre = mantissa * 10f64.powi(exponent);
+                let (nice, across) = scale_bar(per_metre).expect("a positive scale has a bar");
                 let mantissa_of = nice / 10f64.powf(nice.log10().floor());
                 assert!(
                     [1.0, 2.0, 5.0, 10.0]
@@ -1928,11 +2045,16 @@ mod tests {
                         .any(|m| (m - mantissa_of).abs() < 1e-9),
                     "{nice:e} is not a round number"
                 );
-                // It has to be a readable fraction of the picture: a bar the width of the screen
-                // measures nothing and one a pixel long measures nothing either.
+                // The length is the label times the scale, and nothing else.
+                assert!(
+                    ((across as f64) - nice * per_metre).abs() <= f32::EPSILON as f64,
+                    "{across} is not {nice:e} m at {per_metre:e} per metre"
+                );
+                // A bar the width of the screen measures nothing and one a pixel long measures
+                // nothing either.
                 assert!(
                     (0.05..=0.60).contains(&across),
-                    "a {widest:e} m box gives a bar {across} of the half-width"
+                    "{per_metre:e} per metre gives a bar {across} of the half-width"
                 );
             }
         }
@@ -1942,6 +2064,7 @@ mod tests {
         );
         assert!(scale_bar(f64::NAN).is_none());
         assert!(scale_bar(f64::INFINITY).is_none());
+        assert!(scale_bar(-1.0).is_none());
     }
 
     /// **A sequence numbers before the extension, and the dot it finds is the extension's.**
@@ -2128,7 +2251,11 @@ mod tests {
         );
         // The scale bar measures what is framed: a ruler for metres-across-the-run under a
         // picture of a 20 mm bar is the wrong ruler by thirteen orders.
-        assert_eq!(app.widest, 0.02, "the scale bar is not the framed box's");
+        let (nice, _) = app.ruler(ASPECT).expect("framed on the bar, a ruler");
+        assert!(
+            nice < 0.02,
+            "framed on a 20 mm bar the ruler names {nice:e} m: it is not the framed box's"
+        );
     }
 
     /// **What is far from the framed panel is not drawn**, and the whole run brings it back.
@@ -2165,7 +2292,11 @@ mod tests {
                 "framed whole, a planet is off-screen at ({x}, {y})"
             );
         }
-        assert_eq!(app.widest, 2.5e11, "the scale bar is not the whole run's");
+        let (nice, _) = app.ruler(ASPECT).expect("framed whole, a ruler");
+        assert!(
+            nice > 1e10,
+            "framed on a 2.5e11 m run the ruler names {nice:e} m: it is not the whole run's"
+        );
     }
 
     /// **F walks the whole run, then each panel in order, then the whole run again.**

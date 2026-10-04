@@ -31,7 +31,7 @@ a run, which needs a GPU and no display:
 
 ```sh
 cargo run --release --example optical_bench bench.json
-cd app && cargo run --release -- view bench.json --snapshot ../docs/bench-app.png
+cd app && cargo run --release -- view ../bench.json --snapshot ../docs/bench-app.png
 ```
 
 `protein-app.gif` is the third, and the same two commands, because the run it shows is an
@@ -90,7 +90,7 @@ That is also how to refresh them. They are the one place in this repository wher
 is tracked on purpose: `.gitignore` still refuses assets at the root, which is where a run leaves
 them, and the rule those two lines exist for — a `git add -A` that put a 302 KB filmstrip and a
 927 KB frame dump into history — is untouched. The three SVGs are 17, 53 and 41 KB, the bench still is
-44 KB, and the editor's pair is 195 and 160.
+47 KB, and the editor's pair is 195 and 160.
 
 **The animation is 2.2 MB and that is the largest thing in this repository by a wide margin**, so
 it is worth saying what it buys and what it would take to shrink it. It is forty-eight frames of

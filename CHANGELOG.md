@@ -245,6 +245,31 @@ protects nothing.
 
 ### Fixed
 
+- **The viewer's scale bar did not measure what its label said.** `scale_bar` assumed half the
+  screen was half the subject, `(nice / widest) * 0.5` of the half-width, and that ignores the
+  focal length `Camera::fit` chooses and the distance the camera stands at. Framed on scene 14's
+  20 mm bar, which is 1018 px on screen, the `10 MM` ruler under it was 137 px — 3.7 times short.
+  Its test, `the_bar_covers_the_metres_it_names`, checked `across * widest * 2 == nice`, which is
+  the same identity, so it could not disagree. The bar now comes from the camera:
+  `viewer_core::Camera::across_per_metre` projects the framing's centre and a point one span from
+  it along the screen's right direction, through the same `Camera::project` every vertex takes,
+  and the label is still rounded up a 1-2-5 ladder to between 0.167 and 0.417 of the half-width.
+  It follows a zoom now, which the old one could not. `the_bar_measures_what_the_geometry_measures`
+  draws a 30 x 10 x 5 mm box's diagonal (as opened, turned, zoomed in and out) and scene 14's bar,
+  and requires the ruler's metres-to-screen to equal the drawn geometry's to 8 `f32` epsilons over
+  the shorter length, perspective included in closed form. It agrees to `3.6e-7` at worst. Put the
+  old formula back and the box fails at 0.359x. The figures, measured in pixels: `bench-app.png`
+  goes from `10 MM` at 136 px to `20 MM` at 165 px. The committed file had 147 px, because it was
+  already stale against today's renderer everywhere, not only at the bar. `protein-app.gif` goes
+  from `2 NM` at 108 px to `2 NM` at 152 px. Scene 14 framed on its bar goes from `10 MM` at
+  140 px to `2 MM` at 128 px. These lengths include the end tick, which is why 137 reads as 140.
+  The chooser tiles are byte-identical, since `--thumbnail` draws no legend. `docs/README.md`'s
+  bench command read `bench.json` from `app/`, where the example does not write it, and failed. It
+  reads `../bench.json` now. **The editor's bar was wrong too, by another route.** It probed along
+  world +x through the geometry's projector, which is foreshortened by the view's turn and off the
+  centre's depth: at the camera every scene opens on it measured 0.65 of the true scale, a ruler
+  drawn at 65% of its label. It takes `across_per_metre` now, and the bracket figure's label moves
+  from `20 mm` to `10 mm`; both editor figures are retaken.
 - **Scene 14's bar could not be looked at, in the editor or the viewer.** The scene holds a 20 mm
   bar, a 4.4 m room and orbits spanning 2.7e11 m, and both shells framed everything at once, so it
   opened on three planets' markers. Zoom cannot help — `Camera::zoom` clamps the distance to
