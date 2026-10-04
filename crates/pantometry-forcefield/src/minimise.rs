@@ -38,6 +38,20 @@
 //! gives the same bits on one machine at any optimisation level, and the crate does not claim
 //! the same bits across platforms; see the crate documentation.
 //!
+//! # Frozen atoms
+//!
+//! [`Minimiser::with_frozen`] holds a chosen set of atoms where they are — a rigid protein around a
+//! ligand being relaxed in its pocket. **A frozen atom does not move, to the bit**: its gradient is
+//! set to zero before anything else reads it, so it drops out of the convergence test and of
+//! [`Progress::max_force`], and out of the direction exactly — its components of `g`, of every
+//! step `s` and of every gradient change `y` are zero, and the two-loop recursion only scales and
+//! adds those, so its direction stays zero with no rounding at all. And its position in every
+//! trial is copied from the positions the step was given rather than rebuilt from the minimiser's
+//! ångström vector: `(x / 1e-10) · 1e-10` is not `x` for about one coordinate in eleven (measured
+//! over 10⁵ uniform ones), though it is for every three-decimal PDB coordinate. The energy minimised is the force field's whole energy; terms
+//! among frozen atoms only are a constant, which a caller may leave out of the force field to keep
+//! that constant out of the line search's arithmetic (as [`crate::binding`] does).
+//!
 //! # Restraints
 //!
 //! A [`DihedralRestraint`] adds `½ k (φ − φ₀)²`, the difference wrapped to (−π, π], to the energy
@@ -200,6 +214,7 @@ pub struct Minimiser {
     last: Option<Point>,
     steps: usize,
     status: Status,
+    frozen: Vec<bool>,
 }
 
 impl Minimiser {
@@ -219,7 +234,26 @@ impl Minimiser {
             last: None,
             steps: 0,
             status: Status::Running,
+            frozen: Vec::new(),
         }
+    }
+
+    /// The same minimiser holding every atom `i` with `frozen[i]` where it is, to the bit. See
+    /// the module documentation. An empty mask, the default, freezes nothing.
+    ///
+    /// # Panics
+    ///
+    /// In [`Minimiser::step`], if the mask is neither empty nor one entry per atom.
+    pub fn with_frozen(mut self, frozen: Vec<bool>) -> Minimiser {
+        self.frozen = frozen;
+        self.history.clear();
+        self.last = None;
+        self
+    }
+
+    /// The frozen-atom mask: empty, or one entry per atom.
+    pub fn frozen(&self) -> &[bool] {
+        &self.frozen
     }
 
     /// The tolerance, newtons.
@@ -253,6 +287,10 @@ impl Minimiser {
         restraints: &[DihedralRestraint],
         at: &mut [[f64; 3]],
     ) -> Progress {
+        assert!(
+            self.frozen.is_empty() || self.frozen.len() == at.len(),
+            "the frozen mask must be empty or one entry per atom"
+        );
         let here = match self.last.take() {
             Some(p) if p.at == at => p,
             _ => {
@@ -261,7 +299,7 @@ impl Minimiser {
                 if self.status == Status::Stalled {
                     self.status = Status::Running;
                 }
-                evaluate(ff, restraints, &x)
+                evaluate(ff, restraints, &x, &self.frozen, at)
             }
         };
         if max_atom(&here.gradient) <= self.tolerance / KCAL_PER_MOL_ANGSTROM {
@@ -349,7 +387,7 @@ impl Minimiser {
         let mut alpha = 1.0;
         for _ in 0..=HALVINGS {
             let x: Vec<f64> = here.x.iter().zip(&d).map(|(a, b)| a + alpha * b).collect();
-            let trial = evaluate(ff, restraints, &x);
+            let trial = evaluate(ff, restraints, &x, &self.frozen, &here.at);
             if trial.energy <= here.energy + ARMIJO * alpha * slope && trial.energy < here.energy {
                 return Some(trial);
             }
@@ -442,13 +480,31 @@ pub fn two_loop(pairs: &[(Vec<f64>, Vec<f64>)], g: &[f64]) -> Vec<f64> {
     q.iter().map(|v| -v).collect()
 }
 
-fn evaluate(ff: &ForceField, restraints: &[DihedralRestraint], x: &[f64]) -> Point {
+/// One evaluation at the ångström vector `x`, with every atom `frozen` marks put back at its
+/// position in `base` (metres, exactly) and its gradient zeroed.
+fn evaluate(
+    ff: &ForceField,
+    restraints: &[DihedralRestraint],
+    x: &[f64],
+    frozen: &[bool],
+    base: &[[f64; 3]],
+) -> Point {
     let mut at = vec![[0.0; 3]; x.len() / 3];
     unflatten(x, &mut at);
+    for (a, &f) in frozen.iter().enumerate() {
+        if f {
+            at[a] = base[a];
+        }
+    }
     let mut ev = ff.evaluate(&at);
     let mut restraint = 0.0;
     for r in restraints {
         restraint += r.add_forces(&at, &mut ev.forces);
+    }
+    for (a, &f) in frozen.iter().enumerate() {
+        if f {
+            ev.forces[a] = [0.0; 3];
+        }
     }
     let at = at;
     let physical = ev.energy.total / KCAL_PER_MOL;

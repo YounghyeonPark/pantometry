@@ -437,6 +437,124 @@ protects nothing.
   and 181L as fetched, each with its SHA-256 in `components/README.md`, beside the eight other
   entries of the 1995 papers (182L–188L, 1NHB) recorded and not used. 185 tests in the
   crate, and one ignored.
+- **`pantometry-forcefield` computes a binding energy: benzene in T4 lysozyme L99A's rigid
+  pocket, and benzene minimised there — step 2c-2.** New module `binding`. `Binding::new(&System,
+  cutoff)` cuts a pocket of **whole residues** (any heavy atom within the cutoff of any ligand
+  atom, 2c-1's rule, so no residue is split and each fragment's total is an integer) and gives the
+  pocket and the ligand **QEq charges separately**, each at its own formal charge: fixed-charge
+  practice, which leaves out polarisation and charge transfer between them, and keeps the charges
+  exact under any rigid motion of the ligand. Every atom keeps the whole system's UFF type.
+  `interaction()` returns `ΔE_bind = E(complex) − E(pocket) − E(ligand)` both as the direct
+  protein–ligand cross sums and as the term-by-term difference of three evaluations;
+  `desolvation(points)` returns OBC II's complex − pocket − ligand and the buried area;
+  `minimise_ligand` relaxes the ligand with every protein atom frozen, on the complex's force field
+  less its protein-only terms (a constant), so the force on a ligand atom is the complex's bit for
+  bit; `ligand_at(&RigidMotion)`, `with_ligand_positions` and `moved` share the force fields behind
+  an `Arc`, so a path for 2c-3 copies positions and nothing else. **`Minimiser::with_frozen`** is new.
+  A frozen atom's gradient is zeroed, and its position in every trial is copied rather than rebuilt
+  from the minimiser's ångström vector. **Measured: `(x / 1e-10) · 1e-10` is not `x` for 6–11% of
+  values**, only where `x / Å` sits near the bottom of its binade, and it is `x` for every
+  three-decimal PDB coordinate, so on 181L a sabotage removing the copy passed. The test that
+  catches it now places aspirin's frozen coordinates where the round trip fails. A guard zeroing a
+  frozen atom's search direction was removed: no input reaches it, because the two-loop recursion
+  only scales and adds components that are already exactly zero. **Checked against identities and
+  derived bounds, not against experiment**:
+  - the vacuum ΔE_bind is exactly the cross terms: the four valence fields of the difference are
+    zero, and van der Waals, Coulomb and the total agree with the cross sums. The allowance is pure
+    summation rounding, because every term is the same bits in the complex as in its fragment;
+    measured worst 0.005 of it, 4.5e-13 kcal/mol. The cross sum also matches one built in the test
+    over all 310 × 12 pairs with no exclusion list. **This holds the bookkeeping and the pair
+    coverage, not the pair formula**: the test's own sum uses the crate's `Pair::energy` and
+    `coulomb`, which `the_energy_terms_against_closed_forms.rs` holds;
+  - far away the energy vanishes: at 10³ and 10⁴ Å, van der Waals under `3 D (x/(R−a))⁶` and
+    Coulomb under a first-order multipole bound with the Hessian-of-1/r remainder. The measured
+    values are 4.5e-7 and 2.7e-9 kcal/mol against bounds of 2.1e-4 and 4.0e-7. **The Coulomb
+    bound is about 470× loose**: it bounds the pocket's side by Σ|q| over 310 charges, with no
+    cancellation, while the real tail is the pocket's +1 against benzene's 8.5e-4 e Å crystal
+    dipole. Expanding the pocket's side as well brings a remainder in the pocket's ~12 Å extent,
+    which is looser at these distances, so no tighter bound is claimed. A Coulomb energy wrong by
+    1% passes this test and is caught only by the identity above, when the error is in one place
+    and not the other. The polar desolvation is under a bound from the screened cross
+    terms plus the mean value theorem over the box of Born radii (measured −4.4e-7 against
+    2.2e-4), and the buried area is exactly zero;
+  - a change of frame (2.1 rad and 13.6 Å) moves ΔE_bind by 5.4e-14 kcal/mol, inside a
+    coordinate-rounding bound;
+  - frozen protein atoms do not move, to the bit, while benzene moves and converges;
+  - the minimised ligand's force from the whole complex's force field is ≤ 1e-4 kcal mol⁻¹ Å⁻¹;
+  - the interaction force is −∇ΔE_bind against central differences, with the truncation and
+    rounding tolerance of `forces_are_the_gradient.rs`. The worst error is 3.5e-5 of a tolerance,
+    and every atom's force is at least 847 tolerances;
+  - binding grows no atom's surface area and shrinks no Born radius, both exact (OBC II's `R(I)` is
+    increasing, its cubic's discriminant negative). The radius check calls
+    `GeneralizedBorn::born_radii` on the fragments directly, so it holds the solvation module on
+    this system and says nothing about `Binding::desolvation`;
+  - **added after review** (`numerics-reviewer`, fifteen sabotages, three classes passing):
+    - each fragment's charges are bit for bit what `Qeq::equilibrate` gives on that fragment's
+      own atoms read from the `System`. Before this, taking the ligand's charges from the
+      pocket's first twelve atoms passed every test, even though it moved benzene's solvation from
+      −2.27 to −18.89 kcal/mol;
+    - each charge sum is checked against its formal charge, with an allowance from Higham's
+      backward-error bound for the elimination (Theorem 9.4, growth factor taken as 8) in place of
+      an unsourced 1e-9. Measured 8.7e-15 e against 1.3e-10;
+    - `RigidMotion` is checked against closed forms: a quarter turn about z centred at (1, 2, 3)
+      takes (2, 2, 3) to (1, 3, 3), oblique turns match Rodrigues' vector formula written in the
+      test, and `ligand_at` leaves the centroid within `(2n + 8) ε X`. Before this, a transposed
+      matrix and a rotation about the origin both passed the whole crate;
+    - ΔG_GB of the complex, the pocket and the ligand is rebuilt in the test from `born_radii` and
+      eq 2 and eq 3, at the crystal and the minimised pose: agreement 1.4e-12, 2.0e-12 and
+      2.6e-15 kcal/mol, within `2 (n + 10) ε Σ|t|`. Every atom's area is rerun through
+      `surface_area`, and ΔSASA is summed over all atoms, bit for bit. Before this, the polar term
+      halved, ΔSASA summed over the ligand's atoms only, and the ligand-alone GB taken at the
+      crystal pose (0.059 kcal/mol wrong at the minimised one) all passed;
+    - the polar desolvation's change on a change of frame is asserted, no longer only printed: it
+      must lie within `Σ |F_GB| √3 · 10 ε X` plus each evaluation's rounding, and measured 1.2e-8
+      of that. A frame-dependent descreening distance is caught by this check alone.
+
+  Fourteen sabotages, each restored by copying the original back, touching it and checking its
+  SHA-256: thirteen are caught — the pocket rule counting protein hydrogens, a dropped ligand
+  atom's pairs, the pocket's charges scaled 0.999, stale positions in the cross sum, a
+  non-orthogonal rotation, the frozen copy, the frozen gradient, the reduced force field dropping
+  cross pairs, the Coulomb force at 0.99, surface radii enlarged in the complex, the ligand
+  fragment solvated at ε = 4, the complex GB taken as its fragments' sum, and the descreening's
+  log term at 1.05 — and the fourteenth targeted the unreachable direction guard, which was
+  removed. **Three had passed the first version**: the frozen copy, that guard, and the
+  ε = 4 fragment, which only the far-field GB bound sees. Nine more were run after review —
+  the reviewer's six that had passed (each run again here before and after its fix: passing
+  before, caught after), the ligand charged at the pocket's total, a complex GB at stale
+  positions, and the frame-dependent descreening — and all nine are caught. **Benzene, reported and not asserted**
+  (kcal/mol):
+
+  | cutoff | residues | atoms | pocket charge | vdW | elec | ΔE vacuum | polar | ΔSASA Å² | nonpolar | ΔE + solv | minimised RMSD Å | ΔE minimised |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 6 Å | 18 | 322 | +1 | −11.295 | −1.133 | −12.428 | +7.322 | −294.6 | −1.473 | −6.579 | 0.809 | −22.346 |
+  | 8 Å | 43 | 719 | +3 | −13.048 | −1.104 | −14.153 | +10.607 | −294.6 | −1.473 | −5.019 | 0.814 | −24.149 |
+  | 10 Å | 60 | 987 | +6 | −13.327 | −1.104 | −14.431 | +12.211 | −294.6 | −1.473 | −3.693 | 0.815 | −24.440 |
+  | whole | 162 | 2616 | +9 | −13.500 | −1.104 | −14.604 | +14.962 | −294.6 | −1.473 | −1.115 | 0.816 | −24.623 |
+
+  **The vacuum terms converge** (van der Waals −13.33 at 10 Å against −13.50 whole; Coulomb −1.10
+  from 8 Å) and **the polar term does not**: it rises by 7.6 kcal/mol from 6 Å to the whole
+  protein. It is also not the small term an apolar ligand in an apolar cavity was expected to give.
+  At 6 Å it splits exactly, since GB is quadratic in the charges: +2.27 is the pocket desolvated by
+  benzene's volume, +1.94 is benzene's own (of the 2.27 it has alone), and +3.11 is the screened
+  cross terms. GB solvates the empty apo cavity as though it were water. **QEq on the whole complex
+  instead** moves 0.010–0.012 e onto benzene and changes no benzene charge by more than 0.048 e.
+  The cross Coulomb becomes −2.22 instead of −1.13 at 6 Å, but −1.18 instead of −1.10 for the
+  whole protein, so most of the 6 Å change comes from the cut. **Minimised in the rigid pocket**,
+  benzene slides 0.49 Å and turns (0.81 Å RMSD), and van der Waals goes from −11.30 to −21.28.
+  Benzene's own energy goes from 15.89 to 12.14, against 11.88 at its vacuum minimum, so 0.26 of
+  strain. The crystal pose has a 1.89 Å contact between a benzene H and Val111's placed HG13,
+  which 2c-1's rotor rule, scoring heavy atoms only, cannot see. Freeing every protein hydrogen
+  as well moves benzene 0.83 Å, so the move is UFF's own and not the placement's. **Against
+  experiment**: ΔG = −5.19 ± 0.16 kcal/mol for benzene, as Mobley et al. tabulate it (*J. Mol.
+  Biol.* 371, 1118 (2007), Table 1, measured at 302 K; read at PMC2104542), from Morton, Baase and
+  Matthews, *Biochemistry* 34, 8564 (1995), whose own page was not read. The 8 Å row's −5.02 is
+  near that by coincidence: the column runs from −6.58 to −1.12 with the cutoff, and is an energy
+  at one rigid geometry with no entropy, no protein flexibility, no ligand strain against
+  solution, QEq charges with which OBC II over-solvates small molecules, and a polar term that has
+  not converged. It cannot be compared with a free energy, and no test does. 2c-1's carboxylate
+  typing (`O_2` with `O_3`) cannot reach ΔE_bind: UFF gives both 3.500 Å and 0.060 kcal/mol. QEq
+  on the whole protein takes 195 s with `--release`. Ignored by default: the cutoff table, the
+  whole protein and the hydrogens' share. The default tests take 13 s unoptimised. 197 tests in the crate, and four ignored.
 
 ### Changed
 

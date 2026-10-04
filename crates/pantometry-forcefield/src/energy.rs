@@ -351,7 +351,7 @@ impl Pair {
 
     /// The energy and `dE/dx` at separation `x`: the one place the formula is written.
     /// `dE/dx = 12 D (s⁶ − s¹²) / x` with `s = x_IJ / x`.
-    fn at(&self, x: f64) -> (f64, f64) {
+    pub(crate) fn at(&self, x: f64) -> (f64, f64) {
         let s = self.distance / x;
         let s6 = (s * s) * (s * s) * (s * s);
         let s12 = s6 * s6;
@@ -683,6 +683,56 @@ impl ForceField {
     /// The partial charges, in elementary charges.
     pub fn charges(&self) -> &[f64] {
         &self.charges
+    }
+
+    /// The same force field with only the terms that touch at least one atom `keep` marks, and no
+    /// solvation: every term left out is among unmarked atoms alone. The terms kept are in the
+    /// same order, so the force on a marked atom is the same sum, in the same order, as the whole
+    /// force field's — bit for bit — and the energy differs by the left-out terms, which are a
+    /// constant while the unmarked atoms do not move.
+    ///
+    /// # Panics
+    ///
+    /// If `keep` is not one per atom.
+    pub(crate) fn touching(&self, keep: &[bool]) -> ForceField {
+        assert_eq!(keep.len(), self.charges.len(), "one mark per atom");
+        let any = |atoms: &[usize]| atoms.iter().any(|&a| keep[a]);
+        ForceField {
+            stretches: self
+                .stretches
+                .iter()
+                .filter(|t| any(&t.atoms))
+                .copied()
+                .collect(),
+            bends: self
+                .bends
+                .iter()
+                .filter(|t| any(&t.atoms))
+                .copied()
+                .collect(),
+            torsions: self
+                .torsions
+                .iter()
+                .filter(|t| any(&t.atoms))
+                .copied()
+                .collect(),
+            inversions: self
+                .inversions
+                .iter()
+                .filter(|t| any(&t.atoms))
+                .copied()
+                .collect(),
+            pairs: self
+                .pairs
+                .iter()
+                .filter(|t| any(&t.atoms))
+                .copied()
+                .collect(),
+            charges: self.charges.clone(),
+            elements: self.elements.clone(),
+            total_charge: self.total_charge,
+            solvation: None,
+        }
     }
 
     /// The energy at positions `at` (metres), without the forces.

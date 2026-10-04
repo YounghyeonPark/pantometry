@@ -39,6 +39,12 @@
 //!   [`Part::Ligand`]. Strict, as the dictionary reader is: a missing heavy atom, a gap in a chain,
 //!   a residue that is not the sequence's or an unnamed `HETATM` residue is a [`PdbError`] that
 //!   names it. See [`pdb`].
+//! - [`Binding::new`] cuts a pocket of whole residues out of a [`System`] around its ligand, gives
+//!   the pocket and the ligand QEq charges separately, and computes `ΔE_bind = E(complex) −
+//!   E(pocket) − E(ligand)` at fixed geometry — in vacuum exactly the protein–ligand cross terms,
+//!   which is tested — with OBC II's polar desolvation and the buried area beside it, and
+//!   minimises the ligand in the rigid pocket with every protein atom frozen
+//!   ([`Minimiser::with_frozen`]). [`RigidMotion`] moves the ligand. See [`binding`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step**, so a run
@@ -129,7 +135,7 @@
 //!   is optimised.
 //! - **No elements beyond H, C, N, O, F, P, S, Cl, Br and I**, and no hypervalent sulfur types —
 //!   [`uff::assign`] documents the sulfone gap.
-//! - **No charges unless asked for, no solvent unless asked for, no binding energies.**
+//! - **No charges unless asked for, no solvent unless asked for.**
 //!   Electrostatics is computed
 //!   from charges a caller supplies, and they default to zero, because UFF's valence parameters
 //!   were fitted without them (p. 10031 of the UFF paper). QEq's are an option
@@ -143,12 +149,18 @@
 //!   is computed ([`solvation::surface_area`], [`solvation::nonpolar_energy`]) but not added to
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
 //!   Not here: Poisson–Boltzmann, explicit water, GB with a solute dielectric other than 1, a
-//!   cutoff, and the binding energy itself (complex − protein − ligand), which is the next step.
+//!   and a cutoff.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
 //!   about −4 to −6 — so absolute solvation and binding energies built on it are not
 //!   quantitative.
+//! - **A binding energy at fixed geometry, not a binding free energy** ([`binding`]): no entropy,
+//!   no protein flexibility (the pocket is rigid at the crystal's coordinates), no polarisation or
+//!   charge transfer between the partners (QEq on each separately), and a solvated estimate whose
+//!   polar part has not converged with the pocket's size — +7.3 kcal/mol at 6 Å, +15.0 for the
+//!   whole protein, for benzene in T4 lysozyme L99A. No comparison with an experimental affinity
+//!   is asserted.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.
@@ -156,6 +168,7 @@
 #![deny(missing_docs)]
 
 pub mod angular;
+pub mod binding;
 pub mod ccd;
 pub mod energy;
 pub mod minimise;
@@ -165,6 +178,7 @@ pub mod solvation;
 pub mod uff;
 
 pub use angular::{Bend, Inversion, Torsion};
+pub use binding::{Binding, BindingError, Desolvation, Interaction, RigidMotion};
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
