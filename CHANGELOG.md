@@ -555,6 +555,92 @@ protects nothing.
   typing (`O_2` with `O_3`) cannot reach ΔE_bind: UFF gives both 3.500 Å and 0.060 kcal/mol. QEq
   on the whole protein takes 195 s with `--release`. Ignored by default: the cutoff table, the
   whole protein and the hydrogens' share. The default tests take 13 s unoptimised. 197 tests in the crate, and four ignored.
+- **`pantometry-forcefield` on the congener series: nine ligands in T4 lysozyme L99A, set beside
+  experiment, and the rigid-pocket energy does not rank them — step 2c-3a.** No library code
+  changed. A new test file, `the_congener_series.rs`, builds 182L benzofuran (`BZF`), 183L indene
+  (`DEN`), 184L isobutylbenzene (`I4B`), 185L indole (`IND`), 186L n-butylbenzene (`N4B`), 187L
+  p-xylene (`PXY`), 188L o-xylene (`OXE`) and 1NHB ethylbenzene (`PYJ`) with 2c-1's pipeline and
+  2c-2's `Binding`, beside 181L benzene. The eight entries and seven new dictionary entries are
+  fetched from files.rcsb.org, each fetched twice and identical, with SHA-256 in
+  `components/README.md`, and embedded with `include_str!`. **The entries, checked by string
+  operations on the files**: each `SEQRES` is identical to 181L's, and each has exactly 181L's
+  three `SEQADV` conflicts against P00720 (C54T, C97A, L99A). Each has `REMARK 465` Asn163 and
+  Leu164, no alternate location, and `HETATM` residues that are waters (116–134), `CL` ×2, one
+  `HED` and the ligand once with every heavy atom. The drop list is the same for all nine. None was
+  refused, none has a missing atom, and each builds to 181L's 162 residues and 2604 protein atoms,
+  with His31 +1 by the rule (Nδ1/Nε2 to Asp70 2.64–2.71 Å) and a total of +9. All of this is
+  asserted. Reported and not asserted: helix F moves 2.27–2.62 Å at Ala112 (Cα, no superposition)
+  for indene, isobutylbenzene and o-xylene, and no Cα moves more than 0.72 Å in the other six.
+  **Each ligand is the molecule its entry names**: a formula cannot tell o- from p-xylene or n- from
+  isobutylbenzene, so each is held to its bond graph, written by hand, plus the xylenes'
+  methyl–methyl bond count. The bond graph is every heavy atom's element, aromatic flag, heavy
+  neighbours and hydrogens. **Experiment**: ΔG° from Mobley et al., *J. Mol. Biol.* 371, 1118
+  (2007), Table 1, read at PMC2104542. Its caption gives the values as from Morton, Baase and
+  Matthews, *Biochemistry* 34, 8564 (1995), by ITC at 302 K, and that paper itself was not read.
+  Benzofuran −5.46 ± 0.03, benzene −5.19 ± 0.16, ethylbenzene −5.76 ± 0.07, indene −5.13 ± 0.01,
+  indole −4.89 ± 0.06, isobutylbenzene −6.51 ± 0.06, n-butylbenzene −6.70 ± 0.02, o-xylene
+  −4.60 ± 0.06, p-xylene −4.67 ± 0.06 kcal/mol. The table's toluene and n-propylbenzene have no
+  structure among the 1995 entries and are not used. **The crystal pose's vacuum ΔE measures the
+  hydrogen placement for three of the nine.** Both partners' hydrogens are placed: the ligand's by
+  its template, the protein's by 2c-1's rotor rule, which clears heavy atoms only. Neither
+  placement sees the other partner's hydrogens. Indene's H12 sits 1.41 Å from Val111's HG13, so
+  van der Waals is **+224.4 kcal/mol**. N-butylbenzene (H3′2–Leu118 HD22 1.65 Å) is +80.8, and
+  ethylbenzene (HCD1–Val111 HG13 1.64 Å) is +12.8. So van der Waals < 0 is not asserted at the
+  crystal pose. It is asserted at two other poses: with **every hydrogen relaxed** on the crystal's
+  heavy atoms (complex force field, heavy atoms frozen, closest H–H then 1.94–2.13 Å), and after
+  minimisation. Also asserted: ΔSASA < 0 at both poses, every protein atom unmoved to the bit, every
+  minimisation converged, and **181L's 6 and 8 Å numbers unchanged from 2c-2's table**, to half a
+  unit in its last printed digit. 6 Å, kcal/mol:
+
+  | entry | ligand | ΔG°exp | vdW | elec | ΔE vac | polar | nonpolar | total | ΔE vac, H relaxed | RMSD Å | vdW min | ΔE vac min | polar min | total min |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 181L | benzene | −5.19 | −11.29 | −1.13 | −12.43 | +7.32 | −1.47 | −6.58 | −20.42 | 0.809 | −21.28 | −22.35 | +7.33 | −16.50 |
+  | 182L | benzofuran | −5.46 | −14.04 | −2.65 | −16.69 | +10.98 | −1.79 | −7.50 | −27.77 | 0.566 | −24.81 | −27.65 | +11.46 | −17.99 |
+  | 183L | indene | −5.13 | +224.44 | −1.49 | +222.95 | +10.34 | −1.88 | +231.41 | −18.62 | 0.749 | −22.81 | −24.18 | +10.58 | −15.48 |
+  | 184L | isobutylbenzene | −6.51 | −6.50 | −0.66 | −7.16 | +12.88 | −2.20 | +3.52 | −35.80 | 0.667 | −31.67 | −33.16 | +19.27 | −16.11 |
+  | 185L | indole | −4.89 | −20.31 | −1.90 | −22.21 | +10.26 | −1.78 | −13.72 | −25.43 | 0.148 | −24.08 | −26.54 | +11.05 | −17.26 |
+  | 186L | n-butylbenzene | −6.70 | +80.80 | −1.01 | +79.79 | +16.22 | −2.17 | +93.83 | −14.99 | 0.551 | −29.16 | −30.02 | +18.89 | −13.36 |
+  | 187L | p-xylene | −4.67 | −14.00 | −0.02 | −14.01 | +9.61 | −1.91 | −6.31 | −25.46 | 0.483 | −29.13 | −29.64 | +10.43 | −21.14 |
+  | 188L | o-xylene | −4.60 | −18.39 | −0.73 | −19.12 | +9.59 | −1.91 | −11.44 | −24.81 | 0.446 | −28.08 | −29.14 | +10.15 | −20.91 |
+  | 1NHB | ethylbenzene | −5.76 | +12.77 | −0.83 | +11.95 | +11.81 | −1.86 | +21.89 | −24.84 | 0.370 | −26.37 | −27.51 | +12.65 | −16.74 |
+
+  The 6 Å pockets are 18–26 residues and 322–439 atoms, with pocket charges 0 to +2. At 8 Å they
+  are 40–49 residues, 671–804 atoms and +3 each; the full 8 Å table is printed by the test.
+  **Against ΔG°exp, n = 9, 95% Fisher intervals** (Spearman's with the 1.06 factor usually
+  attributed to Fieller, Hartley and Pearson 1957, quoted from memory, not read):
+
+  | column | 6 Å Pearson r | Spearman ρ | slope | RMS after offset | 8 Å Pearson r | Spearman ρ | slope | RMS after offset |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | ΔE vac, hydrogens relaxed | +0.04 [−0.64, +0.69] | −0.03 [−0.69, +0.66] | +0.35 | 5.61 | +0.08 [−0.62, +0.71] | −0.02 [−0.69, +0.67] | +0.64 | 5.60 |
+  | ΔE vac, minimised | +0.46 [−0.29, +0.86] | +0.32 [−0.46, +0.82] | +1.98 | 2.79 | +0.49 [−0.25, +0.87] | +0.33 [−0.44, +0.82] | +2.20 | 2.91 |
+  | total, minimised | −0.77 [−0.95, −0.22] | −0.72 [−0.94, −0.08] | −2.53 | 2.93 | −0.90 [−0.98, −0.58] | −0.88 [−0.98, −0.51] | −3.97 | 3.81 |
+
+  (The crystal-pose columns are printed too, and they are the clashes: r = −0.14, spread 245.)
+  **What this can and cannot mean.** The nine ligands are of one size class, and ΔG°exp spans 2.10
+  kcal/mol, while every computed column spans 8–21. With n = 9, a Pearson r is different from zero
+  at the two-sided 5% level only past 0.666. The vacuum columns' intervals all contain zero, so the
+  minimised vacuum ΔE shows no correlation that nine points can distinguish from none. The solvated
+  total's interval excludes zero **on the wrong side**: it ranks the series roughly backwards. The
+  cause is in the table. The polar term is largest for the two largest ligands (+19.3 and +18.9
+  minimised, against +7.3 for benzene), which also bind best. It grows from 6 to 8 Å for every
+  ligand (isobutylbenzene +19.3 to +26.7), as 2c-2 measured for benzene, and with QEq charges OBC II
+  over-solvates. So the total's anticorrelation is a measurement of the polar term's size
+  dependence, which has not converged, and it is not a measurement of binding. **None of these
+  statistics is asserted.** The statistics functions are held to closed forms instead: `y = x²` on
+  1…5 gives r = 60/√3740, slope 6, ρ = 1 and offset-removed RMS √52.8, plus a reversal, tied ranks
+  and Fisher's interval at r = ½, n = 12. Ignored by default: the series, 100 s with `--release
+  -- --ignored`. The three default tests take 1.1 s unoptimised. Each new assertion was sabotaged:
+  26 sabotages, each restored by copying the original back, touching it and checking its
+  SHA-256, and each caught by the assertion it targeted. The 19 on the default tests: o-xylene's
+  methyl moved to meta (caught by the methyl count alone), isobutylbenzene rewired to n-butyl with
+  formula and valence intact (caught by the graph alone), a `SEQRES` residue, a `SEQADV` line, a
+  water renamed, the His rule at 2.6 Å, dropped residues double-counted, a ligand H removed,
+  lysine neutral, serine's HG removed, residue 1 deleted, the `HEADER` code, a ligand atom deleted,
+  an alternate location added, ties not averaged, Fisher at 2σ, Pearson ×0.999, the RMS without
+  its offset, and the slope's denominator. The 7 on the series: one pocket atom unfrozen, ΔSASA's
+  sign, the cross van der Waals' sign, hydrogens not relaxed, the hydrogen relaxation cut to 5
+  steps, the minimiser cut to 20 steps, and the surface tension at 0.0051. The last is caught only by 181L's committed numbers. 200 tests in
+  the crate, and five ignored.
 
 ### Changed
 

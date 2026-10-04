@@ -50,6 +50,13 @@ time, and assert the edit's anchor occurs exactly once before making it.
 | `TYR.cif` | TYROSINE | C9 H11 N O3 | 2024-09-27 | 2026-10-04 | `fa0ef32f9d623e087a527b0a146c0494a5a656037c6448d956072dd2406fa554` |
 | `VAL.cif` | VALINE | C5 H11 N O2 | 2023-11-03 | 2026-10-04 | `9c3c807970c817b1e1a4b43164db91a5bf1e7bf438b3269c5649f6ce84d4c0ed` |
 | `BNZ.cif` | BENZENE | C6 H6 | 2011-06-04 | 2026-10-04 | `01bcf7c3ce9befdb4078e9832252eb5fe99e2598f320f87358ea1a9a247f7c61` |
+| `BZF.cif` | BENZOFURAN | C8 H6 O | 2011-06-04 | 2026-10-05 | `693e00601478e4b989572f292654b80ebde8bfa331a96a2dda617058222aa557` |
+| `DEN.cif` | INDENE | C9 H8 | 2011-06-04 | 2026-10-05 | `77c0fca9160cc4449a7a6157aa4cd6e84676f559d2b5879e6af41c060c3e47dc` |
+| `I4B.cif` | ISOBUTYLBENZENE | C10 H14 | 2011-06-04 | 2026-10-05 | `950c8f671c4fae134709fbe7ec207b3cbb34f31d5a2cd9a6f5e97e7d58c54381` |
+| `IND.cif` | INDOLE | C8 H7 N | 2011-06-04 | 2026-10-05 | `e40e1c1b797a76646eaf3f357f78b51b121ba490c09bbf9c9975ea29840ffc67` |
+| `N4B.cif` | N-BUTYLBENZENE | C10 H14 | 2011-06-04 | 2026-10-05 | `130733106105fc8719ecb3502d48b8c214f1a53e80b15680b2a9011272dabb81` |
+| `PXY.cif` | PARA-XYLENE | C8 H10 | 2024-09-27 | 2026-10-05 | `092ecd1a419b68c552a9fbf047b38b12b2c2a251270c305effc0ee71d8ee77a9` |
+| `OXE.cif` | ORTHO-XYLENE | C8 H10 | 2024-09-27 | 2026-10-05 | `60bba235532452cccb2f15046df69be1402e9e9232fd692d4519e22aaea2ae05` |
 
 **How each entry was found and checked.** By exact name or by formula through RCSB's search API,
 then read: its name, its formula, and its bond table, which must be the molecule's — every heavy
@@ -75,11 +82,28 @@ pdbx_formal_charge` 1) — and the module's protonation table says what is remov
 `every_component_is_the_molecule_it_says` holds each to its own formula, and
 `the_dictionarys_templates_are_free_amino_acids` to that protonation.
 
+**The congeners' ligands** — `BZF`, `DEN`, `I4B`, `IND`, `N4B`, `PXY`, `OXE`, and `PYJ` above — are
+the ligands of the 182L–188L and 1NHB entries below, by each entry's `HETNAM`. Each entry's atom
+names are its dictionary entry's heavy-atom names, one for one. A formula cannot tell o-xylene from
+p-xylene, or n-butylbenzene from isobutylbenzene, so `each_ligand_is_the_molecule_its_entry_names`
+(in `the_congener_series.rs`) holds each to its bond graph instead. That graph is every heavy atom's
+element, aromatic flag, heavy neighbours and hydrogens, written by hand from the structure, plus the
+methyl–methyl bond count of the two xylenes (3 ortho, 5 para). Indene's five-ring carbons are not
+flagged aromatic in the dictionary; furan's O and pyrrole's NH are.
+
 # Structures, unmodified
 
 | file | entry | fetched from | revision | fetched | SHA-256 as fetched |
 | --- | --- | --- | --- | --- | --- |
 | `181L.pdb` | T4 lysozyme L99A (pseudo-wild-type C54T, C97A) with benzene, X-ray 1.80 Å | `https://files.rcsb.org/download/181L.pdb` | REVDAT 5, 07-FEB-24 | 2026-10-04 | `77018feaaa65bb22dea47c784e8c059b0ccc09cd6dc7442b79cce83f3170985f` |
+| `182L.pdb` | the same, with benzofuran (`BZF` 401) | `https://files.rcsb.org/download/182L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `edc2394c51e72915bb208b5d6b1ae4ffbfedbacaada92baa3aeb33592971e509` |
+| `183L.pdb` | the same, with indene (`DEN` 400) | `https://files.rcsb.org/download/183L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `ef796adb357439f8b7ef645510ecf8febde549f0ad9d67a1acc5d5b753d9394a` |
+| `184L.pdb` | the same, with isobutylbenzene (`I4B` 401) | `https://files.rcsb.org/download/184L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `95ed7b6d6a56f516f1c2bcb34271063a6b5250b0528508914a0de41d49fba517` |
+| `185L.pdb` | the same, with indole (`IND` 400) | `https://files.rcsb.org/download/185L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `227d2f280ddb502333b9dd7eb9b635eccbc9635d1cfc4990a0be46c6e66b1cbe` |
+| `186L.pdb` | the same, with n-butylbenzene (`N4B` 400) | `https://files.rcsb.org/download/186L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `a04775eb0d4604667330deac1305909ef63e9b68703932cdbf2d76716d136e3b` |
+| `187L.pdb` | the same, with p-xylene (`PXY` 400) | `https://files.rcsb.org/download/187L.pdb` | REVDAT 5, 07-FEB-24 | 2026-10-05 | `10fb00afc613cb46f5d662aa7acb0c0ad2ef9af1ff4a25f4a08c1dff6bd2f923` |
+| `188L.pdb` | the same, with o-xylene (`OXE` 400) | `https://files.rcsb.org/download/188L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `2fe9999ebd54f047f5f0528e689780af336d5d5e22224eba482e4c4acce76d4e` |
+| `1NHB.pdb` | the same, with ethylbenzene (`PYJ` 401) | `https://files.rcsb.org/download/1NHB.pdb` | REVDAT 5, 14-FEB-24 | 2026-10-05 | `e7a5041a5a607e0ed4e7146ecfff5ea7b6f8886c9fd9863a5e9550c0efa902aa` |
 
 **PDB format rather than mmCIF**: fixed columns are the simpler of the two to read strictly. Fetched
 twice and identical both times. Its primary citation is A. Morton and B. W. Matthews,
@@ -89,7 +113,7 @@ Baase and B. W. Matthews, *Biochemistry* **34**, 8564 (1995), the binding thermo
 2-hydroxyethyl disulfide (`HED` 170, a crystallisation additive) and the benzene (`BNZ` 400); no
 alternate locations, no hydrogens, and residues 163–164 (Asn, Leu) not located (`REMARK 465`).
 
-**The congeners, recorded and not yet used.** RCSB's search for entries whose citation is
+**The congeners, fetched for step 2c-3a.** RCSB's search for entries whose citation is
 doi:10.1021/bi00027a007 (Morton and Matthews 1995) returns nine, each the same L99A pseudo-wild
 type at 1.80 Å with `CL` and `HED`:
 
@@ -109,3 +133,16 @@ The same search for doi:10.1021/bi00027a006 (Morton, Baase and Matthews 1995) re
 as a secondary citation. Queried 2026-10-04 on `rcsb_primary_citation.pdbx_database_id_DOI` and
 `citation.pdbx_database_id_DOI`, which agreed; the ligands are each entry's `HETNAM`. Ethylbenzene's
 `PYJ.cif` is already above.
+
+**What the eight files are, checked in `the_congener_series.rs` with string operations on the
+files.** Each was fetched twice, on 2026-10-05, and the two copies are identical. Each is the protein
+of 181L. Its `SEQRES` is identical to 181L's, and its `SEQADV` records are the same three conflicts
+against UniProt P00720: Thr54 for Cys, Ala97 for Cys and Ala99 for Leu. So each is L99A on the C54T/C97A
+pseudo-wild type, at 1.80 Å, with `REMARK 465` listing Asn163 and Leu164 and no alternate location.
+Their `HETATM` residues are waters, `CL` 173 and 178, `HED` 170 and the ligand, once, with every
+heavy atom. The waters are 128, 116, 125, 134, 133, 126, 131 and 127, in the table's order, against
+181L's 136. The entry drop list is the same for all nine: `HOH`, `CL`, `HED`. None was refused, none
+has a missing atom, and none has an unmodelled residue but 163–164. By Cα position against 181L,
+without superposition (the crystals are isomorphous), helix F (residues 108–113) moves 2.27, 2.62 and
+2.29 Å at Ala112 for indene, isobutylbenzene and o-xylene. In the other six entries no Cα moves more
+than 0.72 Å.

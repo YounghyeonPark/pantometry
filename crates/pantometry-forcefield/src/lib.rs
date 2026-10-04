@@ -45,6 +45,11 @@
 //!   which is tested — with OBC II's polar desolvation and the buried area beside it, and
 //!   minimises the ligand in the rigid pocket with every protein atom frozen
 //!   ([`Minimiser::with_frozen`]). [`RigidMotion`] moves the ligand. See [`binding`].
+//! - **The congener series** (`tests/the_congener_series.rs`): the nine T4 lysozyme L99A entries
+//!   of Morton and Matthews (1995) — benzene, benzofuran, indene, isobutylbenzene, indole,
+//!   n-butylbenzene, p-xylene, o-xylene and ethylbenzene — are built by the same pipeline with no
+//!   change to it. Their binding energies are set beside the experimental ΔG° that Mobley et al.
+//!   (2007) tabulate. The comparison is reported, not asserted.
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step**, so a run
@@ -94,6 +99,12 @@
 //! placed hydrogen keeps its template's bond length exactly and its angles within a bound its own
 //! fit earns, no hydrogen is within 1.5 Å of a heavy atom, every superposition is no worse than one
 //! built by hand from three atoms, and every refusal is fed the input it refuses.
+//!
+//! The congeners against their own entries and 181L: each entry's `SEQRES` is 181L's and its
+//! `SEQADV` the same three conflicts (C54T, C97A, L99A). Its `HETATM` residues are waters, two
+//! chlorides, one HED and the ligand only. Every one builds with His31 +1 by the rule, a total
+//! of +9 and 2604 protein atoms. Each ligand's dictionary entry is held to its molecule by its
+//! bond graph, written by hand, which tells o-xylene from p-xylene where a formula cannot.
 //!
 //! The minimiser against geometry whose minimum is known exactly: a diatomic relaxes to eq 2's
 //! natural length, water to its two natural lengths and θ₀ (no non-bonded pair is left in
@@ -160,7 +171,14 @@
 //!   charge transfer between the partners (QEq on each separately), and a solvated estimate whose
 //!   polar part has not converged with the pocket's size — +7.3 kcal/mol at 6 Å, +15.0 for the
 //!   whole protein, for benzene in T4 lysozyme L99A. No comparison with an experimental affinity
-//!   is asserted.
+//!   is asserted. **On the congener series it does not rank the ligands.** Across nine ligands
+//!   whose measured ΔG° spans 2.1 kcal/mol, the minimised vacuum ΔE correlates with experiment at
+//!   r = +0.46 at 6 Å, whose 95% interval is [−0.29, +0.86]. The solvated total correlates at
+//!   r = −0.77, interval [−0.95, −0.22]: the wrong sign. The polar term grows with the ligand and
+//!   with the cutoff, so the ligands that bind best are the ones it penalises most. **At the
+//!   crystal pose the placed hydrogens decide the vacuum ΔE** for three of the nine: indene's
+//!   H12 is 1.41 Å from Val111's HG13, which puts van der Waals at +224 kcal/mol. Neither
+//!   placement sees the other partner's hydrogens.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.

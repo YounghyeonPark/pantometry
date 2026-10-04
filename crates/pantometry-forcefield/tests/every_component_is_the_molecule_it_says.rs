@@ -86,6 +86,13 @@ fn every_component_is_the_molecule_it_says() {
         ("TYR", include_str!("../components/TYR.cif")),
         ("VAL", include_str!("../components/VAL.cif")),
         ("BNZ", include_str!("../components/BNZ.cif")),
+        ("BZF", include_str!("../components/BZF.cif")),
+        ("DEN", include_str!("../components/DEN.cif")),
+        ("I4B", include_str!("../components/I4B.cif")),
+        ("IND", include_str!("../components/IND.cif")),
+        ("N4B", include_str!("../components/N4B.cif")),
+        ("PXY", include_str!("../components/PXY.cif")),
+        ("OXE", include_str!("../components/OXE.cif")),
     ] {
         let c = Component::from_ccd(text).expect("parses");
         let stated = c
