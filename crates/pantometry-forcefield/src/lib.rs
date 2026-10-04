@@ -27,6 +27,11 @@
 //!   charge-dependent orbital iterated as the paper does, and each misprint and ambiguity in the
 //!   paper settled by reproducing its tables. [`ForceField::with_qeq_charges`] puts them in the
 //!   electrostatic term, fixed at that geometry; zero charges stay the default.
+//! - [`solvation`] is implicit water: the generalized Born electrostatic solvation energy of
+//!   Onufriev, Bashford and Case (2004), OBC II, with ε = 80 and optional salt, and its analytic
+//!   force through the Born radii at fixed charges. [`ForceField::with_generalized_born`] adds it
+//!   to the energy and the force; vacuum stays the default. A Shrake–Rupley surface gives the
+//!   paper's nonpolar term beside it, as a number, not a force.
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step**, so a run
@@ -60,6 +65,13 @@
 //! 36 Table IV charges at stated experimental geometries, each to its printed precision plus its
 //! measured sensitivity to the geometry. See [`qeq`].
 //!
+//! Generalized Born against closed forms: eq 5's pair integral against its own quadrature, in
+//! every branch; a lone ion's radius `ρ − 0.09 Å` and Born energy; two ions far apart as two Born
+//! terms and a screened Coulomb, to a bound derived from the descreening; two at one point as one
+//! of their summed charge; a charge inside a dielectric sphere, where HCT gives the Coulomb-field
+//! radius exactly and Kirkwood's series shows it 5.73% long; eq 6 with eq 8's constants; the
+//! paper's 30 Å bound; and the force against central differences. See [`solvation`].
+//!
 //! The minimiser against geometry whose minimum is known exactly: a diatomic relaxes to eq 2's
 //! natural length, water to its two natural lengths and θ₀ (no non-bonded pair is left in
 //! either), and methane to the regular tetrahedron — each to within the displacement its final
@@ -76,7 +88,7 @@
 //! restraint, `atan2` — on every torsion evaluation as well as when a [`ForceField`] is built.
 //! Those are not correctly rounded and are not required to be the same function on two
 //! machines, so no digest of a minimum is pinned; see [`minimise`]. [`qeq`]'s integrals call
-//! `exp`, with the same consequence for a charge.
+//! `exp`, with the same consequence for a charge, and [`solvation`] calls `exp`, `ln` and `tanh`.
 //!
 //! # What is deliberately not in it
 //!
@@ -94,14 +106,26 @@
 //!   only disagree with it. A file without bonds is refused, not guessed at.
 //! - **No elements beyond H, C, N, O, F, P, S, Cl, Br and I**, and no hypervalent sulfur types —
 //!   [`uff::assign`] documents the sulfone gap.
-//! - **No charges unless asked for, no solvent, no binding energies.** Electrostatics is computed
+//! - **No charges unless asked for, no solvent unless asked for, no binding energies.**
+//!   Electrostatics is computed
 //!   from charges a caller supplies, and they default to zero, because UFF's valence parameters
 //!   were fitted without them (p. 10031 of the UFF paper). QEq's are an option
 //!   ([`ForceField::with_qeq_charges`]), **fixed at the geometry they were computed for**: the
 //!   force treats them as constants, as the QEq paper uses them, so a minimisation with them does
-//!   not re-equilibrate as it moves. Not here: charges that follow the geometry, QEq's
-//!   polarisation extensions, and the generalized Born solvation that is the next step. A
-//!   hypervalent sulfur is refused by name ([`Unsupported`]) rather than given the wrong radius.
+//!   not re-equilibrate as it moves. Not here: charges that follow the geometry, and QEq's
+//!   polarisation extensions. A hypervalent sulfur is refused by name ([`Unsupported`]) rather
+//!   than given the wrong radius.
+//! - **Implicit solvent is generalized Born only, its electrostatic part only in the force
+//!   field, and opt-in** ([`ForceField::with_generalized_born`]). The nonpolar `0.005 × SASA` term
+//!   is computed ([`solvation::surface_area`], [`solvation::nonpolar_energy`]) but not added to
+//!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
+//!   Not here: Poisson–Boltzmann, explicit water, GB with a solute dielectric other than 1, a
+//!   cutoff, and the binding energy itself (complex − protein − ligand), which is the next step.
+//!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
+//!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
+//!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
+//!   about −4 to −6 — so absolute solvation and binding energies built on it are not
+//!   quantitative.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.
@@ -113,6 +137,7 @@ pub mod ccd;
 pub mod energy;
 pub mod minimise;
 pub mod qeq;
+pub mod solvation;
 pub mod uff;
 
 pub use angular::{Bend, Inversion, Torsion};
@@ -120,6 +145,7 @@ pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use qeq::{Charges, Qeq, QeqError};
+pub use solvation::{GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
 
 use pantometry_core::{Bodies, Domain, Exchange, Kind, Ledger, Reading, Violation};

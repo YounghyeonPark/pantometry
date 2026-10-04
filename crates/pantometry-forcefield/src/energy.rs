@@ -98,6 +98,7 @@
 use crate::angular::{inversion_parameters, torsion_parameters, Bend, Inversion, Torsion};
 
 use crate::ccd::{BondOrder, Component, Element, ANGSTROM};
+use crate::solvation::GeneralizedBorn;
 use crate::uff::{gmp_electronegativity, Hybridisation, UffType, KCAL_PER_MOL};
 use std::fmt;
 
@@ -363,7 +364,7 @@ impl Pair {
 
 /// An energy, by term and in total, in joules per molecule.
 ///
-/// `total` is accumulated separately from the six terms, term by term as each is evaluated, so
+/// `total` is accumulated separately from the terms, term by term as each is evaluated, so
 /// that the parts summing to the whole is a check on the bookkeeping rather than a definition.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Energy {
@@ -379,6 +380,10 @@ pub struct Energy {
     pub van_der_waals: f64,
     /// Electrostatics.
     pub electrostatic: f64,
+    /// The generalized Born electrostatic solvation energy, ΔG_GB of [`crate::solvation`]: zero
+    /// unless the force field was given a solvent ([`ForceField::with_solvation`]). Not one of
+    /// UFF's six terms.
+    pub solvation: f64,
     /// Everything above.
     pub total: f64,
 }
@@ -392,6 +397,7 @@ impl Energy {
         inversion: f64::NAN,
         van_der_waals: f64::NAN,
         electrostatic: f64::NAN,
+        solvation: f64::NAN,
         total: f64::NAN,
     };
 }
@@ -416,6 +422,7 @@ pub struct ForceField {
     charges: Vec<f64>,
     elements: Vec<Element>,
     total_charge: i32,
+    solvation: Option<GeneralizedBorn>,
 }
 
 impl ForceField {
@@ -578,6 +585,7 @@ impl ForceField {
             charges: vec![0.0; n],
             elements: atoms.iter().map(|a| a.element).collect(),
             total_charge: atoms.iter().map(|a| a.charge).sum(),
+            solvation: None,
         })
     }
 
@@ -618,6 +626,33 @@ impl ForceField {
             f64::from(self.total_charge),
         )?;
         Ok(self.with_charges(charges.charges))
+    }
+
+    /// The same terms **in implicit water**: [`GeneralizedBorn::new`] — OBC II, ε = 80, no salt —
+    /// for its atoms, added to the energy as [`Energy::solvation`] with its analytic force. See
+    /// [`crate::solvation`]. The solvation energy is computed from the force field's charges, so
+    /// with the default zero charges it is zero: give it charges ([`ForceField::with_charges`] or
+    /// [`ForceField::with_qeq_charges`]) as well.
+    pub fn with_generalized_born(self) -> ForceField {
+        let gb = GeneralizedBorn::new(&self.elements);
+        self.with_solvation(gb)
+    }
+
+    /// The same terms with the solvation model `solvation` added to the energy and the force.
+    /// The default, [`ForceField::new`], is vacuum: no solvation term.
+    ///
+    /// # Panics
+    ///
+    /// If `solvation` is not one atom per atom of the force field.
+    pub fn with_solvation(mut self, solvation: GeneralizedBorn) -> ForceField {
+        assert_eq!(solvation.len(), self.charges.len(), "one GB atom per atom");
+        self.solvation = Some(solvation);
+        self
+    }
+
+    /// The solvation model, if one was given; `None` is vacuum.
+    pub fn solvation(&self) -> Option<&GeneralizedBorn> {
+        self.solvation.as_ref()
     }
 
     /// One bond-stretch term per bond, in the component's bond order.
@@ -716,6 +751,11 @@ impl ForceField {
                 e.total += q;
             }
             push(&mut forces, p.atoms, d, de_dr, r);
+        }
+        if let Some(gb) = &self.solvation {
+            let g = gb.accumulate(&self.charges, at, &mut forces);
+            e.solvation += g;
+            e.total += g;
         }
         Evaluation { energy: e, forces }
     }

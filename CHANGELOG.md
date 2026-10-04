@@ -276,6 +276,76 @@ protects nothing.
   (NaCl, KCl and RbCl off by 0.0011–0.0013). Sabotage runs use `--no-fail-fast`: the first did
   not, and `cargo test` stopped at the first failing binary, so "caught by the paper" was not a
   measurement until it was rerun. 122 tests in the crate.
+- **`pantometry-forcefield` has implicit water: generalized Born solvation, OBC II, with its
+  analytic force — opt-in; the default stays vacuum.** New module `solvation`, from Onufriev,
+  Bashford and Case, *Proteins* 55, 383 (2004), read off its pages: eq 2 over every ordered pair,
+  `i = j` included, with Still's `f` of eq 3; the solute's dielectric 1 (p. 384), the same vacuum
+  UFF's Coulomb term is in; ε_w = 80, the paper's "80 for water at 300 K" (p. 384); optional
+  Debye–Hückel κ = 0.316 √[salt] Å⁻¹ (p. 384), default none; `ρ̃ = ρ − 0.09 Å` (p. 385); eq 6 with
+  OBC II's α, β, γ = 1.0, 0.8, 4.85 (eq 8), and OBC I and HCT's eq 4 beside it.
+  `ForceField::with_generalized_born()` adds `Energy::solvation` to the total and its force to the
+  forces, computed from the force field's charges, so it is zero until QEq's or a caller's are
+  given; `Molecule` and its readings are unchanged. **The force is analytic at fixed charges, by
+  the chain rule through every Born radius**, and against central differences of the energy on
+  aspirin (OBC II, OBC II in 0.15 M salt, HCT) and on a cluster built to reach every branch of the
+  pair integral, to a tolerance from a measured third derivative and a rounding bound: the worst
+  miss is 0.018 of it, and every coordinate's force is over a hundred tolerances. **Secondary, and
+  said so**: eq 5's closed pair form and the scale factors (H 0.85, C 0.72, N 0.79, O 0.85, F 0.88,
+  P 0.86, S 0.96, else 0.8) are OpenMM's `customgbforces.py`, and the radii are AMBER's "Bondi"
+  set the paper fitted with (Table I, p. 387; its OBC II trajectory is "parm99, GB^OBC (II), Bondi",
+  Table II) — **not the mbondi2 set AMBER and OpenMM use for igb=5**, which puts a hydrogen on
+  nitrogen at 1.3 Å, and **not Bondi's own table** (O 1.5 against
+  1.52, F 1.5/1.47, P 1.85/1.80, Cl 1.7/1.75) and has **nothing for Br or I**, where AMBER's 1.5 Å
+  default would make them smaller than carbon; Bondi's 1.85 and 1.98 Å are used, not read in
+  primary and outside anything OBC was fitted to. **The pair integral was re-derived, not taken on
+  trust, and OpenMM's form is missing a term**: when atom i's sphere lies wholly inside j's scaled
+  sphere the shells from ρ̃_i to `s − r` add `1/ρ̃_i − 1/(s − r)`, which its `L = max(ρ̃, |r − s|)`
+  leaves out; the derivative needs only the explicit `∂/∂r`, because the moving limits' terms
+  vanish or cancel. Checked against closed forms: eq 5 against a quadrature in the test in every
+  branch to 10⁻¹²; a lone ion's radius `ρ − 0.09 Å` exactly and Born's energy, with salt too;
+  two ions 10, 20 and 40 Å apart against two Born terms and the screened Coulomb, off by 1.1e-2,
+  7.0e-4 and 4.4e-5 kcal/mol within a bound from the descreening of 1.8e-2, 8.9e-4 and 4.9e-5;
+  two coincident charges as one of their sum; eq 6 typed from the paper for all three
+  rescalings; the paper's 30 Å bound for carbon (30.41; a carbon deep in a 50 Å sphere 30.30);
+  HCT's radius NaN, not negative, when overlap pushes `I` past `1/ρ̃`; rigid motions; zero net
+  force. **A charge inside a dielectric sphere**, as one dense atom with a = 3 Å and the charge
+  1.2 Å from its centre: HCT gives the Coulomb-field radius `½[a/(a² − d²) + ln((a+d)/(a−d))/(2d)]⁻¹`
+  = 2.667143 Å to 10⁻¹² for every probe radius — only with the inside term — and **Kirkwood's
+  exact series at ε = 80 gives 2.522651 Å: the Coulomb-field approximation is 5.73% long in R and
+  5.42% short in energy**, the model's own error, pinned as a measurement, not tolerated away (the
+  brief said 5.8%; it is 5.73). OBC II puts the same charge at 3.16–5.32 Å depending on the probe's
+  radius. The nonpolar `0.005 kcal mol⁻¹ Å⁻² × SASA` (p. 392) is computed by Shrake–Rupley on a
+  golden-spiral point set, Bondi radii plus a 1.4 Å probe (a choice; the paper names none), and is
+  **not in the force field**: a counted surface has no gradient. Its worst error over eight
+  overlapping pairs against the exact two-sphere area is 1.86%, 0.49%, 0.29%, 0.096% and 0.025% at
+  100 to 25 600 points — no clean rate, and none is claimed. **Real molecules**, relaxed by UFF in vacuum, QEq charges at that minimum,
+  against FreeSolv v0.52 (Mobley and Guthrie 2014; each value's own reference beside it): **aspirin
+  ΔG_GB −18.22 kcal/mol**, plus 1.86 nonpolar, −16.36 against −9.94. Over eighteen molecules the
+  error has mean −2.14 and RMS 3.36 kcal/mol, Pearson r 0.71; methylamine −4.75 against −4.55 and
+  DMF −8.17 against −7.81, but methanol −9.15 against −5.10, dimethyl ether −7.81 against −1.91,
+  anisole −6.51 against −2.45, propane −1.15 against +2.00, and acetamide −6.99 against −9.71.
+  **What that means: with QEq charges, OBC II over-solvates** — mean −2.1, RMS 3.4 kcal/mol, the
+  ethers and anisole by about −4 to −6 — **so absolute binding energies built on it are not
+  quantitative.** Reported, not asserted: α, β, γ and the radii were fitted to Poisson–Boltzmann
+  energies of proteins with AMBER charges, not QEq's. Each of fifteen sabotages was caught — ρ̃ without the offset, the inside term,
+  OBC I for OBC II, the `i = j` term, Still's exponential, the chain rule through R, the `sech²`
+  in dR/dI, the sign of a term in dI/dr, κ in g′, κ doubled, κ halved in the energy, the cross
+  term counted once, HCT's NaN guard, the surface on the bare radius, and solvation left out of
+  the total — each restored byte for byte and its SHA-256 checked. **A review then found five
+  kinds of error those tests passed, each shown passing before and caught after**: Still's
+  exponent 4 → 8 in energy and gradient together (the coincident ions sit at r = 0, the far ones
+  inside the allowance, and the force check sees only consistency); κ dropped from the pair terms
+  only; `with_solvent_dielectric` ignoring its argument; the surface tension 0.005 → 0.05, which
+  passed the whole crate; and seven radii and scale factors moved, which passed the whole crate
+  too, because the lone-ion test read ρ from the code it checked. Now: two bare ions at 1, 2.3
+  and 4 Å, ε 80 and 4, no salt and 0.15 M, against eq 2 and eq 3 typed in the test to 10⁻¹³, with
+  `still_distance` and the energy sharing one eq 3; `nonpolar_energy(100 Å²)` = 0.5 kcal/mol;
+  every element's ρ and S against values typed from `customgbforces.py` — opened, with line
+  numbers — or Bondi; the lone ion from typed ρ; and the spiral's points at the midpoints of n
+  equal bands, which an off-by-half spiral (z = 1 − 2k/n) had passed. The Kirkwood gap is
+  relabelled a documented measurement — it calls no crate code — and the pair integral gains the
+  case `s > r` with `ρ̃ > s − r`. An unverified sentence that AMBER's integral has the inside term
+  is removed. 140 tests in the crate.
 
 ### Changed
 
