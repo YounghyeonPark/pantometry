@@ -989,6 +989,171 @@ protects nothing.
   The series test takes 124 s with `--release -- --ignored`, the 20 Å test 883 s; the benzene
   file's default tests 13.2–13.8 s unoptimised, against 13.4–13.8 before. 210 tests in the crate,
   and nine ignored.
+- **`pantometry-forcefield` moves: molecular dynamics, BAOAB Langevin and velocity Verlet, and
+  `Molecule` as a domain whose step can be a time step.** This is step 3a of sampling and complex
+  stability. New module `dynamics`: `MolecularDynamics` integrates any `Potential`. `ForceField`
+  is one, and a test's harmonic well another.
+  - **The integrator.** BAOAB is the splitting of Leimkuhler and Matthews, *Appl. Math. Res.
+    Express* 2013, 34, read in arXiv:1203.5428, whose Appendix gives the five lines. Its
+    Ornstein–Uhlenbeck `O` is solved exactly. `Bath::Isolated` gives velocity Verlet instead. One
+    force evaluation per step.
+  - **Masses** are CIAAW's abridged standard atomic weights (2024 table) over `N_A`, as
+    `Element::atomic_weight` and `Element::mass`.
+  - **Randomness.** Every kick is `Rng::for_index(seed ^ KICK_STREAM, step·N + atom)`, with `N`
+    counting frozen atoms. So at a fixed step a run is the same bits however it is cut into calls,
+    and freezing one atom does not change another's noise. A `Simulation` whose frames are not
+    whole multiples of the step takes other substeps, and is another run.
+  - **Frozen atoms** have zero velocity and are never written.
+  - **Initial velocities.** `thermalised` draws Maxwell–Boltzmann velocities. With nothing frozen
+    it removes the centre-of-mass **and** the angular momentum: velocity Verlet conserves both for
+    an isolated molecule, so a tumble drawn at the start would never reach the internal modes. The
+    count is `3N − 6` in NVE (`3N − 5` if linear), and `3 N_free` under a bath, which
+    re-thermalises the removed motion.
+  - **The books.** The bath's work is booked per `O`. `ledger()` is `energy` = kinetic +
+    (potential − its value at the start) − work, in three entries.
+  - **The domain.** `Molecule::thermalised` or `with_dynamics` puts a molecule in motion. Its
+    `step` then advances `dt` in steps of at most `Molecule::time_step` (0.5 fs), and
+    `max_stable_dt` says so, so the kernel cuts each frame.
+  - **New readings:** `temperature` (°C, after `O` under a bath), `kinetic energy`, `thermostat
+    work`, `conserved energy` (the ledger's books) and `dynamics steps`. In motion the diagnostics
+    are `max force`, `rms force`, `conserved energy` and `dynamics steps`. `domain_readings` now
+    also holds a molecule in motion to them.
+  - **The minimiser is still the default**, so no scene, reading or pinned label changes.
+  - **The enum is `Bath`, not `Thermostat`.** The prelude already exports `pantometry-molecular`'s
+    `Thermostat`, which has variants of the same names and different fields.
+
+  **The time step, from measurement.** NVE aspirin from its relaxed geometry at 300 K, for 1 ps at
+  each step:
+
+  | dt (fs) | RMS ΔE (kcal/mol) | max \|ΔE\| | drift (kcal/mol/ps) |
+  | --- | --- | --- | --- |
+  | 0.125 | 0.0040 | 0.0070 | −0.0003 |
+  | 0.25 | 0.0162 | 0.0281 | −0.0012 |
+  | 0.5 | 0.0654 | 0.1147 | −0.0059 |
+  | 1 | 0.2738 | 0.4468 | +0.0091 |
+  | 1.5 | 0.6637 | 1.0748 | −0.0143 |
+  | 2 | 1.3667 | 2.1629 | −0.0007 |
+  | 2.5 | 2.8027 | 4.5741 | −0.0448 |
+  | 3 | blew up at 27 fs | | |
+
+  The error quarters per halving up to 1 fs and departs from `h²` above 2 fs. The stability edge is
+  between 2.5 and 3 fs, below the 3.7 fs that `ωh = 2` gives a lone C–H (UFF's `k` = 662 kcal
+  mol⁻¹ Å⁻², period 11.5 fs).
+  - **0.5 fs**: its worst departure is a fifth of `k_BT`, where 1 fs's is three quarters. BAOAB's
+    whole-step kinetic bias on a C–H, `(ωh)²/4`, is 1.9% at 0.5 fs and 7.5% at 1 fs.
+  - **No constraints.** They would buy about a fourfold step, and nothing here needs that yet.
+
+  **Checked against closed forms, not pinned outputs** (`tests/the_dynamics.rs`,
+  `tests/a_molecule_in_motion.rs`):
+  - **Velocity Verlet on a harmonic well.** Its largest energy departure is the shadow
+    Hamiltonian's `E₀(ωh)²/4`, met to 3e-9 at ωh = 0.4, 0.2 and 0.1. The measured order is 2.000.
+  - **One C–H bond**, released along its axis, follows Verlet's exact discrete cosine at
+    `√(k/μ)`. Measured: 4.8e-13 of the amplitude over 2000 steps. Bound: 1e-11, the rounding summed
+    linearly: 5.2e-12 from the positions and 1.6e-12 from the closed form's `acos`.
+  - **BAOAB on a harmonic well**, 150 000 steps at each of ωh = 0.5, 1 and 1.9:
+    - `k⟨x²⟩/k_BT` = 1.0012, 1.0016 and 1.0006 against 1 exactly;
+    - the whole-step `⟨mv²⟩/k_BT` = 0.9412, 0.7510 and 0.0977 against `1 − (ωh)²/4`;
+    - after `O` it is 1.0038, 1.0014 and 1.0008 against 1;
+    - every |z| is under 1.3, against a bound of 4 standard errors from the series' own
+      autocorrelation time.
+  - **Two unequal masses (C and H) under one bath** each sample `k⟨x²⟩ = k_BT`, and their kicks
+    are uncorrelated between atoms and between components.
+  - **Each BAOAB step moves the books by exactly `(a²/2)(P₁² − P₂² + Q₂² − Q²)`** on a harmonic
+    well, with `P = √m v`, `Q = √k x` and `a = ωh/2`, worked by hand from the five lines. Measured
+    to 9.7e-16 of the scale over 1000 steps, against a rounding bound of 1e-13. Its leading part is
+    the `h²(P₁² − P₂²)/8` that makes a bath's books a random walk.
+  - **A 0 K bath at `γh = ln 2`** is the Appendix worked by hand.
+  - **Thermalised velocities are χ² on `3N − 6`** over 8000 seeds: mean 1.0025 (σ 0.0021) and
+    variance 1.037 of `2(3N − 6)` (σ 0.0166). Both bounds are 4σ, with no autocorrelation, since
+    the draws are independent.
+  - **Equipartition on aspirin** in a 20 ps⁻¹ bath, 30 000 steps, in total and **per element**:
+    - total: 1.0023 ± 0.0094 with nothing frozen, 1.0078 ± 0.0114 with the six ring carbons
+      frozen;
+    - hydrogens 1.008 ± 0.014, carbons 1.004 ± 0.012 and oxygens 0.986 ± 0.016 with nothing
+      frozen;
+    - bound: 4σ from each series' autocorrelation time.
+  - **Energy-error orders.** NVE aspirin's energy error falls as `h²` and its per-step change as
+    `h³`. The bath's books also fall as `h²`, but that bound (0.8) is weak; the closed form above
+    is the real check of the bath's books.
+  - **Masses.** Every atomic weight equals the CIAAW table typed into the test. The masses sum to
+    all 49 entries' `formula_weight` within CIAAW's stated uncertainties. Each atom gets its own
+    element's mass.
+  - **Determinism and invariance.**
+    - A run is the same bits in one call, three, or 300, and from a rebuilt start.
+    - Frozen atoms keep their bits.
+    - A translated and rotated start gives the moved trajectory to 7.8e-15 Å. That holds in NVE
+      only: the kicks are lab-frame vectors.
+  - **The domain.**
+    - Kernel frames of 0.5, 1 or 5 fs give the same bits, and so does a direct 5 fs `step`.
+    - A restored run repeats itself, noise included.
+    - New charges replace the cached forces and the books' zero.
+
+  **Found on the way.**
+  - **The books' scale held UFF's arbitrary zero, and a half-counted bath passed the audit.**
+    `ledger()` first booked the whole potential, and aspirin's minimum is 29.6 kcal/mol. The audit
+    judges a change against the largest entry, so the zero was part of the scale every change was
+    measured against. With the bath's work half counted, a one-step frame moved the books by
+    5.0e-3 of that scale, inside the 1e-2 tolerance, and the audited run passed.
+    - The potential is now booked from its value at the start (`potential_reference`, retaken by
+      `forget_forces`).
+    - `Molecule::ENERGY_TOLERANCE` is re-earned on the new scale at **7e-3**. Over 20 ps at 300 K
+      and four seeds, the worst correct frame moved the books by 2.63e-3 (one step), 3.20e-3
+      (50 fs) and 4.35e-3 (1 ps). Half-counted work moves them by at least 1.06e-2, 6.7e-2 and
+      0.146.
+    - The audited test now runs frames of one step and of 50 fs, and fails on half-counted work.
+    - The tolerance scales as `(dt / 0.5 fs)²` for a longer step.
+  - **A bath makes the books a random walk.** One start's departure measures its order with sd
+    0.21 over 32 orders, against NVE's 0.029. Pooling four starts did not narrow it.
+  - **Holes the first tests had**, each found by a sabotage that passed them:
+    - one noise vector for every atom passed equipartition;
+    - the noise width from the mean free mass passed, with hydrogens near 155 K and heavy atoms
+      near 386 K and the total exact;
+    - velocities drawn 5% cold passed the 400-seed χ² at +1.5σ;
+    - iodine at 12.690, chlorine at 53.45 and fluorine at 19.998 passed, because no aspirin-sized
+      entry weighs them closely;
+    - the kinetic energy read before `O` passed, because it is the same in distribution for a
+      harmonic well;
+    - an unbounded `max_stable_dt` passed, because `step` also cuts a long `dt` itself.
+
+    Each now fails a test written for it. **One sabotage is equivalent**: drifting a frozen atom
+    moves it by zero.
+
+  **Sabotage.** Thirty-eight sabotages were run, each restored by copying the original back,
+  `touch` and SHA-256. The new ones were run before their fix and after it:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | noise width from the mean free mass | passed | caught by per-element equipartition and the two-mass well |
+  | velocities 5% cold | passed | caught by the 8000-seed χ² |
+  | I 12.690, Cl 53.45, F 19.998 | passed | caught by the CIAAW table |
+  | half-counted work, against `a_molecule_in_motion` | passed (with the whole potential booked) | caught by the audited run |
+  | the kinetic energy after `O` booked | caught (by the aspirin books tests) | also caught by the closed-form books |
+  | drift by `dt(1 + 1e-6)` | caught (by the shadow test) | also caught by the C–H bond at 1e-11 |
+  | masses in reverse order | caught (by the books tests) | also caught by the per-atom mass assertion |
+
+  The earlier sabotages are all still caught after the changes. They are:
+  - B/A/O reordered (BOAAB);
+  - the friction exponent's sign, and the noise factor's;
+  - kicks reused across steps, and one kick for every atom;
+  - the second half-kick dropped, and a full first kick;
+  - H's mass set to C's, and a mass in grams;
+  - the bath's work not counted, or half counted;
+  - the kinetic energy read before `O`;
+  - frozen atoms kicked, and the noise index counting free atoms only;
+  - the rigid motion not removed, or only its linear part;
+  - the bath's degrees of freedom less the removed six;
+  - a `2k_BT` width, and an anisotropic kick;
+  - stale forces after new charges, and a checkpoint without the dynamics;
+  - an empty ledger in motion;
+  - an unbounded step, no internal substeps, and the step count advanced per call;
+  - the temperature taken at the whole step;
+  - a declared diagnostic renamed (caught by `domain_readings`).
+
+  **Counts.** Unoptimised, the new default tests take 2.1 s in `the_dynamics.rs` and 0.1 s in
+  `a_molecule_in_motion.rs`. `cargo test -p pantometry-forcefield -- --list` counts **245 tests,
+  twelve of them ignored**: 233 run by default. 26 are new, three of them ignored measurements
+  that print tables and assert nothing. The previous entry's "210 tests and nine ignored" counted
+  the tests that run, and 210 + 23 is the 233.
 
 ### Changed
 

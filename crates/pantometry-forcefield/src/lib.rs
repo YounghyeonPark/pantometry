@@ -6,7 +6,8 @@
 //! The aim, over the steps that follow this one, is molecular mechanics on drug-sized molecules —
 //! an energy, its minimum, and which conformations are stable — with every term checkable.
 //!
-//! **This step computes UFF's whole energy and minimises it.** What is here:
+//! **This step computes UFF's whole energy, minimises it, and moves the molecule in time.** What is
+//! here:
 //!
 //! - [`Component::from_ccd`] reads one entry of the wwPDB Chemical Component Dictionary, strictly:
 //!   every malformed or unsupported input is a [`CcdError`] naming what it refused. See [`ccd`].
@@ -55,10 +56,19 @@
 //!   n-butylbenzene, p-xylene, o-xylene and ethylbenzene — are built by the same pipeline with no
 //!   change to it. Their binding energies are set beside the experimental ΔG° that Mobley et al.
 //!   (2007) tabulate. The comparison is reported, not asserted.
+//! - [`MolecularDynamics`] integrates Newton's equations for the atoms, with the elements'
+//!   standard atomic weights as masses: **BAOAB Langevin dynamics** (Leimkuhler and Matthews
+//!   2013) under a heat bath, velocity Verlet without one, frozen atoms held to the bit, every
+//!   random kick keyed by `(seed, step, atom)` so that, at a fixed step, a run is the same however
+//!   it is cut into calls — a `Simulation` whose frames are not whole multiples of the step takes
+//!   other substeps, and is another run — and the
+//!   bath's work booked so kinetic + potential − work is conserved to the integrator's error. See
+//!   [`dynamics`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
-//!   energy terms and the force as readings, and **one minimiser iteration per step**, so a run
-//!   is the molecule relaxing, frame by frame.
+//!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
+//!   so a run is the molecule relaxing, frame by frame — or, once [`Molecule::thermalised`], **a
+//!   time step**, so a run is the molecule moving thermally.
 //!
 //! # What it is checked against
 //!
@@ -119,6 +129,21 @@
 //! structures of its Figures 4–7, compared row by row, and asserted only where the comparison is
 //! earned.
 //!
+//! The dynamics against closed forms (`tests/the_dynamics.rs`): velocity Verlet's largest energy
+//! departure on a harmonic well is its shadow's `E₀ (ωh)²/4` to a part in 10⁶ at three steps; one
+//! C–H bond, released along its axis, follows Verlet's exact discrete cosine at `√(k/μ)` to 5e-13
+//! of its amplitude; BAOAB samples a harmonic well's positions at `k_BT/k` at ωh = 0.5, 1 and 1.9,
+//! and its momenta at `k_BT (1 − (ωh)²/4)` at the step and `k_BT` after `O`, each within four
+//! standard errors from the series' own autocorrelation time; a bath at 0 K is the paper's
+//! Appendix worked by hand; the kicks are uncorrelated between atoms and components; thermalised
+//! velocities are χ² on `3N − 6` degrees of freedom, in mean and variance; aspirin under a bath has
+//! `⟨½mv²⟩ = (3/2) k_BT` per element, and `⟨KE⟩ = (3N_free/2) k_BT` with and without frozen atoms;
+//! NVE aspirin's energy error falls as `h²` (and per step as `h³`); each BAOAB step on a harmonic
+//! well moves the books by exactly the closed form `(a²/2)(P₁² − P₂² + Q₂² − Q²)`, to rounding;
+//! every atomic weight is CIAAW's, and the masses sum to every dictionary entry's formula weight
+//! within CIAAW's stated uncertainties; at a fixed step a run is the same bits however it is chunked; frozen atoms
+//! do not move; and a moved start gives the moved trajectory to 8e-15 Å.
+//!
 //! # Determinism, and where it stops
 //!
 //! No clock, no randomness, no hash order and no threads, so a run repeats bit for bit on one
@@ -132,8 +157,10 @@
 //!
 //! # What is deliberately not in it
 //!
-//! - **No dynamics.** A step of [`Molecule`] is a minimiser iteration, not a time step: there are
-//!   no velocities, no temperature, and `dt` is not used. Molecular dynamics is a later step.
+//! - **Dynamics without constraints, and with nothing but a Langevin bath.** [`dynamics`] is BAOAB
+//!   and velocity Verlet at a 0.5 fs step, with every X–H bond free: no SHAKE or RATTLE, no
+//!   barostat, no multiple time steps, no periodic box. The measurement that chose the step is in
+//!   [`dynamics`]; constraints would buy a step about four times longer and are not needed yet.
 //! - **No conformer search.** The minimiser finds the minimum downhill from where it starts; the
 //!   torsion scans hold a dihedral to find a barrier, and nothing looks for the global minimum.
 //! - **No reading of the paper but this crate's in use**: [`Variant`] keeps one other — `r_EN`
@@ -202,6 +229,7 @@
 pub mod angular;
 pub mod binding;
 pub mod ccd;
+pub mod dynamics;
 pub mod energy;
 pub mod minimise;
 pub mod pdb;
@@ -214,6 +242,7 @@ pub use binding::{
     ApoCavity, Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
 };
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
+pub use dynamics::{Bath, MolecularDynamics, Potential};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
@@ -221,6 +250,7 @@ pub use qeq::{Charges, Qeq, QeqError};
 pub use solvation::{GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
 
+use pantometry_core::integrator::substeps_for;
 use pantometry_core::{Bodies, Domain, Exchange, Kind, Ledger, Reading, Violation};
 use pantometry_units::{LengthVec, Qty, Time};
 
@@ -228,7 +258,18 @@ use pantometry_units::{LengthVec, Qty, Time};
 ///
 /// # How it moves
 ///
-/// **Downhill, one minimiser iteration per step.** [`Domain::step`] takes one L-BFGS step of
+/// **By default downhill, one minimiser iteration per step; in time once it is given dynamics.**
+///
+/// [`Molecule::thermalised`] (or [`Molecule::with_dynamics`]) puts it in **molecular dynamics**:
+/// [`Domain::step`] then advances `dt` of time by BAOAB Langevin dynamics, or velocity Verlet with
+/// [`Bath::Isolated`] (see [`dynamics`]), in steps of at most [`Molecule::time_step`] — 0.5 fs
+/// by default, and [`Domain::max_stable_dt`] says so, so the kernel cuts a frame into steps of it.
+/// The ledger is then `energy` = kinetic + potential − thermostat work, which moves only by the
+/// integrator's error: `O(h²)`, which no [`Simulation`](pantometry_core::Simulation) default of
+/// 1e-9 can hold, so a simulation running a molecule in motion sets
+/// [`Molecule::ENERGY_TOLERANCE`] for energy, or refuses on the first frame — on purpose.
+///
+/// Minimising: [`Domain::step`] takes one L-BFGS step of
 /// [`Minimiser`] on the positions, so each frame of a run is the molecule further relaxed and
 /// the `energy` reading never rises from one frame to the next. It stops moving when the largest
 /// force on any atom is at most the tolerance ([`Molecule::DEFAULT_TOLERANCE`], or
@@ -237,7 +278,9 @@ use pantometry_units::{LengthVec, Qty, Time};
 /// infinite. The ledger stays empty — the energy that leaves is not a flow to anywhere, and
 /// claiming one would be inventing a sink.
 ///
-/// [`Molecule::minimise`] runs the same iterations to convergence in one call.
+/// [`Molecule::minimise`] runs the same iterations to convergence in one call. On a molecule in
+/// motion it moves the atoms and leaves the velocities, so the books jump by the energy it took
+/// out: minimise first, then thermalise.
 ///
 /// # Readings
 ///
@@ -249,6 +292,14 @@ use pantometry_units::{LengthVec, Qty, Time};
 /// molecule [`ForceField::new`] refuses, the energy and force readings are `NaN` and
 /// [`Molecule::force_field`] says why. The last four are its [`Domain::diagnostics`]: they
 /// describe the minimisation, not the molecule.
+///
+/// In dynamics, `converged` and `minimiser steps` give way to `temperature` (°C, as every
+/// temperature reading in this workspace is), `kinetic energy`, `thermostat work`, `conserved
+/// energy` (kinetic + the potential's change since the start − thermostat work, kcal/mol: the
+/// ledger's books) and `dynamics steps`; the diagnostics
+/// are then `max force`, `rms force`, `conserved energy` and `dynamics steps`. The temperature is
+/// read right after the bath's `O` under a Langevin bath, where BAOAB's momenta are canonical, and
+/// at the whole step without one (see [`dynamics`]).
 #[derive(Clone, Debug)]
 pub struct Molecule {
     name: String,
@@ -257,14 +308,47 @@ pub struct Molecule {
     force_field: Result<ForceField, Unsupported>,
     at: Vec<[f64; 3]>,
     minimiser: Minimiser,
-    saved: Option<(Vec<[f64; 3]>, Minimiser)>,
+    dynamics: Option<MolecularDynamics>,
+    time_step: f64,
+    saved: Option<Saved>,
 }
+
+/// What [`Domain::checkpoint`] keeps: the positions, the minimiser and the dynamics.
+type Saved = (Vec<[f64; 3]>, Minimiser, Option<MolecularDynamics>);
 
 impl Molecule {
     /// The tolerance a new molecule minimises to: the largest force on any atom at most
     /// 1e-4 kcal mol⁻¹ Å⁻¹, in newtons. A bond of `k` ~ 700 kcal mol⁻¹ Å⁻² is then within 1.4e-7 Å
     /// of where the force would put it.
     pub const DEFAULT_TOLERANCE: f64 = 1e-4 * minimise::KCAL_PER_MOL_ANGSTROM;
+
+    /// The longest dynamics step a molecule takes, seconds: 0.5 fs, chosen from the measurement in
+    /// [`dynamics`]. Aspirin's fastest bond vibrates with a period near 11 fs; NVE aspirin at 300 K
+    /// blows up at 3 fs, and at 0.5 fs its energy stays within 0.11 kcal/mol (a fifth of `k_BT`) of
+    /// its start over a picosecond, where 1 fs allows 0.45. Under BAOAB the whole-step kinetic
+    /// temperature of a mode is low by `(ωh)²/4`: 1.9% for a C–H stretch at 0.5 fs, 7.5% at 1.
+    pub const DEFAULT_TIME_STEP: f64 = 0.5e-15;
+
+    /// A relative tolerance for [`quantity::ENERGY`](pantometry_core::conserved::quantity::ENERGY)
+    /// that a [`Simulation`](pantometry_core::Simulation) running a molecule in motion can be given
+    /// ([`Simulation::conservation_tolerance_for`](pantometry_core::Simulation::conservation_tolerance_for)):
+    /// how far one frame may move `kinetic + (potential − its start) − thermostat work`, relative to
+    /// the largest of those three and of the totals, as the kernel's audit judges it.
+    ///
+    /// **Earned, at [`Molecule::DEFAULT_TIME_STEP`]** (`tests/a_molecule_in_motion.rs`,
+    /// `the_energy_tolerance_measured`). Over 20 ps of aspirin at 300 K in a 1 ps⁻¹ bath, four
+    /// seeds, the largest change was 2.63e-3 for a frame of one step, 3.20e-3 for 50 fs and
+    /// 4.35e-3 for 1 ps. On the same runs a bath whose work was half counted would move them by at
+    /// least 1.06e-2, 6.7e-2 and 0.146. 7e-3 sits between them, 1.6 times the worst correct frame
+    /// and 1.5 times below the least wrong one. The band scales with the temperature as the
+    /// books' scale does, so the ratio does not. It scales as the step squared, so a molecule
+    /// given a longer step ([`Molecule::with_time_step`]) needs a tolerance larger by
+    /// `(dt / 0.5 fs)²`, and with it loses that margin.
+    ///
+    /// Before the potential was counted from its start, the scale held UFF's arbitrary zero —
+    /// 29.6 kcal/mol at aspirin's minimum. Half-counted work then moved a one-step frame by 5.0e-3
+    /// of it, inside the 1e-2 this was set to, and passed.
+    pub const ENERGY_TOLERANCE: f64 = 7e-3;
 
     /// A molecule named `name`, at the component's coordinates, typed by [`uff::assign`], with
     /// its [`ForceField`] built and every partial charge zero.
@@ -282,6 +366,8 @@ impl Molecule {
             force_field,
             at,
             minimiser: Minimiser::new(Molecule::DEFAULT_TOLERANCE),
+            dynamics: None,
+            time_step: Molecule::DEFAULT_TIME_STEP,
             saved: None,
         }
     }
@@ -322,9 +408,66 @@ impl Molecule {
         if let Ok(ff) = self.force_field {
             self.force_field = Ok(ff.with_charges(charges));
         }
-        // A different energy: the minimiser's history and status belong to the old one.
+        // A different energy: the minimiser's history and status belong to the old one, and the
+        // dynamics' forces were the old potential's — its cache knows the positions, not the
+        // potential, so it is told.
         self.minimiser = Minimiser::new(self.minimiser.tolerance());
+        if let Some(d) = &mut self.dynamics {
+            d.forget_forces();
+            if let Ok(ff) = &self.force_field {
+                d.prepare(ff, &self.at);
+            }
+        }
         self
+    }
+
+    /// The same molecule **in molecular dynamics**: Maxwell–Boltzmann velocities at `temperature`
+    /// kelvin drawn from `seed`, with the rigid motion removed (see [`MolecularDynamics::thermalised`]),
+    /// the masses of its elements, and `bath`. From here [`Domain::step`] advances time. See
+    /// [`Molecule`] and [`dynamics`].
+    pub fn thermalised(self, temperature: f64, bath: Bath, seed: u64) -> Molecule {
+        let dynamics =
+            MolecularDynamics::for_elements(self.component.atoms().iter().map(|a| a.element))
+                .with_bath(bath)
+                .thermalised(&self.at, temperature, seed);
+        self.with_dynamics(dynamics)
+    }
+
+    /// The same molecule moving under `dynamics` — built by hand, for frozen atoms or given
+    /// velocities. Its forces are computed here, at the current positions.
+    ///
+    /// # Panics
+    ///
+    /// If `dynamics` is not one mass per atom.
+    pub fn with_dynamics(mut self, mut dynamics: MolecularDynamics) -> Molecule {
+        assert_eq!(dynamics.masses().len(), self.at.len(), "one mass per atom");
+        if let Ok(ff) = &self.force_field {
+            dynamics.prepare(ff, &self.at);
+        }
+        self.dynamics = Some(dynamics);
+        self
+    }
+
+    /// The same molecule taking dynamics steps of at most `dt` seconds instead of
+    /// [`Molecule::DEFAULT_TIME_STEP`].
+    ///
+    /// # Panics
+    ///
+    /// If `dt` is not positive and finite.
+    pub fn with_time_step(mut self, dt: f64) -> Molecule {
+        assert!(dt.is_finite() && dt > 0.0, "a time step must be positive");
+        self.time_step = dt;
+        self
+    }
+
+    /// The dynamics, if the molecule is in motion; `None` when it minimises.
+    pub fn dynamics(&self) -> Option<&MolecularDynamics> {
+        self.dynamics.as_ref()
+    }
+
+    /// The longest dynamics step it takes, seconds.
+    pub fn time_step(&self) -> f64 {
+        self.time_step
     }
 
     /// Its force field, or why there is none.
@@ -407,41 +550,74 @@ impl Domain for Molecule {
         Kind::Evolving
     }
 
-    /// Infinite: a step is a minimiser iteration, and its length in time means nothing. See
-    /// [`Molecule`].
+    /// Minimising, infinite: a step is a minimiser iteration, and its length in time means
+    /// nothing. In dynamics, [`Molecule::time_step`]. See [`Molecule`].
     fn max_stable_dt(&self, _now: Time) -> Time {
-        Qty::from_si(f64::INFINITY)
+        if self.dynamics.is_some() {
+            Qty::from_si(self.time_step)
+        } else {
+            Qty::from_si(f64::INFINITY)
+        }
     }
 
-    /// One minimiser iteration; nothing, for a molecule the force field refuses. See
-    /// [`Molecule`].
-    fn step(&mut self, _t: Time, _dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
-        if let Ok(ff) = &self.force_field {
-            self.minimiser.step(ff, &[], &mut self.at);
+    /// Minimising, one minimiser iteration. In dynamics, `dt` of time, in as many equal steps of
+    /// at most [`Molecule::time_step`] as it takes ([`substeps_for`]): one, when the kernel has
+    /// already cut the frame to [`Domain::max_stable_dt`]. Nothing, for a molecule the force field
+    /// refuses. See [`Molecule`].
+    fn step(&mut self, _t: Time, dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
+        let Ok(ff) = &self.force_field else {
+            return Ok(());
+        };
+        match &mut self.dynamics {
+            None => {
+                self.minimiser.step(ff, &[], &mut self.at);
+            }
+            Some(d) => {
+                if dt.to_si() > 0.0 {
+                    let n = substeps_for(dt, Qty::from_si(self.time_step));
+                    let h = dt.to_si() / f64::from(n);
+                    for _ in 0..n {
+                        d.step(ff, &mut self.at, h);
+                    }
+                }
+            }
         }
         Ok(())
     }
 
-    /// Empty: a minimisation lowers the energy without sending it anywhere, so there is no flow
-    /// to record. See [`Molecule`].
+    /// Minimising, empty: a minimisation lowers the energy without sending it anywhere, so there
+    /// is no flow to record. In dynamics, `energy` = kinetic + potential − thermostat work
+    /// ([`MolecularDynamics::ledger`]), which moves only by the integrator's error — and that is
+    /// `O(h²)`, not the 1e-9 a [`Simulation`](pantometry_core::Simulation) checks by default, so a
+    /// simulation running a molecule in motion has to set an energy tolerance; see [`Molecule`].
     fn ledger(&self) -> Ledger {
-        Ledger::new()
+        match &self.dynamics {
+            Some(d) => d.ledger(),
+            None => Ledger::new(),
+        }
     }
 
-    /// True and exact: it holds nothing and takes nothing from the bus.
+    /// True: it takes nothing from the bus, so its books are its own. Minimising, it holds
+    /// nothing; in dynamics, its energy, which the audit holds to the tolerance it is given.
     fn books_balance(&self) -> bool {
         true
     }
 
-    /// The positions and the minimiser's whole state, so a restored run repeats bit for bit.
+    /// The positions, the minimiser's whole state and the dynamics' — velocities, step count,
+    /// thermostat work — so a restored run repeats bit for bit, noise included.
     fn checkpoint(&mut self) {
-        self.saved = Some((self.at.clone(), self.minimiser.clone()));
+        self.saved = Some((
+            self.at.clone(),
+            self.minimiser.clone(),
+            self.dynamics.clone(),
+        ));
     }
 
     fn restore(&mut self) {
-        if let Some((at, minimiser)) = &self.saved {
+        if let Some((at, minimiser, dynamics)) = &self.saved {
             self.at.clone_from(at);
             self.minimiser = minimiser.clone();
+            self.dynamics = dynamics.clone();
         }
     }
 
@@ -474,7 +650,7 @@ impl Domain for Molecule {
         } else {
             0.0
         };
-        vec![
+        let mut readings = vec![
             Reading::new(&self.name, "atoms", atoms.len() as f64, ""),
             Reading::new(&self.name, "heavy atoms", heavy as f64, ""),
             Reading::new(&self.name, "bonds", self.component.bonds().len() as f64, ""),
@@ -498,22 +674,68 @@ impl Domain for Molecule {
             ),
             Reading::new(&self.name, "max force", max_force, "kcal/mol/Å"),
             Reading::new(&self.name, "rms force", rms_force, "kcal/mol/Å"),
-            Reading::new(&self.name, "converged", converged, ""),
-            Reading::new(
-                &self.name,
-                "minimiser steps",
-                self.minimiser.steps() as f64,
-                "",
-            ),
-        ]
+        ];
+        match &self.dynamics {
+            None => {
+                readings.push(Reading::new(&self.name, "converged", converged, ""));
+                readings.push(Reading::new(
+                    &self.name,
+                    "minimiser steps",
+                    self.minimiser.steps() as f64,
+                    "",
+                ));
+            }
+            Some(d) => {
+                // The temperature the ensemble samples best: after the bath's `O` under BAOAB, the
+                // whole step without a bath. See `dynamics`.
+                let kelvin = if matches!(d.bath(), Bath::Langevin { .. }) && d.steps() > 0 {
+                    d.half_step_temperature()
+                } else {
+                    d.temperature()
+                };
+                let kinetic = d.kinetic_energy();
+                // The books exactly as the ledger keeps them, the potential counted from its start.
+                let books = d
+                    .ledger()
+                    .get(pantometry_core::conserved::quantity::ENERGY)
+                    .unwrap_or(f64::NAN);
+                readings.extend([
+                    Reading::new(&self.name, "temperature", kelvin - 273.15, "C"),
+                    Reading::new(&self.name, "kinetic energy", kcal(kinetic), "kcal/mol"),
+                    Reading::new(
+                        &self.name,
+                        "thermostat work",
+                        kcal(d.thermostat_work()),
+                        "kcal/mol",
+                    ),
+                    Reading::new(&self.name, "conserved energy", kcal(books), "kcal/mol"),
+                    Reading::new(&self.name, "dynamics steps", d.steps() as f64, ""),
+                ]);
+            }
+        }
+        readings
     }
 
-    /// The four that describe the minimisation rather than the molecule: `max force` and
-    /// `rms force` are its gradient, the residual a minimiser drives towards zero, and
+    /// Minimising, the four that describe the minimisation rather than the molecule: `max force`
+    /// and `rms force` are its gradient, the residual a minimiser drives towards zero, and
     /// `converged` and `minimiser steps` are its state. A sweep that compared them across runs as
     /// though they converged to something would be measuring the stopping rule.
+    ///
+    /// In dynamics, `max force` and `rms force` — instantaneous now, and no more an answer than
+    /// before — `conserved energy`, whose only movement is the integrator's error, and `dynamics
+    /// steps`. The temperature, the kinetic energy and the thermostat work describe the molecule
+    /// and its bath, and are not here.
     fn diagnostics(&self) -> &'static [&'static str] {
-        &["max force", "rms force", "converged", "minimiser steps"]
+        if self.dynamics.is_some() {
+            &[
+                "max force",
+                "rms force",
+                "conserved energy",
+                "dynamics steps",
+            ]
+        } else {
+            &["max force", "rms force", "converged", "minimiser steps"]
+        }
     }
 
     fn as_bodies(&self) -> Option<&dyn Bodies> {

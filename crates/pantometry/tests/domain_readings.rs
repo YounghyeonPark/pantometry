@@ -191,4 +191,16 @@ fn a_declared_diagnostic_is_a_reading_the_domain_emits() {
             .expect("AIN parses"),
         ),
     );
+    // In motion its diagnostics are another four, and they have to be emitted too.
+    holds(
+        "a molecule in motion",
+        &Molecule::new(
+            "aspirin",
+            Component::from_ccd(include_str!(
+                "../../pantometry-forcefield/components/AIN.cif"
+            ))
+            .expect("AIN parses"),
+        )
+        .thermalised(300.0, pantometry::forcefield::Bath::Isolated, 1),
+    );
 }
