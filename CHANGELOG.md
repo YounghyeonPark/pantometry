@@ -1729,6 +1729,215 @@ protects nothing.
   `the_generalized_born_is_its_direct_sum.rs`: five default, and one ignored that asserts. 287 + 6
   is the 293, and 265 + 5 the 270.
 
+- **`pantometry-forcefield` decouples a ligand under OBC II, and benzene's absolute binding free
+  energy to T4 lysozyme L99A comes out at +6.1 ± 0.3 kcal/mol by double decoupling, against
+  experiment's −5.19 ± 0.16.** This is step 3c-3. Nothing is asserted against experiment.
+  - **`Decoupling` accepts a solvated force field.** 3c-1 refused one (`AlchemyError::Solvated`,
+    now removed). Its solvation term is taken out of the rest and evaluated as
+    `G(x; λ_e, λ_v)` by the new `GeneralizedBorn::decoupled`:
+    - **the group's charges are `λ_e q` in every term of eq 2.** Its Born terms and its pairs
+      among themselves go as `λ_e²`, its pairs across as `λ_e`. The intramolecular Coulomb term
+      stays in the rest at full charge, so the decoupled ligand keeps its vacuum self-interaction
+      and loses only its solvation;
+    - **the descreening integral between atoms on opposite sides is scaled by `λ_v`**, and between
+      atoms on the same side it is not. The ligand's volume leaves the environment's Born radii
+      with its van der Waals;
+    - `∂G/∂λ_e` and `∂G/∂λ_v` are analytic, and the chain rule through the radii takes a cross
+      pair's `dI/dr` times `λ_v`;
+    - **no nonpolar term in either leg**, because the surface has no useful gradient (2b). It is
+      estimated at the end states and reported separately.
+
+    **The decoupled end state is the environment alone in solvent plus the ligand alone in
+    vacuum, exactly.** That is the end state openmmtools' `AbsoluteAlchemicalFactory` builds
+    (`_alchemically_modify_GBSAOBCForce`, read at commit `f6ef22a8`): it multiplies an alchemical
+    atom's charge, and its descreening of every other atom, by `lambda_electrostatics`. Its path
+    differs in two ways, chosen differently here, neither of which changes ΔG:
+    - it scales the Born self term linearly, not as the square of a scaled charge;
+    - it removes the descreening with the charges, not with the van der Waals.
+
+    Tying the descreening to `λ_v` keeps the radii fixed while the charges go, so that segment is
+    exactly quadratic in `λ_e`, and a Born ion's TI is then exact on a trapezoid.
+  - A whole molecule may now be the group of a solvated force field: that is the solvent leg.
+    `Decoupling::with_solvation` gives a `from_pairs` model a GB term, for a Born ion.
+    `Alchemical::couplings` evaluates several states at one configuration, each to the bit of its
+    own `coupling`; `Decoupling`'s shares the descreening, and `Window::advance` uses it.
+    `GeneralizedBorn::decoupled_energies` is the same for the solvation term alone.
+
+  **Checked** (`tests/benzene_bound_in_generalized_born.rs`, ten default tests in 1.0 s
+  unoptimised), on 181L's 3 Å pocket with QEq charges and on one and two ions:
+  - **fully coupled, the solvation term is `accumulate`'s to the bit**, energy and every force,
+    and the whole energy is the solvated force field's to a gap of 2.8e-14 kcal/mol against a
+    traced allowance of 5.2e-10;
+  - **with the charges off, the group's charges are in no term**: the solvation term is
+    `accumulate` with benzene's charges zeroed, to the bit, and the coupling energy is the cross
+    van der Waals plus that, with no cross Coulomb; `∂U/∂λ_e` there is the cross Coulomb plus the
+    linear GB terms, rebuilt in the test from the radii and eq 3;
+  - **fully decoupled, it is the pocket alone in solvent plus benzene alone in vacuum**: the
+    solvation term and its forces are the pocket's own GB to the bit (zero on benzene), and the
+    total is the pocket's solvated force field plus benzene's vacuum one to 2.8e-14 kcal/mol
+    against 3.8e-10;
+  - **the forces and `∂U/∂λ_e`, `∂U/∂λ_v`** against central differences at three states, with
+    second-order one-sided differences at an end of [0, 1];
+  - **the frozen buffer's kept descreening is used and changes no bit**: with only benzene mobile,
+    the decoupled energy, both derivatives and every force at four states equal the same model's
+    without the kept terms, at the start, with benzene moved (kept terms used) and with a pocket
+    atom moved (not used); and `couplings` over six states, two of them equal, is each state's
+    `coupling` to the bit;
+  - **a Born ion decoupled through `Windows`** gives `−G = (q²/2ρ̃)(1 − 1/ε) × 332.0637` by the
+    trapezoid, by Simpson and by BAR, to 8 ε, the rounding of five weighted terms or four roots of
+    `G`'s size (measured: at most 1.69 ε): 101.836305512 kcal/mol for ρ 1.7 Å and q −1, and
+    36.927128801 for ρ 1.2 Å and q +0.5. The integrand `2λ_e G` is linear, so the trapezoid is
+    exact. **The totals see only the ends of the path**: a Born self term linear in `λ_e`, with a
+    consistent derivative, integrates to the same `−G`. What tells the path is the per-sample check
+    that each gradient is `2λ_e G`, to 4 ε;
+  - **two ions follow eqs 2–8 written out at nine `(λ_e, λ_v)`**: each radius OBC II's with
+    `I = λ_v ×` the other's pair integral, energy and `∂/∂λ_e` to 1e-13. `∂/∂λ_v` is held to a
+    difference of the written-out energy at `h` = 1e-4, central inside [0, 1] and second-order
+    one-sided at its ends, within `h² M₃/6` (or `/3`) plus `4 ε max|G|/h`, with `M₃` the largest
+    third derivative on a 0.01 grid, doubled. The measured errors are a quarter to a ninth of that.
+    **With both ions frozen**, so that the one kept descreening term crosses the partition, every
+    result is the uncached model's to the bit;
+  - **the measurements' interval BAR is `Windows::bennett`'s to the bit**: the Born ion's windows,
+    read into the records the measurements analyse, give each interval's estimate, variance and
+    overlap with the same bits. The helper that computes it, `interval_bar`, is now the one place
+    both the insertion rule and the printed table take an interval from;
+  - **the cycle**, now the function `binding_free_energy` with the cycle in its documentation, on
+    hand-chosen numbers that a flipped release or swapped legs would change;
+  - **the solvent leg's molecule**: benzene alone, the group every atom, is the solvated force
+    field at full coupling and its vacuum force field to the bit at `λ_e = 0`. Its `∂U/∂λ_v` is
+    exactly zero, which **follows from the construction** — a whole-molecule group has no cross
+    pair and no cross descreening — and checks only that the code adds nothing there.
+
+  **Sabotage.** Fifteen, each restored by copying the original back, `touch` and SHA-256, run with
+  `--no-fail-fast` over this file, 3c-1's two and 3c-2's direct-sum file. All fifteen were caught:
+  - by the two-ion closed form: the cross descreening left unscaled, scaled by `λ_v²`, `∂G/∂λ_v`
+    left out, the Born self term linear in `λ_e` (openmmtools' form), a pair skipped when its
+    scaled charge is zero, and `∂G/∂λ_e` of the Born term without its factor 2;
+  - by the finite differences: most of those, and a cross pair's `dI/dr` unscaled in the force,
+    a pair's `∂/∂λ_e` without the other charge's scale, and the solvation force not added at the
+    dynamics state;
+  - by the bit-exact end states: the cross descreening unscaled, the partition's two sums
+    swapped, the rest keeping its solvation term (also by the coupled and solvent-leg tests), and
+    the radii always taken from the two partial sums even at `λ_v = 1` — a reassociation alone,
+    caught by the coupled test to the bit;
+  - by the frozen-cache test: a kept frozen term left out of the two partial sums, and states
+    deduplicated by `λ_e` alone;
+  - by the Born ion and three of 3c-1's `Windows` tests: a window's neighbours evaluated in the
+    wrong order.
+
+  **Added after review** (`numerics-reviewer`, which also derived the cycle's signs independently
+  and agreed). Four more sabotages, each run before its fix and after it, restored the same way:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | the reverse set not negated, in the insertion rule and in the analysis | passed: only the ignored measurements reached it | caught by `the_interval_bar_is_the_windows_own` |
+  | the release's sign flipped in the cycle | passed: the cycle was only printed | caught by `the_cycle_has_its_signs` |
+  | every kept frozen term sent to the same-side sum | passed: the tests froze only the pocket, whose kept terms never cross | caught by the two ions frozen together |
+  | the Born self term linear in `λ_e`, its derivative consistent | — | caught by the Born ion's per-sample check, the two ions and the charges-off test |
+
+  The two-ion `∂/∂λ_v` allowances were 1e-4 and 1e-8 of the derivative, unsourced, against
+  measured errors of 2.8e-7 and 9e-11; they are now the difference's own error, above. The Born
+  ion's 64 ε is now 8 ε.
+
+  **The measurement** (ignored, release, one core). Each window was written to a file outside the
+  repository as it ran, so that a stopped run could resume; it ran once, to the end, and exited 0.
+  - **The cycle**, in 3c-1's convention: `ΔG°_bind = ΔG_solvent − ΔG_complex − ΔG°_release`. Each
+    `ΔG` is the free energy of decoupling in its leg, and `ΔG°_release` is the analytic release of
+    the restraint to 1 M, which is negative. Equivalently `+ ΔG°_restrain`, with
+    `ΔG°_restrain = −ΔG°_release` the free energy of restraining the decoupled ligand from 1 M.
+  - **The setup** is 3b's and 3c-1's: a 6 Å mobile zone of 322 atoms in a 10 Å binding of 987,
+    hydrogens relaxed, the zone minimised under OBC II (converged in 1274 steps to 1.8e-3
+    kcal/mol/Å, 77 s), the buffer frozen and its descreening kept. The anchor rule chose backbone
+    atoms 232, 231 and 230 and benzene's 978, 979 and 980: r₀ 6.941 Å, θ_A 103.1°, θ_B 65.2°.
+    Each window runs at 0.5 fs in a 1 ps⁻¹ bath, discards 2 ps and samples 10 ps every 10 fs.
+  - **The schedule was thinned from 3c-1's**, to 15 windows from 22: five for the restraint, two
+    more for the charges and eight more for the van der Waals, because every overlap there was
+    0.38–0.50. Each window recorded its energy at every candidate state between its neighbours,
+    so that a window could be added between two that had run without running either again. One
+    was to be added wherever an interval's overlap fell below 0.1, three times the 0.03 that
+    Klimovich, Shirts and Mobley (*J. Comput.-Aided Mol. Des.* 29, 397 (2015), PMC4420631) find
+    tolerable "with enough samples". **None fell below it**: the lowest is 0.315.
+
+  | window | λ_r | λ_e | λ_v | → next: BAR (kcal/mol) | overlap | EXP fwd | EXP rev |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 0 | 0 | 1 | 1 | +0.154 ± 0.043 | 0.481 | +0.185 | +0.075 |
+  | 1 | 0.1 | 1 | 1 | +0.099 ± 0.008 | 0.498 | +0.100 | +0.096 |
+  | 2 | 0.25 | 1 | 1 | +0.164 ± 0.018 | 0.492 | +0.143 | +0.230 |
+  | 3 | 0.5 | 1 | 1 | +0.301 ± 0.031 | 0.478 | +0.282 | +0.321 |
+  | 4 | 1 | 1 | 1 | −2.580 ± 0.006 | 0.494 | −2.575 | −2.585 |
+  | 5 | 1 | 0.5 | 1 | −2.593 ± 0.006 | 0.494 | −2.592 | −2.591 |
+  | 6 | 1 | 0 | 1 | +0.188 ± 0.025 | 0.386 | +0.135 | +0.192 |
+  | 7 | 1 | 0 | 0.9 | +0.597 ± 0.042 | 0.315 | +0.554 | +0.645 |
+  | 8 | 1 | 0 | 0.75 | +0.984 ± 0.040 | 0.331 | +1.116 | +1.005 |
+  | 9 | 1 | 0 | 0.6 | +1.388 ± 0.047 | 0.366 | +1.499 | +1.394 |
+  | 10 | 1 | 0 | 0.45 | +1.796 ± 0.109 | 0.396 | +1.807 | +1.827 |
+  | 11 | 1 | 0 | 0.3 | +1.234 ± 0.072 | 0.419 | +1.429 | +1.168 |
+  | 12 | 1 | 0 | 0.2 | +1.209 ± 0.106 | 0.417 | +1.142 | +1.283 |
+  | 13 | 1 | 0 | 0.1 | +1.104 ± 0.137 | 0.379 | +1.015 | +1.077 |
+  | 14 | 1 | 0 | 0 | | | | |
+
+  | leg or segment | BAR (kcal/mol) | TI (trapezoid) |
+  | --- | --- | --- |
+  | solvent: charges off (4 seeds, spread 0.0003) | +2.3395 ± 0.0003 | +2.3403 |
+  | solvent: van der Waals off (identically zero; see below) | exactly 0 | exactly 0 |
+  | complex: restraint on | +0.718 ± 0.065 | +0.753 |
+  | complex: charges off | −5.172 ± 0.011 | −5.171 |
+  | complex: van der Waals off | +8.501 ± 0.301 | +8.491 |
+  | **complex leg** | **+4.047 ± 0.309** | +4.073 ± 0.313 |
+  | restraint released to 1 M, analytic (extended form −7.801) | −7.784 | |
+  | **ΔG°_bind = +2.340 − 4.047 + 7.784** | **+6.08 ± 0.31** | |
+  | nonpolar estimate, `0.005 × ΔA`, ΔA = −293.3 Å² at the start | −1.47 | |
+  | **ΔG°_bind with it** | **+4.61 ± 0.31** | |
+  | experiment, Mobley et al. 2007, Table 1 | −5.19 ± 0.16 | |
+
+  - **Hysteresis.** The first half of every window's samples gives +3.63 ± 0.31 for the complex
+    leg and the second half +4.42 ± 0.31: a drift of 0.79 ± 0.44, 1.8σ, which says that 2 ps of
+    equilibration did not settle every window. EXP summed forward gives +4.24 and backward +4.14,
+    against BAR's +4.05. A second seed of the complex leg, another 5 h, was not run. The
+    autocorrelation times reach 37–48 samples at both ends of the path (λ_r = 0, and λ_v ≤ 0.3),
+    so those windows hold 20–30 independent samples each and their σ̂ is itself uncertain by
+    about a fifth.
+  - **Eight of the solvent leg's eleven windows sample a segment that is identically zero**: with
+    the whole molecule as the group nothing depends on `λ_v`. They are kept, so that the two legs
+    run one schedule and the zero is seen on sampled configurations, at about 130 s of the leg's
+    178.
+  - **The solvent leg's cross-check.** Its charges' free energy, +2.3395, against benzene's
+    ⟨ΔG_GB⟩ in the coupled state, −2.342; the linear-response average −(⟨G⟩₁ + ⟨G⟩₀)/2, +2.339;
+    and Zwanzig's exponential average from the coupled end, +2.339. Benzene is nearly rigid and
+    its GB energy barely moves, so all four agree to 3e-3 kcal/mol.
+  - **The hydration free energy** under the model is −2.340 polar, and −1.133 with the nonpolar
+    term (0.005 × 241.4 Å²). **FreeSolv's experimental value is −0.90 ± 0.20, not the −0.87 the
+    brief gave**: `database.txt` v0.52 from `github.com/MobleyLab/FreeSolv` (master, fetched
+    2026-10-05, SHA-256 `2d13f095…f260`) reads `mobley_3053621; c1ccccc1; benzene; -0.90; 0.20`,
+    referenced to 10.1039/P29900000291. The model is 0.23 too negative, about the experiment's
+    uncertainty.
+  - **Against experiment the model is +11.3 kcal/mol off (+9.8 with the nonpolar term): it does
+    not bind benzene.** Nothing is asserted. What limits the comparison, roughly by size:
+    - **GB's electrostatic desolvation with QEq charges.** The charges cost +7.51 kcal/mol of
+      binding (+2.34 in solvent, less −5.17 in the complex), where vacuum's charge segment gave
+      −1.48. 2c-2 and A-2 found the same penalty at fixed pose (+12.21 in the 10 Å pocket at the
+      crystal pose), with its cross terms unchecked against Poisson–Boltzmann or explicit water.
+      QEq's charges are not the ones OBC II was fitted with.
+    - **The cavity solvated as water when it is empty.** Removing benzene's volume lets GB
+      solvate the cavity's walls, and L99A's real cavity is empty (A-2). The van der Waals segment
+      is +8.50 against vacuum's +13.80. A-2 put this part of the polar term, the pocket
+      desolvated by benzene's volume, at +4.31 kcal/mol in the 10 Å binding at the crystal pose.
+    - **The frozen buffer and the cut.** The 10 Å binding's cut surface is solvated in every
+      state (A-2: a cut pocket solvates its cut), and nothing outside 6 Å moves.
+    - **UFF's van der Waals** for the cavity, and no nonpolar term in the sampled Hamiltonian.
+    - **Sampling**: ±0.31 by BAR, a 1.8σ drift between halves, and one seed. That is small beside
+      the rest.
+  - **Wall time.** The solvent leg, 178 s. The complex leg, 5.11 h: the minimisation 77 s and the
+    15 windows 18 318 s, 1157–1252 s each, 48.2–52.2 ms per step with the sampling, which
+    evaluates up to five states at each of 1000 samples. 3c-2's cost test, run again after this
+    change, reads 43.2 ms per evaluation and 44.6 ms per step without sampling: the partition's
+    sums in the descreening cost nothing measurable.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **305 tests, twenty-five of
+  them ignored**: 280 run by default. The twelve new ones are all in
+  `benzene_bound_in_generalized_born.rs`: ten default, and the two measurements. 293 + 12 is the
+  305, and 270 + 10 the 280. 3c-1's refusal test now holds that a solvated force field is accepted.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

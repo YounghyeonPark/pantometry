@@ -588,7 +588,7 @@ impl GeneralizedBorn {
     ///
     /// If `at` is not one position per atom.
     pub fn born_radii(&self, at: &[[f64; 3]]) -> Vec<f64> {
-        self.descreen(at).radius
+        self.descreen(at, None).radius
     }
 
     /// [`GeneralizedBorn::born_radii`] by the direct sum, every pair integral computed where it is
@@ -607,10 +607,19 @@ impl GeneralizedBorn {
     /// terms do not hold, for the chain rule to read instead of computing the pair integral again.
     // The loops over `j` are written as the direct sum's are, index by index, so that the two can
     // be read against each other term for term.
+    ///
+    /// With `group`, each atom's integral is also summed in two parts — over the atoms on its own
+    /// side of the partition and over those across it — for [`GeneralizedBorn::decoupled`]; the
+    /// whole integral, and so every radius, is the same sum as without.
     #[allow(clippy::needless_range_loop)]
-    fn descreen(&self, at: &[[f64; 3]]) -> Descreened<'_> {
+    fn descreen(&self, at: &[[f64; 3]], group: Option<&[bool]>) -> Descreened<'_> {
         let n = self.radii.len();
         assert_eq!(at.len(), n, "one position per atom");
+        if let Some(g) = group {
+            assert_eq!(g.len(), n, "one group mark per atom");
+        }
+        let mut same = Vec::with_capacity(if group.is_some() { n } else { 0 });
+        let mut across = Vec::with_capacity(if group.is_some() { n } else { 0 });
         let frozen = self.frozen.as_ref().filter(|f| f.hold_at(at));
         let kept = frozen.map_or(0, |f| f.atoms.len());
         let screened = self.screened_radii();
@@ -622,6 +631,17 @@ impl GeneralizedBorn {
             starts.push(pairs.len());
             let rho_tilde = self.radii[i] - RADIUS_OFFSET;
             let mut integral = 0.0;
+            // The two parts of the integral for a partition: the same terms, in the same order.
+            let (mut own, mut other) = (0.0, 0.0);
+            let mut split = |j: usize, t: f64| {
+                if let Some(g) = group {
+                    if g[i] == g[j] {
+                        own += t;
+                    } else {
+                        other += t;
+                    }
+                }
+            };
             // The same terms in the same order as the direct sum: a kept term where both atoms
             // are frozen, the pair integral where either is not.
             match frozen.and_then(|f| f.row(i)) {
@@ -635,9 +655,13 @@ impl GeneralizedBorn {
                                 let (t, d) =
                                     descreening(separation(at, i, j).1, rho_tilde, screened[j]);
                                 integral += t;
+                                split(j, t);
                                 pairs.push(d);
                             }
-                            rj => integral += row[rj],
+                            rj => {
+                                integral += row[rj];
+                                split(j, row[rj]);
+                            }
                         }
                     }
                 }
@@ -647,10 +671,15 @@ impl GeneralizedBorn {
                             let (t, d) =
                                 descreening(separation(at, i, j).1, rho_tilde, screened[j]);
                             integral += t;
+                            split(j, t);
                             pairs.push(d);
                         }
                     }
                 }
+            }
+            if group.is_some() {
+                same.push(own);
+                across.push(other);
             }
             let (r, d) = self.rescaling.radius(self.radii[i], rho_tilde, integral);
             radius.push(r);
@@ -663,6 +692,8 @@ impl GeneralizedBorn {
             pairs,
             starts,
             frozen,
+            same,
+            across,
         }
     }
 
@@ -716,7 +747,7 @@ impl GeneralizedBorn {
         let n = self.radii.len();
         assert_eq!(charges.len(), n, "one charge per atom");
         assert_eq!(forces.len(), n, "one force per atom");
-        let descreened = self.descreen(at);
+        let descreened = self.descreen(at, None);
         let (born, slope) = (&descreened.radius, &descreened.slope);
         let k = COULOMB_KCAL * KCAL_PER_MOL * ANGSTROM;
         let (eps, kappa) = (self.solvent_dielectric, self.kappa);
@@ -884,6 +915,225 @@ impl GeneralizedBorn {
         }
         energy
     }
+
+    /// ΔG_GB with the atoms `group` marks **decoupled** by `lambda_electrostatics` and
+    /// `lambda_van_der_waals`, both in [0, 1], its force added to `forces`, and its derivatives in
+    /// both. See [`crate::alchemy`], "Generalized Born", for the definition:
+    ///
+    /// - each group atom's charge is `λ_e q`, in every term of eq 2 — its Born term, its pairs
+    ///   within the group and its pairs across;
+    /// - the descreening integral of eq 5 between two atoms on opposite sides of the partition is
+    ///   scaled by `λ_v`, so the group's volume leaves the environment's radii with its van der
+    ///   Waals, and the environment's leaves the group's; the integral between two atoms on the
+    ///   same side is not scaled.
+    ///
+    /// **At `(1, 1)` it is [`GeneralizedBorn::accumulate`] to the bit**, energy and forces: each
+    /// radius is taken from the whole integral, the same sum, and each charge is `1 × q`. **At
+    /// `λ_v = 0` each environment atom's radius is the environment alone's to the bit** (the
+    /// same-side sum, in the same order, plus `0 × ` the cross sum), **and at `λ_e = 0` every term
+    /// with a group charge in it is `±0`**, so the energy and the environment's forces are the
+    /// environment alone's, bit for bit, when the group's atoms come after the environment's.
+    /// The kept frozen terms of [`GeneralizedBorn::with_frozen`] are used as
+    /// [`GeneralizedBorn::accumulate`] uses them.
+    ///
+    /// # Panics
+    ///
+    /// If `charges`, `group`, `at` or `forces` is not one per atom, or a λ is outside [0, 1].
+    pub fn decoupled(
+        &self,
+        charges: &[f64],
+        group: &[bool],
+        at: &[[f64; 3]],
+        lambda_electrostatics: f64,
+        lambda_van_der_waals: f64,
+        forces: &mut [[f64; 3]],
+    ) -> DecoupledSolvation {
+        assert_eq!(forces.len(), self.radii.len(), "one force per atom");
+        let descreened = self.descreen(at, Some(group));
+        self.decoupled_at(
+            charges,
+            group,
+            at,
+            &descreened,
+            [lambda_electrostatics, lambda_van_der_waals],
+            Some(forces),
+        )
+    }
+
+    /// [`GeneralizedBorn::decoupled`]'s energy and derivatives, without the force, at each of
+    /// `states` (`[λ_e, λ_v]`): the descreening integrals are computed once and shared, and each
+    /// state is otherwise evaluated by the same code, so every entry is that state's own
+    /// [`GeneralizedBorn::decoupled`] result to the bit. A state equal to an earlier one is not
+    /// evaluated again.
+    ///
+    /// # Panics
+    ///
+    /// As [`GeneralizedBorn::decoupled`].
+    pub fn decoupled_energies(
+        &self,
+        charges: &[f64],
+        group: &[bool],
+        at: &[[f64; 3]],
+        states: &[[f64; 2]],
+    ) -> Vec<DecoupledSolvation> {
+        let descreened = self.descreen(at, Some(group));
+        let mut out: Vec<DecoupledSolvation> = Vec::with_capacity(states.len());
+        for (k, &state) in states.iter().enumerate() {
+            let earlier = states[..k].iter().position(|&s| s == state);
+            let v = match earlier {
+                Some(e) => out[e],
+                None => self.decoupled_at(charges, group, at, &descreened, state, None),
+            };
+            out.push(v);
+        }
+        out
+    }
+
+    /// One state of [`GeneralizedBorn::decoupled`] from the shared descreening.
+    fn decoupled_at(
+        &self,
+        charges: &[f64],
+        group: &[bool],
+        at: &[[f64; 3]],
+        descreened: &Descreened<'_>,
+        [lambda_e, lambda_v]: [f64; 2],
+        mut forces: Option<&mut [[f64; 3]]>,
+    ) -> DecoupledSolvation {
+        let n = self.radii.len();
+        assert_eq!(charges.len(), n, "one charge per atom");
+        assert!(
+            (0.0..=1.0).contains(&lambda_e) && (0.0..=1.0).contains(&lambda_v),
+            "λ must be in [0, 1]"
+        );
+        // The radii: the whole integral's at λ_v = 1, the same bits as `accumulate`; otherwise
+        // the same-side sum plus λ_v times the cross sum.
+        let rescaled: (Vec<f64>, Vec<f64>);
+        let (born, slope) = if lambda_v == 1.0 {
+            (&descreened.radius[..], &descreened.slope[..])
+        } else {
+            rescaled = (0..n)
+                .map(|i| {
+                    let rho_tilde = self.radii[i] - RADIUS_OFFSET;
+                    let integral = descreened.same[i] + lambda_v * descreened.across[i];
+                    self.rescaling.radius(self.radii[i], rho_tilde, integral)
+                })
+                .unzip();
+            (&rescaled.0[..], &rescaled.1[..])
+        };
+        let k = COULOMB_KCAL * KCAL_PER_MOL * ANGSTROM;
+        let (eps, kappa) = (self.solvent_dielectric, self.kappa);
+        // As `accumulate`'s: no exponential without salt.
+        let g = |f: f64| {
+            let screen = if kappa == 0.0 {
+                1.0 / eps
+            } else {
+                (-kappa * f).exp() / eps
+            };
+            let g = (1.0 - screen) / f;
+            (g, -g / f + kappa * screen / f)
+        };
+        // Each atom's charge scale s and its derivative in λ_e.
+        let scale = |i: usize| if group[i] { lambda_e } else { 1.0 };
+        let mark = |i: usize| if group[i] { 1.0 } else { 0.0 };
+        let mut energy = 0.0;
+        let (mut d_electrostatics, mut d_van_der_waals) = (0.0f64, 0.0f64);
+        let mut d_born = vec![0.0; n];
+        for i in 0..n {
+            if charges[i] == 0.0 {
+                continue;
+            }
+            let qi = scale(i) * charges[i];
+            let (gi, dgi) = g(born[i]);
+            let c = -0.5 * k * qi * qi;
+            energy += c * gi;
+            d_born[i] += c * dgi;
+            if group[i] {
+                // d(s²)/dλ_e = 2s.
+                d_electrostatics += -k * charges[i] * charges[i] * scale(i) * gi;
+            }
+            for j in i + 1..n {
+                if charges[j] == 0.0 {
+                    continue;
+                }
+                let qj = scale(j) * charges[j];
+                let (d, r) = separation(at, i, j);
+                let rr = born[i] * born[j];
+                let (f, e) = still(r, rr);
+                let (gf, dgf) = g(f);
+                let c = -k * qi * qj;
+                energy += c * gf;
+                if group[i] || group[j] {
+                    let ds = mark(i) * scale(j) + scale(i) * mark(j);
+                    d_electrostatics += -k * charges[i] * charges[j] * ds * gf;
+                }
+                let de_df = c * dgf;
+                if let Some(forces) = forces.as_deref_mut() {
+                    let radial = -de_df * (1.0 - 0.25 * e) / f;
+                    for a in 0..3 {
+                        forces[i][a] += radial * d[a];
+                        forces[j][a] -= radial * d[a];
+                    }
+                }
+                let common = de_df * e * (1.0 + r * r / (4.0 * rr)) / (2.0 * f);
+                d_born[i] += common * born[j];
+                d_born[j] += common * born[i];
+            }
+        }
+        // ∂E/∂λ_v = Σ_i ∂E/∂R_i · dR_i/dI_i · (cross integral of i); and the chain rule through the
+        // radii, a cross pair's dI/dr scaled by λ_v.
+        for i in 0..n {
+            let c = d_born[i] * slope[i];
+            if c == 0.0 {
+                continue;
+            }
+            d_van_der_waals += c * descreened.across[i];
+            let Some(forces) = forces.as_deref_mut() else {
+                continue;
+            };
+            let mut own = descreened.pairs[descreened.starts[i]..descreened.starts[i + 1]].iter();
+            let kept = descreened.frozen.and_then(|f| f.row(i));
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                let mut di = match kept {
+                    Some((f, _, row)) if f.rank[j] != usize::MAX => row[f.rank[j]],
+                    _ => *own
+                        .next()
+                        .expect("one slope per pair the kept terms do not hold"),
+                };
+                if group[i] != group[j] {
+                    di *= lambda_v;
+                }
+                let (d, r) = separation(at, i, j);
+                if r == 0.0 {
+                    continue;
+                }
+                let radial = -c * di / r;
+                for a in 0..3 {
+                    forces[i][a] += radial * d[a];
+                    forces[j][a] -= radial * d[a];
+                }
+            }
+        }
+        DecoupledSolvation {
+            energy,
+            d_electrostatics,
+            d_van_der_waals,
+        }
+    }
+}
+
+/// ΔG_GB of a decoupled group at one state, and its derivatives: see
+/// [`GeneralizedBorn::decoupled`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DecoupledSolvation {
+    /// ΔG_GB, joules per molecule.
+    pub energy: f64,
+    /// `∂ΔG_GB/∂λ_e`, joules per molecule.
+    pub d_electrostatics: f64,
+    /// `∂ΔG_GB/∂λ_v`, joules per molecule.
+    pub d_van_der_waals: f64,
 }
 
 /// What [`GeneralizedBorn::descreen`] computed: the radii, their slopes `dR/dI`, and the `dI/dr`
@@ -895,6 +1145,10 @@ struct Descreened<'a> {
     pairs: Vec<f64>,
     starts: Vec<usize>,
     frozen: Option<&'a FrozenPairs>,
+    /// With a partition, each atom's integral over the atoms on its own side; empty without.
+    same: Vec<f64>,
+    /// With a partition, each atom's integral over the atoms across it; empty without.
+    across: Vec<f64>,
 }
 
 impl FrozenPairs {

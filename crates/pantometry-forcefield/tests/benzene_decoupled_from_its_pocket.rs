@@ -328,17 +328,19 @@ fn at_an_intermediate_state_the_force_is_the_gradient() {
     );
 }
 
-/// **What cannot be decoupled is refused by name**: a solvated force field, a group that a bond
-/// crosses (one benzene carbon alone), and a group that is empty or everything.
+/// **What cannot be decoupled is refused by name**: a group that a bond crosses (one benzene
+/// carbon alone), and a group that is empty, or everything in vacuum. A solvated force field, which
+/// 3c-1 refused, is accepted, with the ligand or with every atom as the group.
 #[test]
 fn what_cannot_be_decoupled_is_refused() {
     let b = small_binding();
     let ff = b.force_field();
     let mask = ligand_mask(b);
-    assert_eq!(
-        Decoupling::new(&ff.clone().with_generalized_born(), &mask),
-        Err(AlchemyError::Solvated)
-    );
+    // A solvated force field is accepted since 3c-3, and so is a whole group there, which is
+    // decoupled from the solvent alone; in vacuum a whole group has nothing to leave.
+    let solvated = ff.clone().with_generalized_born();
+    assert!(Decoupling::new(&solvated, &mask).is_ok());
+    assert!(Decoupling::new(&solvated, &vec![true; mask.len()]).is_ok());
     let mut one = vec![false; mask.len()];
     let carbon = b
         .ligand_range()

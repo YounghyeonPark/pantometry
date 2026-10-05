@@ -11,7 +11,9 @@
 //!
 //! # The Hamiltonian
 //!
-//! `U(x; λ) = U_rest(x) + λ_r U_B(x) + Σ_cross [λ_e C_ij(r) + U_sc(r; λ_v)]`
+//! `U(x; λ) = U_rest(x) + λ_r U_B(x) + Σ_cross [λ_e C_ij(r) + U_sc(r; λ_v)] + G(x; λ_e, λ_v)`,
+//!
+//! the last term the generalized Born solvation energy when the force field has one (below).
 //!
 //! - **`U_rest`** is the force field with the non-bonded pairs between the group and its
 //!   environment taken out. **The group's own interactions are kept**, bonded and non-bonded,
@@ -23,7 +25,7 @@
 //!   "only the Lennard-Jones interactions of the ligand with its environment were eliminated", as
 //!   read in its PMC text through a summary — and Mobley et al. 2007 on this very system
 //!   (*J. Mol. Biol.* **371**, 1118, PMC2104542) uses the intermediate states of that work. In
-//!   vacuum, which is all this module does yet, the choice matters less: an annihilated ligand's
+//!   vacuum the choice matters less: an annihilated ligand's
 //!   intramolecular Coulomb term is a constant the two legs would share too, but its van der Waals
 //!   term is not, and annihilating it lets the ring's own atoms overlap.
 //! - **`C_ij = 332.0637 q_i q_j / r`** ([`coulomb`]) for every pair across the partition, scaled
@@ -80,17 +82,88 @@
 //! 2007's order — "restrain the ligand harmonically … then annihilate the ligand's partial
 //! charges, then decouple its Lennard-Jones interactions" — as read in PMC2104542.
 //!
+//! # Generalized Born
+//!
+//! A force field with OBC II ([`crate::solvation`]) has its solvation term taken out of `U_rest`
+//! and evaluated as `G(x; λ_e, λ_v)` ([`GeneralizedBorn::decoupled`]):
+//!
+//! - **The group's charges are `λ_e q`, everywhere they enter eq 2**: its Born terms and its
+//!   pairs among themselves go as `λ_e²`, its pairs with the environment as `λ_e`. A charge
+//!   scaled is a charge scaled, so at fixed positions and `λ_v` the whole electrostatic part is
+//!   `A + λ_e (B + Σ C_ij) + λ_e² D` exactly, and `∂U/∂λ_e = B + Σ C_ij + 2 λ_e D` is analytic. The
+//!   group's intramolecular Coulomb term stays in `U_rest` at full charge: the decoupled ligand
+//!   keeps its vacuum self-interaction, and loses only its solvation.
+//! - **The descreening integral of eq 5 between atoms on opposite sides is scaled by `λ_v`**,
+//!   that between atoms on the same side is not: `I_i = I_i^same + λ_v I_i^cross`. So the group's
+//!   volume leaves the environment's Born radii together with its van der Waals, and the
+//!   environment's leaves the group's. `∂G/∂λ_v = Σ_i ∂G/∂R_i · dR_i/dI_i · I_i^cross`, and the
+//!   chain rule through the radii takes a cross pair's `dI/dr` times `λ_v`.
+//! - **No nonpolar surface term.** [`crate::solvation::surface_area`] has no useful gradient,
+//!   and is not in the force field ([`crate::solvation`], "The nonpolar part"), so it is in
+//!   neither leg of a cycle; a caller can add `0.005 kcal mol⁻¹ Å⁻² × ΔA` at the end states as a
+//!   separate estimate, and say so.
+//!
+//! **So the fully decoupled state, `λ_e = λ_v = 0`, is the environment alone in solvent plus the
+//! group alone in vacuum**: the environment's radii are its own (the cross integrals are
+//! multiplied by zero), and every GB term with a group charge in it is zero, so the group neither
+//! screens nor is screened, nor is solvated. The tests hold that exactly. Both legs of a double
+//! decoupling therefore end in the same state of the ligand — alone, in vacuum, with its
+//! intramolecular terms — and the solvent leg, the group being the whole molecule, is its
+//! electrostatic solvation free energy under the model.
+//!
+//! **What practice does, read.** openmmtools' `AbsoluteAlchemicalFactory`
+//! (`openmmtools/alchemy/alchemy.py`, `_alchemically_modify_GBSAOBCForce`, read at commit
+//! `f6ef22a8` of `github.com/choderalab/openmmtools`) builds the same end state: an alchemical
+//! atom's charge is multiplied by `lambda_electrostatics` in the pair term, and its descreening of
+//! any other atom (the computed value `I`) by the same factor, so a decoupled ligand neither
+//! carries charge nor descreens. It differs on the path, in two ways chosen differently here: it
+//! scales the Born self term `q²/B` linearly in λ rather than as the square of a scaled charge,
+//! and it removes the descreening with the charges rather than with the van der Waals. Neither
+//! changes ΔG, which depends on the end states only. Linking the descreening to `λ_v` keeps the
+//! radii fixed while the charges are turned off, so that segment is exactly quadratic in `λ_e` —
+//! which is what makes a Born ion's TI exact on a trapezoid — and takes the ligand's dielectric
+//! cavity away with the volume that makes it.
+//!
+//! # What it measures: benzene and T4 lysozyme L99A under OBC II
+//!
+//! `tests/benzene_bound_in_generalized_born.rs`, ignored, release, one core. With the convention
+//! above, `ΔG°_bind = ΔG_solvent − ΔG_complex − ΔG°_release`, each `ΔG` the free energy of
+//! decoupling in its leg and `ΔG°_release` [`Boresch::release_free_energy`], negative:
+//!
+//! | | kcal/mol |
+//! | --- | --- |
+//! | solvent leg: benzene's charges off in OBC II (4 seeds × 11 windows × 100 ps) | +2.3395 ± 0.0003 |
+//! | complex leg: restraint on | +0.718 ± 0.065 |
+//! | complex leg: charges off | −5.172 ± 0.011 |
+//! | complex leg: van der Waals off, the cavity's descreening with it | +8.501 ± 0.301 |
+//! | complex leg (15 windows × 12 ps; TI +4.073 ± 0.313) | +4.047 ± 0.309 |
+//! | restraint released to 1 M, analytic | −7.784 |
+//! | **ΔG°_bind** | **+6.08 ± 0.31** |
+//! | nonpolar, `0.005 kcal mol⁻¹ Å⁻² × ΔA`, ΔA = −293.3 Å² at the start | −1.47 |
+//! | experiment (Mobley et al. 2007, Table 1) | −5.19 ± 0.16 |
+//!
+//! **The model does not bind benzene.** The electrostatics cost +7.51 (the solvent leg's +2.34
+//! less the complex's −5.17), where in vacuum (3c-1) the complex's charge segment was +1.48, a
+//! contribution of −1.48 to binding: OBC II with QEq charges
+//! desolvates the ligand and the pocket by more than the cross terms give back, as 2c-2 and A-2
+//! measured at fixed pose. The van der Waals segment is +8.50 against vacuum's +13.80. Removing
+//! benzene's volume lets GB solvate the cavity's walls as water, which L99A's real cavity is not
+//! (A-2: it is empty); A-2 measured that part of the polar term, the pocket desolvated by
+//! benzene's volume, at +4.31 kcal/mol in the 10 Å binding at the crystal pose, most of the 5.3
+//! difference. The rest — another pose, minimised under GB, and sampling — is not separated here. The solvent leg's hydration free energy, −2.34 polar and
+//! −1.13 with the nonpolar term, against FreeSolv's −0.90 ± 0.20, is 0.23 too negative, about
+//! the experiment's own uncertainty: for benzene the model's over-solvation of small molecules is
+//! small. Nothing is asserted against experiment.
+//!
 //! # What is not here
 //!
-//! **No solvent.** A [`ForceField`] with generalized Born is refused ([`AlchemyError::Solvated`]):
-//! GB is quadratic in the charges and many-body through the Born radii, so decoupling the ligand
-//! there means scaling its charges in the GB sum and deciding what its radii do as it vanishes —
-//! step 3c-3's question, not this one's. **No group bonded to its environment**
-//! ([`AlchemyError::BondedAcross`]): only non-bonded pairs are scaled.
+//! **No group bonded to its environment** ([`AlchemyError::BondedAcross`]): only non-bonded pairs
+//! are scaled. **No nonpolar solvation term**, above.
 
 use crate::boresch::Boresch;
 use crate::dynamics::Potential;
 use crate::energy::{coulomb, ForceField, Pair};
+use crate::solvation::{DecoupledSolvation, GeneralizedBorn};
 use std::fmt;
 
 /// α of the soft core, [`SoftCore::default`]: Mobley, Chodera and Dill 2006's 0.5. See the module
@@ -251,6 +324,14 @@ pub trait Alchemical {
     /// The part of `U(x; λ)` that depends on λ, up to a constant the same at every state, and its
     /// gradient in λ: what TI averages and BAR differences. See [`Coupling`].
     fn coupling(&self, at: &[[f64; 3]], lambda: Lambda) -> Coupling;
+
+    /// [`Alchemical::coupling`] at each of `states`, at one configuration: **each entry that
+    /// state's own [`Alchemical::coupling`], to the bit**. The default calls it once per state; an
+    /// implementation may share what the states have in common, as [`Decoupling`] shares the
+    /// generalized Born descreening.
+    fn couplings(&self, at: &[[f64; 3]], states: &[Lambda]) -> Vec<Coupling> {
+        states.iter().map(|&l| self.coupling(at, l)).collect()
+    }
 }
 
 /// An [`Alchemical`] Hamiltonian held at one state: a [`Potential`] that molecular dynamics can
@@ -272,34 +353,29 @@ impl<A: Alchemical + ?Sized> Potential for AtLambda<'_, A> {
 /// Why a [`Decoupling`] could not be built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AlchemyError {
-    /// The force field has a solvent: decoupling under generalized Born is not here yet. See the
-    /// module documentation.
-    Solvated,
     /// A bond joins the group to its environment: these two atoms.
     BondedAcross {
         /// The bond's atoms.
         atoms: [usize; 2],
     },
-    /// The group has no atom, or every atom.
+    /// The group has no atom, or — in a force field without a solvent, where it would have
+    /// nothing to be decoupled from — every atom.
     NothingToDecouple,
 }
 
 impl fmt::Display for AlchemyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AlchemyError::Solvated => f.write_str(
-                "the force field has a solvent, and decoupling under generalized Born is not \
-                 implemented",
-            ),
             AlchemyError::BondedAcross { atoms } => write!(
                 f,
                 "atoms {} and {} are bonded across the group's boundary, and only non-bonded \
                  pairs are decoupled",
                 atoms[0], atoms[1]
             ),
-            AlchemyError::NothingToDecouple => {
-                f.write_str("the group must have at least one atom and leave at least one out")
-            }
+            AlchemyError::NothingToDecouple => f.write_str(
+                "the group must have at least one atom, and leave at least one out unless \
+                     there is a solvent to decouple it from",
+            ),
         }
     }
 }
@@ -315,33 +391,44 @@ pub struct Decoupling {
     cross: Vec<CrossPair>,
     restraint: Option<Boresch>,
     soft_core: SoftCore,
+    solvent: Option<Solvent>,
+}
+
+/// The generalized Born term a [`Decoupling`] scales, and the charges it is evaluated with.
+#[derive(Clone, Debug, PartialEq)]
+struct Solvent {
+    model: GeneralizedBorn,
+    charges: Vec<f64>,
 }
 
 impl Decoupling {
     /// `force_field` with the atoms `group` marks decoupled from the rest: its pairs across the
     /// partition taken out of it and scaled, every other term kept. No restraint, and
-    /// [`SoftCore::default`].
+    /// [`SoftCore::default`]. **A force field with generalized Born** has its solvation term taken
+    /// out of the rest and scaled as the module documentation's "Generalized Born" says; the group
+    /// may then be every atom, which decouples a molecule from the solvent alone (a solvent leg).
     ///
     /// # Errors
     ///
-    /// [`AlchemyError::Solvated`] for a force field with generalized Born,
     /// [`AlchemyError::BondedAcross`] when a bond crosses the partition, and
-    /// [`AlchemyError::NothingToDecouple`] for an empty or whole group.
+    /// [`AlchemyError::NothingToDecouple`] for an empty group, or a whole one without a solvent.
     ///
     /// # Panics
     ///
     /// If `group` is not one per atom.
     pub fn new(force_field: &ForceField, group: &[bool]) -> Result<Decoupling, AlchemyError> {
-        if force_field.solvation().is_some() {
-            return Err(AlchemyError::Solvated);
-        }
-        if !group.iter().any(|&g| g) || group.iter().all(|&g| g) {
+        let solvated = force_field.solvation().is_some();
+        if !group.iter().any(|&g| g) || (!solvated && group.iter().all(|&g| g)) {
             return Err(AlchemyError::NothingToDecouple);
         }
         let (rest, across) = force_field
             .split_across(group)
             .map_err(|atoms| AlchemyError::BondedAcross { atoms })?;
         let q = force_field.charges();
+        let solvent = force_field.solvation().map(|model| Solvent {
+            model: model.clone(),
+            charges: q.to_vec(),
+        });
         let cross = across
             .into_iter()
             .map(|pair| CrossPair {
@@ -352,10 +439,11 @@ impl Decoupling {
         Ok(Decoupling {
             atoms: group.len(),
             group: group.to_vec(),
-            rest: Some(rest),
+            rest: Some(rest.without_solvation()),
             cross,
             restraint: None,
             soft_core: SoftCore::default(),
+            solvent,
         })
     }
 
@@ -381,6 +469,7 @@ impl Decoupling {
             cross,
             restraint: None,
             soft_core: SoftCore::default(),
+            solvent: None,
         }
     }
 
@@ -402,6 +491,21 @@ impl Decoupling {
         self
     }
 
+    /// The same decoupling with the generalized Born model `model`, evaluated with `charges`
+    /// (elementary charges) and scaled as the module documentation's "Generalized Born" says, in
+    /// place of any it had: for a model system of [`Decoupling::from_pairs`] — a Born ion, say,
+    /// whose solvation free energy is known.
+    ///
+    /// # Panics
+    ///
+    /// If `model` or `charges` is not one per atom.
+    pub fn with_solvation(mut self, model: GeneralizedBorn, charges: Vec<f64>) -> Decoupling {
+        assert_eq!(model.len(), self.atoms, "one GB atom per atom");
+        assert_eq!(charges.len(), self.atoms, "one charge per atom");
+        self.solvent = Some(Solvent { model, charges });
+        self
+    }
+
     /// The same decoupling with another soft core.
     pub fn with_soft_core(mut self, soft_core: SoftCore) -> Decoupling {
         self.soft_core = soft_core;
@@ -418,8 +522,8 @@ impl Decoupling {
         &self.cross
     }
 
-    /// Everything that is not scaled: the force field less the cross pairs; `None` for
-    /// [`Decoupling::from_pairs`].
+    /// Everything that is not scaled: the force field less the cross pairs and less its solvation
+    /// term, which is scaled; `None` for [`Decoupling::from_pairs`].
     pub fn rest(&self) -> Option<&ForceField> {
         self.rest.as_ref()
     }
@@ -434,8 +538,62 @@ impl Decoupling {
         self.soft_core
     }
 
-    /// The λ-dependent part at `at` and `lambda`, adding its forces to `forces` when given.
+    /// The generalized Born model that is scaled, if the force field had one.
+    pub fn solvation(&self) -> Option<&GeneralizedBorn> {
+        self.solvent.as_ref().map(|s| &s.model)
+    }
+
+    /// The solvation term alone at each of `states`, from one descreening; with `forces`, there
+    /// must be one state, and its force is added.
+    fn solvation_at(
+        &self,
+        at: &[[f64; 3]],
+        states: &[Lambda],
+        forces: Option<&mut [[f64; 3]]>,
+    ) -> Option<Vec<DecoupledSolvation>> {
+        let s = self.solvent.as_ref()?;
+        Some(match forces {
+            Some(f) => {
+                assert_eq!(states.len(), 1, "forces at one state");
+                let l = states[0];
+                vec![s.model.decoupled(
+                    &s.charges,
+                    &self.group,
+                    at,
+                    l.electrostatics,
+                    l.van_der_waals,
+                    f,
+                )]
+            }
+            None => {
+                let pairs: Vec<[f64; 2]> = states
+                    .iter()
+                    .map(|l| [l.electrostatics, l.van_der_waals])
+                    .collect();
+                s.model
+                    .decoupled_energies(&s.charges, &self.group, at, &pairs)
+            }
+        })
+    }
+
+    /// The λ-dependent part at `at` and `lambda`, adding its forces to `forces` when given: the
+    /// pairs and the restraint, then the solvation term.
     fn coupling_into(
+        &self,
+        at: &[[f64; 3]],
+        lambda: Lambda,
+        mut forces: Option<&mut [[f64; 3]]>,
+    ) -> Coupling {
+        let mut c = self.pairs_into(at, lambda, forces.as_deref_mut());
+        if let Some(g) = self.solvation_at(at, &[lambda], forces) {
+            add_solvation(&mut c, g[0]);
+        }
+        c
+    }
+
+    /// The cross pairs and the restraint at `at` and `lambda`, adding their forces to `forces`
+    /// when given.
+    fn pairs_into(
         &self,
         at: &[[f64; 3]],
         lambda: Lambda,
@@ -510,4 +668,29 @@ impl Alchemical for Decoupling {
     fn coupling(&self, at: &[[f64; 3]], lambda: Lambda) -> Coupling {
         self.coupling_into(at, lambda, None)
     }
+
+    /// Each state's pairs and restraint as [`Alchemical::coupling`] computes them, and the
+    /// solvation term from one shared descreening ([`GeneralizedBorn::decoupled_energies`]):
+    /// each entry is that state's [`Alchemical::coupling`] to the bit.
+    fn couplings(&self, at: &[[f64; 3]], states: &[Lambda]) -> Vec<Coupling> {
+        let solvation = self.solvation_at(at, states, None);
+        states
+            .iter()
+            .enumerate()
+            .map(|(k, &l)| {
+                let mut c = self.pairs_into(at, l, None);
+                if let Some(g) = &solvation {
+                    add_solvation(&mut c, g[k]);
+                }
+                c
+            })
+            .collect()
+    }
+}
+
+/// Adds a solvation term's energy and derivatives to a coupling.
+fn add_solvation(c: &mut Coupling, g: DecoupledSolvation) {
+    c.energy += g.energy;
+    c.gradient[1] += g.d_electrostatics;
+    c.gradient[2] += g.d_van_der_waals;
 }

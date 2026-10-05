@@ -655,6 +655,12 @@ impl ForceField {
         self.solvation.as_ref()
     }
 
+    /// The same terms in vacuum: the solvation model taken out, every other term kept.
+    pub(crate) fn without_solvation(mut self) -> ForceField {
+        self.solvation = None;
+        self
+    }
+
     /// One bond-stretch term per bond, in the component's bond order.
     pub fn stretches(&self) -> &[Stretch] {
         &self.stretches

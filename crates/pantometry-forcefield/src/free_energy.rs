@@ -253,17 +253,26 @@ impl Window {
             taken += 1;
             let s = self.md.steps();
             if s > eq && (s - eq) % stride == 0 {
-                let here = hamiltonian.coupling(&self.at, self.lambda);
-                let to = |other: Option<Lambda>| {
-                    other.map_or(f64::NAN, |l| {
-                        hamiltonian.coupling(&self.at, l).energy - here.energy
+                // The window's own state and its neighbours at one configuration, in one call, so
+                // that a Hamiltonian can share what they have in common.
+                let mut states = vec![self.lambda];
+                states.extend(self.previous);
+                states.extend(self.next);
+                let c = hamiltonian.couplings(&self.at, &states);
+                let here = c[0];
+                let mut others = c[1..].iter();
+                let mut to = |other: Option<Lambda>| {
+                    other.map_or(f64::NAN, |_| {
+                        others.next().expect("one coupling per neighbour").energy - here.energy
                     })
                 };
+                let to_previous = to(self.previous);
+                let to_next = to(self.next);
                 self.samples.push(Sample {
                     step: s,
                     gradient: here.gradient,
-                    to_previous: to(self.previous),
-                    to_next: to(self.next),
+                    to_previous,
+                    to_next,
                 });
             }
         }

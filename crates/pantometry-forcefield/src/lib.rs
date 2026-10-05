@@ -88,8 +88,11 @@
 //!   linearly, its van der Waals pairs through Beutler's soft core (α = 0.5, p = 1, as Mobley,
 //!   Chodera and Dill 2006 used; the form read in the GROMACS manual, the paper not opened), and a
 //!   [`Boresch`] restraint switched on linearly. The group's own interactions are kept at every λ:
-//!   decoupling, not annihilation. Energy, forces and `∂U/∂λ` analytic. Vacuum only: a solvated
-//!   force field is refused by name. See [`alchemy`].
+//!   decoupling, not annihilation. Energy, forces and `∂U/∂λ` analytic. **Under OBC II** the
+//!   group's charges are `λ_e q` in every GB term and the descreening across the partition is
+//!   scaled by `λ_v`, so the decoupled end state is the environment alone in solvent and the
+//!   group alone in vacuum, exactly — the end state openmmtools' alchemical GB builds, reached by
+//!   another path. See [`alchemy`].
 //! - [`Boresch`] holds a ligand's six relative coordinates to three receptor atoms, chosen by a
 //!   stated geometric rule, and gives the analytic free energy of releasing it to 1 M — Boresch et
 //!   al. 2003's closed form, read secondarily in Clark et al. 2023 (eq 7), with its two
@@ -218,6 +221,12 @@
 //! differences; one Lennard-Jones particle decoupled from a fixed atom against its configurational
 //! integral by quadrature, and coupled again from the other end; `∂U/∂λ_e` the coupled cross
 //! Coulomb energy to the bit in 181L's pocket; and a campaign the same bits however it is cut up.
+//! Under generalized Born (`tests/benzene_bound_in_generalized_born.rs`): fully coupled, the
+//! decoupled solvation term is the force field's to the bit; with the charges off it carries none
+//! of the group's, to the bit; fully decoupled it is the pocket alone in solvent plus benzene
+//! alone in vacuum, the solvation term to the bit and the whole to its rounding; the frozen
+//! buffer's kept terms change no bit; a Born ion decouples to `(q²/2R)(1 − 1/ε)` by TI and BAR
+//! through [`Windows`]; and two ions follow eqs 2–8 written out at every `(λ_e, λ_v)`.
 //!
 //! # Determinism, and where it stops
 //!
@@ -236,12 +245,14 @@
 //!   and velocity Verlet at a 0.5 fs step, with every X–H bond free: no SHAKE or RATTLE, no
 //!   barostat, no multiple time steps, no periodic box. The measurement that chose the step is in
 //!   [`dynamics`]; constraints would buy a step about four times longer and are not needed yet.
-//! - **Free energies in vacuum only, by TI and BAR, and not MBAR.** [`Decoupling`] refuses a force
-//!   field with generalized Born: decoupling there means deciding what the ligand's charges and
-//!   Born radii do as it vanishes, which is the next step's. MBAR would need every sample's energy
-//!   at every state; see [`free_energy`] for why BAR between neighbours is enough here. **A
-//!   vacuum complex leg has no solvent leg to close a cycle with**, so no binding free energy is
-//!   computed, and nothing here is compared with experiment.
+//! - **Free energies by TI and BAR, not MBAR, and no nonpolar term in them.** MBAR would need
+//!   every sample's energy at every state; see [`free_energy`] for why BAR between neighbours is
+//!   enough here. The solvent-accessible surface has no useful gradient, so it is in neither leg
+//!   of a cycle and is estimated at the end states apart ([`alchemy`]). **Benzene's absolute
+//!   binding free energy to T4 lysozyme L99A under OBC II comes out at +6.1 ± 0.3 kcal/mol, +4.6
+//!   with that nonpolar estimate, against experiment's −5.19**: the model does not bind benzene,
+//!   and `tests/benzene_bound_in_generalized_born.rs` says which of its parts are candidates. It
+//!   is reported, not asserted.
 //! - **No conformer search.** The minimiser finds the minimum downhill from where it starts; the
 //!   torsion scans hold a dihedral to find a barrier, and nothing looks for the global minimum.
 //! - **No reading of the paper but this crate's in use**: [`Variant`] keeps one other — `r_EN`
@@ -338,7 +349,7 @@ pub use free_energy::{Bar, FreeEnergy, Protocol, Quadrature, Sample, Window, Win
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use qeq::{Charges, Qeq, QeqError};
-pub use solvation::{GeneralizedBorn, Rescaling};
+pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
 
 use pantometry_core::integrator::substeps_for;
