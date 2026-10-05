@@ -478,6 +478,8 @@ struct Model {
     in_pocket: ForceField,
     crystal: Vec<[f64; 3]>,
     near_hydrogens: Vec<bool>,
+    residue_spans: Vec<std::ops::Range<usize>>,
+    bonded_outside: Vec<bool>,
 }
 
 /// A ligand in a rigid pocket: see the module documentation.
@@ -538,6 +540,7 @@ impl Binding {
             })
         };
         let mut residues = Vec::new();
+        let mut residue_spans = Vec::new();
         let mut pocket = Vec::new();
         for r in system.residues() {
             if r.part == Part::Protein
@@ -546,7 +549,9 @@ impl Binding {
                     .any(|i| atoms[i].element != Element::H && near(i))
             {
                 residues.push(r.label());
+                let start = pocket.len();
                 pocket.extend(r.atoms.clone());
+                residue_spans.push(start..pocket.len());
             }
         }
         if pocket.is_empty() {
@@ -604,6 +609,16 @@ impl Binding {
         let in_pocket = complex.touching(&moving);
         // A hydrogen is near when it is the ligand's, or its heavy parent is within the cutoff of
         // the ligand: the pocket's own rule, atom by atom.
+        // An atom is bonded outside when the whole system bonds it to an atom the complex leaves
+        // out: a peptide bond or a disulfide that the cut went through.
+        let mut kept = vec![false; atoms.len()];
+        for &i in &system_atoms {
+            kept[i] = true;
+        }
+        let bonded_outside: Vec<bool> = system_atoms
+            .iter()
+            .map(|&i| whole.neighbours(i).any(|(j, _)| !kept[j]))
+            .collect();
         let near_hydrogens: Vec<bool> = system_atoms
             .iter()
             .enumerate()
@@ -632,6 +647,8 @@ impl Binding {
                 in_pocket,
                 crystal,
                 near_hydrogens,
+                residue_spans,
+                bonded_outside,
             }),
         })
     }
@@ -649,6 +666,19 @@ impl Binding {
     /// For each atom in complex order, its index in the [`System`].
     pub fn system_atoms(&self) -> &[usize] {
         &self.model.system_atoms
+    }
+
+    /// Each pocket residue's atoms as a range of complex indices, in the order of
+    /// [`Binding::residues`]. Together they are `0..pocket_len()`, in order.
+    pub fn residue_spans(&self) -> &[std::ops::Range<usize>] {
+        &self.model.residue_spans
+    }
+
+    /// For each atom in complex order, whether the [`System`] bonds it to an atom the complex
+    /// leaves out — the atoms at the cut, a peptide bond's two ends where it was cut. The ligand's
+    /// atoms are never bonded outside: the ligand is whole and bonded to nothing else.
+    pub fn bonded_outside(&self) -> &[bool] {
+        &self.model.bonded_outside
     }
 
     /// How many atoms the pocket has: complex indices `0..pocket_len()` are the pocket's.
@@ -921,7 +951,7 @@ impl Binding {
     /// difference. See [`Interaction`].
     pub fn interaction(&self) -> Interaction {
         let n0 = self.model.pocket_len;
-        let (vdw, elec) = self.cross(&self.model.charges, None);
+        let (vdw, elec) = self.cross(&self.at, &self.model.charges, None);
         let e_c = self.model.complex.energy(&self.at);
         let e_p = self.model.pocket.energy(self.pocket_alone_positions());
         let e_l = self.model.ligand.energy(self.ligand_alone_positions());
@@ -976,7 +1006,7 @@ impl Binding {
     /// nothing else in ΔE_bind moves with the ligand — newtons, in ligand order.
     pub fn interaction_forces(&self) -> Vec<[f64; 3]> {
         let mut forces = vec![[0.0; 3]; self.at.len() - self.model.pocket_len];
-        self.cross(&self.model.charges, Some(&mut forces));
+        self.cross(&self.at, &self.model.charges, Some(&mut forces));
         forces
     }
 
@@ -989,11 +1019,35 @@ impl Binding {
     /// If `charges` is not one per atom.
     pub fn cross_electrostatic(&self, charges: &[f64]) -> f64 {
         assert_eq!(charges.len(), self.at.len(), "one charge per atom");
-        self.cross(charges, None).1
+        self.cross(&self.at, charges, None).1
     }
 
-    /// The cross sums, van der Waals and Coulomb, and their force on the ligand if asked.
-    fn cross(&self, charges: &[f64], mut forces: Option<&mut [[f64; 3]]>) -> (f64, f64) {
+    /// The protein–ligand cross terms, van der Waals and Coulomb (ε = 1), joules per molecule,
+    /// with the complex's atoms at `at` instead of where the binding holds them: what
+    /// [`Binding::interaction`] sums directly, for positions a trajectory reached. The binding's
+    /// own charges.
+    ///
+    /// # Panics
+    ///
+    /// If `at` is not one position per atom.
+    pub fn cross_terms_at(&self, at: &[[f64; 3]]) -> (f64, f64) {
+        assert_eq!(at.len(), self.at.len(), "one position per atom");
+        self.cross(at, &self.model.charges, None)
+    }
+
+    /// The crystal positions of every atom, complex order — the system's, where the binding was
+    /// built.
+    pub fn crystal_positions(&self) -> &[[f64; 3]] {
+        &self.model.crystal
+    }
+
+    /// The cross sums, van der Waals and Coulomb, at `at`, and their force on the ligand if asked.
+    fn cross(
+        &self,
+        at: &[[f64; 3]],
+        charges: &[f64],
+        mut forces: Option<&mut [[f64; 3]]>,
+    ) -> (f64, f64) {
         let n0 = self.model.pocket_len;
         let (mut vdw, mut elec) = (0.0, 0.0);
         for p in self.model.in_pocket.pairs() {
@@ -1002,7 +1056,7 @@ impl Binding {
             if i >= n0 || j < n0 {
                 continue;
             }
-            let (a, b) = (self.at[i], self.at[j]);
+            let (a, b) = (at[i], at[j]);
             let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             let (e, mut de_dr) = p.at(r);

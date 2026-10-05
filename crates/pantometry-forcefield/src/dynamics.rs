@@ -752,7 +752,7 @@ fn remove_rigid_motion(masses: &[f64], at: &[[f64; 3]], v: &mut [[f64; 3]]) -> u
 /// The eigenvalues and eigenvectors (as columns) of a symmetric 3×3 matrix, by cyclic Jacobi
 /// rotations. Deterministic: a fixed sweep order, stopping when the off-diagonal part is exactly
 /// zero or after fifty sweeps.
-fn symmetric_eigen(mut a: [[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
+pub(crate) fn symmetric_eigen(mut a: [[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
     let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     for _ in 0..50 {
         let off = a[0][1] * a[0][1] + a[0][2] * a[0][2] + a[1][2] * a[1][2];

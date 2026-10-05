@@ -1155,6 +1155,254 @@ protects nothing.
   that print tables and assert nothing. The previous entry's "210 tests and nine ignored" counted
   the tests that run, and 210 + 23 is the 233.
 
+- **`pantometry-forcefield` puts a complex in motion: a mobile zone around the ligand, a frozen
+  buffer around that, and benzene measured staying bound in T4 lysozyme L99A.** This is step 3b.
+  New module `complex`.
+  - **`Complex::new(binding, mobile_cutoff, solvent)`** frees the ligand and every residue with a
+    heavy atom within the cutoff of a ligand atom at the crystal pose. That is the pocket's own
+    rule, so a 6 Å zone in a 10 Å binding is exactly 2c-1's 6 Å pocket: 18 residues and 322 atoms.
+    The rest of the binding is a frozen buffer that keeps its bits. `Complex::with_mobile` takes
+    any mask.
+  - **A mobile atom bonded across the cut is refused**, as `ComplexError::MobileAtTheCut`: its
+    backbone would end free in vacuum. Whole residues reach far, so this decides the buffer:
+    - the 6 Å zone needs a 10 Å binding for benzene and 12 Å for n-butylbenzene, whose Phe153
+      is cut at 10 Å;
+    - the 8 Å zone needs 14 Å, because Trp126 is cut at 10 and 12.
+
+    `Binding` gained `residue_spans`, `bonded_outside`, `crystal_positions` and `cross_terms_at`
+    to carry this.
+  - **Charges are the binding's**: QEq on the pocket and on the ligand separately, fixed, for
+    mobile and frozen atoms alike. They are the same model as the binding energies.
+  - **The potential** is the complex's force field less the terms among frozen atoms. A test
+    holds its force on every mobile atom to the whole complex's, bit for bit.
+    `Solvent::GeneralizedBorn` adds OBC II over every atom, since the Born radii are many-body.
+  - **`Complex::run`** writes a `Frame` into a `Record` every so many steps, keyed by the
+    dynamics' own step count, so a run cut into calls records the same frames. Each frame holds:
+    - the ligand's RMSD without superposition;
+    - its **site RMSD**, the same blind to which atom sits on which crystal site;
+    - the centroid displacement, and the distance to the cavity centre (the lining atoms where
+      they are now);
+    - the heavy-atom contacts below 4 Å;
+    - the vacuum interaction;
+    - the mobile atoms' temperature after `O`;
+    - the books.
+
+    The `Record` also keeps each atom's mean-square fluctuation. `Estimate::of` gives a mean and
+    its standard error from Sokal's autocorrelation time. `complex::mean_square_displacement` is
+    `3B/(8π²)`.
+
+  **The cost of a step** (release, one core):
+
+  | zone in binding | atoms (mobile) | ms/step | ns/day |
+  | --- | --- | --- | --- |
+  | 6 Å in 10 Å, vacuum | 987 (322) | 1.63 | 26.5 |
+  | 6 Å in 14 Å, vacuum | 1486 (322) | 2.56 | 16.9 |
+  | 8 Å in 14 Å, vacuum | 1486 (719) | 5.00 | 8.6 |
+  | 6 Å in 12 Å, vacuum, n-butylbenzene | 1388 (439) | 3.09 | 14.0 |
+  | 6 Å in 10 Å, OBC II | 987 (322) | 87.2 | 0.50 |
+
+  **Generalized Born is 53 times the vacuum step.** 100 ps of it would take nearly five hours, so
+  it was run for 8 ps, which is one correlation time of the slowest vacuum observable.
+
+  **What the runs measured.** Each run starts from the hydrogen-relaxed binding (A-1) and
+  minimises the mobile zone. It then runs at 300 K, 0.5 fs, in a 1 ps⁻¹ bath, discards 10 ps
+  (2 ps under GB) and takes a frame every 10 fs. Means are given ± the standard error from the
+  autocorrelation time:
+
+  | | 6 in 10 Å, 100 ps | 6 in 14 Å, 50 ps | 8 in 14 Å, 50 ps | OBC II, 8 ps |
+  | --- | --- | --- | --- | --- |
+  | RMSD (Å) | 2.03 ± 0.33 | 2.14 ± 0.32 | 2.065 ± 0.007 | 0.79 ± 0.03 |
+  | site RMSD (Å) | 0.579 ± 0.014 | 0.593 ± 0.015 | 0.656 ± 0.003 | 0.604 ± 0.014 |
+  | centroid displacement (Å) | 0.500 ± 0.016 | 0.528 ± 0.013 | 0.557 ± 0.007 | 0.518 ± 0.026 |
+  | to the cavity centre (Å) | 1.197 ± 0.019 | 1.234 ± 0.024 | 1.200 ± 0.009 | 1.289 ± 0.027 |
+  | contacts < 4 Å | 22.76 ± 0.10 | 22.87 ± 0.11 | 22.22 ± 0.12 | 21.78 ± 0.20 |
+  | interaction (kcal/mol) | −23.42 ± 0.03 | −23.58 ± 0.04 | −24.21 ± 0.05 | −22.85 ± 0.10 |
+  | mobile temperature (K) | 299.96 ± 1.37 | 301.7 ± 1.7 | 300.9 ± 0.9 | 299.6 ± 4.2 |
+
+  - **Benzene never leaves.** Its centroid's largest displacement in any run is 1.16 Å, against
+    a stated threshold of 3 Å.
+  - **The 2 Å RMSD is the ring turning in its plane, and it does not sit where the crystal puts
+    it.** In the 6 Å runs the RMSD swings between 0.14 and 2.91 Å with τ = 8 ps, while the centroid
+    stays near 0.5 Å. Each atom's fluctuation about its mean is 1.94 Å², about `a²` (1.93), the
+    value for a ring that turns all the way round.
+    - **The in-plane turn**, a new observable (`Frame::turn`, `complex::in_plane_turn`), measures
+      it directly. Folded into the 60° sector of the crystal orientation it sits at, the turn
+      spreads with an RMS of 22.6°, 23.1° and 25.4° in the three vacuum runs, against 17.3° for a
+      ring that fills its sectors evenly. **It peaks 20–30° from the crystal orientation**, half a
+      sector away, where the ring's atoms sit between the crystal's sites. Only 13%, 10% and 1.2% of
+      frames are within ±10° of the crystal orientation, against a third if the turn were uniform.
+    - **It turns as well as offsetting.** In the 6 Å zone in 10 Å it turned −300° net over
+      100 ps, five sixths of a revolution, and in 6 in 14 Å −101° net. In the 8 Å zone it turned
+      −30° net, staying in two neighbouring sectors.
+    - 100 ps holds about six of the RMSD's correlation times, so its ±0.33 is itself uncertain by
+      about a factor of two. The other observables decorrelate within a picosecond.
+  - **The zone and the buffer move the means little.** A 14 Å buffer moves every mean by about its
+    error. The 8 Å zone binds 0.8 kcal/mol more strongly.
+  - **Under GB the interaction is 0.6 kcal/mol weaker, and the ring did not turn in its 8 ps.** GB
+    is reported as a check of how far a solvent moves the pose, not as the better answer: with
+    QEq charges OBC II over-solvates small molecules, and A-2 found its polar term does not rank
+    the series.
+  - **The books** moved between −0.85 and +1.06 kcal/mol over the runs: the random walk a bath
+    makes of them (3a).
+  - **n-butylbenzene (186L), 50 ps in vacuum, also stays bound.**
+    - Centroid displacement 0.764 ± 0.007 Å, at most 1.32.
+    - Interaction −40.74 ± 0.06 kcal/mol, of which van der Waals is −38.79.
+    - Minimising moved it 0.99 Å from the crystal, and it stayed there: RMSD 1.190 ± 0.005 Å.
+
+  **Against the B-factors, reported, not asserted.**
+  - **Benzene: the simulated ring disagrees with the crystal's B-factors, and that is a finding
+    about the model.** Its carbons have B = 20.05–26.80 Å² in 181L, a mean `3B/(8π²)` of
+    0.894 Å², an RMS displacement of 0.95 Å. That is a ring held at one orientation with its atoms
+    smeared by about an ångström. The simulation's ring sits half a sector from that orientation
+    and turns, so its per-atom fluctuation is 1.94 Å² in the 6 Å zone in 10 Å, and 1.09 for the same zone in a 14 Å binding.
+    Neither run's ring is the density the crystal measured. Vacuum, the frozen buffer and UFF's
+    cavity are each a candidate cause, and none is separated here.
+    - **No folded fluctuation is reported.** Folding 60° jumps back onto the crystal's sites is
+      only meaningful if the ring jumps between them, and it does not. It sits between them.
+    - **The site RMSD is not a fluctuation to set beside B.** It is a nearest-site distance, and it
+      has a ceiling. A ring of the crystal's radius (1.367 Å) turning uniformly reads
+      `2a²(1 − 3/π)` = 0.168 Å², however freely it turns. An isotropic Gaussian with the crystal's
+      own `⟨|u|²⟩` of 0.894 Å² reads back only 0.828 of itself, by Monte Carlo over the crystal
+      ring. The runs' 0.350, 0.365 and 0.433 Å² are above the free-turning ceiling because the
+      ring is offset: at 30° from its sites each atom is `2a sin 15°` = 0.71 Å from one, which is
+      0.50 Å². **The earlier reading, "0.39–0.48 of the crystal's, so no looser than the crystal",
+      is withdrawn.**
+  - **The mobile protein's heavy atoms fluctuate by a tenth of their B-factors**: 0.08–0.12 Å²
+    against 0.97.
+  - **The correlation with B** (6 Å in 10 Å):
+    - r = +0.67 atom by atom, 95% interval [+0.57, +0.75];
+    - r = +0.79 by residue, [+0.52, +0.92];
+    - led by the surface residues Lys83, Lys85 and Asp89 in both.
+  - **In n-butylbenzene's run** the correlation is weaker: +0.35 by atom, +0.29 by residue. Two of
+    its butyl carbons carry B = 100.00 Å², which looks like a refinement's ceiling.
+  - **What the protein's comparison can mean**: the simulation ranks the same atoms as mobile as
+    the crystal does.
+  - **What it cannot mean**: a B-factor includes static disorder and the lattice's motion. Here
+    the buffer is frozen, there is no lattice and no water, and the run is 100 ps. So a smaller
+    simulated fluctuation is expected for the protein, and its size is not a test of the force
+    field. The ligand is the opposite case: its fluctuation is larger than the crystal allows.
+
+  **Checked as exact facts and closed forms** (`tests/the_complex_in_motion.rs`; thirteen default
+  tests, 2.8 s unoptimised, on a 3 Å complex of benzene and four side chains with every backbone
+  frozen):
+  - **Bits and masses.**
+    - The buffer keeps its bits and has zero velocity.
+    - Each atom has its own element's mass.
+    - The degrees of freedom are `3 N_mobile`, with and without a bath.
+  - **The potential's force** on each mobile atom is the whole complex's, bit for bit, in vacuum
+    and under OBC II.
+  - **The frozen-only terms are gone.** No term of the potential has all its atoms frozen. The
+    whole complex's energy less the potential's is the 528 left-out terms' sum, computed term by
+    term in the test. The allowance is traced: `n ε Σ|t|` for each of the three sums, plus one ε of
+    the subtraction. The measured gap is 6e-34 J against an allowance of 1.5e-28 J.
+  - **Determinism.** A run is the same bits in one call, in four, in 120, and rebuilt from the
+    file, with a frame interval (7) that divides none of the chunks.
+  - **NVE order.** The mobile zone's energy error falls as `h²`, within ±0.15 of 2. That bound
+    is earned over sixteen starts: mean 2.041, sd 0.025, range [2.015, 2.070].
+  - **Every frame is recomputed from its positions**, with the cross terms summed pair by pair in
+    the test.
+  - **Observables on hand-built inputs.**
+    - A translation's RMSD is its length.
+    - A ring turned by θ has RMSD `2a sin(θ/2)`, and site RMSD zero at 60°.
+    - The site RMSD of a uniformly turning ring is `2a²(1 − 3/π)`, by a 6000-point midpoint
+      average whose error is bounded by `h² · 2a²/24`. Two atoms on one site read zero: nearest,
+      not one-to-one.
+    - The in-plane turn of a turned, translated ring is the turn.
+    - Contacts count strictly below the cutoff, and a 2 × 3 grid gives the 28 counted by hand.
+    - At the crystal pose the contacts and the cavity distance are the file's, read with string
+      operations.
+  - **B-factor.** `3B/(8π²)` matches a typed B to 4 ε.
+  - **Autocorrelation.**
+    - On one AR(1) series, τ and the standard error are within four of their own spreads of
+      `(1 + φ)/(2(1 − φ))`.
+    - Over 32 seeds, the mean of `τ̂/τ` is 0.9989 ± 0.0051, within four of its standard errors
+      (2.1%). That is what sees Sokal's window constant: stopping at `3τ` biases τ by −4.6%,
+      which passes one series. The bias at `6τ`, 0.27%, is inside the bound.
+  - **Refusals.** A zone with no buffer, or one across the cut, is refused by name.
+    - `Binding::bonded_outside` is checked atom by atom against the test's own neighbour scan.
+    - Every atom the scan marks, each residue's backbone `N` **and** `C`, is freed alone, and each
+      is refused, naming its residue.
+  - **A cutoff's zone is the pocket's rule, at debug speed** (`Complex::zone`, factored out of
+    `new`).
+    - In the 3 Å binding it is the pocket `Binding::new` cuts at 2.7 Å (Val87 alone) and at 2 Å
+      (none).
+    - The radii are chosen so that each part of the rule matters: a radius half as large again
+      reaches all four residues, and counting the residues' hydrogens would take in Val111.
+  - **In release and ignored:**
+    - a cutoff's zone is the pocket `Binding::new` cuts at that radius (18 residues and 322 atoms
+      at 6 Å, 4 and 82 at 3 Å);
+    - equipartition holds per element over the 82 mobile atoms of the 3 Å zone in an 8 Å binding:
+      H 0.998 ± 0.006, C 1.008 ± 0.006, N 1.003 ± 0.014, O 0.988 ± 0.017, and the total
+      1.001 ± 0.005, each |z| below 1.3 against 4.
+    - **No gate runs this.** The per-mass noise width it would catch is held in the default run by
+      3a's `aspirin_shares_its_kinetic_energy_equally`, not by this test.
+
+  **Found on the way.**
+  - **The first cross-term check verified the code against itself.** It compared each frame's
+    cross terms with `Binding::cross_terms_at`, the function that produced them. Sabotaged to read
+    the binding's stored positions, it passed. The test now sums every pair itself.
+  - **A benzene's RMSD from its crystal pose is the wrong number to compare with a B-factor**, as
+    above. The site RMSD was added for this, and then found unearned for it as well, by review. A
+    nearest-site distance has a ceiling of 0.168 Å² for a ring turning freely, and reads back 0.83
+    of a Gaussian with the crystal's own width. The first version of this entry read "0.39–0.48 of
+    the crystal's" as "no looser than the crystal". That reading is withdrawn. The in-plane turn
+    was added to measure the orientation directly, and what it measured is the finding above: the
+    ring sits half a sector from the crystal orientation.
+  - **Five checks did not notice what they claimed to hold**, found by a review's sabotages:
+    - the estimator test could not see Sokal's window constant;
+    - the cut refusal was checked on a backbone `N` only, so checking only a residue's first atom
+      passed;
+    - the zone's rule was held only by an ignored test, so a radius half as large again, or no
+      heavy-atom filter, passed the defaults;
+    - nothing asserted that the frozen-only terms were dropped, so a potential that kept them
+      passed;
+    - the energy-gap allowance, `1e-12 (|E_all| + |E_zone|)`, was not traced to anything.
+
+    Each now has a check that fails on its sabotage, listed below.
+  - **The NVE test cannot see a wrong potential that conserves energy**: a zone that ignored the
+    buffer's pull would conserve its own energy just as well. The bit-for-bit force test is the
+    check for that.
+
+  **Sabotage.** Twenty sabotages were run first, each restored by copying the original back,
+  `touch` and SHA-256. All twenty are caught:
+  - the dynamics without the frozen mask;
+  - frames keyed by the call's own count;
+  - GB dropped from the potential, and a potential of the ligand's terms only;
+  - the RMSD taken after removing the centroids, and the site RMSD blind to the element;
+  - contacts counted at or below the cutoff;
+  - `B/(8π²)` with the 3 dropped;
+  - the standard error without its factor of 2, and an autocorrelation window of one lag;
+  - the fluctuation's mean squared over `n` instead of `n²`;
+  - the cavity centre taken from the crystal;
+  - the temperature taken at the whole step;
+  - no cut check, and nothing bonded outside;
+  - masses in reverse order;
+  - the cross terms taken at the binding's positions, caught only after the fix above;
+  - the second half kick dropped;
+  - the zone rule from the ligand's heavy atoms only (release);
+  - the noise width from the mean mass (release).
+
+  Then the review's eight, run against the review's snapshot of the tests (before) and against the
+  fixed ones (after), each restored the same way:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | Sokal's window at `3τ` instead of `6τ` | passed | caught by the 32-seed mean |
+  | the cut checked on a residue's first atom only | passed | caught: freeing a `C` is refused |
+  | `bonded_outside` marking only bonds to an earlier atom | passed | caught by the atom-by-atom scan |
+  | the zone's radius half as large again | passed | caught at debug speed (2.7 Å) |
+  | the zone without its heavy-atom filter | passed | caught at debug speed (2 Å and 2.7 Å) |
+  | the potential keeping the frozen-only terms | passed | caught: no all-frozen term, and the gap is their sum |
+  | the turn without the current centroid | (new) | caught by the turned, translated ring |
+  | the turn read from the first atom only | (new) | passed, then caught after a non-rigid closed form was added |
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **265 tests, nineteen of them
+  ignored**: 246 run by default. The 20 new ones are all in `the_complex_in_motion.rs`: thirteen
+  run by default, in 2.8 s unoptimised, and seven are ignored. Of those seven, two assert
+  (equipartition and the zone rule), and five are measurements: four trajectories, which assert
+  the buffer's bits, and the NVE spread, which asserts nothing.
+  245 + 20 is the 265, and 233 + 13 the 246.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

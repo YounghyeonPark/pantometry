@@ -64,6 +64,21 @@
 //!   other substeps, and is another run — and the
 //!   bath's work booked so kinetic + potential − work is conserved to the integrator's error. See
 //!   [`dynamics`].
+//! - [`Complex`] puts a [`Binding`] in motion: a **mobile zone** of whole residues within a cutoff
+//!   of the ligand, every atom of them free, and the rest of the binding's pocket a **frozen
+//!   buffer** held to the bit, in vacuum or OBC II over every atom. A mobile residue bonded across
+//!   the binding's cut is refused by name, because its backbone end would be free in vacuum.
+//!   [`Complex::run`] takes a [`Frame`] of observables every so many steps — the ligand's RMSD from
+//!   its crystal pose without superposition, the same blind to which atom is on which site, its
+//!   turn about its crystal plane's normal, its centroid's displacement, its distance to the cavity centre, its heavy-atom contacts, the
+//!   interaction energy, the mobile atoms' temperature and the books — into a [`Record`] that also
+//!   keeps every atom's mean-square fluctuation. [`Estimate::of`] gives a mean and its standard
+//!   error from the autocorrelation time, and [`complex::mean_square_displacement`] turns a
+//!   B-factor into `3B/(8π²)`. **Benzene stays bound in T4 lysozyme L99A**, its centroid within
+//!   1.16 Å of the crystal's in every run. **Its ring does not sit where the crystal puts it**: in
+//!   vacuum it sits 20–30° turned from the crystal orientation, between the crystal's sites, and
+//!   turns, which the crystal's B-factors exclude. That is a finding about the model. See
+//!   [`complex`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -143,6 +158,21 @@
 //! every atomic weight is CIAAW's, and the masses sum to every dictionary entry's formula weight
 //! within CIAAW's stated uncertainties; at a fixed step a run is the same bits however it is chunked; frozen atoms
 //! do not move; and a moved start gives the moved trajectory to 8e-15 Å.
+//!
+//! The complex in motion against what must hold (`tests/the_complex_in_motion.rs`): the buffer
+//! keeps its bits and each atom its element's mass; the degrees of freedom are `3 N_mobile`; the
+//! potential's force on every mobile atom is the whole complex's bit for bit, in vacuum and in
+//! OBC II; a run is its seed however it is cut into calls, and rebuilt from the file; the NVE energy
+//! error of the mobile zone falls as `h²`, within a bound earned over sixteen starts; every frame is
+//! recomputed from its positions, and every observable checked on a hand-built input — a translation's
+//! RMSD is its length, a ring turned by `θ` has RMSD `2a sin(θ/2)`, site RMSD zero at 60° and an
+//! in-plane turn of `θ`, a uniformly turning ring has site RMSD² `2a²(1 − 3/π)`, contacts count
+//! strictly below the cutoff, `3B/(8π²)` on a typed B, and the autocorrelation time of an AR(1)
+//! series is `(1 + φ)/(2(1 − φ))`, on one series and as a mean over 32; the frozen-only terms are
+//! gone from the potential, to a traced allowance; every atom bonded across the cut is refused; a
+//! cutoff's zone is exactly the pocket `Binding::new` cuts at the same radius, at debug speed on the
+//! 3 Å binding and in release on 10 Å; and, in release, equipartition holds per element over the
+//! mobile atoms.
 //!
 //! # Determinism, and where it stops
 //!
@@ -229,6 +259,7 @@
 pub mod angular;
 pub mod binding;
 pub mod ccd;
+pub mod complex;
 pub mod dynamics;
 pub mod energy;
 pub mod minimise;
@@ -242,6 +273,7 @@ pub use binding::{
     ApoCavity, Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
 };
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
+pub use complex::{Complex, ComplexError, Estimate, Frame, Record, Solvent};
 pub use dynamics::{Bath, MolecularDynamics, Potential};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
