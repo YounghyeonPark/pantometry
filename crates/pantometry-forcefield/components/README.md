@@ -104,6 +104,7 @@ flagged aromatic in the dictionary; furan's O and pyrrole's NH are.
 | `187L.pdb` | the same, with p-xylene (`PXY` 400) | `https://files.rcsb.org/download/187L.pdb` | REVDAT 5, 07-FEB-24 | 2026-10-05 | `10fb00afc613cb46f5d662aa7acb0c0ad2ef9af1ff4a25f4a08c1dff6bd2f923` |
 | `188L.pdb` | the same, with o-xylene (`OXE` 400) | `https://files.rcsb.org/download/188L.pdb` | REVDAT 4, 07-FEB-24 | 2026-10-05 | `2fe9999ebd54f047f5f0528e689780af336d5d5e22224eba482e4c4acce76d4e` |
 | `1NHB.pdb` | the same, with ethylbenzene (`PYJ` 401) | `https://files.rcsb.org/download/1NHB.pdb` | REVDAT 5, 14-FEB-24 | 2026-10-05 | `e7a5041a5a607e0ed4e7146ecfff5ea7b6f8886c9fd9863a5e9550c0efa902aa` |
+| `1L90.pdb` | T4 lysozyme L99A (the same pseudo-wild type), **apo**, X-ray 1.75 Å | `https://files.rcsb.org/download/1L90.pdb` | REVDAT 4, 14-FEB-24 | 2026-10-05 | `8536c5f93b2044708ad5b2bd73edf3482f2a076506ab041ee4631f12ebdcdf64` |
 
 **PDB format rather than mmCIF**: fixed columns are the simpler of the two to read strictly. Fetched
 twice and identical both times. Its primary citation is A. Morton and B. W. Matthews,
@@ -146,3 +147,13 @@ has a missing atom, and none has an unmodelled residue but 163–164. By Cα pos
 without superposition (the crystals are isomorphous), helix F (residues 108–113) moves 2.27, 2.62 and
 2.29 Å at Ala112 for indene, isobutylbenzene and o-xylene. In the other six entries no Cα moves more
 than 0.72 Å.
+
+**The apo cavity, fetched for step A-2.** 1L90 is L99A with no ligand: primary citation A. E.
+Eriksson, W. A. Baase and B. W. Matthews, *J. Mol. Biol.* **229**, 747 (1993), doi:10.1006/jmbi.1993.1077;
+its `REMARK 1` cites the cavity's first report, Eriksson et al., *Science* **255**, 178 (1992).
+Fetched twice on 2026-10-05, identical. The same three `SEQADV` conflicts as 181L, Asn163 and
+Leu164 not located, no alternate location, and `HETATM` residues 146 waters, `CL` 173 and 178 and
+two β-mercaptoethanols (`BME` 901, 902) — no `HED`. Its cell is 181L's but for c, 96.8 Å against
+97.0, and its Cα are 0.27 Å RMS from 181L's without superposition. Nothing builds it: it is read by
+string operations in `benzene_in_its_pocket.rs`, to hold that no water is modelled where 181L's
+benzene sits (the nearest is 7.79 Å from a benzene atom) — the fact `ApoCavity::Empty` rests on.

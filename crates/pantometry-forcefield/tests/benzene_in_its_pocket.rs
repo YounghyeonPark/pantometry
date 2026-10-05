@@ -508,6 +508,19 @@ fn far_field_holds(moved: &Binding, far: f64, label: &str) {
         "{far} Å: polar desolvation {:e} past {polar_bound:e}",
         d.polar
     );
+    // The empty cavity's polar term is the same cross terms and ligand's part with the pocket's
+    // part removed — every one of them inside the same bound, whose terms are all non-negative.
+    let empty =
+        moved.desolvation_with_cavity(moved.charges(), 1, pantometry_forcefield::ApoCavity::Empty);
+    assert!(
+        empty.polar.abs() <= polar_bound,
+        "{far} Å: empty-cavity polar desolvation {:e} past {polar_bound:e}",
+        empty.polar
+    );
+    eprintln!(
+        "{far} Å away, {label}: empty-cavity polar desolvation {:.3e} kcal/mol",
+        kcal(empty.polar)
+    );
     eprintln!(
         "{far} Å away, {label}: polar desolvation {:.3e} kcal/mol (bound {:.3e})",
         kcal(d.polar),
@@ -796,6 +809,273 @@ fn the_desolvation_is_rebuilt_from_its_parts() {
             d.buried_area / (ANGSTROM * ANGSTROM)
         );
     }
+}
+
+/// `charges` with the atoms in `range` set to zero.
+fn zeroed(charges: &[f64], range: std::ops::Range<usize>) -> Vec<f64> {
+    let mut q = charges.to_vec();
+    q[range].fill(0.0);
+    q
+}
+
+/// The screened cross terms of eq 2 between the pocket's charges and the ligand's in the complex,
+/// summed directly here — `−k (1 − 1/80) Σ q_i q_l / f_il` over every pocket atom `i` and ligand
+/// atom `l`, both orderings, with the complex's Born radii — and `(sum, Σ|t|, terms)`, joules.
+fn gb_cross(b: &Binding) -> (f64, f64, usize) {
+    let (n0, at, q) = (b.pocket_len(), b.positions(), b.charges());
+    let r = GeneralizedBorn::new(b.elements()).born_radii(at);
+    let k = coulomb(1.0, 1.0, 1.0) * (1.0 - 1.0 / 80.0);
+    let (mut e, mut s, mut n) = (0.0, 0.0, 0usize);
+    for i in 0..n0 {
+        for l in b.ligand_range() {
+            let d = distance(at[i], at[l]);
+            let rr = r[i] * r[l];
+            let t = -k * q[i] * q[l] / (d * d + rr * (-d * d / (4.0 * rr)).exp()).sqrt();
+            e += t;
+            s += t.abs();
+            n += 1;
+        }
+    }
+    (e, s, n)
+}
+
+/// **An empty apo cavity is the ligand's atoms present and uncharged**, against
+/// [`gb_rebuilt`] and exact identities, at the crystal pose (three systems at one geometry) and
+/// relaxed (each at its own):
+///
+/// - for both references and both the binding's charges and the ligand's set to zero, the complex's
+///   and the ligand's ΔG_GB and every area are the default's bit for bit, the default is
+///   [`ApoCavity::Solvent`], and the empty-cavity pocket term is ΔG_GB of the pocket's atoms at the
+///   pocket alone's positions plus the ligand's at the complex's, ligand uncharged, rebuilt in the
+///   test to `2 (n + 10) ε Σ|t|`;
+/// - **with the ligand's charges zero**, the solvent reference's polar term less the empty one's
+///   is the ghost pocket term less the ghost-free one, to four ε of the operands — bit for bit at
+///   the crystal pose, where the empty-cavity polar term is exactly zero and its pocket term is the
+///   complex's bits: the ghost is the complex with the ligand uncharged, so the pocket's
+///   desolvation by the ligand's volume is gone and nothing else is;
+/// - **the decomposition sums**: GB is a quadratic form in the charges at fixed radii, and a zero
+///   charge changes no radius, so `polar = (ligand uncharged) + (pocket uncharged) + cross` holds
+///   exactly for each reference, with the cross terms summed directly in [`gb_cross`] — and the
+///   empty reference's first part is zero at the crystal pose. The allowance is every evaluation's
+///   `2 (n + 10) ε Σ|t|` and the cross sum's `n ε Σ|t|`.
+///
+/// [`ApoCavity::Solvent`]: pantometry_forcefield::ApoCavity::Solvent
+#[test]
+fn an_empty_cavity_is_the_ligand_present_and_uncharged() {
+    use pantometry_forcefield::ApoCavity::{Empty, Solvent};
+    // What `desolvation` and `desolvation_with` mean by the default, pinned.
+    assert_eq!(pantometry_forcefield::ApoCavity::default(), Solvent);
+    for (name, b) in [("crystal", crystal()), ("relaxed", relaxed())] {
+        let shared = b.hydrogen_relaxation().is_none();
+        // The bit-exact checks below are made only where the three systems share positions, so
+        // that must be the crystal binding and only it, or they could be skipped everywhere.
+        assert_eq!(
+            shared,
+            name == "crystal",
+            "{name}: which binding is relaxed"
+        );
+        let (n0, n) = (b.pocket_len(), b.positions().len());
+        let el = b.elements();
+        let q = b.charges();
+        let ligand_uncharged = zeroed(q, n0..n);
+        let pocket_uncharged = zeroed(q, 0..n0);
+        let mut ghost_at = b.pocket_alone_positions().to_vec();
+        ghost_at.extend_from_slice(&b.positions()[n0..]);
+        // Every evaluation's allowance, from the binding's own charges, which bound each part's.
+        let allowance = |el: &[Element], q: &[f64], at: &[[f64; 3]]| {
+            let (_, sum_abs, terms) = gb_rebuilt(el, q, at);
+            2.0 * (terms as f64 + 10.0) * EPS * sum_abs
+        };
+        let a_complex = allowance(el, q, b.positions());
+        let a_pocket = allowance(&el[..n0], &q[..n0], b.pocket_alone_positions());
+        let a_ghost = allowance(el, &ligand_uncharged, &ghost_at);
+        let a_ligand = allowance(&el[n0..], &q[n0..], b.ligand_alone_positions());
+        let mut split = [[0.0; 3]; 2];
+        for (c, charges) in [q, &ligand_uncharged[..], &pocket_uncharged[..]]
+            .into_iter()
+            .enumerate()
+        {
+            let s = b.desolvation_with_cavity(charges, 1, Solvent);
+            let e = b.desolvation_with_cavity(charges, 1, Empty);
+            assert_eq!(s, b.desolvation_with(charges, 1), "{name}: the default");
+            assert_eq!((s.cavity, e.cavity), (Solvent, Empty));
+            assert_eq!(s.complex.to_bits(), e.complex.to_bits(), "{name}");
+            assert_eq!(s.ligand.to_bits(), e.ligand.to_bits(), "{name}");
+            assert_eq!(
+                (&s.areas_bound, &s.areas_apart, s.buried_area),
+                (&e.areas_bound, &e.areas_apart, e.buried_area),
+                "{name}"
+            );
+            let (want, _, _) = gb_rebuilt(el, &zeroed(charges, n0..n), &ghost_at);
+            assert!(
+                (e.pocket - want).abs() <= a_ghost,
+                "{name} charges {c}: ghost pocket {:e} against {want:e}",
+                e.pocket
+            );
+            split[0][c] = s.polar;
+            split[1][c] = e.polar;
+            if c == 1 {
+                // The ligand uncharged.
+                let lhs = s.polar - e.polar;
+                let rhs = e.pocket - s.pocket;
+                let ops = s.complex.abs() + s.pocket.abs() + e.pocket.abs();
+                assert!(
+                    (lhs - rhs).abs() <= 4.0 * EPS * ops,
+                    "{name}: {lhs:e} against {rhs:e}"
+                );
+                if shared {
+                    assert_eq!(e.polar, 0.0, "{name}");
+                    assert_eq!(e.pocket.to_bits(), s.complex.to_bits(), "{name}");
+                    assert_eq!(lhs.to_bits(), rhs.to_bits(), "{name}");
+                }
+                eprintln!(
+                    "{name}: the pocket desolvated by benzene's volume {:+.4} kcal/mol with the \
+                     cavity solvent, {:+.3e} empty",
+                    kcal(s.polar),
+                    kcal(e.polar)
+                );
+            }
+        }
+        let (cross, cross_abs, cross_terms) = gb_cross(b);
+        let a_cross = cross_terms as f64 * EPS * cross_abs;
+        let a_parts = 3.0 * a_complex + 2.0 * a_pocket.max(a_ghost) + 2.0 * a_ligand + a_cross;
+        for (k, label) in [(0, "solvent"), (1, "empty")] {
+            let [whole, pocket_part, ligand_part] = split[k];
+            let sum = pocket_part + ligand_part + cross;
+            let ops = 8.0 * EPS * (whole.abs() + pocket_part.abs() + ligand_part.abs());
+            assert!(
+                (whole - sum).abs() <= a_parts + ops,
+                "{name} {label}: polar {whole:e} against the parts' {sum:e}"
+            );
+            eprintln!(
+                "{name}, cavity {label}: polar {:+.3} = pocket by volume {:+.3} + benzene's own \
+                 {:+.3} + cross {:+.3} kcal/mol, the parts summed to {:.1e} ({:.1e} of the \
+                 allowance)",
+                kcal(whole),
+                kcal(pocket_part),
+                kcal(ligand_part),
+                kcal(cross),
+                kcal((whole - sum).abs()),
+                (whole - sum).abs() / (a_parts + ops)
+            );
+        }
+        if shared {
+            assert_eq!(split[1][1], 0.0, "{name}");
+        }
+    }
+}
+
+/// PDB 1L90, apo T4 lysozyme L99A, byte for byte as RCSB serves it.
+const PDB_1L90: &str = include_str!("../components/1L90.pdb");
+
+/// `(residue name, residue number, atom name, position Å)` of every `ATOM` and `HETATM` line.
+fn coordinates(text: &str) -> Vec<(String, i32, String, [f64; 3])> {
+    atom_lines(text)
+        .map(|l| {
+            let f = |a, b| {
+                columns(l, a, b)
+                    .trim()
+                    .parse::<f64>()
+                    .expect("a coordinate")
+            };
+            (
+                columns(l, 18, 20).trim().to_string(),
+                columns(l, 23, 26).trim().parse().expect("a residue number"),
+                columns(l, 13, 16).trim().to_string(),
+                [f(31, 38), f(39, 46), f(47, 54)],
+            )
+        })
+        .collect()
+}
+
+/// **The apo cavity holds no water: the fact [`ApoCavity::Empty`] rests on**, read from PDB 1L90 by
+/// string operations. 1L90 is the same L99A protein — its three `SEQADV` conflicts are 181L's — in
+/// an isomorphous crystal: the same space group and cell (c 96.8 Å against 97.0, the rest equal), and Cα 0.27 Å RMS from 181L's
+/// without superposition, so 181L's benzene positions are the cavity's in 1L90's frame. Asserted:
+/// the Cα RMS under 0.5 Å, so the frames agree; **no water oxygen within 5 Å of any of benzene's
+/// six carbons** — a water in the cavity would be within about 2 Å of one — and no protein atom
+/// within 3 Å of their centroid, so the site is a cavity and not filled. Measured: the nearest
+/// water is 7.79 Å from a benzene carbon, and the nearest protein atom 3.26 Å from the centroid
+/// (Ala99 CB). Collins et al., *PNAS* **102**, 16668 (2005), say the same of the cavity at ambient
+/// pressure, and that water enters it only at 100–200 MPa.
+///
+/// [`ApoCavity::Empty`]: pantometry_forcefield::ApoCavity::Empty
+#[test]
+fn the_apo_cavity_holds_no_water() {
+    let header = PDB_1L90.lines().next().expect("a first line");
+    assert_eq!(columns(header, 63, 66), "1L90");
+    assert_eq!(seqres(PDB_1L90, 'A'), seqres(PDB_181L, 'A'));
+    let seqadv = |t: &str| -> Vec<String> {
+        t.lines()
+            .filter(|l| l.starts_with("SEQADV"))
+            .map(|l| format!("{}{}", columns(l, 13, 22), columns(l, 40, 70)))
+            .collect()
+    };
+    assert_eq!(seqadv(PDB_1L90), seqadv(PDB_181L));
+    assert_eq!(seqadv(PDB_1L90).len(), 3);
+    let cell = |t: &str| -> Vec<f64> {
+        let l = t.lines().find(|l| l.starts_with("CRYST1")).expect("CRYST1");
+        assert_eq!(columns(l, 56, 66).trim(), "P 32 2 1");
+        [(7, 15), (16, 24), (25, 33), (34, 40), (41, 47), (48, 54)]
+            .iter()
+            .map(|&(a, b)| columns(l, a, b).trim().parse().expect("a cell"))
+            .collect()
+    };
+    for (a, b) in cell(PDB_1L90).iter().zip(cell(PDB_181L)) {
+        // c is 96.8 Å against 97.0, which in floating point is 0.2 and a few ulps.
+        assert!((a - b).abs() <= 0.25, "cell {a} against {b}");
+    }
+    let apo = coordinates(PDB_1L90);
+    let holo = coordinates(PDB_181L);
+    let ca = |c: &[(String, i32, String, [f64; 3])]| -> std::collections::BTreeMap<i32, [f64; 3]> {
+        c.iter()
+            .filter(|a| a.2 == "CA" && a.0 != "HOH")
+            .map(|a| (a.1, a.3))
+            .collect()
+    };
+    let (ca_apo, ca_holo) = (ca(&apo), ca(&holo));
+    assert_eq!(ca_apo.len(), 162);
+    let rms = (ca_apo
+        .iter()
+        .map(|(k, p)| len(sub(*p, ca_holo[k])).powi(2))
+        .sum::<f64>()
+        / ca_apo.len() as f64)
+        .sqrt();
+    assert!(rms < 0.5, "Cα RMS {rms} Å");
+    let benzene: Vec<[f64; 3]> = holo.iter().filter(|a| a.0 == "BNZ").map(|a| a.3).collect();
+    assert_eq!(benzene.len(), 6);
+    let centroid = benzene.iter().fold([0.0; 3], |c, p| {
+        [c[0] + p[0] / 6.0, c[1] + p[1] / 6.0, c[2] + p[2] / 6.0]
+    });
+    let waters: Vec<[f64; 3]> = apo.iter().filter(|a| a.0 == "HOH").map(|a| a.3).collect();
+    assert_eq!(waters.len(), 146);
+    let nearest_water = waters
+        .iter()
+        .flat_map(|w| benzene.iter().map(move |b| len(sub(*w, *b))))
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        nearest_water > 5.0,
+        "a water {nearest_water} Å from a benzene carbon"
+    );
+    let (nearest_protein, name) = apo
+        .iter()
+        .filter(|a| !["HOH", "CL", "BME"].contains(&a.0.as_str()))
+        .map(|a| (len(sub(a.3, centroid)), format!("{}{} {}", a.0, a.1, a.2)))
+        .fold((f64::INFINITY, String::new()), |b, x| {
+            if x.0 < b.0 {
+                x
+            } else {
+                b
+            }
+        });
+    assert!(
+        nearest_protein > 3.0,
+        "{name} {nearest_protein} Å from the site"
+    );
+    eprintln!(
+        "1L90: Cα {rms:.3} Å RMS from 181L's; nearest water {nearest_water:.2} Å from a benzene \
+         carbon; nearest protein atom {nearest_protein:.2} Å from the site ({name})"
+    );
 }
 
 /// **A frozen atom does not move, to the bit**: after benzene is minimised in the pocket, every

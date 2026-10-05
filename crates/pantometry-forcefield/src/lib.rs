@@ -174,8 +174,10 @@
 //! - **A binding energy at fixed geometry, not a binding free energy** ([`binding`]): no entropy,
 //!   no protein flexibility (the pocket is rigid at the crystal's coordinates), no polarisation or
 //!   charge transfer between the partners (QEq on each separately), and a solvated estimate whose
-//!   polar part has not converged with the pocket's size — +7.3 kcal/mol at 6 Å, +15.0 for the
-//!   whole protein, for benzene in T4 lysozyme L99A. No comparison with an experimental affinity
+//!   polar part converges with the pocket's size only slowly, because a cut pocket solvates its
+//!   own cut surface — +7.3 kcal/mol at 6 Å, +14.9 at 20 Å and +15.0 for the whole protein, for
+//!   benzene in T4 lysozyme L99A. GB solvates the apo cavity as water; [`ApoCavity::Empty`] is the
+//!   reference for a cavity that is empty, as L99A's is. No comparison with an experimental affinity
 //!   is asserted. **On the congener series it does not rank the ligands.** Across nine ligands
 //!   whose measured ΔG° spans 2.1 kcal/mol, the minimised vacuum ΔE correlates with experiment at
 //!   r = +0.46 at 6 Å, whose 95% interval is [−0.29, +0.86]. The solvated total correlates at
@@ -187,6 +189,10 @@
 //!   fix: relaxed, no ligand hydrogen is within 1.94 Å of a protein hydrogen in any of the nine.
 //!   It does not make the series rank: relaxed and minimised, the vacuum ΔE correlates at
 //!   r = +0.48 at 6 Å, interval [−0.27, +0.87], and the solvated total at r = −0.81.
+//!   **Neither does converging the polar term or emptying the cavity**: at 20 Å, where the
+//!   polar term has converged, the solvated total correlates at r = −0.93, and at −0.87 with the
+//!   cavity empty. The polar term is largest for the ligands that bind best, and its largest part
+//!   for the two largest is the screened cross terms, which the empty cavity leaves in.
 //!
 //! Nothing here opens a file: every crate in this workspace compiles to `wasm32`, so a caller
 //! reads the text and passes it in.
@@ -205,7 +211,7 @@ pub mod uff;
 
 pub use angular::{Bend, Inversion, Torsion};
 pub use binding::{
-    Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
+    ApoCavity, Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
 };
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};

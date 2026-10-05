@@ -809,6 +809,186 @@ protects nothing.
   comparison and the ligand's share of the reorganisation as columns. It takes 112 s with
   `--release -- --ignored`. The benzene file's default tests take 13.4–13.8 s unoptimised, against
   13 s before. 208 tests in the crate, and six ignored.
+- **`pantometry-forcefield`: why the polar desolvation does not converge with the pocket, an
+  empty-cavity reference for it, and what is left — step A-2.** **What was not known**: 2c-2
+  measured OBC II's polar desolvation of benzene in T4 lysozyme L99A growing from +7.32 kcal/mol at
+  6 Å to +14.96 for the whole protein, and 2c-3a found it largest for the largest ligands, which
+  turned the solvated total against experiment (r ≈ −0.8). 2c-2 split benzene's +7.32 exactly into
+  the pocket desolvated by benzene's volume (+2.27), benzene's own (+1.94) and the screened cross
+  terms (+3.11), and said GB solvates the empty apo cavity as water. **That is true, and it is not
+  what grows most.** Split the same way at the crystal pose, kcal/mol:
+
+  | | 6 Å | 8 Å | 10 Å | 15 Å | 20 Å | whole |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | benzene: polar | +7.32 | +10.61 | +12.21 | +14.17 | +14.86 | +14.96 |
+  | the pocket by benzene's volume | +2.27 | +3.62 | +4.31 | +5.43 | +5.89 | +5.93 |
+  | benzene's own | +1.94 | +2.23 | +2.30 | +2.35 | +2.36 | +2.37 |
+  | cross | +3.11 | +4.77 | +5.61 | +6.39 | +6.61 | +6.66 |
+  | n-butylbenzene: polar | +16.22 | +22.27 | +25.09 | | | +31.01 |
+  | the pocket by its volume | +5.11 | +7.23 | +8.30 | | | +11.17 |
+  | its own | +3.66 | +4.02 | +4.10 | | | +4.20 |
+  | cross | +7.44 | +11.02 | +12.69 | | | +15.65 |
+
+  All three parts grow, the cross terms most, and **the term does converge, slowly: within 0.10
+  kcal/mol of the whole protein at 20 Å (1979 atoms), 0.80 at 15 Å.** The diagnosis is a new
+  ignored file, `the_polar_term_diagnosed.rs` (751 s with `--release`). It attributes each part to the protein's atoms (an
+  atom's Born term and half of each pair term it is in), bins them by distance from the ligand,
+  and asserts only that the attribution sums to the part within its computed rounding (an
+  a-priori bound, 3.2e-5 kcal/mol at 6 Å against 4.4e-13 measured):
+  - **Nothing in the descreening is wrong.** Past 10 Å from the ligand its descreening of each
+    protein atom is within 1.2% of the sphere's asymptote `Σ s³/3r⁴` (1.1% for n-butylbenzene).
+  - **The far tail is small and falls as it should.** In the whole protein, the atoms more than
+    15 Å from benzene carry +0.18 of the pocket part and cross terms' +12.59 (+0.29 of 26.82 for
+    n-butylbenzene), and the 789 atoms past 20 Å carry +0.017: a protein atom 20 Å away is not
+    desolvated by the ligand. Per atom the net falls 7 and 9.5 times from the 10–15 Å shell to the
+    15–20 Å one, about as `r⁻⁶`, a dipole's field squared, because GB's pair terms cancel most of
+    the incoherent `Σ q_i² ΔI_i`: Born terms +42.78 against pairs −36.85 for benzene.
+  - **OBC II amplifies a buried atom's response**: `d(1/R)/dI` is 1.06–1.88 times HCT's, median
+    1.78, and that linearisation gives the actual `Σ q² Δ(1/R)` past 10 Å to 5e-5 of itself
+    (−2.142e-2 e² Å⁻¹, against HCT's −1.261e-2). That is OBC II's fit, not an error.
+  - **The growth is the cut.** A cut pocket solvates its own cut surface: benzene's 6 Å pocket's
+    charges inside the whole protein's dielectric (every other atom present, uncharged) give +9.47
+    against +7.32 in the fragment, and the remaining +5.49 is the charges the cut leaves out, nearly
+    all within 15 Å (a 15 Å pocket's charges in the whole dielectric give +14.79). QEq's charges
+    moving with the cutoff matter little: the whole protein's on the 6 Å pocket give +7.80
+    (n-butylbenzene +16.08 against +16.22).
+
+  No defect was found, so nothing was fixed and there is no test that fails on an old behaviour.
+
+  **Is the cavity empty? Read, not assumed.** **PDB 1L90**, apo L99A (Eriksson, Baase and Matthews,
+  *J. Mol. Biol.* 229, 747 (1993), whose `REMARK 1` cites the cavity's report, *Science* 255, 178
+  (1992)), was fetched twice, identical, and is committed with its SHA-256. A new default test
+  reads it by string operations: the same `SEQRES` and three `SEQADV` conflicts as 181L, an
+  isomorphous cell (c 96.8 Å against 97.0), Cα 0.27 Å RMS from 181L's without superposition, **no
+  water within 5 Å of any of 181L's benzene carbons** (the nearest is 7.79 Å), and no protein atom
+  within 3 Å of their centroid (Ala99 CB at 3.26). **Collins, Hummer, Quillin, Matthews and
+  Gruner, *PNAS* 102, 16668 (2005)**, read at PMC1283839: the L99A cavity "is believed to be
+  entirely empty under ambient conditions"; by high-pressure crystallography about 0.5 waters
+  enter it at 100 MPa and two to four at 200 MPa, and their simulation finds it predominantly
+  empty below about 100 MPa. The 1992 and 1993 papers themselves were not read.
+
+  **New: `ApoCavity` and `Binding::desolvation_with_cavity(charges, points, cavity)`.**
+  `ApoCavity::Solvent` is GB's own reference and the default: `desolvation` and `desolvation_with`
+  are unchanged to the bit, and the series still asserts 181L's committed numbers. `ApoCavity::Empty`
+  solvates the pocket alone with the ligand's atoms present at the complex's ligand positions and
+  uncharged, so the ligand's volume descreens the apo pocket as it does the complex; the polar term
+  is then the ligand's own desolvation plus the cross terms. **An option, not the default**:
+  whether a cavity is wet is a fact about the pocket that the force field cannot know. The areas
+  and the nonpolar term are the same under both (the cavity's walls still count as
+  solvent-accessible, a choice). `Desolvation` gains a `cavity` field saying which reference it
+  holds. **Checked by identities**, in `benzene_in_its_pocket.rs`:
+  - under both references, with the binding's charges and with either partner's set to zero, the
+    complex's and the ligand's ΔG_GB and every area are the default's bit for bit, and the ghost
+    pocket term is rebuilt in the test from `born_radii` and eq 2–3 to `2 (n + 10) ε Σ|t|`, at the
+    crystal pose and relaxed (where the pocket alone's hydrogens are its own);
+  - **with the ligand's charges zero**, the solvent reference's polar term less the empty one's is
+    the ghost pocket term less the ghost-free one — bit for bit at the crystal pose, where the
+    empty-cavity polar term is exactly 0.0 and its pocket term is the complex's bits;
+  - **the decomposition sums**: `polar = pocket part + ligand's part + cross` under each
+    reference, the cross terms summed directly in the test, to 1.6e-13 kcal/mol (5.8e-9 of the
+    allowance);
+  - far away (10³ and 10⁴ Å; relaxed, 10⁴ and 10⁵) the empty-cavity polar term lies inside 2c-2's
+    tail bound: −4.4e-7 kcal/mol at 10³ Å.
+
+  Seven sabotages, each restored by copying the original back, touching it and checking its
+  SHA-256, and each caught: the ghost at the ligand alone's positions (by the rebuilt ghost term,
+  relaxed); the ghost keeping the ligand's charges (also by both far-field tests); no ghost at all;
+  the ghost at the crystal pose (both far-field tests and the rebuild); the default switched to
+  `Empty` (three tests, the default's own check among them); an uncharged atom descreening nothing
+  in `GeneralizedBorn`, which the rebuilt-desolvation tests cannot see because QEq's charges are
+  never exactly zero (caught by the new test and by
+  `burying_benzene_buries_area_and_costs_polar_solvation`, whose split zeroes them); and a water moved into 1L90's cavity (by the 1L90 test). An eighth,
+  the test's own direct cross sum with `R_i R_j` 1% large, confirms that the decomposition
+  assertion can fail.
+
+  **Added after review** (`unearned-pass-hunter`; each sabotage was run before the fix and passed,
+  and is caught after it, restored by copy, touch and SHA-256):
+  - **nothing pinned `#[default]` on `ApoCavity`**, because `desolvation_with` names `Solvent`
+    explicitly. Moving `#[default]` to `Empty` passed every test; now
+    `ApoCavity::default() == Solvent` is asserted;
+  - **the bit-exact checks were conditional on a flag nothing asserted.** They run only where
+    the three systems share positions, so a "relaxed" binding that was not relaxed passed them
+    vacuously: `relaxed()` returning the crystal binding passed. Now the flag is asserted true
+    for the crystal binding and false for the relaxed one;
+  - **the 20 Å test passed with every entry skipped**, printing NaN statistics on n = 0, because
+    it skipped any error from `Binding::new`; a cutoff of zero passed. Now only a QEq failure is
+    a skip and anything else panics (the cutoff sabotage is caught there). The skipped codes
+    must equal the expected set, empty today, and at least three entries must be measured. QEq
+    capped at one solve, so that every entry fails as a QEq failure, is caught by the
+    skipped-set assertion. That sabotage was run only after the fix; by construction the old
+    test skipped it;
+  - the whole-protein numbers once given here for 182L and 183L came from no committed code and
+    are removed; 181L's and 186L's are regenerated by `the_polar_term_diagnosed.rs`;
+  - the `binding` documentation said the 1L90 test asserts no water within 7.79 Å; it asserts
+    none within 5 Å, and 7.79 is the measured nearest.
+
+  **The series, relaxed and minimised, kcal/mol** (the series test also prints the crystal pose's
+  split; nothing is asserted):
+
+  | entry | ΔG°exp | 6 Å: polar | pocket by volume | ligand's own | cross | empty cavity | total | total, empty | 8 Å: polar | empty cavity | total | total, empty |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 181L benzene | −5.19 | +8.17 | +2.77 | +1.96 | +3.45 | +5.41 | −15.86 | −18.62 | +12.04 | +7.52 | −13.59 | −18.11 |
+  | 182L 2,3-benzofuran | −5.46 | +12.64 | +4.58 | +4.15 | +3.91 | +8.10 | −18.53 | −23.07 | +15.39 | +8.81 | −17.03 | −23.61 |
+  | 183L indene | −5.13 | +12.01 | +5.04 | +2.35 | +4.62 | +6.99 | −14.11 | −19.13 | +16.02 | +8.87 | −11.91 | −19.05 |
+  | 184L isobutylbenzene | −6.51 | +21.20 | +6.45 | +5.47 | +9.29 | +14.77 | −13.05 | −19.49 | +29.71 | +20.55 | −6.86 | −16.01 |
+  | 185L indole | −4.89 | +12.14 | +4.60 | +3.25 | +4.28 | +7.56 | −15.30 | −19.87 | +16.37 | +9.54 | −12.81 | −19.64 |
+  | 186L n-butylbenzene | −6.70 | +21.11 | +6.52 | +4.68 | +9.91 | +14.88 | −10.23 | −16.46 | +28.62 | +19.66 | −4.59 | −13.55 |
+  | 187L p-xylene | −4.67 | +11.66 | +4.96 | +2.45 | +4.25 | +6.72 | −18.56 | −23.50 | +16.59 | +9.21 | −15.41 | −22.78 |
+  | 188L o-xylene | −4.60 | +11.26 | +5.04 | +2.22 | +4.00 | +6.18 | −19.28 | −24.36 | +15.41 | +8.30 | −16.67 | −23.79 |
+  | 1NHB ethylbenzene | −5.76 | +13.92 | +5.11 | +3.12 | +5.69 | +8.84 | −14.70 | −19.78 | +19.63 | +12.34 | −10.68 | −17.98 |
+
+  **Where it has converged: a 20 Å pocket** (119–122 residues, 1945–2005 atoms), at the crystal
+  pose and minimised from it, in a new ignored series test. Not the whole protein, because **QEq on
+  184L's whole protein does not settle**: its hydrogen iteration still changes a charge by
+  1.8e-9 e after the default 100 solves, against a tolerance of 1e-10. That is recorded, not fixed
+  here. The test names an entry whose QEq fails and leaves it out of the statistics rather than
+  stopping; it fails on any other error, on a skipped set other than the expected one (empty), and
+  on fewer than three entries measured. At 20 Å all nine converged. The whole protein, measured for the two entries
+  `the_polar_term_diagnosed.rs` builds it for, is within 0.10 (benzene) and 0.25 (n-butylbenzene)
+  kcal/mol of 20 Å's polar term (in brackets). Kcal/mol:
+
+  | entry | ΔG°exp | crystal: polar (whole protein) | pocket by volume | ligand's own | cross | empty cavity | minimised: polar | empty cavity | total | total, empty |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 181L benzene | −5.19 | +14.86 (+14.96) | +5.89 | +2.36 | +6.61 | +8.97 | +15.19 | +9.11 | −10.91 | −16.99 |
+  | 182L 2,3-benzofuran | −5.46 | +17.67 | +8.30 | +4.78 | +4.59 | +9.37 | +19.11 | +10.08 | −12.89 | −21.92 |
+  | 183L indene | −5.13 | +19.56 | +9.41 | +2.73 | +7.42 | +10.15 | +19.95 | +10.92 | −8.76 | −17.78 |
+  | 184L isobutylbenzene | −6.51 | +24.28 | +10.89 | +5.21 | +8.18 | +13.39 | +36.43 | +24.18 | −2.16 | −14.42 |
+  | 185L indole | −4.89 | +19.24 | +8.80 | +3.68 | +6.76 | +10.44 | +20.54 | +11.45 | −10.54 | −19.63 |
+  | 186L n-butylbenzene | −6.70 | +30.76 (+31.01) | +11.08 | +4.19 | +15.50 | +19.68 | +34.81 | +22.55 | −0.29 | −12.55 |
+  | 187L p-xylene | −4.67 | +19.31 | +9.41 | +2.70 | +7.19 | +9.90 | +20.63 | +10.92 | −13.40 | −23.11 |
+  | 188L o-xylene | −4.60 | +18.49 | +9.39 | +2.53 | +6.57 | +9.10 | +19.10 | +9.98 | −14.32 | −23.44 |
+  | 1NHB ethylbenzene | −5.76 | +22.63 | +9.18 | +3.43 | +10.02 | +13.45 | +23.95 | +14.55 | −8.02 | −17.42 |
+
+  **Against ΔG°exp, n = 9, 95% Fisher intervals** (nothing asserted):
+
+  | column | 6 Å Pearson r | Spearman ρ | 8 Å Pearson r | Spearman ρ | 20 Å Pearson r | Spearman ρ |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | ΔE vac, minimised from crystal | +0.46 [−0.29, +0.86] | +0.32 [−0.46, +0.82] | +0.49 [−0.25, +0.87] | +0.33 [−0.44, +0.82] | +0.50 [−0.25, +0.87] | +0.32 [−0.46, +0.82] |
+  | total, minimised from crystal | −0.77 [−0.95, −0.22] | −0.72 [−0.94, −0.08] | −0.90 [−0.98, −0.58] | −0.88 [−0.98, −0.51] | −0.93 [−0.99, −0.69] | −0.85 [−0.97, −0.41] |
+  | the same, cavity empty | −0.50 [−0.87, +0.25] | −0.48 [−0.87, +0.29] | −0.75 [−0.94, −0.18] | −0.77 [−0.95, −0.19] | −0.87 [−0.97, −0.47] | −0.87 [−0.97, −0.46] |
+  | total, relaxed and minimised | −0.81 [−0.96, −0.33] | −0.80 [−0.96, −0.27] | −0.87 [−0.97, −0.50] | −0.70 [−0.93, −0.04] | | |
+  | the same, cavity empty | −0.68 [−0.92, −0.02] | −0.70 [−0.93, −0.04] | −0.82 [−0.96, −0.34] | −0.83 [−0.97, −0.36] | | |
+  | polar alone, relaxed and minimised (20 Å: crystal) | −0.88 [−0.98, −0.53] | −0.80 [−0.96, −0.27] | −0.88 [−0.97, −0.50] | −0.52 [−0.88, +0.25] | −0.81 [−0.96, −0.30] | −0.58 [−0.90, +0.16] |
+  | the same, cavity empty | −0.93 [−0.98, −0.69] | −0.82 [−0.96, −0.31] | −0.91 [−0.98, −0.63] | −0.62 [−0.91, +0.10] | −0.85 [−0.97, −0.41] | −0.65 [−0.92, +0.05] |
+
+  **The honest conclusion: generalized Born with QEq charges in a rigid pocket cannot rank this
+  series, and neither converging it nor emptying the cavity changes that.** The polar term alone
+  anticorrelates with experiment (r −0.81 to −0.93), because it is largest for the ligands that
+  bind best, the two largest (+34.8 and +36.4 minimised at 20 Å, against +15.2 for benzene), and
+  its spread across the series (9.5–17.7 kcal/mol) is four to eight times experiment's 2.10. Converging it
+  makes the solvated total rank the series more firmly backwards (−0.77, −0.90, −0.93 at 6, 8 and
+  20 Å). The empty cavity takes out the pocket's part, the one 2c-2 named, and the total still
+  anticorrelates past the 0.666 at which nine points differ from zero, at 8 and 20 Å: what is left
+  is the ligand's own desolvation and **the cross terms, the largest part for the two largest
+  ligands** (+18.1 and +17.6 minimised at 20 Å). The cross terms are GB's reaction field between
+  the pocket's QEq charges and the ligand's, which nothing here has checked against a
+  Poisson–Boltzmann or explicit-solvent reference, and with QEq's charges OBC II already
+  over-solvates small molecules by a mean −2.1 kcal/mol. The vacuum ΔE's correlation, +0.46 to
+  +0.50, has an interval containing zero at every cutoff. So the series needs either a solvation
+  model checked on buried pockets or charges OBC II was fitted with, and neither is in this step.
+  The series test takes 124 s with `--release -- --ignored`, the 20 Å test 883 s; the benzene
+  file's default tests 13.2–13.8 s unoptimised, against 13.4–13.8 before. 210 tests in the crate,
+  and nine ignored.
 
 ### Changed
 

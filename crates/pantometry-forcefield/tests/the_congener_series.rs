@@ -21,6 +21,11 @@
 //! measured ΔG spans 2.1 kcal/mol; a correlation measured on nine points has a 95% interval that
 //! the series test computes and prints, and it is wide.
 //!
+//! **The polar term is split into its three parts** (step A-2) — the pocket desolvated by the
+//! ligand's volume, the ligand's own, the screened cross terms — and given beside the empty-cavity
+//! reference ([`ApoCavity::Empty`]), at 6 and 8 Å and, in a test of its own, at 20 Å, where it
+//! has converged.
+//!
 //! The series takes minutes, so it is ignored by default:
 //! `cargo test -p pantometry-forcefield --release --test the_congener_series -- --ignored`.
 
@@ -29,7 +34,8 @@ mod protein;
 use pantometry_forcefield::minimise::KCAL_PER_MOL_ANGSTROM;
 use pantometry_forcefield::uff::KCAL_PER_MOL;
 use pantometry_forcefield::{
-    Binding, Component, Element, Histidine, Part, Selection, Status, System,
+    ApoCavity, Binding, BindingError, Component, Element, Histidine, Part, Selection, Status,
+    System,
 };
 use protein::*;
 use std::collections::BTreeMap;
@@ -619,6 +625,14 @@ struct Terms {
     /// The ligand's part of `reorganisation`; the rest is the pocket's.
     reorganisation_ligand: f64,
     polar: f64,
+    /// The polar term's three parts, which sum to it: the pocket desolvated by the ligand's
+    /// volume (the ligand's charges zero), the ligand's own (the pocket's zero), and the screened
+    /// cross terms (the rest).
+    pocket_part: f64,
+    ligand_part: f64,
+    cross_part: f64,
+    /// The polar term with the apo cavity empty ([`ApoCavity::Empty`]).
+    polar_empty: f64,
     area: f64,
     nonpolar: f64,
 }
@@ -627,6 +641,13 @@ impl Terms {
     fn of(b: &Binding) -> Terms {
         let i = b.interaction();
         let d = b.desolvation(POINTS);
+        let (n0, n) = (b.pocket_len(), b.positions().len());
+        let zeroed = |r: std::ops::Range<usize>| {
+            let mut q = b.charges().to_vec();
+            q[r].fill(0.0);
+            kcal(b.desolvation_with(&q, 1).polar)
+        };
+        let (pocket_part, ligand_part) = (zeroed(n0..n), zeroed(0..n0));
         Terms {
             vdw: kcal(i.van_der_waals),
             elec: kcal(i.electrostatic),
@@ -638,6 +659,13 @@ impl Terms {
                         .total,
             ),
             polar: kcal(d.polar),
+            pocket_part,
+            ligand_part,
+            cross_part: kcal(d.polar) - pocket_part - ligand_part,
+            polar_empty: kcal(
+                b.desolvation_with_cavity(b.charges(), 1, ApoCavity::Empty)
+                    .polar,
+            ),
             area: d.buried_area / (ANGSTROM * ANGSTROM),
             nonpolar: kcal(d.nonpolar),
         }
@@ -649,6 +677,11 @@ impl Terms {
 
     fn total(&self) -> f64 {
         self.vacuum() + self.polar + self.nonpolar
+    }
+
+    /// [`Terms::total`] with the apo cavity empty.
+    fn total_empty(&self) -> f64 {
+        self.vacuum() + self.polar_empty + self.nonpolar
     }
 }
 
@@ -905,6 +938,39 @@ fn assert_181l_unchanged(cutoff: f64, m: &Measured) {
     }
 }
 
+/// The header of [`polar_row`]'s table, the second pose named `pose`.
+fn polar_header(pose: &str) -> String {
+    format!(
+        "| entry | ligand | crystal: polar | pocket by volume | ligand's own | cross | empty cavity \
+         | {pose}: polar | pocket by volume | ligand's own | cross | empty cavity | total | total, \
+         cavity empty |"
+    )
+}
+
+/// One entry's polar term split into its three parts, at the crystal pose and relaxed and
+/// minimised (or, in the converged pocket, minimised from the crystal), with the empty-cavity
+/// reference beside each.
+fn polar_row(e: &Entry, c: &Terms, q: &Terms) -> String {
+    format!(
+        "| {} | {} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} \
+         | {:+.2} | {:+.2} | {:+.2} |",
+        e.code,
+        e.name,
+        c.polar,
+        c.pocket_part,
+        c.ligand_part,
+        c.cross_part,
+        c.polar_empty,
+        q.polar,
+        q.pocket_part,
+        q.ligand_part,
+        q.cross_part,
+        q.polar_empty,
+        q.total(),
+        q.total_empty()
+    )
+}
+
 /// The statistics of one computed column against experiment, as a table row.
 fn statistics(label: &str, exp: &[f64], calc: &[f64]) -> String {
     let n = exp.len();
@@ -1006,6 +1072,11 @@ fn the_congener_series_against_experiment() {
             );
             rows.push(m);
         }
+        eprintln!("\n{cutoff} Å, the polar term's parts and the empty cavity, kcal/mol:");
+        eprintln!("{}", polar_header("relaxed, minimised"));
+        for (e, m) in ENTRIES.iter().zip(&rows) {
+            eprintln!("{}", polar_row(e, &m.crystal, &m.relaxed_minimised));
+        }
         if cutoff == 6.0 {
             eprintln!(
                 "\n6 Å at {:.0e} against 2c-2's 1e-4 kcal/mol/Å, where 1e-4 converges:\n| entry | \
@@ -1048,6 +1119,22 @@ fn the_congener_series_against_experiment() {
                 "total, relaxed and minimised",
                 col(&|m| m.relaxed_minimised.total()),
             ),
+            (
+                "total, minimised from crystal, cavity empty",
+                col(&|m| m.minimised.total_empty()),
+            ),
+            (
+                "total, relaxed and minimised, cavity empty",
+                col(&|m| m.relaxed_minimised.total_empty()),
+            ),
+            (
+                "polar, relaxed and minimised",
+                col(&|m| m.relaxed_minimised.polar),
+            ),
+            (
+                "polar, relaxed and minimised, cavity empty",
+                col(&|m| m.relaxed_minimised.polar_empty),
+            ),
         ] {
             eprintln!("{}", statistics(label, &exp, &calc));
         }
@@ -1063,4 +1150,93 @@ fn the_congener_series_against_experiment() {
             t / (t * t + 7.0).sqrt()
         }
     );
+}
+
+/// The cutoff at which the polar term has converged, Å: on benzene within 0.10 kcal/mol of the
+/// whole protein (+14.86 against +14.96), measured by `the_polar_term_diagnosed.rs`, and 0.80 at
+/// 15 Å. **Not the whole protein**, because QEq on 184L's whole protein does not settle: its
+/// hydrogen iteration is still changing a charge by 1.8e-9 e after the default 100 solves, against
+/// a tolerance of 1e-10.
+const CONVERGED: f64 = 20.0;
+
+/// The entries whose QEq fails at [`CONVERGED`] Å, which the test skips by name: none, measured
+/// on all nine.
+const EXPECTED_QEQ_FAILURES: [&str; 0] = [];
+
+/// **The polar term where it has converged**, a [`CONVERGED`] Å pocket, for all nine: the
+/// reference the 6 and 8 Å pockets fall short of. At the crystal pose, which is the same geometry
+/// at every cutoff, and with the ligand minimised from it in the frozen protein (2c-3a's pose; the
+/// hydrogens are not relaxed here, since the rule would free some thousand protein hydrogens in
+/// three systems of about two thousand atoms). Each polar term split into its three parts, the
+/// empty-cavity reference beside it, and the solvated totals' statistics against ΔG°exp —
+/// reported, not asserted. Asserted: the minimisation converged. **An entry whose QEq fails is
+/// named and left out of the statistics**, rather than stopping the measurement of the rest, and
+/// the skipped entries must be [`EXPECTED_QEQ_FAILURES`]; any other error from building the
+/// binding fails the test, and so do statistics over fewer than three entries. Ignored: QEq on
+/// about two thousand atoms for each entry.
+#[test]
+#[ignore = "QEq on pockets of about two thousand atoms for each of nine entries; tens of minutes with --release -- --ignored"]
+fn the_polar_term_where_it_has_converged() {
+    eprintln!(
+        "\n{CONVERGED} Å, kcal/mol:\n{}",
+        polar_header("minimised from crystal")
+    );
+    let mut rows = Vec::new();
+    let mut exp = Vec::new();
+    let mut skipped: Vec<&str> = Vec::new();
+    for e in &ENTRIES {
+        let s = build(e);
+        let b = match Binding::new(&s, CONVERGED * ANGSTROM) {
+            Ok(b) => b,
+            // Only QEq failing is a skip; any other refusal is a defect and stops the test.
+            Err(err @ BindingError::Charges { .. }) => {
+                eprintln!("| {} | {} | not measured: {err} |", e.code, e.name);
+                skipped.push(e.code);
+                continue;
+            }
+            Err(err) => panic!("{} {CONVERGED} Å: {err}", e.code),
+        };
+        let crystal = Terms::of(&b);
+        let mut m = b.clone();
+        let p = m.minimise_ligand(20000, TOLERANCE);
+        assert_eq!(
+            p.status,
+            Status::Converged,
+            "{} {CONVERGED} Å: {p:?}",
+            e.code
+        );
+        let minimised = Terms::of(&m);
+        eprintln!(
+            "{} ({} residues, {} atoms)",
+            polar_row(e, &crystal, &minimised),
+            b.residues().len(),
+            b.positions().len()
+        );
+        rows.push((crystal, minimised));
+        exp.push(e.dg.0);
+    }
+    // The entries QEq is known to fail on at this cutoff: none, measured. A new failure, or one
+    // that went away, changes what the statistics are over and must be said.
+    assert_eq!(skipped, EXPECTED_QEQ_FAILURES, "entries skipped for QEq");
+    // Statistics on fewer than three points are not a correlation; on none they are NaN.
+    assert!(rows.len() >= 3, "{} entries measured", rows.len());
+    let col = |f: &dyn Fn(&(Terms, Terms)) -> f64| rows.iter().map(f).collect::<Vec<f64>>();
+    eprintln!(
+        "\n{CONVERGED} Å against ΔG°exp, n = {} of {}; 95% Fisher intervals in brackets:\n| \
+         column | Pearson r | Spearman ρ | slope on ΔG°exp | RMS after offset | spread |",
+        exp.len(),
+        ENTRIES.len()
+    );
+    for (label, calc) in [
+        ("ΔE vacuum, minimised from crystal", col(&|m| m.1.vacuum())),
+        ("total, minimised from crystal", col(&|m| m.1.total())),
+        (
+            "total, minimised from crystal, cavity empty",
+            col(&|m| m.1.total_empty()),
+        ),
+        ("polar, crystal", col(&|m| m.0.polar)),
+        ("polar, crystal, cavity empty", col(&|m| m.0.polar_empty)),
+    ] {
+        eprintln!("{}", statistics(label, &exp, &calc));
+    }
 }

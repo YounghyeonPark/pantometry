@@ -69,6 +69,67 @@
 //! then bit for bit the whole complex's. Vacuum because the polar GB term on a truncated pocket is
 //! the cutoff-sensitive one, and minimising on it would move the pose by an artefact of the cut.
 //!
+//! # The apo cavity, and the cutoff
+//!
+//! **Generalized Born solvates the space the ligand leaves as water**: with the ligand gone,
+//! nothing descreens the pocket's atoms from it. T4 lysozyme L99A's cavity is empty, not wet. PDB
+//! 1L90, the apo L99A structure (Eriksson, Baase and Matthews, *J. Mol. Biol.* **229**, 747
+//! (1993), whose `REMARK 1` cites the cavity's report, *Science* **255**, 178 (1992)), has no water
+//! near the site: the nearest is 7.79 Å from any of 181L's benzene carbons, in an isomorphous
+//! crystal whose Cα are 0.27 Å RMS from 181L's without superposition.
+//! `tests/benzene_in_its_pocket.rs` reads the file and asserts no water within 5 Å, where one in
+//! the cavity would be within about 2 Å.
+//! Collins, Hummer, Quillin, Matthews and Gruner, *PNAS* **102**, 16668 (2005)
+//! ([PMC1283839](https://pmc.ncbi.nlm.nih.gov/articles/PMC1283839)), say it "is believed to be
+//! entirely empty under ambient conditions"; by high-pressure crystallography about 0.5 waters
+//! enter it at 100 MPa and two to four at 200 MPa, and their simulation finds it predominantly
+//! empty below about 100 MPa. [`ApoCavity::Empty`] is that reference: the pocket alone is solvated
+//! with the ligand's atoms present and uncharged, so the ligand's volume descreens the apo pocket
+//! as it does the complex, and the pocket's desolvation by that volume is zero. **It is an option,
+//! not the default**: a cavity that is wet before the ligand enters is the default's case, and
+//! which one a pocket is, is a fact about the pocket that the force field cannot know. The areas
+//! and the nonpolar term are the same under both: the cavity's walls still count as
+//! solvent-accessible, a choice.
+//!
+//! **What it does not fix is the polar term's growth with the cutoff.** Split exactly into its
+//! three parts at the crystal pose (kcal/mol; `tests/the_polar_term_diagnosed.rs`):
+//!
+//! | | 6 Å | 8 Å | 10 Å | 15 Å | 20 Å | whole |
+//! | --- | --- | --- | --- | --- | --- | --- |
+//! | benzene: polar | +7.32 | +10.61 | +12.21 | +14.17 | +14.86 | +14.96 |
+//! | the pocket by benzene's volume | +2.27 | +3.62 | +4.31 | +5.43 | +5.89 | +5.93 |
+//! | benzene's own | +1.94 | +2.23 | +2.30 | +2.35 | +2.36 | +2.37 |
+//! | cross | +3.11 | +4.77 | +5.61 | +6.39 | +6.61 | +6.66 |
+//! | n-butylbenzene: polar | +16.22 | +22.27 | +25.09 | | | +31.01 |
+//! | the pocket by its volume | +5.11 | +7.23 | +8.30 | | | +11.17 |
+//! | its own | +3.66 | +4.02 | +4.10 | | | +4.20 |
+//! | cross | +7.44 | +11.02 | +12.69 | | | +15.65 |
+//!
+//! All three parts grow, the screened cross terms most, and the empty cavity removes only the
+//! first. **The term does converge, slowly**: within 0.10 kcal/mol of the whole protein at 20 Å
+//! (1979 atoms) and 0.80 at 15 Å. **Nothing in the descreening is wrong.** Past 10 Å from the
+//! ligand, its descreening of each protein atom is within 1.2% of the sphere's asymptote
+//! `Σ s³/3r⁴`. Attributed atom by atom inside the whole protein, the pocket part and the cross
+//! terms of the atoms more than 15 Å from benzene sum to +0.18 kcal/mol of +12.59 (+0.29 of 26.82
+//! for n-butylbenzene), and the 789 atoms past 20 Å carry +0.017: a protein atom far away is not
+//! desolvated by the ligand. Per atom the net falls 7 and 9.5 times from the 10–15 Å shell to the
+//! 15–20 Å one, about as `r⁻⁶`, a dipole's field squared, because GB's pair terms cancel most of
+//! the incoherent `Σ q_i² ΔI_i` — Born terms +42.78 against pairs −36.85 for benzene. OBC II's
+//! rescaling does amplify a buried atom's response: `d(1/R)/dI` is 1.06–1.88 times HCT's, median
+//! 1.78, the model's own fit and not an error. **The growth is the cut.** A cut pocket solvates its
+//! own cut surface: benzene's 6 Å pocket's charges inside the whole protein's dielectric give +9.47
+//! against +7.32 in the fragment, and the remaining +5.49 is the charges the cut leaves out, nearly
+//! all within 15 Å (a 15 Å pocket's charges in the whole dielectric give +14.79). QEq's charges
+//! moving with the cutoff matter little: the whole protein's charges on the 6 Å pocket give +7.80
+//! (n-butylbenzene +16.08 against +16.22).
+//!
+//! **Converged or not, cavity empty or not, it does not rank the congener series.** At 20 Å, where
+//! the term has converged, the solvated total of the nine ligands minimised from the crystal
+//! correlates with experiment at r = −0.93 (−0.87 with the cavity empty), and the polar term alone
+//! at −0.81: it is largest for the ligands that bind best, and the cross terms, which the empty
+//! cavity leaves in, are its largest part for the two largest. `tests/the_congener_series.rs`
+//! measures it; nothing asserts it.
+//!
 //! # Hydrogens relaxed in each system
 //!
 //! **Why.** Every hydrogen here was placed, not measured: the protein's by 2c-1's rules, whose rotor
@@ -139,7 +200,7 @@
 //! benzene's own (of the 2.27 it has alone), and +3.11 is the screened cross terms. GB counts the
 //! empty apo cavity as solvent. The buried area is −294.6 Å², nonpolar −1.47. **The polar term
 //! does not converge with the cutoff**: +7.32, +10.61, +12.21 at 6, 8 and 10 Å, and +14.96 with the
-//! whole protein. Van der Waals goes −11.30, −13.05, −13.33 and −13.50. Benzene minimised in the
+//! whole protein, which a 20 Å pocket reaches within 0.10 (see the apo cavity, above). Van der Waals goes −11.30, −13.05, −13.33 and −13.50. Benzene minimised in the
 //! rigid pocket moves 0.81 Å heavy-atom RMSD (0.82 Å for the whole protein), and ΔE_bind goes from
 //! −12.43 to −22.35. Freeing the protein's hydrogens as well moves it 0.83 Å, so the move is UFF's
 //! and not an artefact of where 2c-1 placed the hydrogens — although the crystal pose does have a
@@ -151,6 +212,11 @@
 //! reorganisation of +2.62 (pocket +1.06, benzene +1.56). The polar desolvation is +8.34 and the
 //! buried area −291.4 Å². Minimised from there, benzene moves 0.90 Å RMSD, against 0.81 from the
 //! crystal's hydrogens, and ΔE_bind is −22.55 against −22.35, of which +0.57 is reorganisation.
+//!
+//! **With the apo cavity empty** ([`ApoCavity::Empty`]) the polar desolvation at 6 Å is +5.05 at
+//! the crystal pose — benzene's own +1.94 and the cross terms +3.11, the pocket's +2.27 gone
+//! exactly — and +5.59 relaxed, where +0.02 of the pocket's part is left because the pocket alone's
+//! hydrogens are its own.
 //!
 //! # What it is not
 //!
@@ -347,14 +413,35 @@ struct Apart {
     ligand: Vec<[f64; 3]>,
 }
 
+/// What the space the ligand fills in the complex is, in the pocket alone: the apo reference of
+/// [`Binding::desolvation_with_cavity`]'s polar term. See the module documentation, "The apo
+/// cavity".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ApoCavity {
+    /// Solvent, as generalized Born has it: with the ligand gone, nothing descreens the pocket's
+    /// atoms from that space, so it counts as water. The default, and what
+    /// [`Binding::desolvation`] uses.
+    #[default]
+    Solvent,
+    /// Empty: the pocket alone is solvated with the ligand's atoms present where they are in the
+    /// complex, **uncharged** — a ghost that descreens the pocket's atoms exactly as the ligand
+    /// does and carries no charge. The polar term is then the ligand's own desolvation plus the
+    /// screened cross terms, and the pocket's desolvation by the ligand's volume is zero. Right
+    /// only for a cavity that is empty of water before the ligand enters.
+    Empty,
+}
+
 /// The solvation part of binding, each system at its own positions — one geometry, unless the
 /// hydrogens are relaxed: OBC II and the nonpolar surface term, each as complex − pocket −
 /// ligand. Energies in joules per molecule, areas in m².
 #[derive(Clone, Debug, PartialEq)]
 pub struct Desolvation {
+    /// What the pocket alone's cavity was taken to be.
+    pub cavity: ApoCavity,
     /// ΔG_GB of the complex.
     pub complex: f64,
-    /// ΔG_GB of the pocket alone.
+    /// ΔG_GB of the pocket alone — for [`ApoCavity::Empty`], with the ligand's atoms in it as
+    /// uncharged descreeners at the complex's ligand positions.
     pub pocket: f64,
     /// ΔG_GB of the ligand alone.
     pub ligand: f64,
@@ -973,6 +1060,29 @@ impl Binding {
     ///
     /// If `charges` is not one per atom, or `points` is zero.
     pub fn desolvation_with(&self, charges: &[f64], points: usize) -> Desolvation {
+        self.desolvation_with_cavity(charges, points, ApoCavity::Solvent)
+    }
+
+    /// [`Binding::desolvation_with`] with the pocket alone's cavity taken as `cavity`. For
+    /// [`ApoCavity::Empty`] the pocket alone's ΔG_GB is taken over the pocket's atoms at
+    /// [`Binding::pocket_alone_positions`] **and the ligand's atoms at the complex's ligand
+    /// positions, with the ligand's charges zero**, so that the ligand's volume descreens the
+    /// apo pocket as it does the complex. The complex's and the ligand's ΔG_GB and every area are
+    /// the same as for [`ApoCavity::Solvent`], bit for bit: the nonpolar term is not changed.
+    ///
+    /// For a binding whose three systems share positions, the empty-cavity pocket term is then
+    /// bit for bit the complex's ΔG_GB with the ligand's charges set to zero, so with those
+    /// charges zero the empty-cavity polar term is exactly zero; the tests hold both.
+    ///
+    /// # Panics
+    ///
+    /// If `charges` is not one per atom, or `points` is zero.
+    pub fn desolvation_with_cavity(
+        &self,
+        charges: &[f64],
+        points: usize,
+        cavity: ApoCavity,
+    ) -> Desolvation {
         assert_eq!(charges.len(), self.at.len(), "one charge per atom");
         let n0 = self.model.pocket_len;
         let el = &self.model.elements;
@@ -987,7 +1097,19 @@ impl Binding {
         let gb = |(range, at): &(std::ops::Range<usize>, &[[f64; 3]])| {
             GeneralizedBorn::new(&el[range.clone()]).energy(&q[range.clone()], at)
         };
-        let (complex, pocket, ligand) = (gb(&systems[0]), gb(&systems[1]), gb(&systems[2]));
+        let pocket = match cavity {
+            ApoCavity::Solvent => gb(&systems[1]),
+            ApoCavity::Empty => {
+                // The pocket alone's atoms, then the ligand's as the complex holds them: complex
+                // order, so for shared positions this is the complex's evaluation term for term.
+                let mut at = self.pocket_alone_positions().to_vec();
+                at.extend_from_slice(&self.at[n0..]);
+                let mut ghost = q[..n0].to_vec();
+                ghost.resize(n, 0.0);
+                GeneralizedBorn::new(el).energy(&ghost, &at)
+            }
+        };
+        let (complex, ligand) = (gb(&systems[0]), gb(&systems[2]));
         let radii: Vec<f64> = el.iter().map(|&e| intrinsic_radius(e)).collect();
         let area = |(range, at): &(std::ops::Range<usize>, &[[f64; 3]])| {
             surface_area(&radii[range.clone()], at, PROBE_RADIUS, points)
@@ -1001,6 +1123,7 @@ impl Binding {
             .map(|(b, a)| b - a)
             .sum();
         Desolvation {
+            cavity,
             complex,
             pocket,
             ligand,
