@@ -32,7 +32,11 @@
 //!   Onufriev, Bashford and Case (2004), OBC II, with ε = 80 and optional salt, and its analytic
 //!   force through the Born radii at fixed charges. [`ForceField::with_generalized_born`] adds it
 //!   to the energy and the force; vacuum stays the default. A Shrake–Rupley surface gives the
-//!   paper's nonpolar term beside it, as a number, not a force.
+//!   paper's nonpolar term beside it, as a number, not a force. The evaluation is the direct
+//!   sum's to the bit, computing each pair integral once and, given the atoms that do not move
+//!   ([`GeneralizedBorn::with_frozen`]), their descreening once: on 3b's 987-atom complex a step of
+//!   dynamics costs 45 ms, half the direct sum's 87 and 28 times vacuum's, and what is left is the
+//!   platform's `exp` and `ln`.
 //! - [`System::from_pdb`] reads a protein chain and its ligand out of a PDB entry and makes them one
 //!   [`Component`] the rest of this crate takes unchanged: hydrogens placed by superposing each
 //!   residue's dictionary template on the crystal, bonds with orders (peptide bonds and disulfides
@@ -137,7 +141,12 @@
 //! terms and a screened Coulomb, to a bound derived from the descreening; two at one point as one
 //! of their summed charge; a charge inside a dielectric sphere, where HCT gives the Coulomb-field
 //! radius exactly and Kirkwood's series shows it 5.73% long; eq 6 with eq 8's constants; the
-//! paper's 30 Å bound; and the force against central differences. See [`solvation`].
+//! paper's 30 Å bound; and the force against central differences. See [`solvation`]. And the
+//! evaluation against the direct sum it replaced (`tests/the_generalized_born_is_its_direct_sum.rs`),
+//! with no tolerance: the energy, every radius and every force the same bits on aspirin, a cluster
+//! with a coincident pair and 181L's pocket, under six frozen masks, with the frozen atoms where
+//! they were kept and moved by 0.1 Å and by one ulp, and a complex's run the direct evaluation's
+//! run.
 //!
 //! A protein against its own entry: T4 lysozyme L99A with benzene (PDB 181L) has every heavy atom
 //! its templates name at the file's coordinates bit for bit, its sequence is `SEQRES`'s with the

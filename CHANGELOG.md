@@ -1628,6 +1628,107 @@ protects nothing.
   in `benzene_decoupled_from_its_pocket.rs` (four default, the demonstration ignored). 265 + 22 is
   the 287, and 246 + 19 the 265.
 
+- **`pantometry-forcefield`: OBC II in a frozen buffer is twice as fast, to the bit, and the rest
+  of its cost is the platform's `exp` and `ln`.** This is step 3c-2. Its target, generalized Born
+  within a few times the vacuum step, **is not met**: the step is 28 times vacuum, down from 53.
+  - **The profile came first** (release, one core, `x86_64-pc-windows-gnu`). The 987-atom complex
+    of 3b (a 6 Å zone of 322 atoms in a 10 Å binding) cost 86.5 ms per evaluation:
+
+    | part | ms |
+    | --- | --- |
+    | the Born radii: 973 000 pair integrals, a logarithm each | 31.2 |
+    | the pair terms: 486 000, an exponential each | 23.0 |
+    | the chain rule through the radii: the 973 000 integrals again | 30.8 |
+    | UFF | 1.6 |
+
+    On this toolchain `exp` costs 33 ns and `ln` 18.5 ns, against 1.1 ns for `sqrt`.
+  - **Three changes, none of which changes a bit.** Every sum still takes the same terms in the
+    same order, so the energy, every Born radius and every force are the earlier evaluation's.
+    - **Each pair integral is computed once.** The chain rule reads the `dI/dr` that the radii
+      were computed with, instead of computing the integral again.
+    - **The frozen atoms' descreening is kept.** `GeneralizedBorn::with_frozen(mask, at)`
+      computes the integral between each pair of frozen atoms once, and `Complex` gives its model
+      the buffer. That is 442 000 of the 973 000 integrals.
+      - Every evaluation first checks that each frozen atom is where it was, to the bit. If one has
+        moved, every term is computed.
+      - `reuses_frozen_terms` says which path an evaluation will take.
+      - **Not kept, because they are not constant**: the radii, which every mobile atom changes,
+        and so the pair terms between frozen atoms, which depend on them. The brief proposed
+        keeping the frozen–frozen pair terms; their `f_ij` depends on `R_i R_j`.
+    - **No `e^(−κf)` without salt.** It is `e^0`, exactly one.
+  - **No cutoff and no threads.** A cutoff is an approximation, which the brief made opt-in and
+    measured, after the exact changes. It was not built: the pair terms fall only as `r⁻¹`.
+  - **Measured after:**
+
+    | | before | after |
+    | --- | --- | --- |
+    | one evaluation | 86.5 ms | 43.5–44.3 ms (57.6 without the kept terms) |
+    | the radii | 31.2 ms | 18.5 ms: 532 000 integrals, 35 ns each |
+    | the pair terms | 23.0 ms | 23.4 ms: 486 000 pairs, 48 ns each |
+    | the chain rule | 30.8 ms | 2.3 ms |
+    | a step of dynamics | 87.2 ms | 44.8–45.5 ms, 28 times vacuum's 1.6 ms; 0.96 ns/day |
+
+  - **What limits it is the platform's `exp` and `ln`**, one of which is in every pair term and
+    every integral. With both replaced by arithmetic stand-ins of no accuracy, for the timing
+    alone, the step took 12.2 ms, about 10.5 of it GB's divisions and other arithmetic. The
+    other 33 ms of the 45 are `exp` and `ln`. Two ways past it are left for a decision, because
+    each changes something this step was told to keep:
+    - an `exp` and `ln` of the crate's own would change the bits of every GB result, though not
+      its accuracy, and at about 4 ns a call would bring the step to about 16 ms;
+    - a cutoff would change the model.
+  - **For 3c-3:** 20 windows of 2 + 10 ps at 0.5 fs is 480 000 steps, about **6.0 h** for the
+    complex leg (11.6 h before). The brief's 4.8 M steps and 116 h are ten times that schedule.
+    For that many steps it would be 60 h. The solvent leg is the ligand alone, and costs
+    microseconds a step.
+  - **`GeneralizedBorn::accumulate_reference` and `born_radii_reference` are the code that was
+    there before, kept** as what the evaluation is held to.
+
+  **Checked, with no tolerance** (`tests/the_generalized_born_is_its_direct_sum.rs`, five default
+  tests in 0.8 s unoptimised, and one ignored). The evaluation is held to the reference bit for
+  bit: the energy, the energy alone, every radius, and every force added to a non-zero start.
+  - **On aspirin**: OBC II, OBC I, HCT, ε = 4 and 0.15 M salt.
+  - **On a cluster that reaches every branch of the pair integral**, with two atoms at one point.
+    That puts an `r = 0` pair in the sums.
+  - **On 181L's 3 Å pocket**, with its QEq charges.
+  - **Under six masks**: no kept terms, none frozen, all frozen, every third, the first half, and
+    all but the last. The small complex's own mask, with the backbones frozen, is added.
+  - **At three kinds of position**: where the terms were kept; with the mobile atoms moved, where
+    the kept terms must be used; and with a frozen atom moved by 0.1 Å and by one ulp, where they
+    must not be.
+  - **A complex keeps its buffer's terms** through minimising and 40 steps.
+  - **Its run is the direct evaluation's run, bit for bit**: 60 steps of BAOAB on the potential,
+    and on a `Potential` that adds `accumulate_reference` to the vacuum terms in the order
+    `ForceField::evaluate` does. That means 3b's OBC II trajectory is the same trajectory.
+  - **In release and ignored**, the same on the 987-atom complex, its run over 20 steps, and the
+    cost. Two cost assertions: with the kept terms the evaluation is under 0.9 of its cost without
+    them (measured 0.75), and without them under 0.85 of the reference's (measured 0.68).
+  - **Unchanged and passing**: every GB closed-form and gradient test, and 3b's bit-for-bit force
+    test of the potential against the whole complex.
+
+  **Sabotage.** Twelve sabotages were run, each restored by copying the original back, `touch`
+  and SHA-256. The tests ran with `--no-fail-fast`: without it, cargo stops at the first failing
+  binary. In the first pass that made three sabotages look caught only by 3b's force test, because
+  the new file never ran.
+  - Caught by the default tests:
+    - a mobile–frozen integral left out of a frozen atom's radius;
+    - kept terms used without checking that the frozen atoms are where they were;
+    - the positions compared to within 10⁻²⁰ m rather than to the bit (caught by the one-ulp move);
+    - a kept slope with the wrong sign;
+    - the kept terms summed apart and added at the end (a reassociation alone);
+    - the kept matrix transposed;
+    - the first frozen atom's kept terms computed from another atom's position;
+    - the no-salt shortcut taken in salt;
+    - the chain rule skipping `r = 0` before reading its slope (only the coincident pair sees it);
+    - the complex's model not told about its buffer.
+  - Caught only by the release cost assertions, because each gives the same bits slower:
+    - the kept terms never used: 58.3 ms with them, against 57.8 without;
+    - the chain rule computing every integral again: 88.4 ms against the reference's 85.7.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **293 tests, twenty-three of
+  them ignored**: 270 run by default. The six new ones are all in
+  `the_generalized_born_is_its_direct_sum.rs`: five default, and one ignored that asserts. 287 + 6
+  is the 293, and 265 + 5 the 270.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

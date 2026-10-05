@@ -124,6 +124,46 @@
 //! **absolute solvation and binding energies built on this are not quantitative**; reported, not
 //! asserted.
 //!
+//! # The cost, and why it is exact
+//!
+//! Evaluated directly, eq 2 with its force costs `N²` pair integrals for the radii, `N(N − 1)/2`
+//! pair terms, and the `N²` pair integrals again for the chain rule, each integral with a
+//! logarithm and each pair term with an exponential. [`GeneralizedBorn::accumulate`] computes the
+//! same numbers with three changes, **none of which changes a bit**:
+//!
+//! - **each pair integral once**: [`descreening`] gives `I` and `dI/dr` together, and the chain
+//!   rule reads the `dI/dr` the radii were computed with instead of computing the integral again;
+//! - **the frozen atoms' descreening kept** ([`GeneralizedBorn::with_frozen`]): the integral
+//!   between two atoms that do not move depends only on where they are, so it is computed once.
+//!   What cannot be kept is said there: the radii, which every mobile atom changes, and so the
+//!   pair terms between frozen atoms, which depend on them;
+//! - **no salt, no `e^(−κf)`**: with κ = 0 it is `e^0`, which is exactly one, and the
+//!   exponential is not called.
+//!
+//! Each kept or reused value is the very value the direct evaluation computes, and every sum takes
+//! the same terms in the same order, so the energy, every radius and every force are the direct
+//! evaluation's to the bit. The direct evaluation is kept as
+//! [`GeneralizedBorn::accumulate_reference`] and [`GeneralizedBorn::born_radii_reference`],
+//! and `tests/the_generalized_born_is_its_direct_sum.rs` holds the two equal, with no tolerance.
+//! **There is no cutoff**: the descreening falls as `r⁻⁴` and the pair terms as `r⁻¹`, and a
+//! truncated sum would be an approximation, which this is not.
+//!
+//! **Measured** (release, one core, `x86_64-pc-windows-gnu`), on step 3b's 987-atom complex —
+//! benzene in 181L, a 6 Å zone of 322 mobile atoms in a 10 Å binding:
+//!
+//! | | direct | now |
+//! | --- | --- | --- |
+//! | one evaluation | 86.5 ms | 43.5–44.3 ms (57.6 without the kept terms) |
+//! | the radii | 31.2 ms | 18.5 ms: 532 000 integrals, 35 ns each |
+//! | the pair terms | 23.0 ms | 23.4 ms: 486 000 pairs, 48 ns each |
+//! | the chain rule | 30.8 ms | 2.3 ms |
+//! | a step of dynamics | 87.2 ms | 44.8–45.5 ms, 28 times vacuum's 1.6 ms |
+//!
+//! **What is left is the platform's `exp` and `ln`**: on this machine they cost 33 and 18.5 ns a
+//! call, and one of each is in every pair term and pair integral. With both replaced by arithmetic
+//! of no accuracy, for the timing alone, the step took 12.2 ms. A faster exponential and logarithm
+//! would change the bits, and a cutoff would change the model; neither is done here.
+//!
 //! # Determinism
 //!
 //! `exp`, `ln` and `tanh` (and `sin`/`cos` for the surface's points) are the platform's, so an
@@ -292,13 +332,61 @@ fn still(r: f64, rr: f64) -> (f64, f64) {
 /// A generalized Born model of one molecule: each atom's intrinsic radius and scale factor, the
 /// rescaling, the solvent's dielectric and the salt. [`GeneralizedBorn::new`] is OBC II in water
 /// with no salt.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Two models are equal when their radii, scales, rescaling, dielectric and κ are: the frozen
+/// atoms' descreening that [`GeneralizedBorn::with_frozen`] keeps changes no result, and is not
+/// compared.
+#[derive(Clone, Debug)]
 pub struct GeneralizedBorn {
     radii: Vec<f64>,
     scales: Vec<f64>,
     rescaling: Rescaling,
     solvent_dielectric: f64,
     kappa: f64,
+    frozen: Option<FrozenPairs>,
+}
+
+impl PartialEq for GeneralizedBorn {
+    fn eq(&self, other: &GeneralizedBorn) -> bool {
+        self.radii == other.radii
+            && self.scales == other.scales
+            && self.rescaling == other.rescaling
+            && self.solvent_dielectric == other.solvent_dielectric
+            && self.kappa == other.kappa
+    }
+}
+
+/// The descreening terms between two frozen atoms, computed once at the positions they are held
+/// at: see [`GeneralizedBorn::with_frozen`].
+#[derive(Clone)]
+struct FrozenPairs {
+    /// Each atom's place among the frozen atoms, or `usize::MAX` for a mobile one.
+    rank: Vec<usize>,
+    /// The frozen atoms, in atom order.
+    atoms: Vec<usize>,
+    /// Their positions' bits when the terms were computed, by rank.
+    at: Vec<[u64; 3]>,
+    /// `descreening(r_ij, ρ̃_i, s_j)`'s `I` for frozen `i` and `j`, at `rank_i · F + rank_j`;
+    /// the diagonal is unused.
+    integral: Vec<f64>,
+    /// The same pairs' `dI/dr`.
+    slope: Vec<f64>,
+}
+
+impl std::fmt::Debug for FrozenPairs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FrozenPairs({} frozen atoms)", self.atoms.len())
+    }
+}
+
+impl FrozenPairs {
+    /// Whether every frozen atom of `at` is, to the bit, where the terms were computed.
+    fn hold_at(&self, at: &[[f64; 3]]) -> bool {
+        self.atoms
+            .iter()
+            .zip(&self.at)
+            .all(|(&k, bits)| at[k].map(f64::to_bits) == *bits)
+    }
 }
 
 impl GeneralizedBorn {
@@ -334,7 +422,94 @@ impl GeneralizedBorn {
             rescaling: Rescaling::OBC_II,
             solvent_dielectric: WATER_DIELECTRIC,
             kappa: 0.0,
+            frozen: None,
         }
+    }
+
+    /// The same model, told that the atoms `frozen` marks are held at their positions in `at`
+    /// (metres): the descreening term of every ordered pair of two frozen atoms — `I` and `dI/dr`
+    /// of eq 5's pair integral, which depend only on the two positions, ρ̃ and S — is computed
+    /// here, once, and reused by every later evaluation instead of being computed again. **It is
+    /// exact: every result is the same bits as without it**, because each reused term is the very
+    /// value the evaluation would compute, and it enters every sum at the same place in the same
+    /// order. The Born radii themselves are not kept: a frozen atom's radius changes whenever a
+    /// mobile atom moves, so it is recomputed every time, from the kept terms and the others.
+    ///
+    /// **An evaluation at positions where a frozen atom is not, to the bit, where it was here
+    /// falls back to computing every term**, so a stale term is never used; it is then only as
+    /// slow as before. What it saves is the frozen–frozen share of the descreening, `F²` of the
+    /// `N²` pair integrals for `F` frozen atoms of `N`.
+    ///
+    /// # Panics
+    ///
+    /// If `frozen` or `at` is not one per atom, or a frozen atom's position is not finite.
+    pub fn with_frozen(mut self, frozen: &[bool], at: &[[f64; 3]]) -> GeneralizedBorn {
+        let n = self.radii.len();
+        assert_eq!(frozen.len(), n, "one frozen flag per atom");
+        assert_eq!(at.len(), n, "one position per atom");
+        let atoms: Vec<usize> = (0..n).filter(|&k| frozen[k]).collect();
+        assert!(
+            atoms.iter().all(|&k| at[k].iter().all(|x| x.is_finite())),
+            "every frozen atom's position must be finite"
+        );
+        let mut rank = vec![usize::MAX; n];
+        for (r, &k) in atoms.iter().enumerate() {
+            rank[k] = r;
+        }
+        let f = atoms.len();
+        let mut integral = vec![0.0; f * f];
+        let mut slope = vec![0.0; f * f];
+        let screened = self.screened_radii();
+        for (ri, &i) in atoms.iter().enumerate() {
+            let rho_tilde = self.radii[i] - RADIUS_OFFSET;
+            for (rj, &j) in atoms.iter().enumerate() {
+                if j != i {
+                    let (t, d) = descreening(separation(at, i, j).1, rho_tilde, screened[j]);
+                    integral[ri * f + rj] = t;
+                    slope[ri * f + rj] = d;
+                }
+            }
+        }
+        self.frozen = Some(FrozenPairs {
+            rank,
+            at: atoms.iter().map(|&k| at[k].map(f64::to_bits)).collect(),
+            atoms,
+            integral,
+            slope,
+        });
+        self
+    }
+
+    /// The same model without the frozen atoms' kept terms: every evaluation computes every term.
+    pub fn without_frozen(mut self) -> GeneralizedBorn {
+        self.frozen = None;
+        self
+    }
+
+    /// How many atoms [`GeneralizedBorn::with_frozen`] was told are frozen; zero without it.
+    pub fn frozen_count(&self) -> usize {
+        self.frozen.as_ref().map_or(0, |f| f.atoms.len())
+    }
+
+    /// Whether an evaluation at `at` reuses the frozen atoms' kept terms: the model was given them
+    /// ([`GeneralizedBorn::with_frozen`]), and every frozen atom of `at` is where it was then, to
+    /// the bit. When it is not, every term is computed: the same result, more slowly.
+    ///
+    /// # Panics
+    ///
+    /// If `at` is not one position per atom.
+    pub fn reuses_frozen_terms(&self, at: &[[f64; 3]]) -> bool {
+        assert_eq!(at.len(), self.radii.len(), "one position per atom");
+        self.frozen.as_ref().is_some_and(|f| f.hold_at(at))
+    }
+
+    /// Each atom's descreening sphere, `S ρ̃`: the expression the pair integral is called with.
+    fn screened_radii(&self) -> Vec<f64> {
+        self.scales
+            .iter()
+            .zip(&self.radii)
+            .map(|(s, r)| s * (r - RADIUS_OFFSET))
+            .collect()
     }
 
     /// The same model with the Born radii from `rescaling` instead.
@@ -413,11 +588,86 @@ impl GeneralizedBorn {
     ///
     /// If `at` is not one position per atom.
     pub fn born_radii(&self, at: &[[f64; 3]]) -> Vec<f64> {
-        self.radii_and_slopes(at).0
+        self.descreen(at).radius
     }
 
-    /// The Born radii and each one's `dR/dI`.
-    fn radii_and_slopes(&self, at: &[[f64; 3]]) -> (Vec<f64>, Vec<f64>) {
+    /// [`GeneralizedBorn::born_radii`] by the direct sum, every pair integral computed where it is
+    /// used and nothing kept: **the reference the evaluation is held to, bit for bit**, kept as the
+    /// code that was here before the evaluation was made faster. Ignores
+    /// [`GeneralizedBorn::with_frozen`].
+    ///
+    /// # Panics
+    ///
+    /// If `at` is not one position per atom.
+    pub fn born_radii_reference(&self, at: &[[f64; 3]]) -> Vec<f64> {
+        self.radii_and_slopes_reference(at).0
+    }
+
+    /// The Born radii, each one's `dR/dI`, and every ordered pair's `dI/dr` that the kept frozen
+    /// terms do not hold, for the chain rule to read instead of computing the pair integral again.
+    // The loops over `j` are written as the direct sum's are, index by index, so that the two can
+    // be read against each other term for term.
+    #[allow(clippy::needless_range_loop)]
+    fn descreen(&self, at: &[[f64; 3]]) -> Descreened<'_> {
+        let n = self.radii.len();
+        assert_eq!(at.len(), n, "one position per atom");
+        let frozen = self.frozen.as_ref().filter(|f| f.hold_at(at));
+        let kept = frozen.map_or(0, |f| f.atoms.len());
+        let screened = self.screened_radii();
+        let mut radius = Vec::with_capacity(n);
+        let mut slope = Vec::with_capacity(n);
+        let mut pairs = Vec::with_capacity(n * n.saturating_sub(1) - kept * kept.saturating_sub(1));
+        let mut starts = Vec::with_capacity(n + 1);
+        for i in 0..n {
+            starts.push(pairs.len());
+            let rho_tilde = self.radii[i] - RADIUS_OFFSET;
+            let mut integral = 0.0;
+            // The same terms in the same order as the direct sum: a kept term where both atoms
+            // are frozen, the pair integral where either is not.
+            match frozen.and_then(|f| f.row(i)) {
+                Some((f, row, _)) => {
+                    for j in 0..n {
+                        if j == i {
+                            continue;
+                        }
+                        match f.rank[j] {
+                            usize::MAX => {
+                                let (t, d) =
+                                    descreening(separation(at, i, j).1, rho_tilde, screened[j]);
+                                integral += t;
+                                pairs.push(d);
+                            }
+                            rj => integral += row[rj],
+                        }
+                    }
+                }
+                None => {
+                    for j in 0..n {
+                        if j != i {
+                            let (t, d) =
+                                descreening(separation(at, i, j).1, rho_tilde, screened[j]);
+                            integral += t;
+                            pairs.push(d);
+                        }
+                    }
+                }
+            }
+            let (r, d) = self.rescaling.radius(self.radii[i], rho_tilde, integral);
+            radius.push(r);
+            slope.push(d);
+        }
+        starts.push(pairs.len());
+        Descreened {
+            radius,
+            slope,
+            pairs,
+            starts,
+            frozen,
+        }
+    }
+
+    /// The Born radii and each one's `dR/dI`, by the direct sum.
+    fn radii_and_slopes_reference(&self, at: &[[f64; 3]]) -> (Vec<f64>, Vec<f64>) {
         let n = self.radii.len();
         assert_eq!(at.len(), n, "one position per atom");
         let mut radius = Vec::with_capacity(n);
@@ -452,6 +702,13 @@ impl GeneralizedBorn {
     /// Adds the analytic force, `−∇ΔG_GB` at fixed charges, to `forces` (newtons) and returns the
     /// energy, joules per molecule. See the module documentation for the derivative.
     ///
+    /// **The same bits as [`GeneralizedBorn::accumulate_reference`]**, the direct evaluation, in
+    /// the energy and in every atom's force, with or without [`GeneralizedBorn::with_frozen`]: it
+    /// computes each pair integral once and keeps its `dI/dr` for the chain rule, where the
+    /// direct evaluation computes it twice; it reuses the kept frozen–frozen terms; and with no
+    /// salt it does not evaluate `e^(−κf)`, which is `e^0`, exactly one. Every sum takes the same
+    /// terms in the same order. See the module documentation, "The cost".
+    ///
     /// # Panics
     ///
     /// If `charges`, `at` or `forces` is not one per atom.
@@ -459,7 +716,106 @@ impl GeneralizedBorn {
         let n = self.radii.len();
         assert_eq!(charges.len(), n, "one charge per atom");
         assert_eq!(forces.len(), n, "one force per atom");
-        let (born, slope) = self.radii_and_slopes(at);
+        let descreened = self.descreen(at);
+        let (born, slope) = (&descreened.radius, &descreened.slope);
+        let k = COULOMB_KCAL * KCAL_PER_MOL * ANGSTROM;
+        let (eps, kappa) = (self.solvent_dielectric, self.kappa);
+        // g(f) = (1 − e^{−κf}/ε)/f and g′(f). Without salt e^{−κf} = e^{−0} = 1 exactly, so the
+        // exponential is not called: the same bits, at a twentieth of the cost of a pair.
+        let g = |f: f64| {
+            let screen = if kappa == 0.0 {
+                1.0 / eps
+            } else {
+                (-kappa * f).exp() / eps
+            };
+            let g = (1.0 - screen) / f;
+            (g, -g / f + kappa * screen / f)
+        };
+        let mut energy = 0.0;
+        let mut d_born = vec![0.0; n];
+        for i in 0..n {
+            if charges[i] == 0.0 {
+                continue;
+            }
+            // The i = j term of eq 2: f_ii = R_i.
+            let (gi, dgi) = g(born[i]);
+            let c = -0.5 * k * charges[i] * charges[i];
+            energy += c * gi;
+            d_born[i] += c * dgi;
+            for j in i + 1..n {
+                if charges[j] == 0.0 {
+                    continue;
+                }
+                let (d, r) = separation(at, i, j);
+                let rr = born[i] * born[j];
+                let (f, e) = still(r, rr);
+                let (gf, dgf) = g(f);
+                // Both orderings, i j and j i.
+                let c = -k * charges[i] * charges[j];
+                energy += c * gf;
+                let de_df = c * dgf;
+                // ∂f/∂x_i = (1 − E/4) (x_i − x_j)/f: the force −∂E/∂x_i, and its opposite on j.
+                let radial = -de_df * (1.0 - 0.25 * e) / f;
+                for a in 0..3 {
+                    forces[i][a] += radial * d[a];
+                    forces[j][a] -= radial * d[a];
+                }
+                let common = de_df * e * (1.0 + r * r / (4.0 * rr)) / (2.0 * f);
+                d_born[i] += common * born[j];
+                d_born[j] += common * born[i];
+            }
+        }
+        // The chain rule through every Born radius: ∂E/∂R_i · dR_i/dI_i · ∂I_i/∂r_ij, with each
+        // ∂I_i/∂r_ij the one the radii were computed with.
+        for i in 0..n {
+            let c = d_born[i] * slope[i];
+            if c == 0.0 {
+                continue;
+            }
+            let mut own = descreened.pairs[descreened.starts[i]..descreened.starts[i + 1]].iter();
+            let kept = descreened.frozen.and_then(|f| f.row(i));
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                let di = match kept {
+                    Some((f, _, row)) if f.rank[j] != usize::MAX => row[f.rank[j]],
+                    _ => *own
+                        .next()
+                        .expect("one slope per pair the kept terms do not hold"),
+                };
+                let (d, r) = separation(at, i, j);
+                if r == 0.0 {
+                    continue;
+                }
+                let radial = -c * di / r;
+                for a in 0..3 {
+                    forces[i][a] += radial * d[a];
+                    forces[j][a] -= radial * d[a];
+                }
+            }
+        }
+        energy
+    }
+
+    /// [`GeneralizedBorn::accumulate`] by the direct evaluation: every pair integral computed where
+    /// it is used — twice, for the radii and for the chain rule — `e^(−κf)` called for every pair,
+    /// and nothing kept. **The reference the evaluation is held to, bit for bit**, kept as the code
+    /// that was here before it was made faster. Ignores [`GeneralizedBorn::with_frozen`].
+    ///
+    /// # Panics
+    ///
+    /// If `charges`, `at` or `forces` is not one per atom.
+    pub fn accumulate_reference(
+        &self,
+        charges: &[f64],
+        at: &[[f64; 3]],
+        forces: &mut [[f64; 3]],
+    ) -> f64 {
+        let n = self.radii.len();
+        assert_eq!(charges.len(), n, "one charge per atom");
+        assert_eq!(forces.len(), n, "one force per atom");
+        let (born, slope) = self.radii_and_slopes_reference(at);
         let k = COULOMB_KCAL * KCAL_PER_MOL * ANGSTROM;
         let (eps, kappa) = (self.solvent_dielectric, self.kappa);
         // g(f) = (1 − e^{−κf}/ε)/f and g′(f).
@@ -527,6 +883,32 @@ impl GeneralizedBorn {
             }
         }
         energy
+    }
+}
+
+/// What [`GeneralizedBorn::descreen`] computed: the radii, their slopes `dR/dI`, and the `dI/dr`
+/// of every ordered pair `(i, j)`, `j ≠ i`, in the order `i` then `j`, except the pairs of two
+/// frozen atoms when the kept terms held — row `i` is `pairs[starts[i]..starts[i + 1]]`.
+struct Descreened<'a> {
+    radius: Vec<f64>,
+    slope: Vec<f64>,
+    pairs: Vec<f64>,
+    starts: Vec<usize>,
+    frozen: Option<&'a FrozenPairs>,
+}
+
+impl FrozenPairs {
+    /// For a frozen atom `i`, its row of kept integrals and of kept slopes, by rank.
+    fn row(&self, i: usize) -> Option<(&FrozenPairs, &[f64], &[f64])> {
+        let f = self.atoms.len();
+        match self.rank[i] {
+            usize::MAX => None,
+            r => Some((
+                self,
+                &self.integral[r * f..(r + 1) * f],
+                &self.slope[r * f..(r + 1) * f],
+            )),
+        }
     }
 }
 

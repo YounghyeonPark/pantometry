@@ -45,8 +45,11 @@
 //! mobile atom is the whole complex's, term for term. **With [`Solvent::GeneralizedBorn`]**, OBC II
 //! over **every** atom of the simulated system is added: generalized Born is many-body through the
 //! Born radii, so a frozen atom's radius changes when a mobile one moves past it, and none of the
-//! sum is a constant. That makes the solvated step cost the whole system's `O(N²)` twice over (radii
-//! and pairs) where the vacuum step costs mobile × all. Vacuum is the default.
+//! sum is a constant. What is constant is the descreening integral between two frozen atoms, and
+//! the model is given the buffer as frozen ([`GeneralizedBorn::with_frozen`]) so that it computes
+//! those once; the rest — the radii and the pairs — is the whole system's `O(N²)` every step, where
+//! the vacuum step costs mobile × all. The result is the direct evaluation's to the bit. Vacuum is
+//! the default.
 //!
 //! # Observables
 //!
@@ -105,10 +108,13 @@
 //! | 6 Å in 14 Å, vacuum | 1486 (322) | 2.56 | 16.9 |
 //! | 8 Å in 14 Å, vacuum | 1486 (719) | 5.00 | 8.6 |
 //! | 6 Å in 10 Å, OBC II | 987 (322) | 87.2 | 0.50 |
+//! | 6 Å in 10 Å, OBC II, since 3c-2 | 987 (322) | 45.5 | 0.95 |
 //!
-//! Generalized Born over every atom costs 53 times the vacuum step, so 100 ps of it would take
+//! Generalized Born over every atom cost 53 times the vacuum step, so 100 ps of it would have taken
 //! nearly five hours. It was run for 8 ps, which is one autocorrelation time of the vacuum run's
-//! slowest observable.
+//! slowest observable. Step 3c-2 halved it without changing a bit of the result — the radii and
+//! pairs are the same sums, and the trajectory below is the same one — and it is still 28 times
+//! the vacuum step: see [`crate::solvation`], "The cost".
 //!
 //! **Benzene stays bound in every run.** Its centroid never moved more than 1.16 Å from the crystal
 //! position, against a threshold of 3 Å. Means, with standard errors from each series'
@@ -683,7 +689,10 @@ impl Complex {
         }
         let mut potential = binding.force_field().touching(&mobile);
         if solvent == Solvent::GeneralizedBorn {
-            potential = potential.with_solvation(GeneralizedBorn::new(elements));
+            let frozen: Vec<bool> = mobile.iter().map(|m| !m).collect();
+            potential = potential.with_solvation(
+                GeneralizedBorn::new(elements).with_frozen(&frozen, binding.positions()),
+            );
         }
         let heavy = |k: &usize| elements[*k] != Element::H;
         let ligand_heavy: Vec<usize> = ligand.clone().filter(heavy).collect();
