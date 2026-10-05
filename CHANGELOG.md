@@ -1403,6 +1403,231 @@ protects nothing.
   the buffer's bits, and the NVE spread, which asserts nothing.
   245 + 20 is the 265, and 233 + 13 the 246.
 
+- **`pantometry-forcefield` computes free energies: an alchemical Hamiltonian, a Boresch
+  restraint, TI and BAR from λ windows, each checked against a closed form, and benzene decoupled
+  from T4 lysozyme L99A in vacuum.** This is step 3c-1, the engine that 3c-2 (a faster OBC II) and
+  3c-3 (benzene's absolute binding free energy by double decoupling) need. Three new modules:
+  `alchemy`, `boresch` and `free_energy`.
+  - **`Decoupling`** decouples one group of atoms from the rest of a `ForceField` with three
+    couplings in a `Lambda`:
+    - the group–environment Coulomb pairs scaled linearly, so `∂U/∂λ_e` is the coupled cross
+      Coulomb energy exactly;
+    - its van der Waals pairs through a soft core, `λ V_LJ(r_sc)` with
+      `r_sc⁶ = α σ⁶ (1 − λ)^p + r⁶`, α = 0.5 and p = 1 as Mobley, Chodera and Dill 2006 used;
+    - a `Boresch` restraint switched on linearly.
+
+    The group's own terms are kept at every λ: decoupling, not annihilation, so the ligand's
+    intramolecular energy cancels between the two legs of a cycle. Energy, forces and `∂U/∂λ` are
+    analytic. A solvated force field, a group bonded across its boundary, and an empty or whole
+    group are each refused by name (`AlchemyError`).
+  - **`Boresch`** holds the six relative coordinates (one distance, two angles, three dihedrals)
+    between three receptor and three ligand atoms. `Boresch::choose` picks the pair of candidate
+    triples whose four hinge angles are furthest from straight, with `r₀` in a stated range.
+    `release_free_energy` is the analytic free energy of releasing the restraint to 1 M, and
+    `release_free_energy_extended` the same with its two approximations undone in closed form.
+    `STANDARD_VOLUME` is `10⁻³ m³ / N_A`.
+  - **`Windows`** runs BAOAB at each state of a schedule. Each window is deterministic from
+    `window_seed(seed, k)`, samples on the dynamics' own step count, so it is the same bits however
+    it is cut into calls, and holds its whole state, so a clone is a checkpoint and a stopped
+    campaign resumes. A `Sample` is `∂U/∂λ` and the energy differences to both neighbours, from
+    the λ-dependent part alone.
+  - **TI**: the trapezoid on any path, Simpson's rule on a uniform line. **BAR**: Bennett's
+    equation solved by bisection to the last bit, with Shirts et al.'s variance for independent
+    samples (`bar`), and the delta method's for a window's correlated samples (`bar_correlated`)
+    and for a chain of windows (`bennett_chain`). **Not MBAR**: it would need every sample's
+    energy at every state, and BAR between neighbours is what Mobley et al. 2007 used on this
+    system.
+
+  **Read, and what was not.**
+  - **Beutler et al. 1994**, **Boresch et al. 2003**, **Bennett 1976** and **Shirts et al.
+    2003** are all behind paywalls, and none was opened. Each formula is taken from a source that
+    was read, and the documentation says which:
+    - the soft core from the GROMACS reference manual's free-energy section;
+    - the Boresch coordinates and closed form from Clark et al., *J. Chem. Theory Comput.* 19,
+      3686 (2023), PMC10308817, Figure 3 and eqs 6–8, read off the published equation images;
+    - BAR and its variance from Shirts and Chodera 2008 (arXiv:0801.1426), eq 11 and Appendix E.
+  - **Mobley et al. 2006 and 2007** were read through PMC summaries: α, p, the protocol's order
+    and the force constant `K₀ = 10` in `K₀(ξ − ξ₀)²`. That is K = 20 in this crate's `½K`
+    convention, which is the convention the closed form's `(2π k_BT)³` requires.
+
+  **Found on the way: summing the intervals' BAR variances understates the error.** By 1.7 on
+  the particle below, where the samples were thinned as well; by 1.26 on exact, independent
+  samples along a five-state chain, which is the covariance alone.
+  - The first version thinned each window to every `⌈2τ⌉`-th sample and summed Shirts's variance
+    over the intervals, as common practice does.
+  - On a Lennard-Jones particle decoupled from a fixed atom, over 48 seeds, the mean was right:
+    −0.5000 ± 0.0050 `k_BT` against −0.5062 by quadrature. But σ̂ was 0.0198 against a spread of
+    0.0345. At a stride five times longer, where the samples are close to independent, it was
+    0.0102 against 0.0166.
+  - So thinning was not the cause. Adjacent intervals share a window — its samples are the
+    forward set of one interval and the reverse set of the other — and the covariance was missing.
+  - The error is now the delta method's, one series per window, so both intervals a window feeds
+    are in it, with each series' own autocorrelation time. Every sample is used.
+  - TI was not affected: each window enters it once, and its σ̂ was 0.0299 against a spread of
+    0.0333.
+  - **BAR is solved by Newton's method inside a bisection bracket**: each evaluation moves one
+    end of the bracket, and the search stops when no float is left strictly inside it. Every
+    printed result is the bisection's to the digit, at a fraction of the evaluations, which is what
+    paid for the calibrations below.
+
+  **The benzene demonstration (reported, not asserted).** 181L in vacuum, with the 3b setup: a
+  6 Å mobile zone in a 10 Å binding, hydrogens relaxed, the zone minimised and the buffer frozen.
+  - **The restraint** chosen by the rule is on the backbone C, CA and N of one pocket residue
+    (complex atoms 177, 176 and 175) and benzene's C3, C4 and C5. Its reference: r₀ 6.452 Å,
+    θ_A 77.2°, θ_B 105.5°, and hinges between 77° and 120°.
+  - **The schedule** has 22 windows: the restraint on in six, the charges off in four more and
+    the van der Waals off in twelve. Each window runs at 0.5 fs in a 1 ps⁻¹ bath, discards 2 ps
+    and samples 10 ps every 10 fs.
+
+  | segment | BAR (kcal/mol) |
+  | --- | --- |
+  | restraint on, coupled | +3.053 ± 0.077 |
+  | charges off | +1.477 ± 0.009 |
+  | van der Waals off | +13.799 ± 0.127 |
+  | **complex leg** | **+18.329 ± 0.200** (TI, trapezoid: +18.421 ± 0.202) |
+  | restraint released to 1 M, analytic | −7.835 |
+
+  - **Every interval's overlap is between 0.38 and 0.50**, so the schedule is denser than it
+    needs to be.
+  - **The restraint is not free to turn on.** At λ_r = 0, `⟨U_B⟩` is 12.2 kcal/mol, because the
+    unrestrained ring turns away from the minimised pose the restraint holds it to (3b's finding).
+  - **The cost** was 873 s for the 22 windows: 39.7 s per window of 24 000 steps, 1.65 ms per step.
+  - **A vacuum leg has no solvent counterpart and cannot be compared with experiment.** It is here
+    to exercise the engine end to end.
+
+  **Checked against closed forms** (`tests/the_free_energy_against_closed_forms.rs`, fifteen
+  default tests in 8.5 s unoptimised as libtest runs them, 18.7 s one at a time;
+  `tests/benzene_decoupled_from_its_pocket.rs`, four in 0.4 s). The two harmonic wells below have
+  `F₁ − F₀ = (3/2) k_BT ln(k₁/k₀)` exactly. **The calibration bands are set by the number of
+  seeds**, so the exact-sample tests run many small campaigns: bands of ±0.14 to ±0.16 on the
+  z-scores' variance, which a σ̂ wrong by about 8% leaves.
+  - **BAR on exact, independent samples** of the two wells: 1600 seeds, `N_F = 400` and
+    `N_R = 700`, so that `M ≠ 0` and its sign is seen. The z variance is 0.963 with Shirts's
+    formula and 0.916 with the delta method, against 1 ± 0.14.
+    - **The delta method is about 4% conservative on independent samples**: `Estimate::of`'s `τ`
+      is a windowed sum of noisy correlations clipped at ½ from below, so it errs upward only.
+  - **On correlated samples** (stationary AR(1) chains with φ = 0.8, 800 per state, 1600 seeds):
+    the delta method's z variance is 1.001, against 1 ± 0.14; Shirts's formula, which assumes
+    independence, gives 3.66. The 0.821 the first version of this test printed, at 200 seeds, was
+    a fluctuation of a band four times as wide.
+  - **Along a chain of five states** (150 samples per window, 1200 seeds): window by window, the
+    z variance is 0.982; summing the intervals' variances gives 1.555, outside the band of ±0.16.
+  - **Through `Windows` itself, over 600 small campaigns, on a schedule with a corner**: one atom
+    whose stiffness goes `k₀ → 2k₀` under λ_r and then `→ 4k₀` under λ_e, so the corner window's
+    trapezoid weight spans two components and both BAR intervals meet there.
+    - Unbiased: TI's mean deviation from the trapezoid on the exact integrand is
+      −0.0049 ± 0.0043 `k_BT`, and BAR's from the exact ΔF −0.0053 ± 0.0036.
+    - Calibrated: the z variance is 1.047 for TI and 1.032 for BAR, against 1 ± 0.23.
+    - The z means, −0.11, are not asserted: σ̂ grows with the estimate here, so an unbiased
+      estimate's z leans negative; the deviations are what check bias.
+    - With 100 steps of equilibration from rest the variance read 1.14 for both, because the first
+      samples remembered the start. The test equilibrates for 500.
+    - Simpson's rule refuses the schedule.
+  - **TI and BAR from MD windows** on the two wells, eleven windows:
+    - Simpson's rule gives 2.0779 ± 0.0167 `k_BT` against 2.0794. Its bias, computed on the
+      exact integrand, is 3.4e-4, and is asserted below a tenth of σ̂.
+    - The trapezoid is held to its own rule's value on the exact integrand: its bias, +0.0105, is
+      not small.
+    - BAR gives 2.0839 ± 0.0155.
+    - Each window's `⟨∂U/∂λ⟩` is within 4σ̂ of `(3/2) k_BT (k₁ − k₀)/k(λ)`.
+  - **Boresch, at 10 kcal mol⁻¹ Å⁻² and rad⁻²**:
+    - eq 6 is integrated as `e^(−βU)` with `U` the restraint's own `Boresch::energy`, on
+      configurations built from the six coordinates (and checked to give them back), with `8π²`
+      from the same quadrature. That gives −7.140864 kcal/mol.
+    - The excluded tails (r below the range, θ outside [0, π], |Δφ| > π) are integrated
+      separately, and are 2.3e-5 of the integral. With them added, eq 6 is the extended closed
+      form to 4e-13 `k_BT`, asserted at 1e-9.
+    - The old bound, the tails' Gaussian estimate, was 2.5e-3, a hundred times the tails, and
+      caught a missing `r²` correction by 2%. That correction is now six orders above the bound.
+    - Eq 7 itself is −7.106823.
+  - **The Jacobian of eq 6**: Cartesian grids over A's and B's positions, integrating
+    `e^(−βU)` with `U` again `Boresch::energy`, agree with the one-dimensional product to 1e-13 at
+    two spacings.
+  - **The restraint's force** against central differences of its energy, at scale 0.7, and its
+    energy `Σ ½ K (ξ − ξ₀)²` of its own coordinates to 4 ε.
+  - **The anchor rule** passes over a hinge at 175°.
+  - **The soft core**:
+    - at λ = 1 it is UFF's pair to the bit, energy and radial derivative;
+    - at λ = 0 it is exactly zero;
+    - at `r = 0` it takes its closed form `λD(s² − 2s)` with `s = 2/(α(1 − λ))`;
+    - `∂/∂λ` and `∂/∂r` match central differences.
+  - **One LJ particle tethered inside a fixed atom's wall**, decoupled over 21 windows:
+    - the reference is the configurational integral reduced to one dimension by the angular
+      integral `2 sinh(a)/a`, and its quadrature reproduces `Z₀` to 1e-12;
+    - BAR and Simpson's TI are each within 4σ̂ of the −0.506 `k_BT` it gives;
+    - coupled again from the other end with another seed, BAR closes to +0.017 ± 0.038 and TI to
+      −0.0005 ± 0.040.
+  - **In 181L's 3 Å pocket**:
+    - `∂U/∂λ_e` is the same bits at seven states, and equals both the test's own pair sum and
+      `Binding::cross_terms_at`'s;
+    - the soft core at λ_v = 1 is the binding's cross van der Waals to the bit;
+    - fully coupled, the decoupling is the force field to a gap of 2.8e-14 kcal/mol, against a
+      traced allowance of 2.0e-10;
+    - decoupled, the forces are the rest's to the bit;
+    - at λ = (0.6, 0.4, 0.7), with the Boresch restraint, the forces and `∂U/∂λ` match central
+      differences.
+  - **Determinism**: a campaign is the same bits in one call, in calls of seven steps, and
+    stopped half-way, cloned and resumed. A window alone is the same as among the others.
+  - **In release and ignored**, measured:
+    - **the particle over 48 seeds.** BAR's mean is −0.5037 ± 0.0044 `k_BT` at 1 fs and
+      −0.5069 ± 0.0046 at 0.5 fs, against −0.5062. Its σ̂ is 0.0282 against a spread of 0.0304
+      between seeds; TI's is 0.0299 against 0.0333.
+    - **the wells over 200 MD campaigns.** The z variance is 0.99 for BAR and 1.09 for TI where
+      the samples decorrelate quickly. Where they are strongly correlated (γ = 0.2ω, stride 2) it
+      is 1.29 and 1.35, both inside the band of ±0.40 but about 12% small in σ̂. That is the
+      autocorrelation-time estimator's limit, and it affects both estimators alike.
+
+  `ForceField` gained `split_across` (crate-internal).
+
+  **Sabotage.** Twenty-six sabotages were run, each restored by copying the original back,
+  `touch` and SHA-256. Twenty-four were caught the first time:
+  - the soft core's α with the wrong sign;
+  - `∂U/∂λ_v` without the chain rule through `r_sc`;
+  - no exact branch at λ = 1;
+  - the Coulomb term quadratic in λ_e;
+  - the restraint's `∂U/∂λ_r` scaled by λ_r, and its coupling energy unscaled;
+  - the cross pairs left in the rest as well;
+  - BAR's `M` with the wrong sign (caught because the test now uses `N_F ≠ N_R`);
+  - BAR's forward term with `Δf`'s sign flipped;
+  - Shirts's variance without `−(1/N_F + 1/N_R)`;
+  - the reverse set's sign, both in the chain and per interval;
+  - the delta method without the autocorrelation time;
+  - the chain's covariance term with the wrong sign;
+  - the trapezoid without its ½, and Simpson's 4 and 2 swapped;
+  - Boresch without `sin θ_A0`, without `8π²`, and with `(π k_BT)³`;
+  - `V°` per m³ rather than per litre;
+  - the extended correction's sign;
+  - the angle gradient's sign, and the dihedral forces unscaled;
+  - the anchor rule keeping the straightest hinge.
+
+  Two needed a fix to the test, and were run before and after it:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | one seed for every window | passed: the check compared windows at different states, which differ anyway | caught: two windows at the same state must differ |
+  | samples keyed by the call's own count | hung: a campaign cut into calls never completed, and the loop waiting for it had no bound | caught: the loop is bounded, and incompleteness fails |
+
+  **A review found the uncertainties unchecked**, and eight more sabotages passed. Each was run
+  against the tests before the fix and after it, restored the same way. All twenty-six of the
+  first set were run again after the fixes and are still caught.
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | `bennett_chain`'s error ×1.2 | passed: band ±0.33 | caught by the chain (±0.16) and the corner campaigns |
+  | `bar_correlated`'s σ̂ ÷1.1 | passed: band ±0.40 | caught by the correlated samples (±0.14) |
+  | Boresch without its ½, in the energy, the forces and the dihedrals alike (a 2K restraint released as K, 1.24 kcal/mol) | passed: every quadrature re-typed `½K` | caught: the quadratures integrate `Boresch::energy`, and the energy is held to `½K Δξ²` |
+  | TI's and BAR's totals' errors ×3 | passed: nothing calibrated σ̂ through `Windows` | caught by the corner campaigns |
+  | TI's error ×½ | passed | caught by the corner campaigns |
+  | the extended correction without its `r²` term | caught by 2% of the bound | caught by six orders |
+  | the trapezoid's weight on one component at a corner | passed: no schedule had a corner | caught by the corner campaigns |
+  | Simpson without its straight-line check | passed | caught: the corner schedule is refused |
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **287 tests, twenty-two of
+  them ignored**: 265 run by default. The 22 new ones are seventeen in
+  `the_free_energy_against_closed_forms.rs` (fifteen default, two ignored measurements) and five
+  in `benzene_decoupled_from_its_pocket.rs` (four default, the demonstration ignored). 265 + 22 is
+  the 287, and 246 + 19 the 265.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

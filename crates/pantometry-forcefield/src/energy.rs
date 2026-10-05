@@ -735,6 +735,41 @@ impl ForceField {
         }
     }
 
+    /// The same force field without the non-bonded pairs that join an atom `group` marks to one it
+    /// does not, and those pairs, in the order the force field holds them: what
+    /// [`crate::alchemy::Decoupling`] scales. Every other term is kept as it is, the group's own
+    /// pairs included.
+    ///
+    /// # Errors
+    ///
+    /// The two atoms of the first bond that joins the group to the rest: a group bonded to its
+    /// environment cannot be decoupled by scaling its non-bonded pairs alone.
+    ///
+    /// # Panics
+    ///
+    /// If `group` is not one per atom.
+    pub(crate) fn split_across(
+        &self,
+        group: &[bool],
+    ) -> Result<(ForceField, Vec<Pair>), [usize; 2]> {
+        assert_eq!(group.len(), self.charges.len(), "one mark per atom");
+        if let Some(s) = self
+            .stretches
+            .iter()
+            .find(|s| group[s.atoms[0]] != group[s.atoms[1]])
+        {
+            return Err(s.atoms);
+        }
+        let (across, within): (Vec<Pair>, Vec<Pair>) = self
+            .pairs
+            .iter()
+            .copied()
+            .partition(|p| group[p.atoms[0]] != group[p.atoms[1]]);
+        let mut rest = self.clone();
+        rest.pairs = within;
+        Ok((rest, across))
+    }
+
     /// The energy at positions `at` (metres), without the forces.
     ///
     /// # Panics

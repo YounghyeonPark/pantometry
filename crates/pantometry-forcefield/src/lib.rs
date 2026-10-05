@@ -6,8 +6,8 @@
 //! The aim, over the steps that follow this one, is molecular mechanics on drug-sized molecules —
 //! an energy, its minimum, and which conformations are stable — with every term checkable.
 //!
-//! **This step computes UFF's whole energy, minimises it, and moves the molecule in time.** What is
-//! here:
+//! **This step computes UFF's whole energy, minimises it, moves the molecule in time, and
+//! computes the free energy of decoupling a ligand from its surroundings.** What is here:
 //!
 //! - [`Component::from_ccd`] reads one entry of the wwPDB Chemical Component Dictionary, strictly:
 //!   every malformed or unsupported input is a [`CcdError`] naming what it refused. See [`ccd`].
@@ -79,6 +79,25 @@
 //!   vacuum it sits 20–30° turned from the crystal orientation, between the crystal's sites, and
 //!   turns, which the crystal's B-factors exclude. That is a finding about the model. See
 //!   [`complex`].
+//! - [`Decoupling`] is the **alchemical Hamiltonian** of one group of atoms — a ligand — and the
+//!   rest, with three couplings in a [`Lambda`]: the group–environment Coulomb pairs scaled
+//!   linearly, its van der Waals pairs through Beutler's soft core (α = 0.5, p = 1, as Mobley,
+//!   Chodera and Dill 2006 used; the form read in the GROMACS manual, the paper not opened), and a
+//!   [`Boresch`] restraint switched on linearly. The group's own interactions are kept at every λ:
+//!   decoupling, not annihilation. Energy, forces and `∂U/∂λ` analytic. Vacuum only: a solvated
+//!   force field is refused by name. See [`alchemy`].
+//! - [`Boresch`] holds a ligand's six relative coordinates to three receptor atoms, chosen by a
+//!   stated geometric rule, and gives the analytic free energy of releasing it to 1 M — Boresch et
+//!   al. 2003's closed form, read secondarily in Clark et al. 2023 (eq 7), with its two
+//!   approximations undone in closed form beside it. See [`boresch`].
+//! - [`Windows`] runs BAOAB at each state of a λ schedule — deterministic per window, the same
+//!   however it is cut into calls, resumable — and estimates the free energy by **thermodynamic
+//!   integration** (trapezoid, or Simpson on a uniform line) and **Bennett's acceptance ratio**,
+//!   solved to the last bit by Newton's method inside a bisection bracket. **Its uncertainty is
+//!   the delta method's, window by window**, because summing the intervals' variances — the
+//!   common practice — leaves out the covariance of two intervals that share a window: measured,
+//!   that understated σ̂ 1.7-fold on a decoupled particle's MD windows (with their samples thinned
+//!   as well) and 1.26-fold on exact samples along a five-state chain. See [`free_energy`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -174,6 +193,23 @@
 //! 3 Å binding and in release on 10 Å; and, in release, equipartition holds per element over the
 //! mobile atoms.
 //!
+//! The free-energy engine against closed forms (`tests/the_free_energy_against_closed_forms.rs`,
+//! `tests/benzene_decoupled_from_its_pocket.rs`): BAR's estimate and both its variances
+//! calibrated over 1600 seeds of exact samples of two harmonic wells,
+//! `ΔF = (3/2) k_BT ln(k₁/k₀)`, in bands of ±0.14 on the z-scores' variance; the delta method's
+//! also on correlated chains, where Shirts's formula, which assumes independence, gives under a
+//! third of the variance the estimates have, and along a chain of five states, where summing the
+//! intervals' variances understates σ̂ by 1.26; TI's and BAR's σ̂ through [`Windows`] itself,
+//! over 600 small campaigns on a schedule with a corner; TI and BAR from MD windows on the same
+//! wells, each quadrature's bias computed from the exact integrand; Boresch's closed form against
+//! a quadrature of `e^(−βU)` with `U` the restraint's own energy, and the excluded tails by
+//! quadrature, to 4e-13 `k_BT`, and that integral's Jacobian against Cartesian grids to 1e-13;
+//! the soft core equal to UFF's pair to the bit at
+//! λ = 1, zero at λ = 0, its closed form at `r = 0`, and its derivatives against finite
+//! differences; one Lennard-Jones particle decoupled from a fixed atom against its configurational
+//! integral by quadrature, and coupled again from the other end; `∂U/∂λ_e` the coupled cross
+//! Coulomb energy to the bit in 181L's pocket; and a campaign the same bits however it is cut up.
+//!
 //! # Determinism, and where it stops
 //!
 //! No clock, no randomness, no hash order and no threads, so a run repeats bit for bit on one
@@ -191,6 +227,12 @@
 //!   and velocity Verlet at a 0.5 fs step, with every X–H bond free: no SHAKE or RATTLE, no
 //!   barostat, no multiple time steps, no periodic box. The measurement that chose the step is in
 //!   [`dynamics`]; constraints would buy a step about four times longer and are not needed yet.
+//! - **Free energies in vacuum only, by TI and BAR, and not MBAR.** [`Decoupling`] refuses a force
+//!   field with generalized Born: decoupling there means deciding what the ligand's charges and
+//!   Born radii do as it vanishes, which is the next step's. MBAR would need every sample's energy
+//!   at every state; see [`free_energy`] for why BAR between neighbours is enough here. **A
+//!   vacuum complex leg has no solvent leg to close a cycle with**, so no binding free energy is
+//!   computed, and nothing here is compared with experiment.
 //! - **No conformer search.** The minimiser finds the minimum downhill from where it starts; the
 //!   torsion scans hold a dihedral to find a barrier, and nothing looks for the global minimum.
 //! - **No reading of the paper but this crate's in use**: [`Variant`] keeps one other — `r_EN`
@@ -256,26 +298,34 @@
 
 #![deny(missing_docs)]
 
+pub mod alchemy;
 pub mod angular;
 pub mod binding;
+pub mod boresch;
 pub mod ccd;
 pub mod complex;
 pub mod dynamics;
 pub mod energy;
+pub mod free_energy;
 pub mod minimise;
 pub mod pdb;
 pub mod qeq;
 pub mod solvation;
 pub mod uff;
 
+pub use alchemy::{
+    Alchemical, AlchemyError, AtLambda, Coupling, CrossPair, Decoupling, Lambda, SoftCore,
+};
 pub use angular::{Bend, Inversion, Torsion};
 pub use binding::{
     ApoCavity, Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
 };
+pub use boresch::Boresch;
 pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use complex::{Complex, ComplexError, Estimate, Frame, Record, Solvent};
 pub use dynamics::{Bath, MolecularDynamics, Potential};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
+pub use free_energy::{Bar, FreeEnergy, Protocol, Quadrature, Sample, Window, Windows};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use qeq::{Charges, Qeq, QeqError};
