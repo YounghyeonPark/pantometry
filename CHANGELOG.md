@@ -2259,6 +2259,209 @@ protects nothing.
   ignored. Thirty sabotages in all, every one caught. `tools/erfc-reference/README.md` says what
   the script prints and where it is committed.
 
+- **`pantometry-forcefield` has water: rigid TIP3P held by SETTLE inside BAOAB, a box of it, and
+  the liquid at 298 K set beside the literature.** This is step W2 of the four-step explicit-water
+  track: W1 built the box and Ewald, W3 is benzene's hydration free energy in this water and W4
+  the solvated complex. New module `water`.
+  - **The model is TIP3P as Jorgensen et al. 1983 published it** (*J. Chem. Phys.* 79, 926, Table
+    I): r(OH) 0.9572 Å, ∠HOH 104.52°, q(O) −0.834, q(H) +0.417, and an O–O Lennard-Jones term
+    `A/r¹² − C/r⁶` with A = 582.0 × 10³ kcal Å¹² mol⁻¹ and C = 595.0 kcal Å⁶ mol⁻¹, so ε =
+    0.152 073 kcal/mol and σ = 3.150 656 Å. **The hydrogens have no Lennard-Jones term**: CHARMM's
+    modified TIP3P, which gives them one, is another model. **Read secondarily**: the paper could
+    not be opened (the publisher and the one copy found refused). The row is as Table 1 of Izadi,
+    Anandakrishnan and Onufriev (*J. Phys. Chem. Lett.* 5, 3863 (2014), read in arXiv:1408.1679)
+    and Wikipedia's "Water model" article reproduce it, which agree to every digit, and LAMMPS's
+    TIP3P page gives the same geometry, charges and ε and σ.
+  - **The charges sum to zero exactly**, not to rounding, and the dipole is the closed form
+    `2 q_H r_OH cos(θ/2)` = 0.488 56 e Å = 2.347 D (Izadi et al. tabulate 2.348).
+  - **Water and a UFF solute mix by UFF's own rule**, geometric in the distance and the depth: the
+    oxygen is a UFF atom with `x = 2^⅙ σ` and `D = ε`, a hydrogen one with `D = 0`. **A judgement and
+    an approximation**: neither parameter set was fitted with the other. For it: it is the rule the
+    solute's own pairs use, and it keeps W1's long-range correction separable, `O(N)`. Against:
+    GAFF, AMBER and Mobley's benchmark combine σ arithmetically. For benzene's aromatic carbon
+    against a water oxygen the two rules differ by 0.09% in the distance and not at all in the
+    depth. `PeriodicForceField::tip3p` is water alone, `PeriodicForceField::solvated` a UFF solute
+    followed by waters, with `with_solute_charges` and `rigid_waters`. `PeriodicForceField::bonded`
+    is now an `Option`, `None` for water alone (an unreleased W1 signature).
+  - **SETTLE** (Miyamoto and Kollman, *J. Comput. Chem.* 13, 952 (1992)) is **derived here from the
+    conditions it solves, not transcribed**: the constraint impulses are a combination of the old
+    bond vectors, so they lie in the old plane, sum to zero and exert no torque. That fixes the
+    two out-of-plane angles from the out-of-plane coordinates, the centre of mass, and the in-plane
+    turn from `α cos θ + β sin θ = γ`, of whose two roots the smaller turn. The velocities are made
+    RATTLE-consistent by the mass-weighted projection onto each water's rigid motions, a 3×3 solve.
+    SETTLE's cube roots and the box's are by bisection in `+ − × ÷`, not the platform's `cbrt`.
+  - **Inside BAOAB** (`MolecularDynamics::with_constraints`): SETTLE after each drift, with the
+    velocity given the same correction `Δq/h`; the projection after each kick and after `O`, which
+    takes an isotropic Gaussian to Maxwell–Boltzmann on what is left; the bath's work booked after
+    the projection. Velocity Verlet becomes RATTLE. **Six degrees of freedom a water.** Frozen
+    atoms still work: a water frozen whole is not SETTLEd and keeps its bits, one frozen in part
+    is refused by name. `thermalised` projects its draw. `half_step_velocities` gives the
+    velocities after `O`, from which translation and rotation are read. **With no constraints
+    every new step is skipped and a run is the bits it was**: the whole forcefield suite passes
+    unchanged.
+  - **The box** (`WaterBox::lattice`): `k³` waters on a simple cubic lattice at 0.997 g/cm³, each
+    turned by a uniform rotation — the unit quaternion of four normals of `Rng::for_index(seed,
+    water)` — and `WaterBox::equilibrate` melts it: 0.5 ps at 0.5 fs in a 50 ps⁻¹ bath, then at 2 fs
+    in a 5 ps⁻¹ one.
+
+  **Checked against closed forms and invariants** (`tests/a_rigid_water_against_closed_forms.rs`,
+  thirteen tests, 17 s unoptimised):
+  - Table I as it stands; ε and σ against LAMMPS's printed 0.1521 kcal/mol and 3.1507 Å to their
+    last digit, a third source for the transcription (C = 600 in both places, which the
+    derivation alone cannot see, now fails); `4εσ¹²` and `4εσ⁶` give back A and C to 1e-14; the oxygen as a UFF pair is
+    `A/r¹² − C/r⁶` at six distances; the charges' sum is `0.0`; the triangle's lengths, angle and
+    centre of mass; the dipole against its closed form to 1e-14 and against 2.35 D.
+  - The box's force field written out: the O–O pairs by hand to 1e-13, A&T's one-type tail to
+    1e-13, the electrostatics the Ewald sum with each water's three pairs excluded, no bonded term;
+    and methane among eight waters, its pairs with each oxygen by the geometric rule to 1e-12.
+  - **SETTLE against SHAKE**, iterated here to its fixed point, on 512 waters given a step's
+    worth of random displacement: the three lengths to 1.56 ε × the water's largest coordinate
+    (bound 16), the centre of mass kept, and SHAKE's answer to 16.0 of the same unit (bound 64),
+    against constraint corrections at least 2.6 × 10¹¹ of it. **The bound is in ε × the
+    coordinate, not ulps of the bond**: a position is stored to half an ulp of itself, and the
+    first bound, 8 ulps of the bond, failed at 8.5 for nothing but the waters' distance from the
+    origin.
+  - Projected velocities: nothing along a constraint to 8.1e-16, idempotent, rigid motions kept.
+  - **Constrained NVE's RMS energy error falls as `h²`**, on eight waters in vacuum with no cutoff,
+    written out in the test so that no cutoff's steps enter: measured over sixteen starts, the 32
+    ratios per halving from 1 to 0.5 to 0.25 fs were 3.911–4.057, and the band is 3.8–4.2. **From
+    2 fs to 1 fs they were 3.36–4.09**: one start in sixteen reads 3.36 there, 2 fs being past where
+    `h²` alone describes it, so the test halves from 1 fs. The largest departure rather than the
+    RMS was tried first and spread more (3.20–4.59 on the same start).
+  - **Equipartition for rigid bodies**: in a 20 ps⁻¹ bath the 27 waters' translation read
+    1.001 ± 0.026 and their rotation 1.022 ± 0.027 of `(3/2) N k_BT` each, each within 4σ, and
+    `degrees_of_freedom` is `6N`. **The first version equilibrated 0.1 ps and read 1.057**
+    (z = +2.4): measured over 20 ps in release, 0.1 ps left translation at 1.0143 ± 0.0068, and 1 ps
+    brought four starts to 0.985–1.002, so the test equilibrates 1 ps.
+  - **Equipartition to a part in a thousand**: 27 free rigid waters under no potential, in a bath
+    with `γh = 1`, so that the samples are nearly independent (τ = 0.65 over 40 000): translation
+    0.9985 ± 0.0009 and rotation 1.0005 ± 0.0009 of `(3/2) N k_BT`, held to 4σ.
+  - The books balance under a bath with constraints: 5.1e-3 kcal/mol over 800 steps of 0.5 fs,
+    against a bound of ten times constrained NVE's RMS error from the same start at the same step
+    (5.06e-3), stated as a constant.
+  - NVE's degrees of freedom are `6N − 6` with the rigid motion removed, asserted in every NVE
+    run.
+  - A run is the same bits in one call or 24, two or three; every water rigid after it; and the
+    whole-step velocities have nothing along a constraint, to 2.2e-16, and so have the velocities
+    after `O` at the positions they were projected at (`half_step_positions`, new), to 5.2e-16.
+  - Frozen waters keep their bits with `6 N_free` degrees of freedom; a water frozen in part
+    panics.
+  - The lattice is at its density to 8ε, every centre of mass on its site, its orientations the
+    seed's, and uniform: the bisectors' mean and fourth moment over 4 096 waters within 4σ of 0 and
+    1/5.
+  - W1's guarantees with TIP3P: forces against central differences, and the energy and forces
+    unchanged when every atom is moved by its own whole number of box lengths.
+
+  **Sabotage: seventeen, every one caught**, each restored by copying the original back, `touch` and
+  SHA-256, the file run with `--no-fail-fast`: SETTLE's `sin ψ` sign and its other root (each by
+  four tests, SHAKE among them); the degrees of freedom without the constraints (two); **no
+  projection after `O` (the books alone: the noise along the bonds at 1 fs is 4% of the
+  rotation's share, inside its 4σ)**; the charges swapped (five); no velocity correction after
+  SETTLE (two); the work booked before the projection (the books); rotations from a quaternion
+  uniform in a cube (the fourth moment); the molecule's mass one hydrogen short (five); the
+  hydrogens given the oxygen's Lennard-Jones (four); the projection with the oxygen's mass on a
+  hydrogen (four); `thermalised` not projecting (two); the drift never SETTLEd (three); the frozen
+  mask not rechecked (two); the oxygen's `x` taken as σ (two); one O–H not excluded (one). **One
+  passed first: no projection after the second kick.** It follows the same trajectory — the next
+  step's first kick projects at the same positions, and projection is linear and idempotent — and
+  only the whole-step velocities are wrong, whose kinetic energy error is `O(h²)` too. The cut
+  test now holds those velocities to the constraints, and catches it.
+
+  **A review found six gaps, and each now has the test that closes it**, every sabotage run
+  against the test file before the fix and after, restored by copy, `touch` and SHA-256:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | the constrained bath's noise 4% wide | passed (rotation z = +3.6 in the reviewer's run) | caught by the free-water equipartition |
+  | the noise 2% wide, 4% in the energy | passed | caught: translation 1.0389 ± 0.0009, z = +42 |
+  | NVE counting nine degrees of freedom a water | passed all twelve | caught by the `6N − 6` assertion |
+  | the projection after `O` at the positions before the drift | caught by the books at 1e-3 of traffic, 2–4× margin | caught: 0.67 kcal/mol against the new 0.051 bound |
+  | no `Δq/h` velocity correction | caught | caught: 1.36 kcal/mol, and by the `h²` test |
+  | `Δq/h` halved | caught | caught: 0.68 kcal/mol, and by the `h²` test |
+  | no projection after `O` | caught by the books alone | also caught by the velocities after `O` and by the free-water equipartition (rotation 1.86) |
+  | `C = 600` in the code and in the test's own Table I | passed | caught by LAMMPS's ε and σ |
+
+  - **The books' first new bound grew with the integrator's error**, ten times NVE's RMS error
+    measured again in the same test, and a missing `Δq/h` passed it at 0.2 of itself because
+    its NVE error grew too. The bound is now a stated constant from the correct integrator's
+    measurement.
+  - **A sub-ulp tolerance**: the UFF form of the O–O pair was held to `1e-14 A/r¹²`, a tenth of an
+    ulp of the dominant `C/r⁶` at 9 Å, and passed by rounding's luck; the scale is now
+    `A/r¹² + C/r⁶`.
+
+  **The liquid** (`tests/liquid_water_against_the_literature.rs`, ignored, release). 216 waters in
+  an 18.64 Å box and 512 in a 24.86 Å one, `r_c` = 9 Å, δ = 10⁻⁵ (309 and 606 wave vectors);
+  melted 20.5 ps, then NVT at 2 fs in a 1 ps⁻¹ bath (100 and 50 ps) and 100 ps of NVE from its
+  last state. **Reported, not asserted**; errors from each series' own autocorrelation, or from
+  independent 25 ps blocks:
+
+  | | 216 | 512 | literature |
+  | --- | --- | --- | --- |
+  | ⟨T⟩ after `O` (K) | 298.3 ± 1.2 | 298.3 ± 1.2 | 298 |
+  | U/N (kcal/mol) | −9.610 ± 0.014 | −9.612 ± 0.015 | −9.86, Jorgensen 1983 (Monte Carlo, NPT, spherical cutoff), **as quoted, not read** |
+  | g_OO first peak (Å) | 2.770 ± 0.004 | 2.782 ± 0.006 | 2.77, Izadi et al. 2014 Table 3 |
+  | its height | 2.72 ± 0.02 | 2.73 ± 0.02 | not tabulated there |
+  | P (bar) | +180 ± 37 | +139 ± 30 | −2.9 ± 2.5 at 33.00 nm⁻³, N = 256 (Yeh and Hummer 2004); here 33.33 |
+  | NVE ⟨T⟩ (K) | 304.0 ± 0.4 | 293.3 ± 0.2 | |
+  | D, NVE (10⁻⁵ cm²/s) | 5.80 ± 0.27 | 5.04 ± 0.13 | D_PBC 5.123 ± 0.027 (N = 256) and 5.315 ± 0.014 (512), 298 K (Yeh and Hummer) |
+  | D under the bath | 5.67 ± 0.46 | 4.79 (two blocks) | 5.06 ± 0.09 NVT, 5.19 ± 0.08 NPT (Mahoney and Jorgensen 2001, 9 Å cutoff, 267 waters) |
+  | k_BTξ/(6πηL) at the NVE run's ⟨T⟩ | +1.10 | +0.80 | |
+  | D∞ from NVE | 6.90 ± 0.27 at 304.0 K | 5.84 ± 0.13 at 293.3 K | 6.05 by fit, 6.11 corrected, 298 K (Yeh and Hummer); 5.5 (Izadi et al.) |
+  | D∞ under the bath | 6.75 ± 0.46 at 298.3 K | 5.60 (two blocks) at 298.3 K | |
+  | experiment | | | 2.30 |
+
+  - **The correction** uses Yeh and Hummer's own TIP3P viscosity, 0.308 mPa s, and ξ = 2.837297,
+    with `k_BT` at each run's own mean temperature. **η's own temperature dependence is not
+    included**: η is their 298 K value throughout, which understates the correction of the warmer
+    run and overstates the cooler one's. (The table first used 298 K for both NVE runs; those
+    D∞ were 6.88 and 5.85. The values here are the same runs, recomputed by the formula the test
+    now uses; the runs were not repeated.)
+    Yeh and Hummer and Mahoney and Jorgensen were read in primary; Izadi et al. in primary for
+    their table, which cites others for its TIP3P column. The g_OO height is not compared with
+    anything: no readable source that tabulates it was found, and a search snippet giving 2.71
+    from an unidentified paper is not a citation.
+  - **U/N against −9.86**: Jorgensen's is a cutoff Monte Carlo at the model's own density (0.980
+    in Izadi et al.'s table); this is Ewald at 0.997 and its reciprocal bias, 4.9e-3 and 7.1e-3
+    kcal/mol a water, is not put back. Izadi et al.'s ΔH_vap of 10.26 kcal/mol implies about
+    −9.67 with `RT` taken off. The two box sizes agree to 0.002.
+  - **The pressure is positive because the density is the experiment's**: TIP3P's own at 1 atm is
+    0.980 (Izadi et al.), and the box is 1% denser than Yeh and Hummer's, which TIP3P's
+    compressibility (57.4 × 10⁻⁶ bar⁻¹, Izadi et al.) makes about +175 bar.
+  - **Each NVE run is at its own temperature**, 304.0 K and 293.3 K from baths at 298.3: an NVE run
+    starts from one draw of the canonical total energy, whose spread, `k_BT √(N C_v/k_B)` with
+    TIP3P's `C_p` of 18.74 cal/(K mol) (Izadi et al.), moves the mean temperature by 6.7 K at 216
+    waters and 4.4 K at 512, one standard deviation. Neither drifts (−0.002 and +0.003 kcal/mol/ps
+    over the box). The NVE temperature is now the library's own count, `temperature()` with
+    `6N − 3` after `without_net_momentum` (new), not one written in the test. Water's D rises about
+    2% a kelvin, so each NVE D belongs to its own temperature, and **the two sizes' D∞, 6.90 at
+    304 K and 5.84 at 293 K, bracket Yeh and Hummer's 6.05–6.11 at 298 K** rather than test the
+    size correction. That would need both at one temperature, longer.
+  - TIP3P's excess over experiment's 2.30 is there, two and a half times: the model, not this code.
+
+  **The cost** (release, one core, `x86_64-pc-windows-gnu`; rigid TIP3P at 2 fs, classical Ewald at
+  δ = 10⁻⁵, `r_c` = 9 Å):
+
+  | waters | atoms | wave vectors | ms a step | one evaluation | SETTLE + one projection |
+  | --- | --- | --- | --- | --- | --- |
+  | 216 | 648 | 309 | 7.03 | 6.77 | 0.029 |
+  | 512 | 1 536 | 606 | 26.2 | 25.3 | 0.072 |
+  | 1 000 | 3 000 | 1 051 | 55.2 | 53.5 | 0.136 |
+
+  The constraints are a quarter of a percent of a step; the force field is the rest.
+  - **W3's projection.** Benzene in 500 to 1 000 waters, about 20 windows of 300 ps at 2 fs, is 3
+    million steps: **about 22 h at 512 waters and 46 h at 1 000**, before the vacuum leg, which is
+    negligible. **But benzene's C–H bonds are UFF's and free**, and the step they allow is 0.5 fs
+    (3a's measurement): at that step the same campaign is 87 and 184 h. So W3 needs one of a
+    constrained solute X–H (SHAKE on the solute, which SETTLE does not do), a multiple time step,
+    or a rigid benzene; and `Windows` does not yet take constraints, which is W3's to add. A
+    neighbour list with a skin, not PME, is the next saving at this size (W1).
+  - **Not here**: SHAKE for a solute, a barostat, PME, H–H or O–H Lennard-Jones (CHARMM's
+    TIP3P), other water models, a measured viscosity.
+
+  **Counts.** `cargo test -p pantometry-forcefield` passes **319**, 30 ignored (305 and 27
+  before): thirteen in `a_rigid_water_against_closed_forms.rs`, one in `water`'s unit tests, and three
+  ignored in `liquid_water_against_the_literature.rs` (two liquids and the timing).
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

@@ -53,7 +53,8 @@
 //!
 //! # The time step, measured
 //!
-//! Every X–H bond is free — no SHAKE or RATTLE — so the step is set by the fastest bond. UFF gives
+//! Every X–H bond of a UFF molecule is free — only rigid water is constrained, below — so the
+//! step is set by the fastest bond. UFF gives
 //! aspirin's C–H `k` = 662 kcal mol⁻¹ Å⁻², a period of 11.5 fs with the C–H reduced mass. NVE
 //! aspirin from its relaxed geometry, velocities at 300 K (seed 7, the rigid motion removed), one
 //! picosecond at each step (`tests/the_dynamics.rs`, `the_step_size_measured`):
@@ -140,6 +141,28 @@
 //! of them rather than against a sum that may be near zero. The potential is booked from its value
 //! at the start ([`MolecularDynamics::potential_reference`]), because a force field's zero is
 //! arbitrary and would otherwise be the largest entry, and the scale every change is judged on.
+//!
+//! # Rigid molecules
+//!
+//! [`MolecularDynamics::with_constraints`] holds molecules rigid by SETTLE ([`Settle`], in
+//! [`crate::water`]), BAOAB composed with RATTLE's two halves as Leimkuhler and Matthews constrain
+//! it (*Proc. R. Soc. A* **472**, 20160138 (2016) — cited for the scheme, not opened; what follows
+//! is each piece's own requirement, and the tests check the result): **after each drift** the positions are
+//! SETTLEd and the velocity given the same correction, `v ← v + Δq/h`, then projected; **after each
+//! kick and after `O`** the velocities are projected onto the motions that keep every molecule
+//! rigid — the mass-weighted orthogonal projection, which takes an isotropic Gaussian to the
+//! Maxwell–Boltzmann distribution of what is left, so `O` followed by it samples that distribution
+//! exactly. Without a bath it is RATTLE's velocity Verlet. With no constraints every one of these
+//! steps is skipped and a run is the bits it was.
+//!
+//! - **Degrees of freedom**: three per free atom less three per rigid three-site molecule, six a
+//!   water, and less the rigid motion `thermalised` removed in NVE.
+//! - **The thermostat's work** is booked after the projection, so it is what `O` and the
+//!   projection together put into the motions that remain.
+//! - **Frozen atoms** still work: a molecule frozen whole is not SETTLEd and keeps its bits; one
+//!   frozen in part is refused, because a triangle held by one corner is not what SETTLE solves.
+//! - [`MolecularDynamics::half_step_velocities`] are the velocities after `O` and its projection,
+//!   from which a rigid body's translational and rotational kinetic energies are read.
 
 // Three-vectors as `[f64; 3]`, indexed by component as the formulas are written; the Jacobi
 // rotations update two columns at once, which an iterator over one cannot.
@@ -148,6 +171,7 @@
 use crate::ccd::Element;
 use crate::energy::ForceField;
 use crate::uff::AVOGADRO;
+use crate::water::Settle;
 use pantometry_core::conserved::quantity;
 use pantometry_core::{Ledger, Rng};
 use pantometry_units::BOLTZMANN;
@@ -260,8 +284,13 @@ pub struct MolecularDynamics {
     thermostat_work: f64,
     half_step_kinetic: f64,
     half_step_kinetic_per_atom: Vec<f64>,
+    half_step_velocities: Vec<[f64; 3]>,
+    half_step_positions: Vec<[f64; 3]>,
     cache: Option<Cache>,
     reference: Option<f64>,
+    constraints: Option<Settle>,
+    /// Per rigid molecule: whether it moves (it is not frozen).
+    active: Vec<bool>,
 }
 
 impl MolecularDynamics {
@@ -287,9 +316,99 @@ impl MolecularDynamics {
             thermostat_work: 0.0,
             half_step_kinetic: f64::NAN,
             half_step_kinetic_per_atom: vec![f64::NAN; n],
+            half_step_velocities: vec![[f64::NAN; 3]; n],
+            half_step_positions: vec![[f64::NAN; 3]; n],
             cache: None,
             reference: None,
+            constraints: None,
+            active: Vec::new(),
         }
+    }
+
+    /// The same dynamics with the molecules `settle` names held rigid: see [the module
+    /// documentation](self). Call it before [`MolecularDynamics::thermalised`], which then draws
+    /// velocities that keep them rigid; any others are projected at the first step. The positions
+    /// given to every step must have each molecule rigid and whole, as the last step left them.
+    ///
+    /// # Panics
+    ///
+    /// If an atom of a molecule is past the atom count, its masses are not the ones `settle` was
+    /// built with, or a molecule is frozen in part.
+    pub fn with_constraints(mut self, settle: Settle) -> MolecularDynamics {
+        let n = self.masses.len();
+        let [m_o, m_h] = settle.masses();
+        for &[o, a, b] in settle.waters() {
+            assert!(
+                o < n && a < n && b < n,
+                "a rigid molecule's atom is past the atom count"
+            );
+            assert!(
+                self.masses[o] == m_o && self.masses[a] == m_h && self.masses[b] == m_h,
+                "a rigid molecule's masses must be the ones its SETTLE was built with"
+            );
+        }
+        self.constraints = Some(settle);
+        self.refresh_active();
+        self.cache = None;
+        self
+    }
+
+    /// The rigid molecules, if any.
+    pub fn constraints(&self) -> Option<&Settle> {
+        self.constraints.as_ref()
+    }
+
+    fn refresh_active(&mut self) {
+        let frozen = &self.frozen;
+        self.active = match &self.constraints {
+            None => Vec::new(),
+            Some(s) => s
+                .waters()
+                .iter()
+                .map(|w| {
+                    let f = w.map(|i| frozen[i]);
+                    assert!(
+                        f[0] == f[1] && f[1] == f[2],
+                        "a rigid molecule is frozen whole or not at all: atoms {w:?}"
+                    );
+                    !f[0]
+                })
+                .collect(),
+        };
+    }
+
+    /// Projects the velocities onto the rigid motions of every moving molecule at `at`.
+    fn project(&mut self, at: &[[f64; 3]]) {
+        if let Some(s) = &self.constraints {
+            let active = &self.active;
+            s.constrain_velocities_where(at, &mut self.velocities, |w| active[w]);
+        }
+    }
+
+    /// A drift by `h`, then — with constraints — SETTLE, the velocity correction it implies and the
+    /// projection.
+    fn drift_constrained(&mut self, at: &mut [[f64; 3]], h: f64) {
+        if self.constraints.is_none() {
+            self.drift(at, h);
+            return;
+        }
+        let before = at.to_vec();
+        self.drift(at, h);
+        let unconstrained = at.to_vec();
+        let s = self.constraints.as_ref().expect("constraints");
+        let active = &self.active;
+        s.constrain_positions_where(&before, at, |w| active[w]);
+        for (w, idx) in s.waters().iter().enumerate() {
+            if !active[w] {
+                continue;
+            }
+            for &i in idx {
+                for c in 0..3 {
+                    self.velocities[i][c] += (at[i][c] - unconstrained[i][c]) / h;
+                }
+            }
+        }
+        self.project(at);
     }
 
     /// Molecular dynamics of atoms of these elements, each with its [`Element::mass`].
@@ -333,6 +452,7 @@ impl MolecularDynamics {
         }
         self.frozen = frozen;
         self.removed = 0;
+        self.refresh_active();
         self
     }
 
@@ -387,6 +507,8 @@ impl MolecularDynamics {
                 rng.gaussian() * width,
             ];
         }
+        // The draw projected onto the rigid motions is Maxwell–Boltzmann on them.
+        self.project(at);
         self.removed = if self.frozen.iter().any(|&f| f) || self.masses.is_empty() {
             0
         } else {
@@ -439,17 +561,22 @@ impl MolecularDynamics {
 
         // B: half a kick from the forces where the atoms are.
         self.kick(&cache.forces, half);
+        self.project(at);
         match self.bath {
-            Bath::Isolated => self.drift(at, dt),
+            Bath::Isolated => self.drift_constrained(at, dt),
             Bath::Langevin {
                 temperature,
                 friction,
                 seed,
             } => {
                 // A, O, A.
-                self.drift(at, half);
-                self.exchange_with_bath(temperature, friction, seed, dt);
-                self.drift(at, half);
+                self.drift_constrained(at, half);
+                if self.constraints.is_some() {
+                    self.exchange_with_bath_constrained(at, temperature, friction, seed, dt);
+                } else {
+                    self.exchange_with_bath(temperature, friction, seed, dt);
+                }
+                self.drift_constrained(at, half);
             }
         }
         // The forces where the atoms arrived, which the second B uses and the next step's first
@@ -458,6 +585,7 @@ impl MolecularDynamics {
         let energy = potential.energy_and_forces(at, &mut forces);
         // B: the other half kick.
         self.kick(&forces, half);
+        self.project(at);
         self.cache = Some(Cache {
             at: at.to_vec(),
             forces,
@@ -530,6 +658,51 @@ impl MolecularDynamics {
         }
         self.thermostat_work += work;
         self.half_step_kinetic = kinetic;
+        self.half_step_velocities.copy_from_slice(&self.velocities);
+    }
+
+    /// The same with rigid molecules: the solve, the projection at `at`, and then the books, so
+    /// that the work is what the two together put into the motions that remain.
+    fn exchange_with_bath_constrained(
+        &mut self,
+        at: &[[f64; 3]],
+        temperature: f64,
+        friction: f64,
+        seed: u64,
+        dt: f64,
+    ) {
+        let c1 = (-friction * dt).exp();
+        let fresh = -(-2.0 * friction * dt).exp_m1();
+        let kt = BOLTZMANN.to_si() * temperature;
+        let n = self.masses.len() as u64;
+        let mut before = 0.0;
+        for (i, v) in self.velocities.iter_mut().enumerate() {
+            if self.frozen[i] {
+                continue;
+            }
+            let m = self.masses[i];
+            let mut rng = Rng::for_index(seed ^ KICK_STREAM, self.steps * n + i as u64);
+            let width = (fresh * kt / m).sqrt();
+            before += 0.5 * m * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            for c in v.iter_mut() {
+                *c = c1 * *c + width * rng.gaussian();
+            }
+        }
+        self.project(at);
+        let mut kinetic = 0.0;
+        for (i, v) in self.velocities.iter().enumerate() {
+            if self.frozen[i] {
+                self.half_step_kinetic_per_atom[i] = 0.0;
+                continue;
+            }
+            let k = 0.5 * self.masses[i] * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            kinetic += k;
+            self.half_step_kinetic_per_atom[i] = k;
+        }
+        self.thermostat_work += kinetic - before;
+        self.half_step_kinetic = kinetic;
+        self.half_step_velocities.copy_from_slice(&self.velocities);
+        self.half_step_positions.copy_from_slice(at);
     }
 
     /// The masses, kilograms.
@@ -582,6 +755,40 @@ impl MolecularDynamics {
         &self.half_step_kinetic_per_atom
     }
 
+    /// The velocities right after the last step's `O` (and, with constraints, its projection),
+    /// metres per second; `NaN` without a Langevin bath or before the first step. A rigid
+    /// molecule's translational and rotational kinetic energies are read from these.
+    pub fn half_step_velocities(&self) -> &[[f64; 3]] {
+        &self.half_step_velocities
+    }
+
+    /// The positions [`MolecularDynamics::half_step_velocities`] were projected at — the
+    /// half-drifted positions of the last step's `O` — with constraints; `NaN` without them, without
+    /// a Langevin bath or before the first step. Against these, and only these, the velocities
+    /// after `O` have nothing along a constraint.
+    pub fn half_step_positions(&self) -> &[[f64; 3]] {
+        &self.half_step_positions
+    }
+
+    /// The same dynamics with the centre-of-mass velocity taken out of every free atom, and — in
+    /// NVE, where it then stays out — three degrees of freedom counted as removed. For an NVE run
+    /// started from a bath's velocities, whose net momentum would otherwise carry the whole system
+    /// along. With an atom frozen there is no conserved momentum, and nothing is done.
+    pub fn without_net_momentum(mut self) -> MolecularDynamics {
+        if self.frozen.iter().any(|&f| f) || self.masses.is_empty() {
+            return self;
+        }
+        let total: f64 = self.masses.iter().sum();
+        let p = self.momentum();
+        for v in self.velocities.iter_mut() {
+            for c in 0..3 {
+                v[c] -= p[c] / total;
+            }
+        }
+        self.removed = 3;
+        self
+    }
+
     /// The potential energy at the positions of the last step or [`MolecularDynamics::prepare`], joules per
     /// molecule; `None` before either.
     pub fn potential_energy(&self) -> Option<f64> {
@@ -594,11 +801,13 @@ impl MolecularDynamics {
         self.thermostat_work
     }
 
-    /// The degrees of freedom that exchange energy: three per free atom, less the momenta
+    /// The degrees of freedom that exchange energy: three per free atom, less three per moving
+    /// rigid molecule, less the momenta
     /// [`MolecularDynamics::thermalised`] removed — which only the microcanonical dynamics keeps removed. A
-    /// Langevin bath re-thermalises them, so under one this is `3 N_free`.
+    /// Langevin bath re-thermalises them, so under one this is `3 N_free − 3 N_rigid`: six a water.
     pub fn degrees_of_freedom(&self) -> usize {
-        let free = 3 * self.frozen.iter().filter(|&&f| !f).count();
+        let rigid = self.active.iter().filter(|&&a| a).count();
+        let free = 3 * self.frozen.iter().filter(|&&f| !f).count() - 3 * rigid;
         match self.bath {
             Bath::Isolated => free - self.removed.min(free),
             Bath::Langevin { .. } => free,

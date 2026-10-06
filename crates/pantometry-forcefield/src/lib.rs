@@ -118,6 +118,17 @@
 //!   function is this crate's own ([`ewald::erfc`], at most 3.21 ulp against mpmath). No PME yet:
 //!   at W4's 24 000 atoms one evaluation is 0.7–1.3 s, most of it reciprocal. See [`periodic`] and
 //!   [`ewald`].
+//! - [`water`] is **rigid TIP3P water**, step W2 of explicit water: Jorgensen et al.'s Table I
+//!   (1983, read as two readable sources reproduce it), the O–O Lennard-Jones term as a UFF pair
+//!   so that a water oxygen mixes with a UFF solute by UFF's own geometric rule — a stated
+//!   approximation — and **SETTLE** ([`Settle`], Miyamoto and Kollman 1992), derived here from its
+//!   conditions and checked against SHAKE converged, with the RATTLE projection of the
+//!   velocities. [`MolecularDynamics::with_constraints`] puts it inside BAOAB — SETTLE after each
+//!   drift, the projection after each kick and after `O`, six degrees of freedom a water — and
+//!   [`WaterBox`] builds a lattice at 0.997 g/cm³ and melts it. [`PeriodicForceField::tip3p`] is
+//!   the water alone and [`PeriodicForceField::solvated`] a UFF solute in it. The liquid at
+//!   298 K is set beside the literature in `tests/liquid_water_against_the_literature.rs`;
+//!   nothing about it is asserted. See [`water`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -255,6 +266,18 @@
 //! against mpmath; a decoupling's end states and `∂U/∂λ` against the systems and sums they are;
 //! and dynamics in the box the same bits however it is cut into calls.
 //!
+//! Rigid water against closed forms (`tests/a_rigid_water_against_closed_forms.rs`): Table I as it
+//! stands, ε and σ from `A` and `C`, the charges summing to zero exactly and the dipole
+//! `2 q_H r_OH cos(θ/2)`; the box's force field written out pair by pair, and a UFF solute's pair
+//! with a water oxygen by the geometric rule; SETTLE restoring the three lengths to rounding and
+//! landing on SHAKE's converged answer; projected velocities with nothing along a bond; the RMS
+//! energy error of constrained NVE falling by four per halving, in a band measured over sixteen
+//! starts; a bath giving each water `(3/2) k_BT` of translation and of rotation, and free rigid
+//! waters taking the bath's temperature to a part in a thousand; the books
+//! balancing under a bath; a run the same bits however it is cut; frozen waters held to the bit
+//! and a water frozen in part refused; the lattice at its density with uniform orientations; and
+//! W1's gradient and image guarantees with TIP3P.
+//!
 //! # Determinism, and where it stops
 //!
 //! No clock, no randomness, no hash order and no threads, so a run repeats bit for bit on one
@@ -278,10 +301,11 @@
 //!
 //! # What is deliberately not in it
 //!
-//! - **Dynamics without constraints, and with nothing but a Langevin bath.** [`dynamics`] is BAOAB
-//!   and velocity Verlet at a 0.5 fs step, with every X–H bond free: no SHAKE or RATTLE, no
-//!   barostat, no multiple time steps. The measurement that chose the step is in
-//!   [`dynamics`]; constraints would buy a step about four times longer and are not needed yet.
+//! - **No constraints but rigid water, and nothing but a Langevin bath.** [`dynamics`] is BAOAB
+//!   and velocity Verlet at a 0.5 fs step for a UFF molecule, with every X–H bond free; only a
+//!   rigid three-site water is held, by SETTLE ([`water`]), which allows 2 fs. No SHAKE on a
+//!   solute's bonds, no barostat, no multiple time steps. The measurement that chose the step is
+//!   in [`dynamics`].
 //! - **Free energies by TI and BAR, not MBAR, and no nonpolar term in them.** MBAR would need
 //!   every sample's energy at every state; see [`free_energy`] for why BAR between neighbours is
 //!   enough here. The solvent-accessible surface has no useful gradient, so it is in neither leg
@@ -321,8 +345,9 @@
 //!   is computed ([`solvation::surface_area`], [`solvation::nonpolar_energy`]) but not added to
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
 //!   Not here: Poisson–Boltzmann, GB with a solute dielectric other than 1, and a cutoff.
-//!   **Explicit water is under way**: the periodic box and Ewald are here ([`periodic`]), and the
-//!   water model, its constraints and the pressure are the next step; no smooth PME yet.
+//!   **Explicit water is under way**: the periodic box and Ewald ([`periodic`]) and rigid TIP3P
+//!   ([`water`]) are here; benzene's hydration in it is the next step, and there is no smooth PME
+//!   yet.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
@@ -372,6 +397,7 @@ pub mod periodic;
 pub mod qeq;
 pub mod solvation;
 pub mod uff;
+pub mod water;
 
 pub use alchemy::{
     Alchemical, AlchemyError, AtLambda, Coupling, CrossPair, Decoupling, Lambda, SoftCore,
@@ -395,6 +421,7 @@ pub use periodic::{
 pub use qeq::{Charges, Qeq, QeqError};
 pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
+pub use water::{Settle, WaterBox};
 
 use pantometry_core::integrator::substeps_for;
 use pantometry_core::{Bodies, Domain, Exchange, Kind, Ledger, Reading, Violation};

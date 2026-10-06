@@ -2,8 +2,9 @@
 //! correction, Ewald electrostatics ([`crate::ewald`]), and the alchemical decoupling of a group
 //! inside the box.
 //!
-//! This is step W1 of the explicit-water track. W2 adds rigid water, W3 benzene's hydration and
-//! W4 the solvated complex; nothing here is water yet.
+//! This is step W1 of the explicit-water track, and W2 adds the water: [`PeriodicForceField::tip3p`]
+//! is rigid TIP3P alone and [`PeriodicForceField::solvated`] a UFF solute in it, the model and its
+//! constraints in [`crate::water`]. W3 is benzene's hydration and W4 the solvated complex.
 //!
 //! # The box
 //!
@@ -126,7 +127,7 @@
 //!
 //! **No smooth PME**: classical Ewald only, the reference PME will be checked against; its cost
 //! is measured above. **No neighbour list** with a skin: the cell list is rebuilt at each
-//! evaluation, `O(N)`. **No triclinic box, no barostat, no constraints** (W2). **No implicit
+//! evaluation, `O(N)`. **No triclinic box, no barostat**; constraints are [`crate::water`]'s, for rigid water. **No implicit
 //! solvent in the box**, and no QEq for a periodic system: the charges are given.
 
 use crate::alchemy::{Alchemical, AlchemyError, Coupling, Lambda, SoftCore};
@@ -136,6 +137,7 @@ use crate::dynamics::Potential;
 use crate::energy::{coulomb, ForceField, Pair, Unsupported};
 use crate::ewald::{add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters};
 use crate::uff::UffType;
+use crate::water;
 use std::f64::consts::PI;
 
 /// An orthorhombic periodic box: three edges at right angles, metres. See the module documentation.
@@ -407,7 +409,11 @@ pub struct PeriodicEvaluation {
 /// UFF in an orthorhombic periodic box with Ewald electrostatics: see the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeriodicForceField {
-    bonded: ForceField,
+    /// The solute's bonded terms, on its atoms — the first `solute` — or none for water alone.
+    bonded: Option<ForceField>,
+    solute: usize,
+    /// The rigid TIP3P waters after the solute, oxygen first.
+    waters: Vec<[usize; 3]>,
     ewald: Ewald,
     charges: Vec<f64>,
     /// `[x_i, D_i]`, metres and joules.
@@ -452,9 +458,82 @@ impl PeriodicForceField {
         cell: PeriodicBox,
         parameters: EwaldParameters,
     ) -> Result<PeriodicForceField, Unsupported> {
-        let bonded = ForceField::bonded_only(component, types)?;
-        let n = component.atoms().len();
-        let bonds: Vec<[usize; 2]> = component.bonds().iter().map(|b| b.atoms).collect();
+        PeriodicForceField::assemble(Some((component, types)), 0, cell, parameters)
+    }
+
+    /// Rigid TIP3P water alone ([`crate::water`]): `waters` molecules, atoms in the order oxygen,
+    /// hydrogen, hydrogen, water by water, with Table I's charges and the O–O Lennard-Jones term
+    /// as a UFF pair, and every pair inside a water excluded. No bonded term: the geometry is
+    /// SETTLE's to hold ([`crate::water::Settle`]).
+    ///
+    /// # Panics
+    ///
+    /// If the cutoff is past half the box's shortest edge.
+    pub fn tip3p(
+        cell: PeriodicBox,
+        parameters: EwaldParameters,
+        waters: usize,
+    ) -> PeriodicForceField {
+        PeriodicForceField::assemble(None, waters, cell, parameters)
+            .expect("water alone has nothing unsupported")
+    }
+
+    /// `component`, typed as `types` and with zero charges until
+    /// [`PeriodicForceField::with_solute_charges`], followed by `waters` rigid TIP3P waters, as
+    /// [`PeriodicForceField::tip3p`] builds them. A water oxygen and a UFF atom combine by UFF's
+    /// geometric rule — a judgement, see [`crate::water`].
+    ///
+    /// # Errors
+    ///
+    /// As [`ForceField::new`].
+    ///
+    /// # Panics
+    ///
+    /// As [`PeriodicForceField::new`].
+    pub fn solvated(
+        component: &Component,
+        types: &[UffType],
+        waters: usize,
+        cell: PeriodicBox,
+        parameters: EwaldParameters,
+    ) -> Result<PeriodicForceField, Unsupported> {
+        PeriodicForceField::assemble(Some((component, types)), waters, cell, parameters)
+    }
+
+    fn assemble(
+        solute: Option<(&Component, &[UffType])>,
+        waters: usize,
+        cell: PeriodicBox,
+        parameters: EwaldParameters,
+    ) -> Result<PeriodicForceField, Unsupported> {
+        let (bonded, mut bonds, mut vdw, n_solute) = match solute {
+            Some((component, types)) => {
+                let bonded = ForceField::bonded_only(component, types)?;
+                let bonds: Vec<[usize; 2]> = component.bonds().iter().map(|b| b.atoms).collect();
+                let vdw: Vec<[f64; 2]> = types
+                    .iter()
+                    .map(|t| {
+                        let p = t.parameters();
+                        [p.vdw_distance, p.vdw_energy]
+                    })
+                    .collect();
+                (Some(bonded), bonds, vdw, component.atoms().len())
+            }
+            None => (None, Vec::new(), Vec::new(), 0),
+        };
+        let mut charges = vec![0.0; n_solute];
+        let mut rigid = Vec::with_capacity(waters);
+        for w in 0..waters {
+            let o = n_solute + 3 * w;
+            bonds.push([o, o + 1]);
+            bonds.push([o, o + 2]);
+            vdw.push(water::oxygen_vdw());
+            vdw.push([0.0, 0.0]);
+            vdw.push([0.0, 0.0]);
+            charges.extend(water::CHARGES);
+            rigid.push([o, o + 1, o + 2]);
+        }
+        let n = n_solute + 3 * waters;
         let mut adjacent = vec![Vec::new(); n];
         for &[i, j] in &bonds {
             adjacent[i].push(j);
@@ -489,17 +568,12 @@ impl PeriodicForceField {
                 }
             }
         }
-        let vdw = types
-            .iter()
-            .map(|t| {
-                let p = t.parameters();
-                [p.vdw_distance, p.vdw_energy]
-            })
-            .collect();
         Ok(PeriodicForceField {
             bonded,
+            solute: n_solute,
+            waters: rigid,
             ewald: Ewald::new(cell, parameters),
-            charges: vec![0.0; n],
+            charges,
             vdw,
             bonds,
             exclusions: Exclusions::from_pairs(n, &excluded),
@@ -516,6 +590,29 @@ impl PeriodicForceField {
         assert_eq!(charges.len(), self.charges.len(), "one charge per atom");
         self.charges = charges;
         self
+    }
+
+    /// The same force field with the solute's partial charges `charges`, elementary charges, the
+    /// waters' left as TIP3P's.
+    ///
+    /// # Panics
+    ///
+    /// If `charges` is not one per solute atom.
+    pub fn with_solute_charges(mut self, charges: Vec<f64>) -> PeriodicForceField {
+        assert_eq!(charges.len(), self.solute, "one charge per solute atom");
+        self.charges[..self.solute].copy_from_slice(&charges);
+        self
+    }
+
+    /// The rigid TIP3P waters, atom indices, oxygen first: what [`crate::water::Settle::tip3p`]
+    /// is built from.
+    pub fn rigid_waters(&self) -> &[[usize; 3]] {
+        &self.waters
+    }
+
+    /// How many atoms the solute has: the first ones, before the waters.
+    pub fn solute_atoms(&self) -> usize {
+        self.solute
     }
 
     /// The same force field in another box, with the same α, cutoff and integer wave vectors
@@ -550,9 +647,10 @@ impl PeriodicForceField {
         self.exclusions.pairs()
     }
 
-    /// The bonded terms, a [`ForceField`] with no non-bonded pair.
-    pub fn bonded(&self) -> &ForceField {
-        &self.bonded
+    /// The solute's bonded terms, a [`ForceField`] with no non-bonded pair on the first
+    /// [`PeriodicForceField::solute_atoms`]; `None` for water alone.
+    pub fn bonded(&self) -> Option<&ForceField> {
+        self.bonded.as_ref()
     }
 
     /// The positions `at` with every molecule made whole: see the module documentation. An atom
@@ -657,16 +755,19 @@ impl PeriodicForceField {
 
         // The bonded terms, on whole molecules.
         let whole = self.whole(at);
-        let b = self.bonded.evaluate(&whole);
-        e.bond = b.energy.bond;
-        e.total += b.energy.bond;
-        e.angle = b.energy.angle;
-        e.total += b.energy.angle;
-        e.torsion = b.energy.torsion;
-        e.total += b.energy.torsion;
-        e.inversion = b.energy.inversion;
-        e.total += b.energy.inversion;
-        let mut forces = b.forces;
+        let mut forces = vec![[0.0; 3]; n];
+        if let Some(bonded) = &self.bonded {
+            let b = bonded.evaluate(&whole[..self.solute]);
+            e.bond = b.energy.bond;
+            e.total += b.energy.bond;
+            e.angle = b.energy.angle;
+            e.total += b.energy.angle;
+            e.torsion = b.energy.torsion;
+            e.total += b.energy.torsion;
+            e.inversion = b.energy.inversion;
+            e.total += b.energy.inversion;
+            forces[..self.solute].copy_from_slice(&b.forces);
+        }
         for (r, f) in whole.iter().zip(&forces) {
             for a in 0..3 {
                 for c in 0..3 {
