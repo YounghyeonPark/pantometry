@@ -459,6 +459,25 @@ impl ForceField {
         types: &[UffType],
         variant: Variant,
     ) -> Result<ForceField, Unsupported> {
+        ForceField::build(component, types, variant, true)
+    }
+
+    /// The bonded terms alone — stretch, bend, torsion and inversion — with no non-bonded pair:
+    /// what [`crate::periodic::PeriodicForceField`] holds, which finds its pairs in the box. Never
+    /// builds the `N²` exclusion table, so it is linear in the atoms.
+    pub(crate) fn bonded_only(
+        component: &Component,
+        types: &[UffType],
+    ) -> Result<ForceField, Unsupported> {
+        ForceField::build(component, types, Variant::default(), false)
+    }
+
+    fn build(
+        component: &Component,
+        types: &[UffType],
+        variant: Variant,
+        with_pairs: bool,
+    ) -> Result<ForceField, Unsupported> {
         let atoms = component.atoms();
         let n = atoms.len();
         assert_eq!(types.len(), n, "one UFF type per atom");
@@ -559,6 +578,27 @@ impl ForceField {
             }
         }
 
+        let pairs = if with_pairs {
+            ForceField::pairs_of(component, types)
+        } else {
+            Vec::new()
+        };
+        Ok(ForceField {
+            stretches,
+            bends,
+            torsions,
+            inversions,
+            pairs,
+            charges: vec![0.0; n],
+            elements: atoms.iter().map(|a| a.element).collect(),
+            total_charge: atoms.iter().map(|a| a.charge).sum(),
+            solvation: None,
+        })
+    }
+
+    /// Every pair of atoms that is neither 1-2 nor 1-3, `atoms[0] < atoms[1]`, in order.
+    fn pairs_of(component: &Component, types: &[UffType]) -> Vec<Pair> {
+        let n = component.atoms().len();
         let mut excluded = vec![false; n * n];
         for i in 0..n {
             for (j, _) in component.neighbours(i) {
@@ -576,17 +616,7 @@ impl ForceField {
                 }
             }
         }
-        Ok(ForceField {
-            stretches,
-            bends,
-            torsions,
-            inversions,
-            pairs,
-            charges: vec![0.0; n],
-            elements: atoms.iter().map(|a| a.element).collect(),
-            total_charge: atoms.iter().map(|a| a.charge).sum(),
-            solvation: None,
-        })
+        pairs
     }
 
     /// The same terms with per-atom partial charges `charges`, in elementary charges.

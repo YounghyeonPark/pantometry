@@ -2072,6 +2072,192 @@ protects nothing.
   **Counts.** `cargo test -p pantometry-core -- --list` counts **139**, two ignored (the ×20 table
   and the timing): the seventeen new are eleven in `math`, four in `exp_and_ln_against_mpmath.rs`
   and two doc tests.
+- **`pantometry-forcefield` in a periodic box: Ewald electrostatics, UFF's van der Waals cut off
+  with its long-range correction, and a ligand decoupled inside the box.** This is step W1 of the
+  four-step explicit-water track that +6.08 kcal/mol against experiment's −5.19 under OBC II
+  opened: periodic boundaries and Ewald here, TIP3P with constraints (W2), benzene's hydration
+  (W3) and the solvated complex (W4) to come. Nothing here is water yet. New modules `periodic`
+  and `ewald`.
+  - **The box is orthorhombic** (`PeriodicBox`): enough for a water box and a solvated protein,
+    and its minimum image is one comparison per axis. No triclinic box.
+  - **Molecules are made whole through their bonds at every evaluation**, breadth first from each
+    molecule's lowest atom, and the bonded terms run on those positions unchanged. The other
+    choice, the minimum image inside every bonded term, would have rewritten every angular term,
+    which reads positions rather than displacements. The walk is `O(N)` and **changes no bit** when
+    no bond crosses a face: aspirin's four bonded terms in a 40 Å box are the vacuum force field's
+    to the bit. Molecular dynamics never wraps, so a trajectory stays continuous.
+  - **Van der Waals is cut off at the Ewald cutoff, unshifted, with Allen and Tildesley's
+    long-range correction** (eqs 2.144–2.145) for the energy and the pressure. UFF's
+    `D[(x/r)¹² − 2(x/r)⁶]` is Lennard-Jones's `4ε[(σ/r)¹² − (σ/r)⁶]` exactly, with `ε = D` and
+    `σ = x/2^⅙`, and **its geometric combination makes the double sum of the correction separable**,
+    the square of `Σ √D_i x_i⁶` and of `Σ √D_i x_i³`, so it is `O(N)`. The virial is the model's
+    own strain derivative, so its tail part is `E_tail`; A&T's `P_tail` differs from `E_tail/V` by
+    the impulsive term of a potential that steps at `r_c`, `(2π/3V²) ΣΣ r_c³ u(r_c)`, which has
+    the sign of `u(r_c)` and so makes `P_tail` the more negative for UFF; `pressure_correction`
+    gives it for W2, and a test holds the difference to that term to 1e-12.
+  - **Ewald**: real space by minimum image inside `r_c ≤ L/2`, reciprocal space over a sphere of
+    wave vectors, the self term, the background `−π Q_net²/(2Vα²)`, and the 1-2 and 1-3 pairs'
+    `erf(αr)/r` taken back out wherever they are. UFF keeps 1-4 pairs whole, so no pair is
+    scaled. Analytic forces, and the virial `W_ab = −∂U/∂ε_ab` with the reciprocal stress
+    `δ_ab − 2 k_a k_b (1/k² + 1/4α²)`. **α and `k_c` are chosen by Kolafa and Perram's (1992)
+    estimates**, read secondarily in Saffar Shamshirgar, Hess and Tornberg (arXiv:1712.04718):
+    the accuracy `δ` is each RMS estimate in units of `k_e Q/r_c`, so it does not depend on the
+    charges. A thousand waters in a 31 Å box at `r_c` = 9 Å and `δ = 10⁻⁵` get α = 0.301 Å⁻¹ and
+    1 051 wave vectors.
+  - **Found: the estimate leaves out the larger error.** The reciprocal cut also drops the diagonal
+    of `|S(k)|²`, which tends to `Q` at large `k`, so the energy is low on average by
+    `k_e Q (α/√π) erfc(k_c/2α)` — derived here, `reciprocal_bias`. On a disordered box of 96 charges
+    the measured error was that bias, 0.88–1.10 of it at every δ from 10⁻⁶ to 10⁻¹¹, and ten times
+    Kolafa and Perram's spread. It is a constant per atom at fixed charges, so it moves no force,
+    and it has no cross term, so it is not in a decoupling's `∂U/∂λ_e`. **Kolafa and Perram's
+    real-space estimate is right**: with the reciprocal sum made exact, the RMS error over sixteen
+    disordered boxes was 1.022, 1.061 and 1.054 of it at δ = 10⁻⁴, 10⁻⁶ and 10⁻⁸.
+  - **`erfc` is this crate's own**, clean-room: Taylor's series of erf below 0.4375, and
+    `exp(−x²) erfcx(x)` above, with `erfcx` a Chebyshev series on nine intervals to 6 and in
+    `1/x²` beyond, every coefficient fitted with mpmath by `tools/erfc-reference/generate.py`, no
+    library's code or table read; `x²` carried exactly by Dekker's product, and the kernel's `exp`.
+    **Against mpmath at 50 digits, at most 3.21 ulp over 992 240 points** (2.74 from 0.4375 to 6,
+    3.21 above 6, 1.22 below 0.4375, 1.05 for negative arguments), run once; the 438 points the
+    test carries are held to 3.5 ulp, and their worst is 2.67. It is the same function on every
+    platform. The reciprocal sum's phase factors still start from the platform's `sin_cos`, 3N
+    calls an evaluation.
+  - **`PeriodicForceField`** is UFF in the box — the bonded terms on whole molecules, every
+    non-bonded pair by a cell list of cells at least half the cutoff wide, the correction and
+    Ewald — and a `Potential`, so `MolecularDynamics` integrates it unchanged. It never builds the
+    `N²` pair list `ForceField::new` keeps; `ForceField` gained a crate-private bonded-only build
+    for it.
+  - **`PeriodicDecoupling`** is `Decoupling` in the box, an `Alchemical` for `Windows`: the
+    group's van der Waals pairs with the rest through the same soft core, and **its Coulomb pairs
+    with the rest scaled by `λ_e` as the cross terms of the Ewald sum** — the real pairs across,
+    `2 Re(S_rest* S_group)` in reciprocal space and the background's cross part, the self terms
+    cancelling. **The group's own non-bonded terms are computed in vacuum, at every λ**, with no
+    interaction with its own images, so the decoupled state is the rest in its box and the group
+    alone in vacuum: `Decoupling`'s decoupled state exactly, whatever box each leg of a cycle used.
+    The coupled state leaves the group's image interaction out too, a finite-size artefact: for
+    two UFF waters in a 9.3 Å box, −0.25 kcal/mol, the long-range correction's share included. The cross part of the long-range correction is
+    scaled linearly by `λ_v`.
+  - **Checked against closed forms** (`tests/the_ewald_sum_against_closed_forms.rs`, point charges;
+    `tests/a_molecule_in_a_periodic_box.rs`, UFF):
+    - **Madelung constants** from periodic cells, at δ from 10⁻³ to 10⁻¹¹:
+
+      | δ | NaCl, 64 ions | CsCl, 54 ions |
+      | --- | --- | --- |
+      | 10⁻³ | 1.749368 (1.8e-3) | 1.762345 (3.3e-4) |
+      | 10⁻⁵ | 1.747635 (7.0e-5) | 1.762947 (2.7e-4) |
+      | 10⁻⁷ | 1.7475663 (1.7e-6) | 1.7626744 (3.8e-7) |
+      | 10⁻⁹ | 1.74756461 (2.0e-8) | 1.76267480 (2.4e-8) |
+      | 10⁻¹¹ | 1.7475645949 (2.6e-10) | 1.7626747733 (2.5e-10) |
+      | exact | 1.747564594633 | 1.762674773071 |
+
+      **Kolafa and Perram's estimate does not hold for a crystal** — the error is 1.3 to 19 times
+      it on rock salt and 0.2 to 17 on CsCl, because an ordered lattice puts its charge in Bragg
+      peaks and shells — and is not asserted there. What is asserted is exact: every term the two
+      cutoffs leave out, summed by brute force over the image pairs out to `r_c + 7/α` and the
+      wave vectors to `3 k_c` and added back, gives both constants to 2.4e-15 or better at every δ.
+    - **A lone charge in a cube is the Wigner lattice**, `k_e q² ξ/(2L)`, `ξ = −2.837297479480620`:
+      with the omitted shell of wave vectors added back, to 8e-14 at three cutoffs and two
+      accuracies — the background is what makes that so — and the bias estimate is 0.78–1.05 of
+      that shell.
+    - **The total does not depend on α**, from 0.23 to 0.99 Å⁻¹ over nine cutoffs and accuracies:
+      each is the tightest's less the difference of their reciprocal biases, within 4σ of
+      Kolafa and Perram's estimate (measured −3.4σ to +1.1σ) — the signed claim, not a bound on
+      the distance.
+    - **The non-periodic limit at its rate**: a neutral cluster in boxes of 12 to 32 Å is its own
+      Coulomb energy less the tinfoil term `2π k_e μ²/(3V)`, and what is left times `L⁵` is
+      constant to 2.8% from 16 to 32 Å (5.7% from 12), held to 5%. Aspirin with neutral charges in 40, 60 and 80 Å boxes: the energy's remainder
+      falls by 7.618 and 4.219 against `L⁻⁵`'s 7.594 and 4.214, and the forces', after the dipole
+      field `(4π k_e/3V) q_i μ`, by 7.630 and 4.221.
+    - **Exclusions**: a cluster with six pairs excluded is the non-periodic energy without them to
+      8e-7 of it, against a smallest excluded pair 4.5e5 times larger.
+    - Forces against central differences and the virial against the strain derivative, each to a
+      tolerance from the step's truncation and the energy's rounding — on point charges with a net
+      charge and exclusions, and on 27 and 64 UFF waters, by brute force and by the cell list; the
+      energy and forces unmoved, to 5e-16 of the parts, by a translation, by wrapping every atom on
+      its own with 27 molecules cut by a face, and by scattering every atom over images up to four
+      boxes away; the correction against its integral by quadrature to 1e-10, and for one type
+      against A&T's printed forms to 1e-13; the soft-core decoupling's `∂U/∂λ_e` the three Ewald
+      sums' cross terms to 1e-12, its end states the systems they say to 1e-12, and its λ
+      derivatives and forces against differences; Langevin dynamics in the box the same bits cut
+      into 24 calls, two or three.
+  - **Sabotage: twenty-three, every one caught**, each restored by copying the original back,
+    `touch` and SHA-256, the two test files run with `--no-fail-fast`: the self term's sign (six
+    tests); the exclusion correction removed (three); the wave vectors without their 2π (nine);
+    the pair search's minimum image never wrapping up (five), and the box's by `floor` (four);
+    the background's sign (the Wigner lattice alone); the reciprocal force's sign (four); the
+    reciprocal virial without `1/4α²` (both virial tests); the correction's 9 made 3 (its
+    integral alone — the virial is the model's own derivative and stays consistent); the
+    correction left out of the virial; `erfc` without the exact square, and its Clenshaw sum's
+    first coefficient a part in 10¹⁵ off (both by the mpmath points alone); molecules not made
+    whole (the wrapping test); the cell stencil shifted one cell (α-independence and the
+    estimate's own test); the decoupling's background cross term, its soft-core λ gradient, the
+    long-range cross term unscaled, and 1-3 pairs not excluded; Kolafa and Perram's real estimate
+    without its `(α r_c)⁻²`; the real-space force without its Gaussian (six); the reciprocal
+    Gaussian 1% wide (eight). **One passed first, and never reached its guard**: dropping the
+    group's own pairs, because the decoupled group was one water, whose every pair is 1-2 or 1-3.
+    With two waters it is caught — **and the two waters found a defect**: the group's own pairs
+    were taken by minimum image, which for a group spanning more than half the box measures a
+    pair through an image, 1.76 kcal/mol off the vacuum in the 9.3 Å test box. They are now taken
+    on the whole molecules as given, and the minimum image put back is the twenty-third sabotage,
+    caught.
+  - **A review found five more that passed, and each now has the test that fails it** (each
+    sabotage run before the test was added, passing, and after, caught; restored by copy, `touch`
+    and SHA-256):
+    - **The cell list was never compared with brute force**, and every box it ran on had `2L/r_c`
+      whole, where a cell count rounded up comes out right: `floor` made `ceil` passed. Now 120
+      charges in a 17.1 × 15.3 × 14.0 Å box at `r_c` = 5 Å, the real-space energy against every
+      pair by minimum image, agree to 2.3e-17 of the pairs' magnitudes, and the sabotage is caught.
+      The 27-cell branch of the cell list was unreachable — three cutoff-wide cells across is six
+      half-cells — and is removed.
+    - **No box was not a cube**, so the wave-vector extent, or the cell count, taken from `L_x` for
+      every axis passed. Now rock salt's 2×2×3 and 3×2×2 supercells give its Madelung constant,
+      completed by brute force to 1.0e-14, and both are caught. Their own truncation error is up
+      to 103 times the estimate, the tightest 1.2e-9: `k_c` is set from `V^⅓`.
+    - **The bonded virial was never compared with molecules cut by a face**: taking `Σ r ⊗ F` on
+      the raw positions passed. The image test now compares the virial, to 4.5e-15 of its largest
+      with 27 molecules cut, and catches it.
+    - **No excluded pair was beyond `r_c`**: skipping their correction there passed, in the sum and
+      in the force field. Now the energy with the exclusions less the energy without them is
+      `−k_e Σ q_i q_j / r` over the excluded pairs (`erf(αr)/r` alone for a pair past `r_c`) to
+      rounding, in a 40 Å box and in an 8 Å one at `r_c` = 1.5 Å with two pairs past it; and the
+      force field's Ewald energy is the sum's at `r_c` = 1.4 Å, inside a water's H–H. That
+      replaces a bound on the large-box remainder with a margin of 1.25.
+    - **The off-diagonal virial was checked only for symmetry**: its sign flipped passed. Now
+      `W_xy`, `W_xz` and `W_yz` are each the central difference of the energy under a simple
+      shear, written in the test — the same pairs and integer wave vectors, `k_b → k_b − ε k_a`,
+      the volume and every phase unchanged — in a non-cubic box with exclusions and a net
+      charge, agreeing to 2.3e-8 of each or better.
+    - A&T's `P_tail` is now held to `E_tail/V` plus the impulsive term written in the test, to
+      1e-12, where it was only required to be the lower.
+  - **The cost** (release, one core, `x86_64-pc-windows-gnu`; water's density, `r_c` = 9 Å,
+    point charges with the waters' exclusions):
+
+    | atoms | box (Å) | δ = 10⁻⁵: waves, ms (real, reciprocal) | δ = 10⁻⁶: waves, ms (real, reciprocal) |
+    | --- | --- | --- | --- |
+    | 375 | 15.5 | 257, 2.0 (1.5, 0.4) | 522, 2.2 (1.5, 0.8) |
+    | 1 029 | 21.7 | 423, 8.5 (6.8, 1.7) | 895, 10.1 (6.7, 3.4) |
+    | 3 000 | 31.0 | 1 051, 37.7 (25.8, 11.9) | 2 192, 51.1 (25.4, 25.7) |
+    | 6 591 | 40.4 | 1 955, 104 (56, 48) | 4 300, 160 (55, 105) |
+    | 12 288 | 49.7 | 3 309, 249 (97, 152) | 7 385, 434 (95, 338) |
+    | 24 000 | 62.1 | 5 533, 697 (198, 499) | 12 838, 1 347 (198, 1 149) |
+
+    The whole force field on the 3 000-atom box is 40.2 ms at 10⁻⁵ and 52.7 at 10⁻⁶. Real space is
+    linear in `N`; the reciprocal sum goes as `N^1.8` here and as `N²` in principle at a fixed
+    cutoff. A first cell list, cells a whole cutoff wide and the minimum image by `round`, cost
+    78 ms of real space at 3 000 atoms where this one costs 26.
+  - **PME is needed for W4, not for W3.** At W4's 20 000–30 000 atoms one evaluation is 0.7–1.3 s,
+    most of it reciprocal and growing as `N²`: a nanosecond at a 2 fs step would be four to eight
+    days on one core. W3's few thousand atoms cost 40–50 ms an evaluation, a nanosecond in six to
+    seven hours, where real space is half and a neighbour list with a skin, not PME, is the next
+    saving. Smooth PME (Essmann et al. 1995) is left for later, and this sum is what it will be
+    checked against.
+  - **Not here**: PME, a neighbour list, a triclinic box, a barostat, constraints, QEq or
+    generalized Born in a box.
+
+  **Counts.** `cargo test -p pantometry-forcefield` passes **305**, 27 ignored (280 and 25 before):
+  fourteen in `the_ewald_sum_against_closed_forms.rs`, with the million-point dump for
+  `generate.py --measure` ignored, and eleven in `a_molecule_in_a_periodic_box.rs`, with the timing
+  ignored. Thirty sabotages in all, every one caught. `tools/erfc-reference/README.md` says what
+  the script prints and where it is committed.
 
 ### Changed
 

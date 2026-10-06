@@ -7,7 +7,8 @@
 //! an energy, its minimum, and which conformations are stable — with every term checkable.
 //!
 //! **This step computes UFF's whole energy, minimises it, moves the molecule in time, and
-//! computes the free energy of decoupling a ligand from its surroundings.** What is here:
+//! computes the free energy of decoupling a ligand from its surroundings — in vacuum, in implicit
+//! water, and now in a periodic box with Ewald electrostatics.** What is here:
 //!
 //! - [`Component::from_ccd`] reads one entry of the wwPDB Chemical Component Dictionary, strictly:
 //!   every malformed or unsupported input is a [`CcdError`] naming what it refused. See [`ccd`].
@@ -105,6 +106,18 @@
 //!   common practice — leaves out the covariance of two intervals that share a window: measured,
 //!   that understated σ̂ 1.7-fold on a decoupled particle's MD windows (with their samples thinned
 //!   as well) and 1.26-fold on exact samples along a five-state chain. See [`free_energy`].
+//! - [`PeriodicForceField`] is UFF in an orthorhombic periodic box ([`PeriodicBox`]), the first
+//!   step (W1) of explicit water: the bonded terms on molecules made whole through their bonds,
+//!   van der Waals cut off at the Ewald cutoff with Allen and Tildesley's long-range correction —
+//!   which UFF's geometric combination makes `O(N)` — and **classical Ewald electrostatics**
+//!   ([`Ewald`]) with the 1-2 and 1-3 pairs taken back out and the neutralising background, α and
+//!   the wave-vector cutoff chosen by Kolafa and Perram's estimates from one accuracy parameter
+//!   ([`EwaldParameters::for_accuracy`]). Analytic forces and the virial, a [`Potential`] for the
+//!   dynamics, and [`PeriodicDecoupling`], an [`Alchemical`] whose Coulomb coupling is the Ewald
+//!   sum's cross terms and whose decoupled state is [`Decoupling`]'s. The complementary error
+//!   function is this crate's own ([`ewald::erfc`], at most 3.21 ulp against mpmath). No PME yet:
+//!   at W4's 24 000 atoms one evaluation is 0.7–1.3 s, most of it reciprocal. See [`periodic`] and
+//!   [`ewald`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -228,6 +241,20 @@
 //! buffer's kept terms change no bit; a Born ion decouples to `(q²/2R)(1 − 1/ε)` by TI and BAR
 //! through [`Windows`]; and two ions follow eqs 2–8 written out at every `(λ_e, λ_v)`.
 //!
+//! Periodic boundaries and Ewald against closed forms (`tests/the_ewald_sum_against_closed_forms.rs`,
+//! `tests/a_molecule_in_a_periodic_box.rs`): NaCl's and CsCl's Madelung constants from periodic
+//! cells, to under `2.7e-10` at the tightest accuracy and to `2.4e-15` with every omitted term summed
+//! back by brute force; a lone charge as the Wigner lattice, `ξ = −2.837297479480620`; the total
+//! the same over α from 0.23 to 0.99 Å⁻¹, less its reciprocal bias; a neutral cluster and
+//! aspirin in growing boxes as their non-periodic energy less the tinfoil term `2πμ²/3V`, with the
+//! rest falling as `L⁻⁵`, energy and forces; exclusions exact, inside the cutoff and beyond it;
+//! the cell list against every pair in a box no cell count divides; forces, the virial's diagonal
+//! against the box's strain and its off-diagonal against a written shear; the energy unmoved by translation, by wrapping every atom on its own and by
+//! scattering atoms over images; the long-range correction against its integral and A&T's printed
+//! forms; Kolafa and Perram's real-space estimate against sixteen disordered boxes; `erfc`
+//! against mpmath; a decoupling's end states and `∂U/∂λ` against the systems and sums they are;
+//! and dynamics in the box the same bits however it is cut into calls.
+//!
 //! # Determinism, and where it stops
 //!
 //! No clock, no randomness, no hash order and no threads, so a run repeats bit for bit on one
@@ -246,12 +273,14 @@
 //! pass through UFF's torsion `cos` as well, and QEq through `powi`, whose rounding Rust does not
 //! specify. It would change their bits, and is left to be decided with those.
 //! [`pdb`]'s superposition is arithmetic and `sqrt`, but turning a rotor calls `sin` and `cos`.
+//! [`ewald`]'s `erfc` and Gaussians are its own and the kernel's `exp`, the same everywhere; its
+//! reciprocal sum starts from the platform's `sin_cos` of each atom's three coordinates.
 //!
 //! # What is deliberately not in it
 //!
 //! - **Dynamics without constraints, and with nothing but a Langevin bath.** [`dynamics`] is BAOAB
 //!   and velocity Verlet at a 0.5 fs step, with every X–H bond free: no SHAKE or RATTLE, no
-//!   barostat, no multiple time steps, no periodic box. The measurement that chose the step is in
+//!   barostat, no multiple time steps. The measurement that chose the step is in
 //!   [`dynamics`]; constraints would buy a step about four times longer and are not needed yet.
 //! - **Free energies by TI and BAR, not MBAR, and no nonpolar term in them.** MBAR would need
 //!   every sample's energy at every state; see [`free_energy`] for why BAR between neighbours is
@@ -291,8 +320,9 @@
 //!   field, and opt-in** ([`ForceField::with_generalized_born`]). The nonpolar `0.005 × SASA` term
 //!   is computed ([`solvation::surface_area`], [`solvation::nonpolar_energy`]) but not added to
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
-//!   Not here: Poisson–Boltzmann, explicit water, GB with a solute dielectric other than 1, a
-//!   and a cutoff.
+//!   Not here: Poisson–Boltzmann, GB with a solute dielectric other than 1, and a cutoff.
+//!   **Explicit water is under way**: the periodic box and Ewald are here ([`periodic`]), and the
+//!   water model, its constraints and the pressure are the next step; no smooth PME yet.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
@@ -334,9 +364,11 @@ pub mod ccd;
 pub mod complex;
 pub mod dynamics;
 pub mod energy;
+pub mod ewald;
 pub mod free_energy;
 pub mod minimise;
 pub mod pdb;
+pub mod periodic;
 pub mod qeq;
 pub mod solvation;
 pub mod uff;
@@ -353,9 +385,13 @@ pub use ccd::{Atom, Bond, BondOrder, CcdError, Component, Coordinates, Element};
 pub use complex::{Complex, ComplexError, Estimate, Frame, Record, Solvent};
 pub use dynamics::{Bath, MolecularDynamics, Potential};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
+pub use ewald::{Ewald, EwaldEnergy, EwaldEvaluation, EwaldParameters};
 pub use free_energy::{Bar, FreeEnergy, Protocol, Quadrature, Sample, Window, Windows};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
+pub use periodic::{
+    PeriodicBox, PeriodicDecoupling, PeriodicEnergy, PeriodicEvaluation, PeriodicForceField,
+};
 pub use qeq::{Charges, Qeq, QeqError};
 pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
