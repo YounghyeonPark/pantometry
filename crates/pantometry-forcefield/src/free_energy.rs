@@ -21,6 +21,15 @@
 //! so a [`Windows`] that has stopped part-way resumes by being advanced again, and a clone of it
 //! is a checkpoint.
 //!
+//! **Constrained windows.** [`Windows::with_dynamics`] builds every window from a template
+//! [`MolecularDynamics`] — its masses, frozen atoms, rigid waters and held bonds — given the
+//! protocol's bath and thermalised from the window's seed; [`Windows::new`] is the same with an
+//! unconstrained template, to the bit. A constraint is a property of the dynamics, not of the
+//! Hamiltonian, so the same [`Alchemical`] serves both. Both end states carry the same
+//! constraints, which is what a free energy between them needs: for bonds that share no atom, as a
+//! solute's bonds to hydrogen do not, the constrained distribution needs no metric correction at
+//! all ([`crate::shake`]).
+//!
 //! # Thermodynamic integration
 //!
 //! `ΔF = F(λ_last) − F(λ_first) = ∫ ⟨∂U/∂λ⟩_λ · dλ` along the schedule, a path of straight
@@ -194,6 +203,34 @@ impl Window {
         frozen: Vec<bool>,
         protocol: Protocol,
     ) -> Window {
+        Window::with_dynamics(
+            hamiltonian,
+            schedule,
+            index,
+            start,
+            &MolecularDynamics::new(masses).with_frozen(frozen),
+            protocol,
+        )
+    }
+
+    /// The same window with its dynamics built from `dynamics` — its masses, frozen atoms and
+    /// constraints ([`MolecularDynamics::with_constraints`],
+    /// [`MolecularDynamics::with_bond_constraints`]) — given the protocol's bath and thermalised
+    /// from [`window_seed`]`(protocol.seed, index)`. [`Window::new`] is this with
+    /// `MolecularDynamics::new(masses).with_frozen(frozen)`, to the bit. `start` must satisfy the
+    /// constraints, and every rigid molecule be whole.
+    ///
+    /// # Panics
+    ///
+    /// As [`Window::new`], and if `dynamics` has taken a step.
+    pub fn with_dynamics(
+        hamiltonian: &(impl Alchemical + ?Sized),
+        schedule: &[Lambda],
+        index: usize,
+        start: &[[f64; 3]],
+        dynamics: &MolecularDynamics,
+        protocol: Protocol,
+    ) -> Window {
         assert!(
             index < schedule.len(),
             "window {index} of {}",
@@ -204,15 +241,21 @@ impl Window {
             "every λ must be in [0, 1]"
         );
         assert_eq!(start.len(), hamiltonian.len(), "one position per atom");
+        assert_eq!(
+            dynamics.masses().len(),
+            start.len(),
+            "one mass per position"
+        );
+        assert_eq!(dynamics.steps(), 0, "a window's dynamics starts unstepped");
         assert!(protocol.stride > 0, "a sample every zero steps");
         let seed = window_seed(protocol.seed, index);
-        let mut md = MolecularDynamics::new(masses)
+        let mut md = dynamics
+            .clone()
             .with_bath(Bath::Langevin {
                 temperature: protocol.temperature,
                 friction: protocol.friction,
                 seed,
             })
-            .with_frozen(frozen)
             .thermalised(start, protocol.temperature, seed);
         let lambda = schedule[index];
         md.prepare(
@@ -566,19 +609,33 @@ impl Windows {
         frozen: Vec<bool>,
         protocol: Protocol,
     ) -> Windows {
+        Windows::with_dynamics(
+            hamiltonian,
+            schedule,
+            start,
+            &MolecularDynamics::new(masses).with_frozen(frozen),
+            protocol,
+        )
+    }
+
+    /// One [`Window`] at each state of `schedule`, every one from `start`, as
+    /// [`Window::with_dynamics`]: for constrained dynamics — rigid water, bonds to hydrogen —
+    /// and anything else `dynamics` carries. [`Windows::new`] is this with
+    /// `MolecularDynamics::new(masses).with_frozen(frozen)`, to the bit.
+    ///
+    /// # Panics
+    ///
+    /// If the schedule has fewer than two states, or as [`Window::with_dynamics`].
+    pub fn with_dynamics(
+        hamiltonian: &(impl Alchemical + ?Sized),
+        schedule: Vec<Lambda>,
+        start: &[[f64; 3]],
+        dynamics: &MolecularDynamics,
+        protocol: Protocol,
+    ) -> Windows {
         assert!(schedule.len() >= 2, "a schedule needs two states");
         let windows = (0..schedule.len())
-            .map(|k| {
-                Window::new(
-                    hamiltonian,
-                    &schedule,
-                    k,
-                    start,
-                    masses.clone(),
-                    frozen.clone(),
-                    protocol,
-                )
-            })
+            .map(|k| Window::with_dynamics(hamiltonian, &schedule, k, start, dynamics, protocol))
             .collect();
         Windows {
             schedule,

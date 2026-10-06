@@ -103,6 +103,25 @@
 //! `r ≥ r_c` the soft core's `r_sc⁶ = r⁶ + α σ⁶ (1 − λ)` differs from `r⁶` by at most `α σ⁶/r_c⁶`,
 //! `9e-4` for two `O_3` at 9 Å, so linear is the soft core's own tail to that.
 //!
+//! **For a neutral solute in water, W3, the choice costs nothing measurable.** Benzene's charges
+//! sum to zero, so there is no Wigner term `ξ q²/2L` to correct, and its dipole would be zero by
+//! symmetry — QEq's charges at 181L's crystal pose are not quite symmetric, so it is small rather
+//! than zero, and with it the tinfoil term `2π μ²/3V`; what the coupled state leaves out is that,
+//! benzene's quadrupole and its van der Waals with its own images, a box away.
+//! `tests/benzene_hydrated_in_tip3p.rs` measures it at the start of the hydration run:
+//! −0.008 kcal/mol, with a dipole of 0.021 e Å whose tinfoil term is 2 × 10⁻⁵. The coupled state is then benzene in water, and the decoupled
+//! state the water in its box and benzene in vacuum — **the hydration free energy is minus the
+//! free energy of decoupling, with no vacuum leg to run**, because benzene's intramolecular terms
+//! are the same in both and in vacuum.
+//!
+//! **The coupling is evaluated from the cross terms alone** ([`Alchemical::couplings`] on a
+//! [`PeriodicDecoupling`]): the group's pairs with the rest inside the cutoff — their distances by
+//! the evaluation's own wrapped minimum image, so each is its bits — the reciprocal sum's cross
+//! terms, the background's and the correction's, then each state's soft core over those pairs. No
+//! pair of the rest is computed, so a sample at 29 states costs a sixth of one evaluation of the
+//! 1 533-atom box. Its sums are the evaluation's λ-dependent terms in another order, which a unit
+//! test holds to 64 ε of the evaluation's parts.
+//!
 //! # The cost, measured
 //!
 //! `tests/a_molecule_in_a_periodic_box.rs`, `the_cost`: release, one core,
@@ -127,7 +146,8 @@
 //!
 //! **No smooth PME**: classical Ewald only, the reference PME will be checked against; its cost
 //! is measured above. **No neighbour list** with a skin: the cell list is rebuilt at each
-//! evaluation, `O(N)`. **No triclinic box, no barostat**; constraints are [`crate::water`]'s, for rigid water. **No implicit
+//! evaluation, `O(N)`. **No triclinic box, no barostat**; constraints are the dynamics' —
+//! [`crate::water`]'s SETTLE and [`crate::shake`]'s bonds — not the force field's. **No implicit
 //! solvent in the box**, and no QEq for a periodic system: the charges are given.
 
 use crate::alchemy::{Alchemical, AlchemyError, Coupling, Lambda, SoftCore};
@@ -437,7 +457,9 @@ struct Core {
     energy: PeriodicEnergy,
     forces: Vec<[f64; 3]>,
     virial: [[f64; 3]; 3],
-    /// The λ-dependent part, the restraint aside.
+    /// The λ-dependent part, the restraint aside, summed in the evaluation's own order: what the
+    /// tests hold [`PeriodicDecoupling`]'s own `couplings` to.
+    #[cfg_attr(not(test), allow(dead_code))]
     coupling: Coupling,
 }
 
@@ -1030,6 +1052,98 @@ impl PeriodicDecoupling {
         };
         self.field.core(at, Some(&split), forces)
     }
+
+    /// What the coupling at any state is made of, at `at`: the group's van der Waals pairs with the
+    /// rest inside the cutoff and their distances, found by the same wrapped minimum image as the
+    /// evaluation's pair search, so each distance is its bits; the cross Coulomb energy at full
+    /// strength — those pairs' real-space terms, the reciprocal cross terms and the background's —
+    /// and the long-range correction's cross part.
+    fn cross_terms(&self, at: &[[f64; 3]]) -> CrossTerms {
+        let f = &self.field;
+        let n = f.charges.len();
+        assert_eq!(at.len(), n, "one position per atom");
+        let cell = f.cell();
+        let parameters = f.ewald.parameters();
+        let (cutoff, volume) = (parameters.cutoff, cell.volume());
+        let rc2 = cutoff * cutoff;
+        let l = cell.lengths();
+        let half = l.map(|x| 0.5 * x);
+        let w: Vec<[f64; 3]> = at.iter().map(|p| cell.wrap(*p)).collect();
+        let q = &f.charges;
+        let members: Vec<usize> = (0..n).filter(|&i| self.group[i]).collect();
+        let mut pairs = Vec::new();
+        let mut real = 0.0;
+        for &g in &members {
+            for j in 0..n {
+                if self.group[j] {
+                    continue;
+                }
+                let (a, b) = (g.min(j), g.max(j));
+                let mut d = sub(w[a], w[b]);
+                for x in 0..3 {
+                    if d[x] > half[x] {
+                        d[x] -= l[x];
+                    } else if d[x] < -half[x] {
+                        d[x] += l[x];
+                    }
+                }
+                let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                if r2 >= rc2 || f.exclusions.contains(a, b) {
+                    continue;
+                }
+                let r = r2.sqrt();
+                pairs.push((f.pair(a, b), r));
+                let qq = q[a] * q[b];
+                if qq != 0.0 {
+                    real += f.ewald.real_pair(qq, r).0;
+                }
+            }
+        }
+        let reciprocal = if q.iter().any(|&x| x != 0.0) {
+            let mut unused = [[0.0; 3]; 3];
+            f.ewald
+                .reciprocal(q, Some((&self.group, 0.0)), at, None, &mut unused)
+                .1
+        } else {
+            0.0
+        };
+        let rest_charges: Vec<f64> = (0..n)
+            .map(|i| if self.group[i] { 0.0 } else { q[i] })
+            .collect();
+        let q_rest: f64 = rest_charges.iter().sum();
+        let q_group: f64 = members.iter().map(|&i| q[i]).sum();
+        let background = 2.0 * f.ewald.background(1.0) * q_rest * q_group;
+        let s_rest = f.tail_sums(|i| !self.group[i]);
+        let s_group = f.tail_sums(|i| self.group[i]);
+        CrossTerms {
+            pairs,
+            coulomb: real + reciprocal + background,
+            tail: 2.0 * tail_energy(s_rest, s_group, cutoff, volume),
+        }
+    }
+
+    /// The long-range van der Waals correction between the group and the rest at full coupling,
+    /// joules: `2 (2π/V) Σ_{i∈G} Σ_{j∉G} D_ij [x_ij¹²/(9 r_c⁹) − 2 x_ij⁶/(3 r_c³)]`, the part
+    /// [`PeriodicDecoupling`] scales by `λ_v`. It depends on nothing that moves, so it is exactly
+    /// its own contribution to the free energy of decoupling.
+    pub fn cross_dispersion_correction(&self) -> f64 {
+        let f = &self.field;
+        let s_rest = f.tail_sums(|i| !self.group[i]);
+        let s_group = f.tail_sums(|i| self.group[i]);
+        2.0 * tail_energy(
+            s_rest,
+            s_group,
+            f.ewald.parameters().cutoff,
+            f.cell().volume(),
+        )
+    }
+}
+
+/// [`PeriodicDecoupling::cross_terms`]'s result.
+struct CrossTerms {
+    pairs: Vec<(Pair, f64)>,
+    coulomb: f64,
+    tail: f64,
 }
 
 impl Alchemical for PeriodicDecoupling {
@@ -1048,13 +1162,101 @@ impl Alchemical for PeriodicDecoupling {
         energy
     }
 
+    /// [`Alchemical::couplings`] at the one state.
     fn coupling(&self, at: &[[f64; 3]], lambda: Lambda) -> Coupling {
-        let mut c = self.core(at, lambda, false).coupling;
-        if let Some(b) = &self.restraint {
-            let u = b.energy(at);
-            c.gradient[0] = u;
-            c.energy += lambda.restraint * u;
+        self.couplings(at, &[lambda])[0]
+    }
+
+    /// The λ-dependent part at each state from one pass over what they share: the cross pairs and
+    /// their distances, the cross Coulomb energy and the correction's cross part
+    /// ([`PeriodicDecoupling`]'s `cross_terms`), then each state's soft core over those pairs.
+    /// **Not the whole evaluation**: nothing between two atoms of the rest is computed, so a state
+    /// costs the group's pairs and one reciprocal sum is shared by all. The energy is
+    /// `Σ U_sc(r; λ_v) + λ_e C + λ_v T` and the gradient `[U_B, C, Σ ∂U_sc/∂λ_v + T]`, with `C` the
+    /// cross Coulomb energy and `T` the correction's cross part: the λ-dependent part of
+    /// [`Alchemical::energy_and_forces`], whose evaluation sums the same terms in another order.
+    fn couplings(&self, at: &[[f64; 3]], states: &[Lambda]) -> Vec<Coupling> {
+        for l in states {
+            assert!(l.is_valid(), "every λ must be in [0, 1]: {l:?}");
         }
-        c
+        let cross = self.cross_terms(at);
+        let restraint = self.restraint.as_ref().map(|b| b.energy(at));
+        states
+            .iter()
+            .map(|l| {
+                let mut energy = 0.0;
+                let mut soft = 0.0;
+                for (pair, r) in &cross.pairs {
+                    let sc = self.soft_core.at(pair, *r, l.van_der_waals);
+                    energy += sc.energy;
+                    soft += sc.de_dlambda;
+                }
+                energy += l.electrostatics * cross.coulomb;
+                energy += l.van_der_waals * cross.tail;
+                let mut gradient = [0.0, cross.coulomb, soft + cross.tail];
+                if let Some(u) = restraint {
+                    gradient[0] = u;
+                    energy += l.restraint * u;
+                }
+                Coupling { energy, gradient }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ccd::ANGSTROM;
+    use crate::water::WaterBox;
+
+    /// The couplings from the cross terms alone are the evaluation's λ-dependent part, summed in
+    /// another order: two waters of 27, carrying +0.1 e between them so that the background has a
+    /// cross term, at five states, energy and both gradients within 64 ε of the evaluation's
+    /// largest part — a few thousand terms each, none larger. And `coupling` is `couplings`' entry
+    /// to the bit.
+    #[test]
+    fn the_cross_terms_are_the_evaluations_coupling() {
+        let water = WaterBox::lattice(3, 0x3C0);
+        let field = water.force_field(4.6 * ANGSTROM, 1e-8);
+        let mut q = field.charges().to_vec();
+        q[0] += 0.1;
+        let field = field.with_charges(q);
+        let mut group = vec![false; water.positions().len()];
+        group[..6].fill(true);
+        let d = PeriodicDecoupling::new(&field, &group).unwrap();
+        let at = water.positions();
+        let e = field.energy(at);
+        let scale = e.ewald.real.abs()
+            + e.ewald.reciprocal.abs()
+            + e.ewald.self_energy.abs()
+            + e.van_der_waals.abs();
+        let states = [
+            Lambda::COUPLED,
+            Lambda::new(0.0, 0.5, 1.0),
+            Lambda::new(0.0, 0.0, 1.0),
+            Lambda::new(0.0, 0.0, 0.4),
+            Lambda::new(0.0, 0.0, 0.0),
+        ];
+        let fast = d.couplings(at, &states);
+        for (l, c) in states.iter().zip(&fast) {
+            let slow = d.core(at, *l, false).coupling;
+            assert!(
+                (c.energy - slow.energy).abs() <= 64.0 * f64::EPSILON * scale,
+                "{l:?}"
+            );
+            for k in 1..3 {
+                assert!(
+                    (c.gradient[k] - slow.gradient[k]).abs() <= 64.0 * f64::EPSILON * scale,
+                    "{l:?} {k}: {} against {}",
+                    c.gradient[k],
+                    slow.gradient[k]
+                );
+            }
+            let one = d.coupling(at, *l);
+            assert_eq!(one.energy.to_bits(), c.energy.to_bits());
+            assert_eq!(one.gradient.map(f64::to_bits), c.gradient.map(f64::to_bits));
+        }
+        assert!(fast[0].gradient[1].abs() > 1e-3 * scale);
     }
 }

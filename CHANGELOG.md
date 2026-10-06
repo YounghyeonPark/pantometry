@@ -2462,6 +2462,207 @@ protects nothing.
   before): thirteen in `a_rigid_water_against_closed_forms.rs`, one in `water`'s unit tests, and three
   ignored in `liquid_water_against_the_literature.rs` (two liquids and the timing).
 
+- **`pantometry-forcefield` holds a solute's bonds to hydrogen, decouples it from rigid water in
+  the box, and benzene's hydration free energy in TIP3P comes out at −1.57 ± 0.14 kcal/mol,
+  against experiment's −0.90 ± 0.20.** This is step W3 of the four-step explicit-water track: W1
+  built the box and Ewald, W2 the water, and W4 is the solvated complex. New module `shake`.
+  Nothing is asserted against experiment.
+  - **`Shake`: SHAKE for the positions and RATTLE for the velocities**, for any set of bond
+    lengths (Ryckaert, Ciccotti and Berendsen 1977; Andersen 1983 — cited for the method, not
+    opened; each condition derived here). The impulse on a bond lies along its old vector, and
+    **each bond's quadratic is solved exactly**, by its smaller root written without cancellation,
+    then swept Gauss–Seidel until every bond is within the stated tolerance, `|r² − d²| ≤ 2 tol d²`
+    with `tol` = 10⁻¹², two hundred times above the rounding a 25 Å box allows. **Bonds that share
+    no atom — benzene's six C–H — are solved in one sweep, to rounding.** The velocities are
+    RATTLE's projection, `κ = r·u/(w|r|²)` per bond, whose fixed point is the mass-weighted
+    orthogonal projection SETTLE makes in closed form. A frozen atom has inverse mass zero, so a
+    bond to it holds its partner at the length; a bond frozen at both ends is skipped.
+    `Shake::to_hydrogen` holds every bond to a hydrogen at UFF's natural length `r_IJ`, 1.0814 Å
+    for benzene's C–H. **For bonds that share no atom the constrained distribution needs no Fixman
+    correction**: the mass-weighted Gram matrix of their gradients is a constant diagonal.
+  - **`MolecularDynamics::with_bond_constraints`** composes it with BAOAB where SETTLE is: SHAKE
+    and `Δq/h` after each drift, each atom corrected once by its whole displacement; the projection
+    after each kick and after `O`. It combines with SETTLE as long as no atom is in both, which is
+    refused by name. **One degree of freedom a held bond** with an atom free to move. Without bond
+    constraints every new step is skipped: the whole suite's earlier tests pass unchanged.
+  - **`Windows::with_dynamics` and `Window::with_dynamics`** build windows from a template
+    `MolecularDynamics` — masses, frozen atoms, rigid water, held bonds — and `Windows::new` is
+    that with an unconstrained template, to the bit.
+  - **`PeriodicDecoupling`'s couplings come from the cross terms alone**: the group's pairs with
+    the rest inside the cutoff, by the evaluation's own wrapped minimum image, the reciprocal sum's
+    cross terms, the background's and the long-range correction's, then each state's soft core.
+    A sample at 29 states costs 4.3 ms against 25.4 for one evaluation of the 1 533-atom box;
+    `coupling` is `couplings`' entry to the bit, and a unit test holds both to the evaluation's
+    own λ-dependent terms to 64 ε. `PeriodicDecoupling::cross_dispersion_correction` gives the
+    correction's cross part. **W1's treatment of the group's own images is kept**: benzene is
+    neutral, so there is no Wigner term, and the image interaction the coupled state leaves out
+    measured −0.008 kcal/mol at the start, with a dipole of 0.021 e Å whose tinfoil term is
+    2 × 10⁻⁵ kcal/mol. The decoupled state is the water in its box and benzene alone in vacuum
+    with its intramolecular terms, so `ΔG_hyd = −ΔG_decouple` with no vacuum leg.
+  - `WaterBox::without_overlaps` takes out the waters a solute overlaps, by minimum image.
+
+  **Checked against exact identities** (`tests/constrained_bonds_against_closed_forms.rs`, eleven
+  default tests in 1.8 s unoptimised, and the band's measurement ignored):
+  - benzene's C–H held to 0.67 ε of the larger coordinate (bound 16) after every step at 2 fs
+    beside rigid water, the whole-step velocities and those after `O` tangent to 0.75 ε (bound the
+    larger of 16 ε and RATTLE's 10⁻¹²);
+    the six bonds are the bonds to hydrogen, at the stretches' natural lengths, and independent;
+  - twelve bonds sharing atoms — the ring as well — within 1.01 tol of their lengths and of
+    tangent after every step, and their NVE energy error falling by 4.06 per halving from 1 fs;
+  - the degrees of freedom `3N − 3N_w − N_b`, less six in NVE, with a bond to a frozen atom
+    costing one and a bond frozen at both ends none; **a bath fills exactly that many**: with no
+    potential, at `γh = 1`, each C–H dumbbell's translation 0.998 ± 0.004 of `(3/2) k_BT`, its
+    rotation 1.000 ± 0.004 of `k_BT`, the waters 1.000 ± 0.001 and the temperature through
+    `degrees_of_freedom` 1.000 ± 0.001; and held bonds alone 1.001 ± 0.003 of `15 k_BT`;
+  - **constrained NVE at 2 fs falls as `h²`**: benzene and the ten waters nearest it, rigid, in a
+    30 Å box with `r_c` = 14 Å so that nothing crosses the cutoff. Over sixteen starts the ratio
+    per halving was 4.229–4.508 from 2 fs, 4.050–4.109 from 1 fs and 4.012–4.027 from 0.5 fs,
+    above 4 because the next term is `h⁴` and positive; the bands are 3.9–4.8, 3.8–4.2 and
+    3.97–4.05. **And the excess over 4 shrinks by four per halving**, as the `h⁴` term's must:
+    `(r₃ − 4)/(r₂ − 4)` read 0.2365–0.2593, held to 0.15–0.35. The ratios alone could not see an
+    error of lower order with a small coefficient, whose excess grows instead (below). The RMS
+    error at 2 fs was 0.066–0.48 kcal/mol over 0.2 ps. **This test is the whole guard of SHAKE's
+    `Δq/h`**: removing it passes every Langevin and equipartition test and the hydration file;
+  - a frozen carbon holds its hydrogen at the bond's length, keeping its bits; a run with SETTLE and
+    SHAKE together the same bits in one call or cut three ways; an atom held twice refused.
+
+  (`tests/benzene_hydrated_in_tip3p.rs`, ten default tests in 7.3 s unoptimised, three ignored):
+  - **the end states are the systems they say** at a configuration constrained dynamics left:
+    coupled, the solvated field less benzene alone in the box plus benzene in vacuum; decoupled,
+    the water alone plus benzene in vacuum, energy and every force, to 10⁻¹² of the parts; and
+    the cross correction written out pair by pair to 10⁻¹³;
+  - `∂U/∂λ_e` and `∂U/∂λ_v` against central differences of the whole energy at four states;
+  - every state of `couplings` its own `coupling` to the bit, and their differences the whole
+    energy's to 64 ε; and the same **with a Boresch restraint** (benzene to two waters, 6.62
+    kcal/mol stretched after the dynamics): `∂U/∂λ_r` the restraint's energy to the bit and the
+    whole energy's central difference in `λ_r`, the branch W4's complex leg needs;
+  - **a charge held at a distance has a closed form.** An ion held by SHAKE 3.3 Å from a frozen
+    oxygen carrying the opposite charge, in a 9 Å cube: `ψ − 1/r − 2πr²/3V` is harmonic in the
+    ball of radius `L`, so its sphere average is its value at the centre, Wigner's `ξ/L`, and
+    `⟨E⟩ = k_e qQ (1/d + ξ/L + 2πd²/3L³)`. A 32 × 64 product rule gives −6.329688804 kcal/mol
+    against −6.329688808, inside four times Kolafa and Perram's estimate; the directions span
+    −8.47 to −5.05. **The windows decouple it to its quadrature**: BAR +7.090 ± 0.071 and TI
+    +7.087 ± 0.070 against the exact +7.094 and the trapezoid's +7.091, where `−⟨E⟩` alone would
+    be +6.330 — 0.764 apart, against the 8σ (0.564) that two four-σ windows need not to touch;
+    the decoupled window's `⟨∂U/∂λ_e⟩` −6.336 ± 0.081 against the uniform −6.330;
+  - a solute takes out exactly the waters brute force over 27 images says it overlaps;
+  - constrained windows the same bits however they are cut, `Windows::new` the unconstrained
+    `with_dynamics` to the bit, and the measurement's own sampler the windows' to the bit.
+
+  **Sabotage: twenty-one at first, every one caught**, each restored by copying the original back, `touch`
+  and SHA-256, the lib's unit tests and both files run with `--no-fail-fast`. SHAKE along the new
+  bond (the `h²` test alone); RATTLE's sign on one atom (six); a frozen atom's inverse mass kept
+  (two); the tolerance without `d²` (nine); RATTLE stopping after a sweep (the shared bonds);
+  `to_hydrogen` holding every bond (six); the degrees of freedom without the bonds (three), and a
+  bond to a frozen atom not counted (one); the projection without RATTLE (four); no `Δq/h` for
+  held bonds (the `h²` test alone); the couplings without the background (the sphere's closed form
+  alone), without the correction in `∂U/∂λ_v` (two), with the soft core at `λ_e` (three), without
+  the minimum image (three) and past the cutoff (three); the cross correction halved (the end
+  states); `with_dynamics` dropping the template's constraints (three) and seeding every window as
+  window 0 (the sampler test alone); the overlaps without the minimum image (one). **Two passed
+  first**, and each now has the test that fails it: `Δq/h` applied twice to an atom in two bonds
+  (caught by the shared bonds' energy, `h²`), and a bath with held bonds and no rigid water skipping
+  the projection after `O` (caught by held bonds alone in a bath).
+
+  **A review found four more that passed, and each now has the test that fails it** (each run
+  before the fix and after, restored by copy, `touch` and SHA-256):
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | SHAKE's `Δq/h` × 0.99 | passed: ratios 4.375 and 4.177, inside both bands | caught by the excess's shrinking (0.491–1.322 over sixteen starts against the band 0.15–0.35) |
+  | `Δq/h` × 0.95 | passed the 2 → 1 fs band | caught by the same, and by the shared bonds' energy |
+  | `l.electrostatics × U_B` for `l.restraint × U_B` in the couplings | passed: no test built a restraint in the box | caught by the restraint test |
+  | `∂U/∂λ_r` halved | passed | caught by the restraint test |
+  | `DEFAULT_TOLERANCE` 10⁻⁶ | passed: the shared bonds were held to the tolerance read back from the code | caught by four tests: the bound is now the literal 10⁻¹² |
+  | a velocity that is not finite iterated to the sweeps' end | panicked "did not converge" | refused by name, a unit test |
+
+  The tangency bounds were 16 ε, while RATTLE skips a bond already within `10⁻¹² |r||u|` of
+  tangent: they are now the larger of the two, and the measured worst stays 0.75 ε. The "test can
+  tell" margin of the held charge was 10σ with 8% to spare and no reason given; it is now 8σ, the
+  separation two four-σ windows need, with a margin of 1.35.
+
+  **The measurement** (ignored, release, one core; written window by window outside the
+  repository, run once, exit 0 after 33 564 s).
+  - **Before it ran**, the cost: 25.7 ms a step for benzene in 507 waters, 25.4 of it the force
+    field and 0.015 the projections, and 4.3 ms for the couplings at all 29 candidates; a window
+    0.79 h, thirteen 10.3 h, below the 30 h at which the run would have been referred back. It took
+    9.3 h: the steps ran at 22–27 ms.
+  - **The box**: 512 lattice waters at 33.00 nm⁻³ (0.9872 g/cm³), where Yeh and Hummer measure
+    TIP3P's pressure under Ewald at −2.9 ± 2.5 bar, less the five within 1.4 Å of benzene, about
+    its volume. W2's 0.997 g/cm³ read +139 to +180 bar, and a hydration free energy carries the
+    solute's partial molar volume times the pressure, a few tenths of a kcal/mol there. 24.94 Å, past
+    `2 r_c` plus benzene's 5.0 Å. Benzene grown in through the soft core, then 20 ps at 2 fs.
+  - **Constrained NVE in that box**, from the start, 1 ps: RMS energy error 0.264, 0.126 and 0.117
+    kcal/mol at 2, 1 and 0.5 fs. The floor below 1 fs is the plain cutoff's steps, which no step
+    size removes; above it, 2 fs is `h²`'s.
+  - **The schedule**: charges off at λ_e 1, 0.5, 0, then van der Waals at λ_v 0.9 to 0 by 0.1;
+    29 candidates recorded per sample, one window to be inserted between any pair below 0.1
+    overlap. **None was**: the lowest was 0.225, between λ_v 0.4 and 0.3. Each window 20 ps
+    discarded and 2000 samples every 100 fs, 2 fs, 1 ps⁻¹, 298.15 K, benzene's QEq charges from
+    181L as 3c-3's.
+
+  | window | λ_e | λ_v | TI term | τ | → next: BAR | overlap | EXP fwd | EXP rev |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 0 | 1 | 1 | +0.775 ± 0.023 | 3.2 | +1.011 ± 0.027 | 0.348 | +1.029 | +0.968 |
+  | 1 | 0.5 | 1 | +0.537 ± 0.029 | 1.9 | +0.216 ± 0.017 | 0.395 | +0.208 | +0.247 |
+  | 2 | 0 | 1 | +0.378 ± 0.011 | 1.1 | +0.802 ± 0.008 | 0.449 | +0.816 | +0.808 |
+  | 3 | 0 | 0.9 | +0.774 ± 0.013 | 0.7 | +0.753 ± 0.009 | 0.443 | +0.333 | +0.750 |
+  | 4 | 0 | 0.8 | +0.724 ± 0.013 | 0.9 | +0.685 ± 0.010 | 0.435 | +0.700 | +0.680 |
+  | 5 | 0 | 0.7 | +0.644 ± 0.015 | 0.9 | +0.589 ± 0.012 | 0.423 | +0.607 | +0.585 |
+  | 6 | 0 | 0.6 | +0.526 ± 0.019 | 1.1 | +0.461 ± 0.017 | 0.403 | +0.425 | +0.473 |
+  | 7 | 0 | 0.5 | +0.376 ± 0.029 | 2.0 | +0.240 ± 0.027 | 0.369 | +0.234 | +0.242 |
+  | 8 | 0 | 0.4 | +0.055 ± 0.055 | 4.2 | −0.240 ± 0.049 | 0.298 | −0.308 | −0.238 |
+  | 9 | 0 | 0.3 | −0.608 ± 0.076 | 5.3 | −1.166 ± 0.065 | 0.225 | −0.859 | −1.234 |
+  | 10 | 0 | 0.2 | −1.587 ± 0.083 | 6.5 | −1.326 ± 0.041 | 0.363 | −1.367 | −1.339 |
+  | 11 | 0 | 0.1 | −0.911 ± 0.033 | 5.2 | −0.454 ± 0.014 | 0.463 | −0.436 | −0.466 |
+  | 12 | 0 | 0 | −0.005 ± 0.006 | 2.5 | | | | |
+
+  kcal/mol; τ in samples.
+
+  | | BAR (kcal/mol) | TI (trapezoid) |
+  | --- | --- | --- |
+  | charges off | +1.227 ± 0.038 | +1.278 ± 0.038 |
+  | van der Waals off, the long-range correction's +0.915 included | +0.343 ± 0.135 | +0.400 ± 0.136 |
+  | **decoupling** | **+1.570 ± 0.140** | +1.678 ± 0.142 |
+  | **ΔG_hydration = −ΔG_decouple** | **−1.57 ± 0.14** | −1.68 ± 0.14 |
+  | GAFF/AM1-BCC in TIP3P, FreeSolv v0.52's calculated value (10.1021/acs.jced.7b00104) | −0.81 ± 0.02 | |
+  | OBC II, the same charges (3c-3): polar; with the nonpolar term | −2.34; −1.13 | |
+  | experiment, FreeSolv v0.52 `mobley_3053621` | −0.90 ± 0.20 | |
+
+  - **0.67 kcal/mol too negative, 2.7 of the combined errors**, and 0.76 below GAFF in the same
+    water. By part: **electrostatic −1.23 ± 0.04**, about half of OBC II's −2.34 for the same
+    charges, so GB's over-solvation of QEq benzene was most of 3c-3's polar number; and
+    **nonpolar −0.34 ± 0.14**, of which the long-range correction is −0.91 and what lies inside the
+    cutoff +0.57.
+  - **Hysteresis.** The first half of every window gives +1.377 ± 0.205, the second +1.753 ± 0.184:
+    0.38 apart, 1.4σ. EXP forward +1.382 and reverse +1.478 against BAR's +1.570. TI is 0.11
+    above BAR, mostly the trapezoid's bias where `⟨∂U/∂λ_v⟩` turns over between λ_v 0.4 and 0.1,
+    the windows whose autocorrelation times are longest (4–7 samples).
+  - **Window 3's forward EXP, +0.333 where BAR gives +0.753, is one sample.** At step 80 200 of the
+    λ_v = 0.9 window, moving to 0.8 lowers the energy by 3.72 kcal/mol, with `∂U/∂λ_v` = +55.5
+    against a median of about +8: a water against benzene's repulsive wall, which the softer state
+    relieves. Its weight `e^{6.3}` ≈ 540 among 2000 samples is the whole average; without it the
+    forward EXP is +0.702. The sample 100 fs before it is the next most extreme (−1.57), so it is
+    one event of a few hundred femtoseconds. That is EXP's known failure in the direction that
+    removes a repulsion; BAR uses both sides and is not moved, and the interval's overlap is 0.443.
+  - **What limits the comparison**, roughly by size:
+    - **UFF's van der Waals against TIP3P's oxygen by UFF's geometric rule**, which neither was
+      fitted for: a UFF hydrogen's well is 0.044 kcal/mol, aromatic carbon's 0.105 at 3.851 Å, and
+      twelve of those against water make the nonpolar part. GAFF's parameters were not read here,
+      so how much of the 0.76 against GAFF is this, rather than the charges, is not separated;
+    - **QEq's charges**, ±0.098 e, not the AM1-BCC charges GAFF's −0.81 used;
+    - **sampling**: ±0.14 by BAR, halves 0.38 apart, one seed, 200 ps a window;
+    - **the box**: 507 waters, NVT at the model's one-atmosphere density rather than under a
+      barostat; for a neutral solute the finite-size terms are measured as small (above).
+  - The steps ran at 22–27 ms rather than the measured 25.7: the machine's load moved during the
+    run, and the windows' wall times are in the log.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **378 tests, thirty-four of
+  them ignored**: 344 run by default (319 and 30 before). The new: three unit tests in `shake`, one
+  in `periodic`, eleven default and one ignored in `constrained_bonds_against_closed_forms.rs`, and
+  ten default and three ignored in `benzene_hydrated_in_tip3p.rs`. 319 + 25 is the 344, and
+  30 + 4 the 34.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

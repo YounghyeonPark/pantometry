@@ -53,8 +53,8 @@
 //!
 //! # The time step, measured
 //!
-//! Every X–H bond of a UFF molecule is free — only rigid water is constrained, below — so the
-//! step is set by the fastest bond. UFF gives
+//! Every X–H bond of a UFF molecule is free unless it is held ([`MolecularDynamics::with_bond_constraints`],
+//! below), so without that the step is set by the fastest bond. UFF gives
 //! aspirin's C–H `k` = 662 kcal mol⁻¹ Å⁻², a period of 11.5 fs with the C–H reduced mass. NVE
 //! aspirin from its relaxed geometry, velocities at 300 K (seed 7, the rigid motion removed), one
 //! picosecond at each step (`tests/the_dynamics.rs`, `the_step_size_measured`):
@@ -76,8 +76,11 @@
 //! a drift beyond its band's noise: what the table measures is the band. **0.5 fs is the default**
 //! ([`Molecule::DEFAULT_TIME_STEP`](crate::Molecule::DEFAULT_TIME_STEP)): its worst departure,
 //! 0.11 kcal/mol, is a fifth of `k_BT` at 300 K where 1 fs's is three quarters, and BAOAB's
-//! whole-step kinetic bias on a C–H stretch, `(ωh)²/4`, is 1.9% against 7.5%. Constraints would
-//! allow a step of about 2 fs and are not needed for that. (`⟨T⟩` is the same at every stable
+//! whole-step kinetic bias on a C–H stretch, `(ωh)²/4`, is 1.9% against 7.5%. **With the X–H
+//! bonds held, 2 fs**: benzene with its C–H held among the ten waters nearest it, rigid, has an
+//! NVE energy error falling as `h²` from 2 fs (ratios 4.23–4.51 per halving from 2 fs and
+//! 4.05–4.11 from 1 fs over sixteen starts, `tests/constrained_bonds_against_closed_forms.rs`).
+//! (`⟨T⟩` is the same at every stable
 //! step, which is the point of the column; it is not 300 K because the run starts at the minimum
 //! with all its energy kinetic. A harmonic molecule would share it out to 150 K; aspirin's torsions
 //! and methyl rotor are neither harmonic nor fast, and it reads 238 K. Not asserted.)
@@ -163,6 +166,18 @@
 //!   frozen in part is refused, because a triangle held by one corner is not what SETTLE solves.
 //! - [`MolecularDynamics::half_step_velocities`] are the velocities after `O` and its projection,
 //!   from which a rigid body's translational and rotational kinetic energies are read.
+//!
+//! # Held bonds
+//!
+//! [`MolecularDynamics::with_bond_constraints`] holds bonds at their lengths by SHAKE and RATTLE
+//! ([`Shake`], in [`crate::shake`]), composed in exactly the places SETTLE is: after each drift
+//! SHAKE, the velocity correction `Δq/h` on every atom it moved and the projection; after each kick
+//! and after `O` the projection, which for bonds is RATTLE's. It combines with SETTLE as long as no
+//! atom is in both — a solute's bonds to hydrogen beside rigid water — and each solver moves only
+//! its own atoms. **Each held bond with an atom free to move costs one degree of freedom**; a bond
+//! with one atom frozen holds the other at its length from it, and costs one; a bond frozen at both
+//! ends is skipped and costs none. Without bond constraints every one of these steps is skipped, so
+//! a run with SETTLE alone, or with no constraint at all, is the bits it was.
 
 // Three-vectors as `[f64; 3]`, indexed by component as the formulas are written; the Jacobi
 // rotations update two columns at once, which an iterator over one cannot.
@@ -170,6 +185,7 @@
 
 use crate::ccd::Element;
 use crate::energy::ForceField;
+use crate::shake::Shake;
 use crate::uff::AVOGADRO;
 use crate::water::Settle;
 use pantometry_core::conserved::quantity;
@@ -291,6 +307,9 @@ pub struct MolecularDynamics {
     constraints: Option<Settle>,
     /// Per rigid molecule: whether it moves (it is not frozen).
     active: Vec<bool>,
+    bonds: Option<Shake>,
+    /// How many bond constraints have an atom that moves.
+    active_bonds: usize,
 }
 
 impl MolecularDynamics {
@@ -322,6 +341,8 @@ impl MolecularDynamics {
             reference: None,
             constraints: None,
             active: Vec::new(),
+            bonds: None,
+            active_bonds: 0,
         }
     }
 
@@ -347,6 +368,9 @@ impl MolecularDynamics {
                 "a rigid molecule's masses must be the ones its SETTLE was built with"
             );
         }
+        if let Some(b) = &self.bonds {
+            assert_disjoint(&settle, b);
+        }
         self.constraints = Some(settle);
         self.refresh_active();
         self.cache = None;
@@ -356,6 +380,40 @@ impl MolecularDynamics {
     /// The rigid molecules, if any.
     pub fn constraints(&self) -> Option<&Settle> {
         self.constraints.as_ref()
+    }
+
+    /// The same dynamics with the bonds `shake` names held at their lengths by SHAKE and RATTLE
+    /// ([`crate::shake`]), composed with BAOAB as SETTLE is: see [the module
+    /// documentation](self). It may be combined with [`MolecularDynamics::with_constraints`] as long
+    /// as no atom is in both. A bond with one atom frozen holds the other at its distance; one with
+    /// both frozen is skipped. Call it before [`MolecularDynamics::thermalised`], as SETTLE's.
+    ///
+    /// # Panics
+    ///
+    /// If a constrained atom is past the atom count, or an atom is also in a rigid molecule.
+    pub fn with_bond_constraints(mut self, shake: Shake) -> MolecularDynamics {
+        let n = self.masses.len();
+        assert!(
+            shake.bonds().iter().flatten().all(|&i| i < n),
+            "a constrained bond's atom is past the atom count"
+        );
+        if let Some(s) = &self.constraints {
+            assert_disjoint(s, &shake);
+        }
+        self.bonds = Some(shake);
+        self.refresh_active();
+        self.cache = None;
+        self
+    }
+
+    /// The bond constraints, if any.
+    pub fn bond_constraints(&self) -> Option<&Shake> {
+        self.bonds.as_ref()
+    }
+
+    /// Whether anything is constrained.
+    fn constrained(&self) -> bool {
+        self.constraints.is_some() || self.bonds.is_some()
     }
 
     fn refresh_active(&mut self) {
@@ -375,34 +433,60 @@ impl MolecularDynamics {
                 })
                 .collect(),
         };
+        self.active_bonds = self.bonds.as_ref().map_or(0, |b| {
+            b.bonds()
+                .iter()
+                .filter(|&&[i, j]| !(frozen[i] && frozen[j]))
+                .count()
+        });
     }
 
-    /// Projects the velocities onto the rigid motions of every moving molecule at `at`.
+    /// Projects the velocities onto the rigid motions of every moving molecule at `at`, and onto
+    /// the motions that keep every constrained bond's length.
     fn project(&mut self, at: &[[f64; 3]]) {
         if let Some(s) = &self.constraints {
             let active = &self.active;
             s.constrain_velocities_where(at, &mut self.velocities, |w| active[w]);
+        }
+        if let Some(b) = &self.bonds {
+            b.constrain_velocities(&self.masses, &self.frozen, at, &mut self.velocities);
         }
     }
 
     /// A drift by `h`, then — with constraints — SETTLE, the velocity correction it implies and the
     /// projection.
     fn drift_constrained(&mut self, at: &mut [[f64; 3]], h: f64) {
-        if self.constraints.is_none() {
+        if !self.constrained() {
             self.drift(at, h);
             return;
         }
         let before = at.to_vec();
         self.drift(at, h);
         let unconstrained = at.to_vec();
-        let s = self.constraints.as_ref().expect("constraints");
-        let active = &self.active;
-        s.constrain_positions_where(&before, at, |w| active[w]);
-        for (w, idx) in s.waters().iter().enumerate() {
-            if !active[w] {
-                continue;
+        if let Some(s) = &self.constraints {
+            let active = &self.active;
+            s.constrain_positions_where(&before, at, |w| active[w]);
+            for (w, idx) in s.waters().iter().enumerate() {
+                if !active[w] {
+                    continue;
+                }
+                for &i in idx {
+                    for c in 0..3 {
+                        self.velocities[i][c] += (at[i][c] - unconstrained[i][c]) / h;
+                    }
+                }
             }
-            for &i in idx {
+        }
+        if let Some(b) = &self.bonds {
+            b.constrain_positions(&self.masses, &self.frozen, &before, at);
+            // Each constrained atom once, frozen ones aside: an atom in two bonds is corrected
+            // once by its whole displacement.
+            let mut seen = vec![false; at.len()];
+            for &i in b.bonds().iter().flatten() {
+                if seen[i] || self.frozen[i] {
+                    continue;
+                }
+                seen[i] = true;
                 for c in 0..3 {
                     self.velocities[i][c] += (at[i][c] - unconstrained[i][c]) / h;
                 }
@@ -571,7 +655,7 @@ impl MolecularDynamics {
             } => {
                 // A, O, A.
                 self.drift_constrained(at, half);
-                if self.constraints.is_some() {
+                if self.constrained() {
                     self.exchange_with_bath_constrained(at, temperature, friction, seed, dt);
                 } else {
                     self.exchange_with_bath(temperature, friction, seed, dt);
@@ -802,12 +886,13 @@ impl MolecularDynamics {
     }
 
     /// The degrees of freedom that exchange energy: three per free atom, less three per moving
-    /// rigid molecule, less the momenta
+    /// rigid molecule, less one per held bond with an atom free to move, less the momenta
     /// [`MolecularDynamics::thermalised`] removed — which only the microcanonical dynamics keeps removed. A
-    /// Langevin bath re-thermalises them, so under one this is `3 N_free − 3 N_rigid`: six a water.
+    /// Langevin bath re-thermalises them, so under one this is `3 N_free − 3 N_rigid − N_bonds`:
+    /// six a water, five a free C–H dumbbell.
     pub fn degrees_of_freedom(&self) -> usize {
         let rigid = self.active.iter().filter(|&&a| a).count();
-        let free = 3 * self.frozen.iter().filter(|&&f| !f).count() - 3 * rigid;
+        let free = 3 * self.frozen.iter().filter(|&&f| !f).count() - 3 * rigid - self.active_bonds;
         match self.bath {
             Bath::Isolated => free - self.removed.min(free),
             Bath::Langevin { .. } => free,
@@ -887,6 +972,19 @@ impl MolecularDynamics {
             }
         }
         l
+    }
+}
+
+/// Panics if an atom is in a rigid molecule and in a constrained bond: the two solvers each assume
+/// they move their atoms alone.
+fn assert_disjoint(settle: &Settle, shake: &Shake) {
+    let mut rigid: Vec<usize> = settle.waters().iter().flatten().copied().collect();
+    rigid.sort_unstable();
+    for &i in shake.bonds().iter().flatten() {
+        assert!(
+            rigid.binary_search(&i).is_err(),
+            "atom {i} is in a rigid molecule and in a constrained bond"
+        );
     }
 }
 

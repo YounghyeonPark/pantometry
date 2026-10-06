@@ -546,6 +546,40 @@ impl WaterBox {
         }
     }
 
+    /// The same box without every water that has an atom within `clearance` metres of an atom of
+    /// `solute` (metres, any image; the distance by minimum image): the waters a solute placed in
+    /// the box would overlap. The others keep their order and their bits. The solute's positions
+    /// go first in a solvated system ([`PeriodicForceField::solvated`]), and these after them.
+    ///
+    /// # Panics
+    ///
+    /// If `clearance` is negative or not finite.
+    pub fn without_overlaps(&self, solute: &[[f64; 3]], clearance: f64) -> WaterBox {
+        assert!(
+            clearance.is_finite() && clearance >= 0.0,
+            "a clearance must be finite and not negative"
+        );
+        let c2 = clearance * clearance;
+        let near = |p: [f64; 3]| {
+            solute.iter().any(|s| {
+                let d = self.cell.minimum_image(sub(p, *s));
+                dot(d, d) < c2
+            })
+        };
+        // By index: `chunks_exact(3)` draws clippy's `as_chunks`, stabilised in 1.88, and this
+        // crate builds on 1.78.
+        let positions = (0..self.count())
+            .map(|w| &self.positions[3 * w..3 * w + 3])
+            .filter(|w| !w.iter().any(|p| near(*p)))
+            .flatten()
+            .copied()
+            .collect();
+        WaterBox {
+            cell: self.cell,
+            positions,
+        }
+    }
+
     /// The box.
     pub fn cell(&self) -> PeriodicBox {
         self.cell

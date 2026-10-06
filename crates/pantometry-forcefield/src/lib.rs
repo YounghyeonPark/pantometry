@@ -129,6 +129,17 @@
 //!   the water alone and [`PeriodicForceField::solvated`] a UFF solute in it. The liquid at
 //!   298 K is set beside the literature in `tests/liquid_water_against_the_literature.rs`;
 //!   nothing about it is asserted. See [`water`].
+//! - [`Shake`] holds **bonds at their lengths by SHAKE and RATTLE**, step W3 of explicit water:
+//!   each bond's quadratic solved exactly, swept until every bond is within 10⁻¹² of its length,
+//!   so bonds that share no atom — a solute's bonds to hydrogen — are solved in one sweep, to
+//!   rounding. [`MolecularDynamics::with_bond_constraints`] composes it with BAOAB beside SETTLE,
+//!   one degree of freedom a bond, and [`Shake::to_hydrogen`] holds every X–H bond at UFF's natural
+//!   length, which lets a UFF solute run at water's 2 fs. [`Windows::with_dynamics`] runs
+//!   constrained windows, and [`PeriodicDecoupling`]'s couplings come from the cross terms alone.
+//!   **Benzene's hydration free energy in TIP3P** comes out at −1.57 ± 0.14 kcal/mol by BAR
+//!   (`tests/benzene_hydrated_in_tip3p.rs`, ignored), against experiment's −0.90 ± 0.20 and
+//!   GAFF/TIP3P's −0.81 ± 0.02 (FreeSolv v0.52); nothing is asserted against either. See
+//!   [`shake`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -278,6 +289,18 @@
 //! and a water frozen in part refused; the lattice at its density with uniform orientations; and
 //! W1's gradient and image guarantees with TIP3P.
 //!
+//! Held bonds against exact identities (`tests/constrained_bonds_against_closed_forms.rs`):
+//! benzene's C–H at UFF's natural length to rounding after every step beside rigid water, and
+//! every velocity tangent to them; twelve bonds sharing atoms within the tolerance; the degrees of
+//! freedom for both kinds of constraint and for frozen atoms, and a bath filling exactly that many;
+//! constrained NVE's energy error falling as `h²` from 2 fs; a frozen atom holding its partner; and
+//! a run the same bits however it is cut. Benzene decoupled from TIP3P
+//! (`tests/benzene_hydrated_in_tip3p.rs`): the end states the systems they say, energy and every
+//! force; `∂U/∂λ` the whole energy's derivative at constrained configurations; a charge held at a
+//! distance from a frozen one averaging, over the sphere, to `k_e q Q (1/d + ξ/L + 2πd²/3L³)` and
+//! decoupling to its quadrature by BAR and TI; and constrained windows the same bits however they
+//! are cut.
+//!
 //! # Determinism, and where it stops
 //!
 //! No clock, no randomness, no hash order and no threads, so a run repeats bit for bit on one
@@ -301,11 +324,11 @@
 //!
 //! # What is deliberately not in it
 //!
-//! - **No constraints but rigid water, and nothing but a Langevin bath.** [`dynamics`] is BAOAB
-//!   and velocity Verlet at a 0.5 fs step for a UFF molecule, with every X–H bond free; only a
-//!   rigid three-site water is held, by SETTLE ([`water`]), which allows 2 fs. No SHAKE on a
-//!   solute's bonds, no barostat, no multiple time steps. The measurement that chose the step is
-//!   in [`dynamics`].
+//! - **Bond-length constraints only, and nothing but a Langevin bath.** [`dynamics`] is BAOAB
+//!   and velocity Verlet at a 0.5 fs step for a UFF molecule with every X–H bond free, or at 2 fs
+//!   with them held by SHAKE ([`shake`]) and water rigid by SETTLE ([`water`]). No angle
+//!   constraints, no metric (Fixman) correction for bonds that share atoms, no barostat, no
+//!   multiple time steps. The measurement that chose the step is in [`dynamics`].
 //! - **Free energies by TI and BAR, not MBAR, and no nonpolar term in them.** MBAR would need
 //!   every sample's energy at every state; see [`free_energy`] for why BAR between neighbours is
 //!   enough here. The solvent-accessible surface has no useful gradient, so it is in neither leg
@@ -345,9 +368,9 @@
 //!   is computed ([`solvation::surface_area`], [`solvation::nonpolar_energy`]) but not added to
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
 //!   Not here: Poisson–Boltzmann, GB with a solute dielectric other than 1, and a cutoff.
-//!   **Explicit water is under way**: the periodic box and Ewald ([`periodic`]) and rigid TIP3P
-//!   ([`water`]) are here; benzene's hydration in it is the next step, and there is no smooth PME
-//!   yet.
+//!   **Explicit water is under way**: the periodic box and Ewald ([`periodic`]), rigid TIP3P
+//!   ([`water`]) and benzene's hydration in it ([`shake`]) are here; the solvated complex is the
+//!   next step, and there is no smooth PME yet.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
@@ -395,6 +418,7 @@ pub mod minimise;
 pub mod pdb;
 pub mod periodic;
 pub mod qeq;
+pub mod shake;
 pub mod solvation;
 pub mod uff;
 pub mod water;
@@ -419,6 +443,7 @@ pub use periodic::{
     PeriodicBox, PeriodicDecoupling, PeriodicEnergy, PeriodicEvaluation, PeriodicForceField,
 };
 pub use qeq::{Charges, Qeq, QeqError};
+pub use shake::Shake;
 pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
 pub use water::{Settle, WaterBox};
