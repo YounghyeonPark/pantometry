@@ -51,7 +51,7 @@ the script produces and the tree fails the app gate's first step. That sentence 
 byte for byte was here before the step was, and it read as true only because `cargo fmt --all`
 happened to run after the comparison that checked it.
 
-## This is the exception to "nothing generated is committed"
+## This is the first exception to "nothing generated is committed"
 
 That rule is stated twice — `EXAMPLES.md` and `app/pantometry-world/scenes/README.md` — and it is
 about **what a run writes**: the SVG an example plots, the glTF a scene exports. Those are outputs.

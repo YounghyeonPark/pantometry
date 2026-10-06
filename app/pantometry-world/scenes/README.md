@@ -86,7 +86,7 @@ The recommendation on record is to export into the rendering tools rather than r
 is that, and it cost no dependency: glTF is JSON with the binary base64'd inside it, which is the
 same reason SVG was chosen over a raster format.
 
-Nothing generated is committed — with two exceptions, and they are named so that this sentence stays true. `tools/presets` writes `presets.rs` and the chooser's tiles, which are build *inputs* rather than outputs and cannot be produced without a GPU; `tools/parts` writes the six STL solids a `block` domain names, which a scene needs on disk before it runs. Both are inputs, and both are held against something other than the script that wrote them.
+Nothing generated is committed — with three exceptions, and they are named so that this sentence stays true. `tools/presets` writes `presets.rs` and the chooser's tiles, which are build *inputs* rather than outputs and cannot be produced without a GPU; `tools/parts` writes the six STL solids a `block` domain names, which a scene needs on disk before it runs; `tools/math-reference` writes the two tables `pantometry_core::math`'s `exp` and `ln` are tested against, which need mpmath to make. All three are inputs, and all three are held against something other than the script that wrote them.
 
 `cargo run --release -- emit scene.json`, from `app/`, writes a starting point.
 

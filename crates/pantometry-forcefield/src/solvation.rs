@@ -148,33 +148,50 @@
 //! **There is no cutoff**: the descreening falls as `r⁻⁴` and the pair terms as `r⁻¹`, and a
 //! truncated sum would be an approximation, which this is not.
 //!
+//! **The exponential and the logarithm are the kernel's**, [`pantometry_core::math::exp`] and
+//! [`pantometry_core::math::ln`]: every `ln(U/L)` in [`descreening`], every `E` of Still's eq 3,
+//! and every `e^(−κf)` in salt, in the evaluation and in the reference alike, so the two are
+//! still equal to the bit. They are built from `+ − × ÷` and give the same bits on every
+//! platform, and on this machine they cost 2.0 and 2.9 ns a call where `f64::exp` and `f64::ln`
+//! cost 33 and 17.5. Changing to them moved no energy: aspirin's and the 3b complex's are the bits
+//! they were; 20 of the complex's 987 radii moved, by at most 3.0 × 2⁻⁵²; and its largest force
+//! change is 4.0 × 2⁻⁵² of its largest force. They were then rewritten from the published method
+//! alone (see [`pantometry_core::math`]), and that moved less again: aspirin not a bit, in OBC II
+//! or in salt; the complex's energy not a bit; 18 of its 987 radii by at most 2.95 × 2⁻⁵² of
+//! themselves; and its forces by at most 3.96 × 2⁻⁵² of its largest force.
+//!
 //! **Measured** (release, one core, `x86_64-pc-windows-gnu`), on step 3b's 987-atom complex —
 //! benzene in 181L, a 6 Å zone of 322 mobile atoms in a 10 Å binding:
 //!
-//! | | direct | now |
-//! | --- | --- | --- |
-//! | one evaluation | 86.5 ms | 43.5–44.3 ms (57.6 without the kept terms) |
-//! | the radii | 31.2 ms | 18.5 ms: 532 000 integrals, 35 ns each |
-//! | the pair terms | 23.0 ms | 23.4 ms: 486 000 pairs, 48 ns each |
-//! | the chain rule | 30.8 ms | 2.3 ms |
-//! | a step of dynamics | 87.2 ms | 44.8–45.5 ms, 28 times vacuum's 1.6 ms |
+//! | | direct, platform `exp` and `ln` | the three changes | and the kernel's `exp` and `ln` |
+//! | --- | --- | --- | --- |
+//! | one evaluation | 86.5 ms | 43.5–44.3 ms (57.6 without the kept terms) | 16.6 ms (21.6 without; the direct sum 33.6) |
+//! | the radii | 31.2 ms | 18.5 ms: 532 000 integrals, 35 ns each | 7.7 ms, 14 ns each |
+//! | the pair terms | 23.0 ms | 23.4 ms: 486 000 pairs, 48 ns each | |
+//! | the chain rule | 30.8 ms | 2.3 ms | |
+//! | a step of dynamics | 87.2 ms | 44.8–45.5 ms, 28 times vacuum's 1.6 ms | 18.2 ms, 11.4 times vacuum's; 18.5 with the rewrite, against 18.3 for the first in the same session |
 //!
-//! **What is left is the platform's `exp` and `ln`**: on this machine they cost 33 and 18.5 ns a
-//! call, and one of each is in every pair term and pair integral. With both replaced by arithmetic
-//! of no accuracy, for the timing alone, the step took 12.2 ms. A faster exponential and logarithm
-//! would change the bits, and a cutoff would change the model; neither is done here.
+//! **What is left is the arithmetic around them, and their latency.** With both replaced by
+//! arithmetic of no accuracy, for the timing alone, the step takes 12.3 ms, so the two still cost
+//! about 6 ms a step: 5.5–6 ns a call in place, against 2–3 ns in a loop of calls that do not wait
+//! on each other. Each sits in a chain of dependent divisions and square roots, and its latency,
+//! not its throughput, is what the step pays. A cutoff would change the model, and is not done
+//! here.
 //!
 //! # Determinism
 //!
-//! `exp`, `ln` and `tanh` (and `sin`/`cos` for the surface's points) are the platform's, so an
-//! energy repeats bit for bit on one machine and not necessarily across platforms — the crate's
-//! promise.
+//! `exp` and `ln` are the kernel's and the same function everywhere. **`tanh` is still the
+//! platform's**, once per atom per evaluation in the OBC rescaling (and `sin`/`cos` for the
+//! surface's points, which are not in the force field), so an energy repeats bit for bit on one
+//! machine and not necessarily across platforms — the crate's promise, now resting on one call per
+//! atom rather than on one per pair.
 //!
 //! [`ForceField`]: crate::energy::ForceField
 
 use crate::ccd::{Element, ANGSTROM};
 use crate::energy::COULOMB_KCAL;
 use crate::uff::KCAL_PER_MOL;
+use pantometry_core::math::{exp, ln};
 
 /// The reduction of an intrinsic radius, `ρ̃ = ρ − 0.09 Å` (p. 385), in metres.
 pub const RADIUS_OFFSET: f64 = 0.09 * ANGSTROM;
@@ -307,7 +324,7 @@ pub fn descreening(r: f64, rho_tilde: f64, s: f64) -> (f64, f64) {
     let lower = rho_tilde.max((r - s).abs());
     let (il, iu) = (1.0 / lower, 1.0 / upper);
     let squares = il * il - iu * iu;
-    let log = (upper / lower).ln();
+    let log = ln(upper / lower);
     let mut i = 0.5 * (il - iu) + (s * s - r * r) / (8.0 * r) * squares - log / (4.0 * r);
     if rho_tilde < s - r {
         i += 1.0 / rho_tilde - 1.0 / (s - r);
@@ -325,7 +342,7 @@ pub fn still_distance(r: f64, r_i: f64, r_j: f64) -> f64 {
 /// Eq 3 for a pair at distance `r` with `R_i R_j = rr`: `(f, E)`, `E = exp(−r²/4R_iR_j)` being
 /// what the derivatives also need. The one place eq 3 is written.
 fn still(r: f64, rr: f64) -> (f64, f64) {
-    let e = (-r * r / (4.0 * rr)).exp();
+    let e = exp(-r * r / (4.0 * rr));
     ((r * r + rr * e).sqrt(), e)
 }
 
@@ -757,7 +774,7 @@ impl GeneralizedBorn {
             let screen = if kappa == 0.0 {
                 1.0 / eps
             } else {
-                (-kappa * f).exp() / eps
+                exp(-kappa * f) / eps
             };
             let g = (1.0 - screen) / f;
             (g, -g / f + kappa * screen / f)
@@ -851,7 +868,7 @@ impl GeneralizedBorn {
         let (eps, kappa) = (self.solvent_dielectric, self.kappa);
         // g(f) = (1 − e^{−κf}/ε)/f and g′(f).
         let g = |f: f64| {
-            let screen = (-kappa * f).exp() / eps;
+            let screen = exp(-kappa * f) / eps;
             let g = (1.0 - screen) / f;
             (g, -g / f + kappa * screen / f)
         };
@@ -1027,7 +1044,7 @@ impl GeneralizedBorn {
             let screen = if kappa == 0.0 {
                 1.0 / eps
             } else {
-                (-kappa * f).exp() / eps
+                exp(-kappa * f) / eps
             };
             let g = (1.0 - screen) / f;
             (g, -g / f + kappa * screen / f)

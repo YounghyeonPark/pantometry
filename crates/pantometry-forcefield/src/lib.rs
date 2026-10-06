@@ -34,9 +34,9 @@
 //!   to the energy and the force; vacuum stays the default. A Shrake–Rupley surface gives the
 //!   paper's nonpolar term beside it, as a number, not a force. The evaluation is the direct
 //!   sum's to the bit, computing each pair integral once and, given the atoms that do not move
-//!   ([`GeneralizedBorn::with_frozen`]), their descreening once: on 3b's 987-atom complex a step of
-//!   dynamics costs 45 ms, half the direct sum's 87 and 28 times vacuum's, and what is left is the
-//!   platform's `exp` and `ln`.
+//!   ([`GeneralizedBorn::with_frozen`]), their descreening once, and calling the kernel's own
+//!   `exp` and `ln` ([`pantometry_core::math`]): on 3b's 987-atom complex a step of dynamics costs
+//!   18.2 ms, against the direct sum's 87 with the platform's, and 11.4 times vacuum's.
 //! - [`System::from_pdb`] reads a protein chain and its ligand out of a PDB entry and makes them one
 //!   [`Component`] the rest of this crate takes unchanged: hydrogens placed by superposing each
 //!   residue's dictionary template on the crystal, bonds with orders (peptide bonds and disulfides
@@ -236,7 +236,15 @@
 //! restraint, `atan2` — on every torsion evaluation as well as when a [`ForceField`] is built.
 //! Those are not correctly rounded and are not required to be the same function on two
 //! machines, so no digest of a minimum is pinned; see [`minimise`]. [`qeq`]'s integrals call
-//! `exp`, with the same consequence for a charge, and [`solvation`] calls `exp`, `ln` and `tanh`.
+//! `exp`, with the same consequence for a charge. [`solvation`]'s `exp` and `ln`, one of each in
+//! every pair, are [`pantometry_core::math`]'s and the same everywhere; its `tanh`, one per atom,
+//! is the platform's. **The rest of the crate's `exp` and `ln` are still the platform's**:
+//! [`qeq`]'s integrals, the BAR solver in [`free_energy`], the Langevin coefficient in
+//! [`dynamics`], the Boresch correction and UFF's bond-order term. None is where the time goes —
+//! each runs once per system, per integrator or per sample — and switching them would make no
+//! result of a run the same across platforms, since a minimum, a trajectory and a free energy all
+//! pass through UFF's torsion `cos` as well, and QEq through `powi`, whose rounding Rust does not
+//! specify. It would change their bits, and is left to be decided with those.
 //! [`pdb`]'s superposition is arithmetic and `sqrt`, but turning a rotor calls `sin` and `cos`.
 //!
 //! # What is deliberately not in it

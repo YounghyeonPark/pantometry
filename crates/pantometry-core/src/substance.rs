@@ -85,7 +85,7 @@ pub struct Substance {
 ///
 /// **Emissivity is a surface, not a substance.** The same 6061 is 0.09 polished and about 0.9
 /// anodised, a factor of ten in the radiative path — which
-/// [`Environment::loss_from`](../../pantometry_thermal/struct.Environment.html) says is the same order
+/// `pantometry-thermal`'s `Environment::loss_from` says is the same order
 /// as still-air convection at room temperature. [`Substance::with_emissivity`] exists so a finish
 /// does not have to become a new material.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

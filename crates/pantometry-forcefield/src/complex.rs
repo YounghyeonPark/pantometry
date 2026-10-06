@@ -109,12 +109,16 @@
 //! | 8 Å in 14 Å, vacuum | 1486 (719) | 5.00 | 8.6 |
 //! | 6 Å in 10 Å, OBC II | 987 (322) | 87.2 | 0.50 |
 //! | 6 Å in 10 Å, OBC II, since 3c-2 | 987 (322) | 45.5 | 0.95 |
+//! | 6 Å in 10 Å, OBC II, with the kernel's `exp` and `ln` | 987 (322) | 18.2 | 2.37 |
 //!
 //! Generalized Born over every atom cost 53 times the vacuum step, so 100 ps of it would have taken
 //! nearly five hours. It was run for 8 ps, which is one autocorrelation time of the vacuum run's
 //! slowest observable. Step 3c-2 halved it without changing a bit of the result — the radii and
-//! pairs are the same sums, and the trajectory below is the same one — and it is still 28 times
-//! the vacuum step: see [`crate::solvation`], "The cost".
+//! pairs are the same sums, and the trajectory below is the same one — and it was still 28 times
+//! the vacuum step. The kernel's own `exp` and `ln` brought it to 11.4 times (see
+//! [`crate::solvation`], "The cost"), and **that did change bits**: a few forces by a few ulps,
+//! which a run of dynamics amplifies, so the OBC II column below is 3b's trajectory with the
+//! platform's functions and a run now is a different trajectory of the same model.
 //!
 //! **Benzene stays bound in every run.** Its centroid never moved more than 1.16 Å from the crystal
 //! position, against a threshold of 3 Å. Means, with standard errors from each series'

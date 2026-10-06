@@ -45,6 +45,7 @@
 //! | [`ensemble`] | Many independent samples in parallel, with an answer that does not depend on how many threads produced it |
 //! | [`transform`] | The discrete Fourier transform, accurate rather than fast |
 //! | [`vector`] | Basis construction and reflection — the vector maths no domain owns |
+//! | [`math`] | `exp` and `ln` of the workspace's own: `+ − × ÷` only, so the same bits on every platform |
 //!
 //! [`scene`] here is **not** the `pantometry-scene` crate, and the collision is worth naming. This
 //! module is where two domains *meet* — an [`Interface`] cut into faces and a [`Flux`] that
@@ -130,6 +131,7 @@ pub mod conserved;
 pub mod ensemble;
 pub mod field;
 pub mod integrator;
+pub mod math;
 pub mod mixture;
 pub mod motion;
 pub mod pose;

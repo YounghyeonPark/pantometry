@@ -9,6 +9,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+# The exp/ln reference tables are 1.2 MB of test data. Every user of the kernel downloads it, and
+# none needs to: CI and both gates run the test from the repository. Left out of the package with
+# the one test that reads them, so a published crate holds no test that cannot compile.
+exclude = ["tests/data/", "tests/exp_and_ln_against_mpmath.rs"]
 
 [dependencies]
 pantometry-units = { workspace = true }

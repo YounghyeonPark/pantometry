@@ -426,9 +426,10 @@ fn the_kept_terms_change_no_model() {
 /// binding's positions and after 20 steps, and the reuse holds through them. Then the cost:
 /// milliseconds per step of dynamics in vacuum and in OBC II, and one evaluation of the reference.
 /// **Asserted about the cost only that each saving is taken, by a margin**: with the kept terms the
-/// evaluation is under 0.9 of its cost without them (measured 0.75), and without them under 0.85
-/// of the reference's (measured 0.68). A fast path that silently stopped being taken gives the
-/// same bits, so the default tests cannot see it, and this is what does. The numbers are printed.
+/// evaluation is under 0.9 of its cost without them (measured 0.75 with the platform's `exp` and
+/// `ln`, 0.77–0.79 with the kernel's), and without them under 0.85 of the reference's (0.68, and
+/// 0.64–0.67). A fast path that silently stopped being taken gives the same bits, so the default
+/// tests cannot see it, and this is what does. The numbers are printed.
 #[test]
 #[ignore = "QEq on 987 atoms and timed dynamics, about a minute with --release: run with --release -- --ignored --nocapture"]
 fn the_3b_complex_is_its_direct_sum_and_costs_measured() {

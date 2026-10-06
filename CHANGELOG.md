@@ -1938,6 +1938,141 @@ protects nothing.
   `benzene_bound_in_generalized_born.rs`: ten default, and the two measurements. 293 + 12 is the
   305, and 270 + 10 the 280. 3c-1's refusal test now holds that a solvated force field is accepted.
 
+- **`pantometry_core::math::{exp, ln}`: an exponential and a logarithm of the workspace's own,
+  the same bits on every platform, and generalized Born's step from 44.9 ms to 18.2.** 3c-2 left
+  two ways past the platform's `exp` and `ln` for a decision; this is the first of them, taken.
+  - **In the kernel**, as maths no domain owns, beside `vector` and `transform`: neither function
+    knows anything about a physics, and a second domain should not have to depend on the
+    forcefield to have them. Nothing in the kernel calls them, so no kernel result moved.
+  - **Original code, under the crate's own `MIT OR Apache-2.0`, and no notice to carry.** The
+    first version was ported from Arm's routines as musl has them and from fdlibm's `e_log.c`,
+    and carried Sun's and the MIT notices; that would have made the kernel's licence a compound
+    expression. It was **rewritten clean-room**: from the published method — P. T. P. Tang's
+    table-driven `exp` and `ln` (*ACM TOMS* 15(2), 1989; 16(4), 1990), Cody–Waite reduction,
+    Dekker's exact sum, Sterbenz's lemma, Taylor's series — without opening the port's code or
+    tables, or any library's source. `math.rs` cites the mathematics and no code, and carries no
+    third-party notice.
+  - **The method.** `exp`: `x = (128k + j) ln 2/128 + r`, `n = 128k + j` rounded by adding
+    `1.5 · 2⁵²`, `r` by a Cody–Waite split of `ln 2` whose head has 35 bits, so the head's product
+    and difference are exact; `2^(j/128)` from a 128-entry double-double table; `eʳ − 1` by Taylor
+    to `r⁵`; one rounding of `T_hi + (T_hi p + T_lo)`, then an exact `2ᵏ`. Below `2⁻¹⁰²²` the sum
+    is added to 1 at `2¹⁰²²` times its size, so it is rounded **once** onto the subnormal grid.
+    `ln`: `x = 2ᵏ m`, `m` in `[0.703125, 1.40625)`; `F` is `m` to eight fraction bits, `c` a
+    nine-bit `1/F` from a 257-entry table (1 in the two cells about 1), and
+    `r = m c − 1 = (F c − 1) + (m − F) c` — **every operation in it exact**, which the cells'
+    width and `c`'s length are chosen for and the table's test checks cell by cell — then
+    `k ln 2 − ln c` exact in its head, Dekker's sum, and Taylor to `r⁷`. **No division** in
+    either. Only `+ − × ÷` and integer operations on the bits, in a written order, with no fused
+    multiply–add. Every constant is written by `tools/math-reference/generate.py` (`--exp-table`,
+    `--ln-table`, `--constants`) with mpmath at 50 digits.
+  - **The reference tables are committed, and left out of the published kernel.** At 1.4 MB, they
+    are the third exception to "nothing generated is committed", after `tools/presets` and
+    `tools/parts`. `tools/math-reference/README.md` says why. Packaged with the first, 1.2 MB of
+    them, they took `pantometry-core` from 147.4 KiB to 1.0 MiB compressed, for every user of the
+    kernel. `Cargo.toml` excludes `tests/data/` and the one test that reads it, so a published
+    crate holds no test that cannot compile, and CI and both gates still run the test from the
+    repository. **The point recipe was extended for the rewrite's own seams** — `exp`'s table
+    boundaries `(n + ½) ln 2/128` for `|n| ≤ 512`, `|x| = 708`, `ln`'s 256 cell edges at
+    `k = −1, 0, 1` and `0.703125 · 2ᵉ` in every binade — appended after the old points, whose rows
+    in the regenerated tables are byte for byte what they were: 64 993 and 76 308 points.
+  - **fdlibm's `exp` and `ln` throughout were ported first, and measured worse on both counts**:
+    0.8994 and 0.7526 ulp, and a step of 23.7 ms, against 4.4 and 3.4 ns a call in a loop. The
+    gap between the loop and the step is what chose the table methods.
+  - **Accuracy, against mpmath at 50 digits** (`tests/exp_and_ln_against_mpmath.rs`, against a
+    committed table of the exact values' rounding at points the test draws itself by the script's
+    recipe — whose input digest the table carries and the test checks first). The bounds are
+    **derived from the method**, written beside them, and held at every point:
+
+    | | bound | worst, 64 993 / 76 308 committed points | worst, ×20 random points (804 287 / 737 812), run once |
+    | --- | --- | --- | --- |
+    | `exp` | 0.520 | 0.5106 ulp | 0.5106 ulp at `x = 0.55506`, a boundary of `j`; 0.074% not correctly rounded |
+    | `ln`, `c = 1` (`x` in `[1 − 3·2⁻¹⁰, 1 + 2⁻⁹)`) | 0.508 | 0.5000 ulp | 0.5010 ulp at `x = 1.0017` |
+    | `ln`, `k = 0`, `c ≠ 1` | 0.508 | 0.5000 ulp | 0.5002 ulp at `x = 0.97946` |
+    | `ln`, `k ≠ 0` | 0.501 | 0.5000 ulp | 0.5000 ulp; 6 points (0.001%) not correctly rounded, all of `ln` |
+
+    On the committed points `ln` is correctly rounded at every one. The first version's were
+    0.5058 and 0.5331 ulp against bounds of 0.52, 0.63 and fdlibm's 1. Each comparison also shows
+    it can see one ulp: the values moved up one double are more than one ulp out somewhere.
+  - **The constants are checked against closed forms summed in the test, not against the
+    script**: `ln 2` by `Σ 1/(n 2ⁿ)` in double-double, its split, `128/ln 2`; every `2^(j/128)` by
+    its Taylor series and by the exact products `T_j T_(128−j) = 2` and `T_j² = T_2j`; every
+    `−ln c` by `2 atanh((c − 1)/(c + 1))`, each `c` the nearest nine-bit `1/F`, and per cell the
+    two properties `ln` assumes: `|m c − 1| < 2⁻⁸` at both edges, and the exponent condition for
+    Dekker's sum.
+  - **Identities, each bound derived from the asserted ulp bounds**: `exp(ln x) = x` to
+    `(0.508 |ln x| + 0.520) ε` relative, `ln(exp x) = x` to `(0.520 + 0.508 |x|) ε`,
+    `ln(xy) = ln x + ln y` for `xy` exact; exactly `exp(±0) = 1` and `ln(1) = +0`; both monotone on
+    consecutive doubles at every seam of the method, on 2¹⁷ doubles about 1 and on sorted grids
+    across each domain.
+  - **Special values**, as IEEE and `f64` have them, each tested by name: NaN, `±∞`, `±0`,
+    negative `ln`, `exp`'s overflow at `0x40862e42fefa39ef` (finite there, `+∞` one double up)
+    and underflow at `0xc0874910d52d3051` (the smallest subnormal there, `+0` one double down),
+    subnormal arguments of both, subnormal results of `exp`, and `ln 2ᵉ` for every `e` from −1074
+    to 1023.
+  - **The bits are pinned, and it is a new digest**: FNV-1a of both at 8192 points each and their
+    special values, `0x84532fb880d98a57`, the same here in debug and in release. The first
+    version's, `0x150a0cfa04b62b07`, pinned another function over other points. CI runs it on
+    Linux, macOS on arm64, Windows, release, and `wasm32-wasip1`; that matrix, not this machine,
+    is what the claim rests on, and the rewrite has not yet been through it.
+  - **The cost** (release, `x86_64-pc-windows-gnu`): 1.96–2.03 ns a call for `exp` against
+    `f64::exp`'s 33.0–33.7, and 2.86–2.92 for `ln` against 17.4–17.6, in a loop over generalized
+    Born's arguments. A first draft of `ln` that carried `(m − F)/F` as a product and its exactly
+    computed remainder measured 3.67 ns; making `r` exact by construction instead removed the
+    remainder. **The target of about 16 ms a step is not met**: on 3b's 987-atom complex one
+    OBC II evaluation is 16.6 ms (43.1 before), 21.6 without the kept terms (57.0) and 33.6 by the
+    direct sum (86.4); the radii 7.7 (18.1); a step of dynamics **18.2 ms against 44.9**, 11.4
+    times vacuum's 1.6, 2.37 ns/day — all with the first version. The rewrite, timed in the same
+    session as the first, is 18.48–18.49 ms against its 18.29–18.30: 1% slower a step, though
+    `ln` alone is the same speed in a loop. With both functions replaced by arithmetic of no
+    accuracy the step is 12.3 ms, so they still cost about 6 ms: 5.5–6 ns a call in place. Each
+    sits in a chain of dependent divisions and square roots, and the step pays their latency, not
+    their throughput.
+  - **Adopted by generalized Born only**: `ln(U/L)` in `descreening`, `E` in Still's eq 3, and
+    `e^(−κf)` in salt — the evaluation, the reference, and the alchemical evaluation alike, so
+    3c-2's equivalence holds to the bit, with no test changed. **What moved**, the platform's
+    against the first version, on aspirin (OBC II, and in 0.15 M salt) and on the 3b complex: no
+    energy by a bit; no radius of aspirin's, and 20 of the complex's 987, by at most 2.95 ε;
+    forces by at most 0.23 ε of aspirin's largest and 3.97 ε of the complex's. **And the rewrite
+    against the first version**, the same systems: aspirin not a bit, energy, radius or force, in
+    either model; the complex's energy not a bit, in OBC II or in salt; 18 of its radii by at
+    most 2.95 ε of themselves; forces by at most 3.64 ε of its largest (3.96 in salt). Every
+    forcefield test passes unchanged: 280, and 25 ignored.
+    - **Not bit-identical yet**: GB's `tanh`, once per atom, is still the platform's, as are the
+      QEq charges it is given.
+    - **Not rerun**: 3b's 8 ps OBC II trajectory and 3c-3's free energy were measured with the
+      platform's functions. A run now is another trajectory of the same model, since dynamics
+      amplifies a few-ulp force, and the same within its statistics; `complex.rs` says so.
+    - **The rest of the forcefield's `exp` and `ln` are not switched** — QEq, BAR, the Langevin
+      coefficient, Boresch, UFF's bond-order term: none is hot, and every result they feed also
+      passes through UFF's torsion `cos` (QEq through `powi`), so switching them would make
+      nothing cross-platform and move their bits.
+  - **Other crates that call `exp` or `ln` outside tests, for a later decision** (switching any
+    would move its pinned and closed-form numbers): the kernel's `Rng::gaussian` (`ln`, with
+    `cos`) and `Rng::poisson` (`exp`); `pantometry-em` `cavity.rs` (a Gaussian pulse);
+    `pantometry-mechanics` (the damped overshoot); `pantometry-molecular` `fluid.rs` (a Langevin
+    decay); `pantometry-optics` `diffraction.rs`, `propagation.rs` and `spectrum.rs` (Gaussians,
+    and `exp_m1` for Planck); `pantometry-porous` (Arrhenius viscosity and kinetics, `puck.rs`);
+    `pantometry-quantum` (a wave packet); `pantometry-thermal` `solid.rs` (`ln` in a view
+    factor); `pantometry-view` `colour.rs` (`exp_m1` and a Gaussian). `pantometry-acoustic`,
+    `-fluid` and `-pharmacokinetic` call them only in tests.
+  - **Sabotage of the rewrite**: fourteen, each restored by copying the original back, `touch`,
+    and SHA-256, with `--no-fail-fast`. Caught: `ln 2`'s tail off by 10⁻⁷ (the `exp` bound and
+    the digest); `exp`'s `r⁵` term dropped; `ln`'s `r⁷` term dropped (only by the 0.508 bound, in
+    `k = 0`); `−0` taken for a negative number by `ln`; `exp`'s Cody–Waite tail dropped; `ln`'s
+    Dekker error dropped, and `r` computed as `m c − 1` (the 0.501 bound, the identities, the
+    digest); subnormal results rounded twice (the 0.520 bound only); `exp`'s overflow branch
+    scaled by `+∞`; `F` rounded down rather than to nearest (the 0.508 bound only); one bit of a
+    `−ln c` flipped at run time (the bounds, monotonicity, the digest); and one low bit each of an
+    `EXP_TABLE` and an `LN_TABLE` word — 2⁻¹⁰¹ relatively, invisible to any accuracy test, and
+    caught by the table tests alone. **One passed and was understood**: bit 40 of `T_lo` for
+    `j = 37` flipped at run time moves results by about 2⁻⁶⁵, a ten-thousandth of an ulp, and the
+    table test reads the constant, not the run-time value; the same kind of flip in the constant
+    is the one caught above.
+
+  **Counts.** `cargo test -p pantometry-core -- --list` counts **139**, two ignored (the ×20 table
+  and the timing): the seventeen new are eleven in `math`, four in `exp_and_ln_against_mpmath.rs`
+  and two doc tests.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

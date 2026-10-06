@@ -364,6 +364,19 @@ This is also why the `wasm32-wasip1` job exists. It runs the pinned digest and e
 closed-form comparison under a different target, so a platform that rounded differently would
 fail there rather than quietly producing different physics.
 
+**The promise is about operations, and only some operations keep it.** IEEE-754 makes `+ − × ÷`
+and `sqrt` correctly rounded, so the same everywhere. It does not do that for `exp`, `ln`, `sin`,
+`cos` or `tanh`: `f64::exp` and the rest call the platform's C library, which is a different
+function on two machines. **`pantometry_core::math::{exp, ln}` are the workspace's own** —
+original code written from the published table-driven method, under the crate's own licence —
+built from the first set in a written order, with no fused multiply–add, held within 0.520 and 0.508
+ulp of mpmath, and `math::tests::the_bits_are_pinned` pins their bits, which
+the platform matrix, the release job and `wasm32-wasip1` all run. A hot path that needs either
+should call them; generalized Born does. Every other transcendental is still the platform's —
+the kernel's own `Rng::gaussian` (`ln`, `cos`) and `Rng::poisson` (`exp`) among them — and a
+result that passes through one repeats on one machine and is not promised across machines. Say so
+where it happens, as `pantometry-forcefield` does.
+
 ### The kernel must never depend on a domain
 
 `pantometry-core` knows about conservation, integration, scheduling and boundaries. It knows
