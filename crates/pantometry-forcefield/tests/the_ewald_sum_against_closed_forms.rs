@@ -472,10 +472,19 @@ fn uniform(seed: u64, i: u64) -> f64 {
     (splitmix(seed, i) >> 11) as f64 / (1u64 << 53) as f64
 }
 
-/// The spacing of doubles at `t`, a normal double.
+/// The spacing of doubles at `t`, a normal double, built from its bits.
+///
+/// **Not `2f64.powi(e - 52)`.** Rust leaves `powi`'s precision unspecified, and for `erfc(26.5)`,
+/// about `2.2e-307`, the spacing is `2^-1071`, a subnormal: Windows returns it and Linux and macOS
+/// return 0, so this test read an infinite error there and passed here. The same defect in
+/// `pantometry-core`'s maths tests was fixed in `f5ec297`; this one was written the same way.
 fn ulp(t: f64) -> f64 {
-    let e = ((t.abs().to_bits() >> 52) as i32) - 1023;
-    2f64.powi(e - 52)
+    let e = ((t.abs().to_bits() >> 52) as i32) - 1023 - 52;
+    if e >= -1022 {
+        f64::from_bits(((e + 1023) as u64) << 52)
+    } else {
+        f64::from_bits(1u64 << (e + 1074))
+    }
 }
 
 /// The error of `v` against the exact value `hi + lo`, in ulps of the exact value.
