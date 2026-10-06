@@ -58,7 +58,7 @@ fn b(x: f64) -> u64 {
 /// `generate.py`'s `exp_inputs`, line for line.
 fn exp_inputs(scale: u64) -> Vec<u64> {
     let mut xs = Vec::new();
-    xs.extend(uniform(b(2f64.powi(-30)), b(746.0), 1, 16384 * scale, 2));
+    xs.extend(uniform(b(pow2(-30)), b(746.0), 1, 16384 * scale, 2));
     xs.extend(uniform(b(1.0), b(709.8), 2, 8192 * scale, 0));
     xs.extend(uniform(b(1.0), b(745.2), 3, 8192 * scale, 1));
     xs.extend(
@@ -324,7 +324,7 @@ fn exp_bound(_: f64) -> (&'static str, f64) {
 /// - **`k ≠ 0`**: `|ln x| ≥ ln 1.40625 = 0.34`, and the same absolute errors are **0.0002 ulp**
 ///   of it: 0.501. A subnormal argument is scaled by `2⁵²`, exactly, first.
 fn ln_bound(x: f64) -> (&'static str, f64) {
-    if (1.0 - 3.0 * 2f64.powi(-10)..1.0 + 2f64.powi(-9)).contains(&x) {
+    if (1.0 - 3.0 * pow2(-10)..1.0 + pow2(-9)).contains(&x) {
         ("the cells about 1, c = 1", 0.508)
     } else if (0.703_125..1.406_25).contains(&x) {
         ("k = 0, c ≠ 1", 0.508)
@@ -452,4 +452,11 @@ fn the_cost() {
     println!(
         "ns per call: exp {ours_exp:.2} (platform {platform_exp:.2}), ln {ours_ln:.2} (platform {platform_ln:.2})"
     );
+}
+
+/// `2^e` for a normal `e`, exactly, from its bits. `f64::powi`'s precision is unspecified by Rust,
+/// and on two CI runners it gave 0 for `2^-1074`, so nothing here relies on it for an input.
+fn pow2(e: i32) -> f64 {
+    assert!((-1022..=1023).contains(&e), "2^{e} is not a normal double");
+    f64::from_bits(((e + 1023) as u64) << 52)
 }

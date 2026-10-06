@@ -739,6 +739,22 @@ pub fn ln(x: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// **`2^e`, exactly, for every `e` from −1074 to 1023**, built from its bits.
+    ///
+    /// `f64::powi` is not this: Rust leaves its precision unspecified, and `2f64.powi(-1074)` is
+    /// the smallest subnormal on Windows but 0 on Linux and macOS, where it is computed as
+    /// `1 / 2^1074` and the divisor has already overflowed. A test built on it checked `ln 0` on
+    /// two of the CI runners and `ln 2^-1074` on the third, which is the platform dependence this
+    /// module exists to remove, found in its own test.
+    fn pow2(e: i32) -> f64 {
+        assert!((-1074..=1023).contains(&e), "2^{e} is not a finite double");
+        if e >= -1022 {
+            f64::from_bits(((e + 1023) as u64) << 52)
+        } else {
+            f64::from_bits(1u64 << (e + 1074))
+        }
+    }
+
     // ---- Double-double arithmetic, Dekker (1971), for checking the tables against their closed
     // forms to about 2^-104 relatively. Test-only: nothing above uses it.
 
@@ -879,15 +895,12 @@ mod tests {
         let ln2 = ln2_dd();
         assert_eq!(ln2.value(), std::f64::consts::LN_2, "the series is ln 2");
         let (hi, lo) = (f64::from_bits(LN2_HI), f64::from_bits(LN2_LO));
-        let scaled = hi * 2f64.powi(35);
+        let scaled = hi * pow2(35);
         assert_eq!(scaled, scaled.trunc(), "LN2_HI is a multiple of 2^-35");
-        assert!(
-            gap(Dd::of(hi), ln2) <= 2f64.powi(-36),
-            "LN2_HI is the nearest"
-        );
+        assert!(gap(Dd::of(hi), ln2) <= pow2(-36), "LN2_HI is the nearest");
         let off = gap(Dd(hi, lo), ln2);
         assert!(
-            off <= 0.5 * ulp(lo.abs()) + 2f64.powi(-100),
+            off <= 0.5 * ulp(lo.abs()) + pow2(-100),
             "LN2_HI + LN2_LO is {off:e} from ln 2"
         );
         let inv = Dd::of(128.0).div(ln2);
@@ -896,9 +909,9 @@ mod tests {
             gap(Dd::of(inv_step), inv) <= 0.5 * ulp(inv_step),
             "INV_STEP is the nearest double to 128/ln 2"
         );
-        assert_eq!(SHIFT, 1.5 * 2f64.powi(52));
-        assert_eq!(TWO_52, 2f64.powi(52));
-        assert_eq!(TWO_M1022, 2f64.powi(-1022));
+        assert_eq!(SHIFT, 1.5 * pow2(52));
+        assert_eq!(TWO_52, pow2(52));
+        assert_eq!(TWO_M1022, pow2(-1022));
         assert_eq!(f64::from_bits(EXP_MAIN_LIMIT), 708.0);
         assert_eq!(f64::from_bits(LN_F_FIRST), 0.703125);
     }
@@ -920,7 +933,7 @@ mod tests {
             );
             let off = gap(t, exact);
             assert!(
-                off <= 0.5 * ulp(t.1.abs().max(f64::MIN_POSITIVE)) + 2f64.powi(-102),
+                off <= 0.5 * ulp(t.1.abs().max(f64::MIN_POSITIVE)) + pow2(-102),
                 "T[{j}] is {off:e} from 2^({j}/128)"
             );
             let two = if j == 0 {
@@ -928,17 +941,14 @@ mod tests {
             } else {
                 t.mul(exp_entry(128 - j))
             };
-            assert!(
-                gap(two, Dd::of(2.0)) <= 2f64.powi(-102),
-                "T[{j}] T[128 − {j}]"
-            );
+            assert!(gap(two, Dd::of(2.0)) <= pow2(-102), "T[{j}] T[128 − {j}]");
             let square = t.mul(t);
             let target = if 2 * j < 128 {
                 exp_entry(2 * j)
             } else {
                 exp_entry(2 * j - 128).scale(2.0)
             };
-            assert!(gap(square, target) <= 2f64.powi(-101), "T[{j}]²");
+            assert!(gap(square, target) <= pow2(-101), "T[{j}]²");
         }
     }
 
@@ -970,11 +980,7 @@ mod tests {
                 f64::from_bits(g_hi),
                 f64::from_bits(g_lo),
             );
-            let grid = if c < 1.0 {
-                2f64.powi(-9)
-            } else {
-                2f64.powi(-8)
-            };
+            let grid = if c < 1.0 { pow2(-9) } else { pow2(-8) };
             assert_eq!(
                 (c / grid).fract(),
                 0.0,
@@ -994,47 +1000,36 @@ mod tests {
             }
             // The cell: m from F less half the spacing below it to F plus half the spacing above,
             // within [0.703125, 1.40625).
-            let below = if big_f <= 1.0 {
-                2f64.powi(-9)
-            } else {
-                2f64.powi(-8)
-            };
-            let above = if big_f < 1.0 {
-                2f64.powi(-9)
-            } else {
-                2f64.powi(-8)
-            };
+            let below = if big_f <= 1.0 { pow2(-9) } else { pow2(-8) };
+            let above = if big_f < 1.0 { pow2(-9) } else { pow2(-8) };
             let lo = if i == 0 { big_f } else { big_f - below / 2.0 };
             let hi = if i == 256 { big_f } else { big_f + above / 2.0 };
             let r_max = (lo * c - 1.0).abs().max((hi * c - 1.0).abs());
             widest = widest.max(r_max);
             if c != 1.0 {
-                assert!(
-                    r_max < 2f64.powi(-8),
-                    "r is not exact in F = {big_f}'s cell"
-                );
+                assert!(r_max < pow2(-8), "r is not exact in F = {big_f}'s cell");
                 assert!(
                     exponent(g_hi) >= exponent(r_max),
                     "Dekker's sum is not exact in F = {big_f}'s cell"
                 );
             } else {
-                assert!(r_max <= 3.0 * 2f64.powi(-10), "r = m − 1 about 1");
+                assert!(r_max <= 3.0 * pow2(-10), "r = m − 1 about 1");
             }
             let exact = ln_dd(c).neg();
-            assert_eq!((g_hi * 2f64.powi(35)).fract(), 0.0, "(−ln {c})_hi on 2^-35");
+            assert_eq!((g_hi * pow2(35)).fract(), 0.0, "(−ln {c})_hi on 2^-35");
             assert!(
-                gap(Dd::of(g_hi), exact) <= 2f64.powi(-36),
+                gap(Dd::of(g_hi), exact) <= pow2(-36),
                 "(−ln {c})_hi is not the nearest"
             );
             let off = gap(Dd(g_hi, g_lo), exact);
             let allowed = if g_lo == 0.0 {
-                2f64.powi(-104)
+                pow2(-104)
             } else {
-                0.5 * ulp(g_lo.abs()) + 2f64.powi(-104)
+                0.5 * ulp(g_lo.abs()) + pow2(-104)
             };
             assert!(off <= allowed, "−ln {c} is {off:e} out");
         }
-        assert!(widest <= 1.71 * 2f64.powi(-9), "|r| reaches {widest:e}");
+        assert!(widest <= 1.71 * pow2(-9), "|r| reaches {widest:e}");
         let entry = |i: usize| {
             let [c, hi, lo] = LN_TABLE[i];
             (
@@ -1048,10 +1043,7 @@ mod tests {
                 let ((ca, ga), (cb, gb)) = (entry(a), entry(b));
                 if ca == 2.0 * cb {
                     pairs += 1;
-                    assert!(
-                        gap(gb.sub(ga), ln2_dd()) <= 2f64.powi(-88),
-                        "c = {ca} and {cb}"
-                    );
+                    assert!(gap(gb.sub(ga), ln2_dd()) <= pow2(-88), "c = {ca} and {cb}");
                 }
             }
         }
@@ -1142,7 +1134,7 @@ mod tests {
             "ln MAX"
         );
         for e in -1074..1024 {
-            let x = 2f64.powi(e);
+            let x = pow2(e);
             let exact = ln2.mul(Dd::of(f64::from(e)));
             let y = ln(x);
             if e == 0 {
@@ -1188,7 +1180,7 @@ mod tests {
     /// `ε²|ln x|²`, are covered by one more `ε`.
     #[test]
     fn exp_undoes_ln() {
-        let lo = 2f64.powi(-1000).to_bits();
+        let lo = pow2(-1000).to_bits();
         for i in 0..20_000 {
             let x = f64::from_bits(between(21, i, lo, f64::MAX.to_bits()));
             let l = ln(x);
@@ -1215,7 +1207,7 @@ mod tests {
     /// `B_ln ε` of itself, and the sum rounds once more.
     #[test]
     fn ln_turns_products_into_sums() {
-        let (lo, hi) = (2f64.powi(-500).to_bits(), 2f64.powi(500).to_bits());
+        let (lo, hi) = (pow2(-500).to_bits(), pow2(500).to_bits());
         let mask = !((1u64 << 27) - 1);
         for i in 0..20_000 {
             let x = f64::from_bits(between(23, i, lo, hi) & mask);
@@ -1289,12 +1281,12 @@ mod tests {
         rises(ln, &about(1.0, 65_536)).unwrap();
         for k in [-1i32, 0, 1] {
             for i in 0..256u64 {
-                let edge = f64::from_bits(LN_F_FIRST + (i << 44) + (1 << 43)) * 2f64.powi(k);
+                let edge = f64::from_bits(LN_F_FIRST + (i << 44) + (1 << 43)) * pow2(k);
                 rises(ln, &about(edge, 8)).unwrap();
             }
         }
         for e in -1022..1023 {
-            rises(ln, &about(0.703125 * 2f64.powi(e), 4)).unwrap();
+            rises(ln, &about(0.703125 * pow2(e), 4)).unwrap();
         }
         rises(ln, &about(f64::MIN_POSITIVE, 64)).unwrap();
         let mut bits: Vec<u64> = (0..100_000)
@@ -1336,7 +1328,7 @@ mod tests {
             }
         };
         let exp_args = (0..8192u64).map(|i| {
-            let b = between(41, i, 2f64.powi(-60).to_bits(), 746.0f64.to_bits());
+            let b = between(41, i, pow2(-60).to_bits(), 746.0f64.to_bits());
             f64::from_bits(b | ((i & 1) << 63))
         });
         let ln_args =
