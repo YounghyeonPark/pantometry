@@ -587,6 +587,81 @@ pub fn bennett_chain(windows: &[(Vec<f64>, Vec<f64>)]) -> FreeEnergy {
     }
 }
 
+/// One interval [`refine_schedule`] found below its threshold.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Insertion {
+    /// The round it was found in, from 0.
+    pub round: usize,
+    /// The candidates at its two ends.
+    pub between: [usize; 2],
+    /// Its overlap, as the caller's `overlap` measured it.
+    pub overlap: f64,
+    /// The candidate a window was inserted at, or `None` when no candidate lies strictly between
+    /// the ends.
+    pub inserted: Option<usize>,
+}
+
+/// **Windows inserted where neighbours overlap too little**: 3c's and W3's rule, written once.
+///
+/// `schedule` holds candidates — indices into a grid of states, ascending along the path — and
+/// `records[k]` what window `schedule[k]` recorded. In each round every interval whose
+/// `overlap(records[k], records[k + 1])` is **below** `threshold` (strictly: an interval at the
+/// threshold is kept as it is) gets a window at the candidate halfway between its ends,
+/// `(a + b)/2` rounded down, when one lies strictly between them; the round's new windows are run
+/// by `run`, in path order, and put in place, so that `records[k]` is still `schedule[k]`'s. The
+/// next round looks at the refined schedule. It stops after a round that inserts nothing, or after
+/// `rounds` rounds. Every window already run is kept: a window records its energy at every
+/// candidate, so a new neighbour needs neither of the old ones run again.
+///
+/// Returns every interval found below the threshold, round by round, in path order.
+///
+/// # Panics
+///
+/// If `records` is not one per entry of `schedule`, or `schedule` is not strictly ascending.
+pub fn refine_schedule<R>(
+    schedule: &mut Vec<usize>,
+    records: &mut Vec<R>,
+    threshold: f64,
+    rounds: usize,
+    mut overlap: impl FnMut(&R, &R) -> f64,
+    mut run: impl FnMut(usize) -> R,
+) -> Vec<Insertion> {
+    assert_eq!(schedule.len(), records.len(), "one record per window");
+    assert!(
+        schedule.windows(2).all(|w| w[0] < w[1]),
+        "a schedule is strictly ascending: {schedule:?}"
+    );
+    let mut found = Vec::new();
+    for round in 0..rounds {
+        let mut inserted = Vec::new();
+        for k in 0..schedule.len().saturating_sub(1) {
+            let o = overlap(&records[k], &records[k + 1]);
+            if o < threshold {
+                let (a, b) = (schedule[k], schedule[k + 1]);
+                let between = a + (b - a) / 2;
+                let at = (between > a).then_some(between);
+                found.push(Insertion {
+                    round,
+                    between: [a, b],
+                    overlap: o,
+                    inserted: at,
+                });
+                if let Some(g) = at {
+                    inserted.push((k + 1, g));
+                }
+            }
+        }
+        if inserted.is_empty() {
+            break;
+        }
+        for (offset, (position, g)) in inserted.into_iter().enumerate() {
+            schedule.insert(position + offset, g);
+            records.insert(position + offset, run(g));
+        }
+    }
+    found
+}
+
 /// A schedule's windows: see the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Windows {
@@ -823,5 +898,91 @@ impl Windows {
             value: kt * f.value,
             error: kt * f.error,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The overlaps of the table below, by the interval's two candidates.
+    fn table(a: usize, b: usize) -> f64 {
+        match (a, b) {
+            (0, 8) => 0.09,
+            (8, 10) => 0.1,
+            (10, 12) => 0.0999,
+            (0, 4) => 0.5,
+            (4, 8) => 0.05,
+            (10, 11) => 0.01,
+            (11, 12) => 0.3,
+            (4, 6) | (6, 8) => 0.2,
+            (12, 15) => 0.05,
+            (12, 13) | (13, 15) => 0.5,
+            other => panic!("no overlap in the table for {other:?}"),
+        }
+    }
+
+    /// **The insertion rule, decided by hand on a table of overlaps**: an interval at 0.09 and one
+    /// at 0.0999 get the candidate halfway between their ends, and one three candidates long the
+    /// one below halfway, 13 between 12 and 15: rounded down; one at exactly the
+    /// threshold, 0.1, does not; one whose ends are neighbouring candidates is reported with nothing
+    /// inserted, in every round it is seen; the new windows are run in path order and put in place,
+    /// each record its own window's; a round that inserts nothing stops it; and `rounds` caps it.
+    #[test]
+    fn windows_are_inserted_where_the_table_says() {
+        let refine = |rounds: usize| {
+            let mut schedule = vec![0, 8, 10, 12, 15];
+            let mut records = schedule.clone();
+            let mut ran = Vec::new();
+            let found = refine_schedule(
+                &mut schedule,
+                &mut records,
+                0.1,
+                rounds,
+                |&a, &b| table(a, b),
+                |g| {
+                    ran.push(g);
+                    g
+                },
+            );
+            assert_eq!(records, schedule, "each record is its own window's");
+            (schedule, ran, found)
+        };
+        let row = |round, between: [usize; 2], inserted| Insertion {
+            round,
+            between,
+            overlap: table(between[0], between[1]),
+            inserted,
+        };
+        let (schedule, ran, found) = refine(10);
+        assert_eq!(schedule, [0, 4, 6, 8, 10, 11, 12, 13, 15]);
+        assert_eq!(ran, [4, 11, 13, 6]);
+        assert_eq!(
+            found,
+            [
+                row(0, [0, 8], Some(4)),
+                row(0, [10, 12], Some(11)),
+                row(0, [12, 15], Some(13)),
+                row(1, [4, 8], Some(6)),
+                row(1, [10, 11], None),
+                row(2, [10, 11], None),
+            ]
+        );
+        let (schedule, ran, found) = refine(1);
+        assert_eq!(schedule, [0, 4, 8, 10, 11, 12, 13, 15]);
+        assert_eq!(ran, [4, 11, 13]);
+        assert_eq!(found.len(), 3);
+        let (schedule, ran, found) = refine(0);
+        assert_eq!(schedule, [0, 8, 10, 12, 15]);
+        assert!(ran.is_empty() && found.is_empty());
+    }
+
+    /// A schedule out of order, or records that are not one a window, are refused.
+    #[test]
+    #[should_panic(expected = "strictly ascending")]
+    fn a_schedule_out_of_order_is_refused() {
+        let mut schedule = vec![0, 8, 8];
+        let mut records = vec![0, 8, 8];
+        refine_schedule(&mut schedule, &mut records, 0.1, 1, |_, _| 1.0, |g| g);
     }
 }

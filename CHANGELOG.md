@@ -2891,7 +2891,7 @@ protects nothing.
     lattice at W3's 33.00 nm⁻³. Turning 181L to its tightest box was measured and not done: the best
     of 20 000 uniform rotations saves 10.5% of the volume.
   - **Two clearances, and why the second.** Every water with an atom within 1.4 Å of a complex
-    atom goes (W3's rule), 775 for 181L, about the protein's volume (18 419 g/mol at the usual
+    atom goes (W3's rule), 780 for 181L, about the protein's volume (18 419 g/mol at the usual
     0.73 cm³/g, a typical value, is 737 waters). **That let a lattice water into a crevice between
     Arg95 and Trp126**, and the melt at 0.5 fs with the protein frozen pushed it in: its oxygen
     1.77 Å from Arg95's Nε, a hydrogen 0.83 Å from it — a TIP3P hydrogen has no van der Waals term,
@@ -3197,6 +3197,175 @@ protects nothing.
   long trajectories and the cost — in `a_neighbour_list_is_the_cell_lists_bits.rs`, and eight unit
   tests in `neighbours`. 374 + 12 is the 386, and 38 + 2 the 40. Ten sabotages, every one caught
   where this says it is.
+
+- **`pantometry-forcefield`'s complex leg is ready to run, and costed: the protein free and
+  released after its frozen melt, its hydrogens relaxed in vacuum first, a water rule that leaves
+  the bulk within about 0.1–0.4% of W3's density instead of about 1.7% under, the restraint on in one interval
+  that the insertion splits, and the neighbour list throughout — 296–301 ms a step, 127–129 h for
+  fourteen windows on one core.** Step W4, phase 2. **The production leg was not started.**
+  - **The protein moves, and is released before any window** (`SolvatedComplex::preparation`,
+    `SolvatedComplex::prepare`, `Stage`, new). `MELT` is phase 1's — 0.5 ps at 0.5 fs in a
+    50 ps⁻¹ bath and 1 ps at 2 fs in a 5 ps⁻¹ one, the protein frozen — and `release(flexibility)`
+    the step phase 1 found necessary: 0.2 ps at 0.5 fs in 50 ps⁻¹, then 0.5 ps at 2 fs in 5 ps⁻¹.
+    Released straight into 2 fs, the 8 Å zone had drifted +149 kcal/mol/ps and the 10 Å zone had
+    failed SHAKE. `prepare` runs the stages in order, stage `k` seeded `stage_seed(seed, k)` —
+    `window_seed(seed ^ PREPARATION_STREAM, k)`, a stream of its own (after the review, below). A stage that
+    frees what the one before held starts from Maxwell–Boltzmann velocities, and every other stage
+    carries its velocities on. The leg runs `preparation(Flexibility::Mobile)` from the box as
+    built. It keeps the end in `prepared.txt`, and no longer needs `PANTOMETRY_W4_FLEXIBILITY`.
+  - **Hydrogens relaxed in vacuum first**: the leg's binding is `relaxing_hydrogens(20 000,
+    HYDROGEN_TOLERANCE)`, 3b's and 3c's call, with every heavy atom frozen. On the whole of 181L
+    the complex converged in 206 steps, the protein alone in 90 and benzene in 15, in 5.3 s. **The
+    closest contacts, placed → relaxed**: Arg119 HG3 … Gln123 HE22 1.461 → 2.022 Å, Arg52 HG2 …
+    HH12 1.504, Thr54 H … Asp47 OD1 1.540 → 2.024 Å (phase 1's 1.50 Å contact, there after SHAKE's
+    adjustment), Tyr18 HH … Thr26 HG21 1.572, His31 HD1 … Asp70 OD2 1.653. The closest left is
+    Asp159 HA … Lys162 HE2 at 1.839 Å: two hydrogens whose heavy atoms are frozen, which a
+    hydrogen-only relaxation cannot move far.
+  - **The water rule: between two, not near one** (`Solvation::removed`, `Solvation::lattice_for`,
+    new). The 1.4 Å clearance stays. A water whose oxygen is within 2.6 Å of **two heavy atoms on
+    opposite sides of it**, `(O − a)·(O − b) < 0`, is now also removed. Phase 1 removed every
+    oxygen within 2.6 Å of any heavy atom. A water close to one side is pushed back out by the
+    melt, as at the rest of the surface. A water pinched between two has no direction that
+    relieves both, and a frozen protein cannot open the gap. 90° is where "between" begins, so
+    nothing is tuned. Phase 1's crevice water is lattice water 4663: its oxygen is within 2.6 Å of
+    nine heavy atoms of Arg95 and Trp126, the widest pair at cos −0.947. On the leg's box the
+    clearance removes 788 of 10 080, the new rule 19 more, **807 in all against phase 1's 909 for
+    the same box** (737 by the protein's volume at 0.73 cm³/g). Relaxed hydrogens bring water 4663
+    within the clearance, so on this box the clearance alone removes it.
+  - **The bulk density, measured** after the leg's preparation, over 1 ps more at 2 fs in its bath,
+    every 50 fs. The volume is a 1 Å grid at that distance from every complex atom, by minimum
+    image, recomputed every frame since the protein moves:
+
+    | water farther than | nm⁻³ | of 33.00 | halves |
+    | --- | --- | --- | --- |
+    | 6 Å | 33.122 ± 0.008 | +0.37% | 33.132, 33.112 |
+    | 8 Å | 33.097 ± 0.014 | +0.29% | 33.072, 33.123 |
+    | 10 Å | **33.035 ± 0.019** | **+0.11%** | 33.008, 33.062 |
+    | 12 Å | 33.046 ± 0.018 | +0.14% | 33.024, 33.069 |
+
+    **Water far from the protein is within about 0.1–0.4% of 33.00 nm⁻³, depending on the
+    shell.** The ± is each shell's standard error over twenty frames (the log now prints `n` and
+    `τ` beside it; this run predates that), the shells differ by more than it, and the potential
+    energy was still falling, so it is not the density's uncertainty. The rule removes 70 more
+    waters than the protein's nominal volume and still lands there, so 0.73 cm³/g was not the
+    right yardstick for a lattice with a 1.4 Å clearance. No barostat.
+  - **The restraint on in one interval**: `SCHEDULE` is λ_r 0 and 1, λ_e 0.5 and 0, λ_v 0.9 to 0,
+    fourteen windows. **`free_energy::refine_schedule` (and `Insertion`, new) is W3's and 3c's
+    insertion written once**. An interval whose overlap is strictly below the threshold gets the
+    candidate `⌊(a + b)/2⌋` when one lies strictly between, round after round, until a round adds
+    nothing or the cap is reached. Each record stays its own window's. The leg uses 0.1 and W3's two
+    rounds.
+  - **The neighbour list in the leg**: `SolvatedComplex::with_neighbour_list`, and the decoupling
+    keeps a list of its own. Through the list an evaluation is 246.9 ms, by the cell list 337.4.
+  - The phase-1 cost measurement now runs on the leg's box and on the library's `MELT` and
+    `release`. **Corrected**: phase 1's entry and module documentation gave 775 waters removed by
+    the 1.4 Å clearance alone; that run's own log says 780.
+
+  **The cost, re-measured** (`the_cost_of_the_mobile_leg_measured`, ignored; release, one core;
+  run once, exit 0, 1 131 s). The box has 30 417 atoms — 2 616 complex, 9 264 waters, 9 Cl⁻ — in
+  62.35 × 65.47 × 74.82 Å. The binding took 174 s (QEq), the relaxation 5.3 s, the box 6 s, and
+  the preparation 619 s.
+
+  | | phase 1, nothing frozen | phase 2, the leg |
+  | --- | --- | --- |
+  | hydrogens | as placed | relaxed in vacuum |
+  | waters | 9 160 | 9 264 |
+  | degrees of freedom | 61 515 | 62 139 |
+  | ms a step at 2 fs | 332–346 (cell list) | **296–301** (neighbour list) |
+  | NVE 2 fs, 0.3 ps: RMS, drift | 2.10, +0.20 | **2.25, −1.23** |
+  | NVE 1 fs, 0.3 ps: RMS, drift | 1.37, +0.13 | 0.67, −0.13 |
+  | worst held bond | 1.0e-12 | 9.9e-13 |
+  | couplings, 33 candidates | 32.7 ms | 32.7 ms |
+  | the leg | 17 windows, 172–180 h | **14 windows, 127–129 h** |
+
+  kcal/mol and kcal/mol/ps over the box. **The leg's schedule**: the restraint 2 windows
+  (λ_r 0 → 1), the charges 2 intervals (λ_e 1 → 0.5 → 0), the van der Waals 10 (λ_v 0.9 → 0 by
+  0.1). Each window is 20 ps discarded and 200 ps sampled at 2 fs, 110 000 steps, 9.1–9.2 h with
+  its 2 000 couplings. **Each window the insertion adds costs another 9.1–9.2 h**. W3's two rounds
+  can add at most three to the restraint (λ_r 0.25, then 0.1 and 0.5), about 27 h. Stable at 2 fs
+  after the release: RMS 2.25 kcal/mol over the 30 417-atom box, a drift of −1.2 kcal/mol/ps, the size of
+  phase 1's −2.0 to −2.5 with the protein frozen or zoned (the plain cutoff's), and every held bond
+  within 1e-12.
+
+  **Checked** (eleven default tests with the review's three; 21 s unoptimised for the W4 file):
+  - **the hydrogens are relaxed first** (`the_legs_hydrogens_are_relaxed_in_vacuum_first`, 5 Å
+    pocket through the leg's own `leg_binding`). All three relaxations converged. **The force on
+    every freed hydrogen, recomputed from the complex's whole force field, is within the
+    tolerance**: 1.88e-3 kcal mol⁻¹ Å⁻¹, against 70.8 as placed (held to be ten tolerances). Every
+    heavy atom and held hydrogen keeps its bits. The closest contact of a freed hydrogen goes
+    1.890 → 2.068 Å (Val111 HG13 … benzene H5), the energy falls, and the box starts from those
+    positions;
+  - **the crevice water is removed, by its rule** (`the_crevice_water_between_arg95_and_trp126_is_removed`),
+    on phase 1's 20 × 21 × 24 lattice around the crystal positions, with no QEq. By brute force
+    over 27 images, water 4663's oxygen is within 2.6 Å of Arg95 and Trp126 heavy atoms with a pair
+    on opposite sides, and 1.488 Å from the complex at closest, so the clearance alone keeps it.
+    `removed` keeps it with the oxygen's rule off and removes it with the rule on;
+  - **the box against brute force**: `check_waters_and_ions` applies the new rule independently,
+    each heavy atom's nearest of 27 images and every pair's dot product. On the 5 Å pocket it
+    asserts that each branch is seen: 88 removed by the clearance, 1 by the oxygen's rule, and 23
+    kept with an oxygen that close on one side only;
+  - **the list** (`the_legs_box_keeps_a_neighbour_list`): the leg's box and its decoupling have
+    one at 2 Å. Twelve steps of the leg's dynamics take 13 evaluations through the decoupling's
+    list (2 builds), and positions and velocities are the bits of the same box without one;
+  - **the preparation** (`the_preparation_is_the_melt_then_the_release`): the stages as numbers
+    (1000 × 0.5 fs at 50 ps⁻¹, 500 × 2 fs at 5, then 400 × 0.5 fs at 50 and 250 × 2 fs at 5, free),
+    0.5, 1, 0.2 and 0.5 ps; frozen has the melt alone, a zone the release at the zone. `prepare`
+    on four short stages, with different steps, time steps and frictions, gives each stage its own
+    steps and frozen mask. The protein keeps its bits through the frozen stages and moves in the
+    others, and the end is to the bit the stages run by hand;
+  - **the schedule** (`the_legs_schedule_starts_the_restraint_in_one_interval`);
+  - **the insertion against a table** (two unit tests in `free_energy`): 0.09 and 0.0999 inserted,
+    0.1 exactly not, neighbouring candidates reported with nothing, runs in path order, the cap,
+    and a schedule out of order refused;
+  - **the insertion against a closed form**
+    (`windows_inserted_where_neighbours_overlap_little_recover_a_closed_form`): seventeen 3-D
+    wells, `k_g = 2^{5g/8}`, starting from the two ends, with exact independent samples. The rule
+    must insert 8, then 4 and 12, and stop. Measured overlaps: 0.0012, then 0.053 and 0.049, then
+    0.23–0.24. BAR along the refined chain gives 10.374 ± 0.080 against `15 ln 2` = 10.397. With one
+    round, `0, 8, 16` is left with both intervals below.
+
+  **Sabotage: thirteen, every one caught**, each applied by a script with an anchor that occurs
+  once, in binary mode, run with `--no-fail-fast`, and restored by copy, `touch` and SHA-256 (no
+  `git checkout`): the oxygen's rule never firing (the crevice test, the box); phase 1's rule back,
+  any heavy atom within 2.6 Å (both box tests, against brute force); the release skipped (the
+  preparation); velocities never carried between stages, a stage's time step halved, and every stage
+  seeded as stage 0 (each the preparation, by its bits by hand); the decoupling built without the
+  list, and the leg's box without one (each the list test); the hydrogens not relaxed (the
+  relaxation test); an interval at 0.09 not split (the rule tested below `threshold − 0.02`), the
+  midpoint rounded up, and the insertions put in place without their offset (each the table's unit
+  test; the last also the closed form — the first two pass the wells, whose overlaps are far from
+  0.1 and whose midpoints are even); and the brute force's own sign reversed (both box tests).
+
+  **A review found seven checks that a defect passed, and each now has a check that fails it**
+  (numerics-reviewer; the coordinator reproduced the first). Each sabotage was run against the
+  revised tests, restored by copy, `touch` and SHA-256:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | "between" at 120°, `dot(a, b) < −½ ‖a‖ ‖b‖` | passed: the one box water and the crevice water are far past 90° (the rule failed only beyond cos −0.9) | caught by a water and two carbons placed by hand at 89° and 91°, 2.59 and 2.61 Å: only 91° with both inside 2.6 Å removes it |
+  | `Solvation::w4()`'s oxygen clearance 2.7 Å | passed | caught by the same case at 2.61 Å, and by every field of `w4()` pinned to its literal |
+  | the preparation seeded as the windows, `PREPARATION_SEED` = `PROTOCOL.seed` | passed: stage `k` and window `k` drew the same streams | `prepare` mixes `PREPARATION_STREAM` into its seed, so equal seeds no longer collide (that alone passes, now harmlessly); with the stream also removed, caught by the stage seeds and the windows' at every candidate asserted disjoint |
+  | the box built from the placed binding, `leg_box(placed, …)` | passed: only heavy atoms were compared | caught: every freed hydrogen in the box within 0.05 Å of its relaxed place (measured 0.026), and each of the 32 the relaxation moved more than 0.1 Å nearer it than its placed one |
+  | only even-index pocket hydrogens freed (`near_hydrogens`) | passed: the test took the mask from the binding | caught by the mask against brute force, 83 of 133 freed on the 5 Å pocket; and the 100 Å binding frees every hydrogen by the same rule on the system, its farthest heavy parent 36.96 Å from benzene, with no QEq |
+  | the midpoint rounded up | caught only through a gap of one, where it reinserts the end | caught by a gap of three, 12 → 15, which must insert 13 |
+  | `prepare` at 298.15 K whatever it is given | passed: the test ran at 298.15 | caught: the short stages run at 310 K, the bath's temperature asserted |
+
+  - **The density's prose said more than the run measured**: "33.035 ± 0.019, +0.11%" read as a
+    density known to 0.06%, from twenty frames in one picosecond, with the shells 0.087 nm⁻³ apart
+    and the energy still falling. It is now "within about 0.1–0.4% of 33.00, depending on the
+    shell", here and in `solvated`; the measurement was not rerun.
+  - **The wells' `f.error < 0.1` was not earned** and is dropped; the 4σ comparison stays.
+  - The crevice test printed "2.6 Å" as a literal; it prints the clearance in use.
+
+  **Not run**: the production leg, W3's production, the workspace suite and the gate.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **438 tests, forty-one of
+  them ignored**: 397 run by default (386 and 40 before). The new: two unit tests in
+  `free_energy`, eight default — three of them the review's — and one ignored (the mobile leg's
+  cost) in `benzene_bound_in_tip3p.rs`, and one in `the_free_energy_against_closed_forms.rs`.
+  386 + 11 is the 397, and 40 + 1 the 41. Twenty sabotages in all, thirteen before the review and
+  seven after, every one caught where this says; equal seeds with the stream kept is a probe, and
+  passes, as it should.
 
 ### Changed
 

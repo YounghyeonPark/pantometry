@@ -1,7 +1,8 @@
 //! **T4 lysozyme L99A and benzene (PDB 181L) in a box of TIP3P water**: the complex leg's system,
 //! checked against closed forms and exact identities, and — ignored, in release — what each way
-//! of holding the protein costs. Step W4 of the explicit-water track, phase 1: nothing here runs
-//! the complex leg; `the_complex_leg_measured` is written and ignored.
+//! of holding the protein costs. Step W4 of the explicit-water track, phases 1 and 2: nothing here
+//! runs the complex leg; `the_complex_leg_measured` is written and ignored, and
+//! `the_cost_of_the_mobile_leg_measured` costs it.
 //!
 //! Default, unoptimised, on pockets cut out of 181L so that each takes seconds:
 //!
@@ -21,7 +22,11 @@
 //! - **each flexibility freezes what it says**, and its frozen atoms keep their bits;
 //! - **constrained NVE falls as `h²`**, with the excess over four shrinking by four, on a pocket
 //!   whose held bonds share atoms;
-//! - **the Boresch release is its closed form**, at the anchors the rule chooses here.
+//! - **the Boresch release is its closed form**, at the anchors the rule chooses here;
+//! - phase 2, **the leg's pieces**: its hydrogens relaxed in vacuum first, a stationary point in
+//!   what was freed; phase 1's crevice water between Arg95 and Trp126 removed, by the rule for it;
+//!   its box and its decoupling through a neighbour list, the same bits; its preparation the frozen
+//!   melt and then the release, run as the stages say; and its schedule.
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
@@ -29,13 +34,13 @@
 mod protein;
 
 use pantometry_forcefield::ewald::COULOMB;
-use pantometry_forcefield::free_energy::{bennett_chain, window_seed};
+use pantometry_forcefield::free_energy::{bennett_chain, refine_schedule, window_seed};
 use pantometry_forcefield::uff::{self, KCAL_PER_MOL};
 use pantometry_forcefield::water::{self, WaterBox};
 use pantometry_forcefield::{
     Alchemical, AtLambda, Bath, Binding, Boresch, Complex, Component, Coupling, Element, Estimate,
     EwaldParameters, Flexibility, Lambda, MolecularDynamics, PeriodicBox, PeriodicDecoupling,
-    PeriodicEnergy, PeriodicForceField, Protocol, SolvatedComplex, Solvation, System,
+    PeriodicEnergy, PeriodicForceField, Protocol, SolvatedComplex, Solvation, Stage, System,
 };
 use pantometry_units::BOLTZMANN;
 use std::sync::OnceLock;
@@ -252,10 +257,14 @@ fn benzene(b: &Binding) -> Component {
 /// nearest images of each pair: the lattice rebuilt and **its sites checked independently** — each
 /// water's centre of mass at `(g + ½) L_a/k_a`, `g` its index read as `[x, y, z]` with `z` fastest,
 /// to `16 ε L` — then every water with an atom within the clearance of a complex atom, or its
-/// oxygen within the oxygen's clearance of a heavy atom, found and removed; **each ion in turn on
+/// oxygen within the oxygen's clearance of two heavy atoms on opposite sides of it (each heavy
+/// atom's nearest image, every pair's `(O − a)·(O − b)` below zero), found and removed; and, when
+/// `every_branch`, **each rule must have removed a water the other would not**, and one water must
+/// have an oxygen that close to a heavy atom and be kept, so that every branch is seen; **each ion
+/// in turn on
 /// the oxygen of the kept water farthest from every complex atom and every ion already placed**,
 /// the first on a tie, that water gone; and the survivors in order, to the bit.
-fn check_waters_and_ions(s: &SolvatedComplex, solvation: &Solvation) {
+fn check_waters_and_ions(s: &SolvatedComplex, solvation: &Solvation, every_branch: bool) {
     let n = s.complex_atoms();
     let at = s.positions();
     let total = at.len();
@@ -301,16 +310,64 @@ fn check_waters_and_ions(s: &SolvatedComplex, solvation: &Solvation) {
         .filter(|&i| s.binding().elements()[i] != Element::H)
         .map(|i| at[i])
         .collect();
+    // The nearest image of `o − h`, over the 27.
+    let nearest_vector = |o: [f64; 3], h: [f64; 3]| {
+        let mut best = [f64::INFINITY; 3];
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for m in -1..=1 {
+                    let v = sub(
+                        o,
+                        [
+                            h[0] + f64::from(i) * lengths[0],
+                            h[1] + f64::from(j) * lengths[1],
+                            h[2] + f64::from(m) * lengths[2],
+                        ],
+                    );
+                    if dot(v, v) < dot(best, best) {
+                        best = v;
+                    }
+                }
+            }
+        }
+        best
+    };
     let mut kept: Vec<usize> = Vec::new();
+    let (mut by_clearance, mut between_only, mut close_kept) = (0, 0, 0);
     for w in 0..lattice.count() {
         let atoms = &lattice.positions()[3 * w..3 * w + 3];
-        if atoms
+        let clear = atoms
             .iter()
-            .all(|&p| nearest27(p, complex) >= solvation.clearance)
-            && nearest27(atoms[0], &heavy) >= solvation.oxygen_clearance
-        {
-            kept.push(w);
+            .all(|&p| nearest27(p, complex) >= solvation.clearance);
+        let close: Vec<[f64; 3]> = heavy
+            .iter()
+            .map(|&h| nearest_vector(atoms[0], h))
+            .filter(|v| len(*v) < solvation.oxygen_clearance)
+            .collect();
+        let mut between = false;
+        for a in 0..close.len() {
+            for b in 0..a {
+                between |= dot(close[a], close[b]) < 0.0;
+            }
         }
+        match (clear, between) {
+            (true, false) => {
+                kept.push(w);
+                close_kept += usize::from(!close.is_empty());
+            }
+            (false, _) => by_clearance += 1,
+            (true, true) => between_only += 1,
+        }
+    }
+    println!(
+        "removed: {by_clearance} by the clearance, {between_only} more between two heavy atoms; \
+         kept {close_kept} with the oxygen that close to one side only"
+    );
+    if every_branch {
+        assert!(
+            by_clearance > 0 && between_only > 0 && close_kept > 0,
+            "every branch of the rule is seen"
+        );
     }
     assert_eq!(lattice.count() - kept.len(), s.overlapping());
     // Each ion in turn: the kept water whose oxygen is farthest from the complex and from every
@@ -379,7 +436,7 @@ fn two_ions_are_each_farthest_from_everything_placed() {
     let sum: f64 = q.iter().sum();
     let scale: f64 = q.iter().map(|x| x.abs()).sum();
     assert!(sum.abs() <= q.len() as f64 * EPS * scale);
-    check_waters_and_ions(&s, &solvation);
+    check_waters_and_ions(&s, &solvation, false);
 }
 
 /// **The box is what it says**, on the 5 Å pocket, whose formal charge is +1:
@@ -488,7 +545,7 @@ fn the_box_is_neutral_at_its_density_and_clear_of_the_complex() {
         moved / ANGSTROM
     );
 
-    check_waters_and_ions(&s, &solvation);
+    check_waters_and_ions(&s, &solvation, true);
 
     // The chloride's parameters.
     let ion = pantometry_forcefield::Ion::chloride();
@@ -1370,10 +1427,39 @@ fn read_positions(path: &std::path::Path) -> Option<Vec<[f64; 3]>> {
     )
 }
 
-/// The whole of 181L: every residue (a binding cut at 100 Å, past the farthest heavy atom from
-/// benzene), QEq on the protein at +9 and on benzene at 0 — benzene's charges 3c-3's and W3's — the
-/// hydrogens as 2c-1 placed them, and W4's solvation.
-fn whole_complex() -> SolvatedComplex {
+/// **The leg's hydrogens**: `binding`'s, each system's own, relaxed in vacuum with every heavy
+/// atom frozen — 3b's and 3c's `relaxing_hydrogens(20 000, HYDROGEN_TOLERANCE)`, step A-1 —
+/// before it goes in water. Phase 1 put the hydrogens in water as 2c-1 placed them, and the
+/// crystal's contacts, a backbone amide H 1.50 Å from an Asp Oδ1 among them, were what a released
+/// protein let go of at its first step.
+fn leg_relaxed(binding: &Binding) -> Binding {
+    binding.relaxing_hydrogens(20_000, Binding::HYDROGEN_TOLERANCE)
+}
+
+/// The leg's binding: 181L's residues within `cutoff` of benzene, hydrogens relaxed
+/// ([`leg_relaxed`]).
+fn leg_binding(cutoff: f64) -> Binding {
+    leg_relaxed(&Binding::new(the_system(), cutoff).expect("181L"))
+}
+
+/// The leg's box: `binding` in water as `solvation` says, **its real-space pairs in a Verlet list**
+/// of [`PeriodicForceField::NEIGHBOUR_SKIN`], which the decoupling keeps a list of its own of.
+fn leg_box(binding: &Binding, solvation: &Solvation) -> SolvatedComplex {
+    SolvatedComplex::new(binding, solvation)
+        .expect("the box")
+        .with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN)
+}
+
+/// How much of the protein the leg moves: all of it, decided after phase 1's measurement.
+const LEG_FLEXIBILITY: Flexibility = Flexibility::Mobile;
+
+/// The seed of the leg's preparation ([`SolvatedComplex::prepare`]).
+const PREPARATION_SEED: u64 = 0x4_4A7F;
+
+/// The whole of 181L as a binding: every residue (cut at 100 Å, past the farthest heavy atom from
+/// benzene), QEq on the protein at +9 and on benzene at 0 — benzene's charges 3c-3's and W3's —
+/// and the hydrogens as 2c-1 placed them, **not yet relaxed**.
+fn whole_binding() -> Binding {
     let b = Binding::new(the_system(), 100.0 * ANGSTROM).expect("the whole of 181L");
     assert_eq!(b.positions().len(), the_system().component().atoms().len());
     assert!(
@@ -1385,72 +1471,57 @@ fn whole_complex() -> SolvatedComplex {
         b.charges()[b.ligand_range()],
         pocket3().charges()[pocket3().ligand_range()]
     );
-    SolvatedComplex::new(&b, &Solvation::w4()).expect("181L in water")
+    b
 }
 
-/// The box melted with the protein frozen, read from `start.txt` if a run has written it: 0.5 ps
-/// at 0.5 fs in a 50 ps⁻¹ bath — W2's melt, which takes out the lattice's strain and the 1.4 Å
-/// contacts without a step a hydrogen could cross a neighbour in — then 1 ps at 2 fs in a 5 ps⁻¹
-/// bath. Every constraint on throughout; the melt's end is kept in `melt.txt` and `melt_v.txt`, so
-/// that a run stopped in the second part does not melt again. **Phase 1's start, not production's**: the complex leg
-/// equilibrates each window 20 ps more.
-fn melted(s: &SolvatedComplex, dir: &std::path::Path, name: &str) -> Vec<[f64; 3]> {
-    let path = dir.join("start.txt");
+/// The whole of 181L in W4's box as the leg runs it: [`whole_binding`], its hydrogens relaxed
+/// ([`leg_relaxed`]), in [`leg_box`].
+fn whole_complex() -> SolvatedComplex {
+    leg_box(&leg_relaxed(&whole_binding()), &Solvation::w4())
+}
+
+/// `stages` of [`SolvatedComplex::prepare`] on `potential` from the box as built, read from
+/// `file` in `dir` if a run has written it, and each stage logged as it ends.
+fn prepared(
+    s: &SolvatedComplex,
+    potential: &dyn pantometry_forcefield::Potential,
+    stages: &[Stage],
+    dir: &std::path::Path,
+    file: &str,
+    name: &str,
+) -> Vec<[f64; 3]> {
+    let path = dir.join(file);
     if let Some(at) = read_positions(&path) {
-        assert_eq!(
-            at.len(),
-            s.positions().len(),
-            "start.txt is another system's"
-        );
+        assert_eq!(at.len(), s.positions().len(), "{file} is another system's");
         return at;
     }
     let t = std::time::Instant::now();
     let mut at = s.positions().to_vec();
-    let bath = |friction: f64, seed: u64| Bath::Langevin {
-        temperature: KELVIN,
-        friction,
-        seed,
-    };
-    let mut md = s
-        .dynamics(Flexibility::Frozen)
-        .with_bath(bath(50e12, 0xE01))
-        .thermalised(&at, KELVIN, 0xE01);
-    let melt = dir.join("melt.txt");
-    match read_positions(&melt) {
-        Some(m) => {
-            at = m;
-            let v = read_positions(&dir.join("melt_v.txt")).expect("melt_v.txt");
-            md = md.with_velocities(v);
-        }
-        None => {
-            md.run(s.field(), &mut at, 0.5 * FS, 1000);
-            write_positions(&melt, &at);
-            write_positions(&dir.join("melt_v.txt"), md.velocities());
-        }
-    }
-    log(
-        dir,
-        name,
-        &format!(
-            "melted 0.5 ps at 0.5 fs, protein frozen: {:.0} s, T {:.1} K, U {:.1} kcal/mol",
-            t.elapsed().as_secs_f64(),
-            md.temperature(),
-            kcal(md.potential_energy().unwrap())
-        ),
+    s.prepare(
+        potential,
+        stages,
+        KELVIN,
+        PREPARATION_SEED,
+        &mut at,
+        |k, stage, md, _| {
+            log(
+                dir,
+                name,
+                &format!(
+                    "stage {k}: {} steps of {} fs, {:?}, {} ps⁻¹: {:.0} s in all, T {:.1} K, U \
+                     {:.1} kcal/mol",
+                    stage.steps,
+                    stage.time_step / FS,
+                    stage.flexibility,
+                    stage.friction / 1e12,
+                    t.elapsed().as_secs_f64(),
+                    md.temperature(),
+                    kcal(md.potential_energy().unwrap())
+                ),
+            )
+        },
     );
-    let mut md = md.with_bath(bath(5e12, 0xE02));
-    md.run(s.field(), &mut at, 2.0 * FS, 500);
     write_positions(&path, &at);
-    log(
-        dir,
-        name,
-        &format!(
-            "then 1 ps at 2 fs: {:.0} s in all, T {:.1} K, U {:.1} kcal/mol",
-            t.elapsed().as_secs_f64(),
-            md.temperature(),
-            kcal(md.potential_energy().unwrap())
-        ),
-    );
     at
 }
 
@@ -1473,12 +1544,10 @@ fn grid() -> Vec<Lambda> {
     g
 }
 
-/// The complex leg's first schedule, as indices into [`grid`]: the restraint on in four intervals
-/// (3c-3's five states), the charges off in two (W3's), the van der Waals off in ten (W3's).
-/// Seventeen windows.
-const SCHEDULE: [usize; 17] = [
-    0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-];
+/// The complex leg's schedule, as indices into [`grid`]: **the restraint on in one interval**,
+/// λ_r 0 → 1, which the insertion splits where it overlaps too little; the charges off in two
+/// (W3's); the van der Waals off in ten (W3's). Fourteen windows before any is inserted.
+const SCHEDULE: [usize; 14] = [0, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32];
 
 /// W3's protocol: 2 fs, 1 ps⁻¹ at 298.15 K, 20 ps discarded, 2000 samples every 100 fs.
 const PROTOCOL: Protocol = Protocol {
@@ -1492,18 +1561,66 @@ const PROTOCOL: Protocol = Protocol {
 };
 
 /// An interval whose overlap is below this gets a window at the candidate between its ends: 3c's
-/// and W3's rule and threshold.
+/// and W3's rule and threshold ([`pantometry_forcefield::free_energy::refine_schedule`]).
 const OVERLAP_THRESHOLD: f64 = 0.1;
+
+/// How many rounds of insertion the leg makes: W3's two.
+const INSERTION_ROUNDS: usize = 2;
 
 /// W3's solvent leg, benzene decoupled from TIP3P: +1.570 ± 0.140 kcal/mol (CHANGELOG, W3).
 const SOLVENT_LEG: (f64, f64) = (1.570, 0.140);
 
+/// Constrained NVE from `at` with `velocities` under `template` (no bath): `n` steps of `dt`. The
+/// RMS departure of the total energy from its start, the drift by a least-squares line per
+/// second, ⟨T⟩ and the worst held bond with a mobile atom, relative to its length.
+#[allow(clippy::too_many_arguments)]
+fn nve(
+    s: &SolvatedComplex,
+    potential: &dyn pantometry_forcefield::Potential,
+    template: &MolecularDynamics,
+    mobile: &[bool],
+    at: &[[f64; 3]],
+    velocities: &[[f64; 3]],
+    dt: f64,
+    n: usize,
+) -> (f64, f64, f64, f64) {
+    let mut at = at.to_vec();
+    let mut md = template.clone().with_velocities(velocities.to_vec());
+    md.prepare(potential, &at);
+    let e0 = md.kinetic_energy() + md.potential_energy().unwrap();
+    let (mut squares, mut series, mut t_sum) = (0.0, Vec::with_capacity(n), 0.0);
+    for _ in 0..n {
+        md.step(potential, &mut at, dt);
+        let e = md.kinetic_energy() + md.potential_energy().unwrap() - e0;
+        squares += e * e;
+        series.push(e);
+        t_sum += md.temperature();
+    }
+    // The drift: a least-squares line through the energy against time.
+    let m = n as f64;
+    let tm = (m + 1.0) / 2.0;
+    let em = series.iter().sum::<f64>() / m;
+    let (mut sxy, mut sxx) = (0.0, 0.0);
+    for (k, e) in series.iter().enumerate() {
+        let x = k as f64 + 1.0 - tm;
+        sxy += x * (e - em);
+        sxx += x * x;
+    }
+    let worst_bond = s
+        .shake()
+        .bonds()
+        .iter()
+        .zip(s.shake().lengths())
+        .filter(|(&[i, j], _)| mobile[i] || mobile[j])
+        .map(|(&[i, j], &d0)| (len(sub(at[i], at[j])) - d0).abs() / d0)
+        .fold(0.0f64, f64::max);
+    ((squares / m).sqrt(), sxy / sxx / dt, t_sum / m, worst_bond)
+}
+
 /// One flexibility's cost, as a line for the log: the mobile atoms and the degrees of freedom; a
-/// mobile protein equilibrated from the frozen start — 0.2 ps at 0.5 fs in a 50 ps⁻¹ bath, then
-/// 0.5 ps at 2 fs in a 5 ps⁻¹ one, since its crystal contacts are released at the first step — ms
-/// per step at 2 fs in a 1 ps⁻¹ bath, the fastest and slowest of three runs of ten steps; then
-/// constrained NVE over 0.3 ps at 2 fs and at 1 fs from the same positions and velocities: the
-/// RMS departure, the drift by a least-squares line, ⟨T⟩ and the worst held bond.
+/// protein that moves released from the frozen start ([`SolvatedComplex::release`]); ms per step
+/// at 2 fs in a 1 ps⁻¹ bath, the fastest and slowest of three runs of ten steps; then constrained
+/// NVE over 0.3 ps at 2 fs and at 1 fs from the same positions and velocities ([`nve`]).
 fn flexibility_cost(
     s: &SolvatedComplex,
     d: &PeriodicDecoupling,
@@ -1518,22 +1635,24 @@ fn flexibility_cost(
         hamiltonian: d,
         lambda: Lambda::COUPLED,
     };
-    let bath = |friction: f64, seed: u64| Bath::Langevin {
-        temperature: KELVIN,
-        friction,
-        seed,
-    };
     let mut at = start.to_vec();
-    let mut md = md0
-        .clone()
-        .with_bath(bath(50e12, 0x5EED))
-        .thermalised(&at, KELVIN, 0x5EED);
-    if flexibility != Flexibility::Frozen {
-        md.run(&potential, &mut at, 0.5 * FS, 400);
-        md = md.with_bath(bath(5e12, 0x5EEE));
-        md.run(&potential, &mut at, 2.0 * FS, 250);
-    }
-    let mut md = md.with_bath(bath(1e12, 0x5EEF));
+    let md = if flexibility != Flexibility::Frozen {
+        s.prepare(
+            &potential,
+            &SolvatedComplex::release(flexibility),
+            KELVIN,
+            0x5EED,
+            &mut at,
+            |_, _, _, _| {},
+        )
+    } else {
+        md0.clone().thermalised(&at, KELVIN, 0x5EED)
+    };
+    let mut md = md.with_bath(Bath::Langevin {
+        temperature: KELVIN,
+        friction: 1e12,
+        seed: 0x5EEF,
+    });
     let mut chunks = Vec::new();
     for _ in 0..3 {
         let t = std::time::Instant::now();
@@ -1543,42 +1662,9 @@ fn flexibility_cost(
     let fastest = chunks.iter().copied().fold(f64::INFINITY, f64::min);
     let slowest = chunks.iter().copied().fold(0.0, f64::max);
     let dof = md.degrees_of_freedom();
-    let (equilibrated, velocities) = (at.clone(), md.velocities().to_vec());
-    let mut nve = Vec::new();
-    for (dt, n) in [(2.0 * FS, 150usize), (1.0 * FS, 300)] {
-        let mut at = equilibrated.clone();
-        let mut md = md0.clone().with_velocities(velocities.clone());
-        md.prepare(&potential, &at);
-        let e0 = md.kinetic_energy() + md.potential_energy().unwrap();
-        let (mut squares, mut series, mut t_sum) = (0.0, Vec::with_capacity(n), 0.0);
-        for _ in 0..n {
-            md.step(&potential, &mut at, dt);
-            let e = md.kinetic_energy() + md.potential_energy().unwrap() - e0;
-            squares += e * e;
-            series.push(e);
-            t_sum += md.temperature();
-        }
-        // The drift: a least-squares line through the energy against time.
-        let m = n as f64;
-        let tm = (m + 1.0) / 2.0;
-        let em = series.iter().sum::<f64>() / m;
-        let (mut sxy, mut sxx) = (0.0, 0.0);
-        for (k, e) in series.iter().enumerate() {
-            let x = k as f64 + 1.0 - tm;
-            sxy += x * (e - em);
-            sxx += x * x;
-        }
-        let slope_per_ps = sxy / sxx / (dt / 1e-12);
-        let worst_bond = s
-            .shake()
-            .bonds()
-            .iter()
-            .zip(s.shake().lengths())
-            .filter(|(&[i, j], _)| mobile[i] || mobile[j])
-            .map(|(&[i, j], &d0)| (len(sub(at[i], at[j])) - d0).abs() / d0)
-            .fold(0.0f64, f64::max);
-        nve.push(((squares / m).sqrt(), slope_per_ps, t_sum / m, worst_bond));
-    }
+    let v = md.velocities().to_vec();
+    let two = nve(s, &potential, &md0, &mobile, &at, &v, 2.0 * FS, 150);
+    let one = nve(s, &potential, &md0, &mobile, &at, &v, 1.0 * FS, 300);
     let windows = SCHEDULE.len() as f64;
     let leg = |step: f64| {
         windows * PROTOCOL.steps_per_window() as f64 * step
@@ -1592,14 +1678,14 @@ fn flexibility_cost(
         s.complex_atoms(),
         fastest * 1e3,
         slowest * 1e3,
-        kcal(nve[0].0),
-        kcal(nve[0].1),
-        nve[0].2,
-        nve[0].3,
-        kcal(nve[1].0),
-        kcal(nve[1].1),
-        nve[1].2,
-        nve[0].0 / nve[1].0,
+        kcal(two.0),
+        kcal(two.1) * 1e-12,
+        two.2,
+        two.3,
+        kcal(one.0),
+        kcal(one.1) * 1e-12,
+        one.2,
+        two.0 / one.0,
         SCHEDULE.len(),
         PROTOCOL.steps_per_window(),
         leg(fastest) / 3600.0,
@@ -1607,14 +1693,14 @@ fn flexibility_cost(
     )
 }
 
-/// **What each way of holding the protein costs, before anything long is run** (release, one
-/// core, about twenty-five minutes): the whole of 181L in W4's box — atoms, waters, ions, the box, the
-/// mesh — melted with the protein frozen; then for the protein frozen, residues beyond 8 and 12 Å
-/// of benzene frozen, and nothing frozen, [`flexibility_cost`]; and the evaluation's parts and the
-/// couplings' cost. A flexibility whose dynamics fails is logged as failed, with why, and the
-/// others still run.
-/// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test benzene_bound_in_tip3p
-/// the_cost_of_each_flexibility_measured -- --ignored --nocapture`.
+/// **What each way of holding the protein costs** (phase 1's measurement, release, one core, about
+/// twenty-five minutes), now on the box the leg runs ([`whole_complex`]: hydrogens relaxed, the
+/// neighbour list on): the whole of 181L in W4's box melted with the protein frozen
+/// ([`SolvatedComplex::MELT`]); then for the protein frozen, residues beyond 8 and 12 Å of benzene
+/// frozen, and nothing frozen, [`flexibility_cost`]; and the evaluation's parts and the couplings'
+/// cost. A flexibility whose dynamics fails is logged as failed, with why, and the others still
+/// run. `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p the_cost_of_each_flexibility_measured -- --ignored --nocapture`.
 #[test]
 #[ignore = "the whole complex in 9 160 waters, about twenty-five minutes with --release: run with --release -- --ignored --nocapture"]
 fn the_cost_of_each_flexibility_measured() {
@@ -1651,7 +1737,19 @@ fn the_cost_of_each_flexibility_measured() {
     );
     let q: f64 = s.field().charges().iter().sum();
     log(&dir, name, &format!("net charge {q:+.3e} e"));
-    let start = melted(&s, &dir, name);
+    let d = s.decoupling();
+    let coupled = AtLambda {
+        hamiltonian: &d,
+        lambda: Lambda::COUPLED,
+    };
+    let start = prepared(
+        &s,
+        &coupled,
+        &SolvatedComplex::MELT,
+        &dir,
+        "start.txt",
+        name,
+    );
 
     // The evaluation's parts.
     // The fastest of `k`: the machine's load only ever adds.
@@ -1665,7 +1763,6 @@ fn the_cost_of_each_flexibility_measured() {
         best
     };
     let full = time(&|| drop(s.field().evaluate(&start)), 5);
-    let classical_free = s.field().ewald().parameters();
     let no_charges = s
         .field()
         .clone()
@@ -1674,7 +1771,6 @@ fn the_cost_of_each_flexibility_measured() {
     let bonded = s.field().bonded().unwrap();
     let complex_at = &start[..s.complex_atoms()];
     let bonded_only = time(&|| drop(bonded.evaluate(complex_at)), 5);
-    let d = s.decoupling();
     let states = grid();
     let couplings = time(&|| drop(d.couplings(&start, &states)), 5);
     log(
@@ -1682,13 +1778,12 @@ fn the_cost_of_each_flexibility_measured() {
         name,
         &format!(
             "an evaluation {:.1} ms: van der Waals and the bonded terms without charges {:.1}, the \
-             protein's bonded terms {:.1}; the couplings at all {} candidates {:.1} ms (α {:.4})",
+             protein's bonded terms {:.1}; the couplings at all {} candidates {:.1} ms",
             full * 1e3,
             vdw_only * 1e3,
             bonded_only * 1e3,
             states.len(),
             couplings * 1e3,
-            classical_free.alpha * ANGSTROM
         ),
     );
 
@@ -1725,26 +1820,965 @@ fn the_cost_of_each_flexibility_measured() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The complex leg: written, not run in phase 1
+// Phase 2: the leg's pieces
 
-/// Which flexibility the complex leg runs: `PANTOMETRY_W4_FLEXIBILITY` = `frozen`, `zone:R` (R in
-/// Å) or `mobile`. **Required**: it is the decision phase 1 leaves open, so the leg refuses to
-/// choose it.
-fn chosen_flexibility() -> Flexibility {
-    let v = std::env::var("PANTOMETRY_W4_FLEXIBILITY")
-        .expect("set PANTOMETRY_W4_FLEXIBILITY to frozen, zone:R (Å) or mobile");
-    match v.as_str() {
-        "frozen" => Flexibility::Frozen,
-        "mobile" => Flexibility::Mobile,
-        z => {
-            let r: f64 = z
-                .strip_prefix("zone:")
-                .and_then(|r| r.parse().ok())
-                .unwrap_or_else(|| panic!("PANTOMETRY_W4_FLEXIBILITY={v} is not understood"));
-            Flexibility::Zone(r * ANGSTROM)
+/// The `k` closest contacts of a hydrogen with an atom of the complex at `at` that is neither
+/// bonded to it nor bonded to its neighbour — the 1-2 and 1-3 pairs, which van der Waals leaves
+/// out — by brute force: `(distance, hydrogen, other)`, nearest first, each pair once.
+fn closest_hydrogen_contacts(b: &Binding, at: &[[f64; 3]], k: usize) -> Vec<(f64, usize, usize)> {
+    let n = at.len();
+    let el = b.elements();
+    let mut neighbours = vec![Vec::new(); n];
+    for bond in b.component().bonds() {
+        let [i, j] = bond.atoms;
+        neighbours[i].push(j);
+        neighbours[j].push(i);
+    }
+    let mut out = Vec::new();
+    for h in (0..n).filter(|&i| el[i] == Element::H) {
+        let mut excluded = vec![h];
+        for &j in &neighbours[h] {
+            excluded.push(j);
+            excluded.extend(neighbours[j].iter().copied());
+        }
+        for x in 0..n {
+            if excluded.contains(&x) || (el[x] == Element::H && x < h) {
+                continue;
+            }
+            out.push((len(sub(at[h], at[x])), h, x));
         }
     }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out.truncate(k);
+    out
 }
+
+/// A contact for a log: `A:THR54 H … A:ASP47 OD1 1.505 Å`.
+fn contact_label(b: &Binding, c: (f64, usize, usize)) -> String {
+    let s = the_system();
+    let name = |k: usize| {
+        let i = b.system_atoms()[k];
+        format!("{} {}", s.residue_of(i).label(), s.atom_name(i))
+    };
+    format!("{} … {} {:.3} Å", name(c.1), name(c.2), c.0 / ANGSTROM)
+}
+
+/// **The leg's hydrogens are relaxed in vacuum before it is solvated**, on the 5 Å pocket through
+/// the leg's own [`leg_binding`]: each of the three relaxations converged; **the forces on the
+/// freed hydrogens, recomputed from the complex's whole force field, are each within the
+/// tolerance** — a stationary point in what was freed, which a binding not relaxed is not (the
+/// largest is asserted to be ten times the tolerance there); every heavy atom and every hydrogen
+/// left held keeps its bits; the closest contact a freed hydrogen makes is longer than at the
+/// placement, and the energy lower; and the box built from it starts from those positions.
+#[test]
+fn the_legs_hydrogens_are_relaxed_in_vacuum_first() {
+    let b = leg_binding(5.0 * ANGSTROM);
+    let placed = pocket5();
+    let r = b
+        .hydrogen_relaxation()
+        .expect("the leg's binding is relaxed");
+    for (system, p) in [
+        ("complex", r.complex),
+        ("pocket", r.pocket),
+        ("ligand", r.ligand),
+    ] {
+        println!("{system}: {:?} in {} steps", p.status, p.steps);
+        assert_eq!(
+            p.status,
+            pantometry_forcefield::Status::Converged,
+            "{system}"
+        );
+    }
+    assert_eq!(r.tolerance, Binding::HYDROGEN_TOLERANCE);
+    assert_eq!(r.free, b.free_hydrogens());
+    // Which hydrogens are free, by brute force: every ligand hydrogen, and each pocket hydrogen
+    // whose bonded heavy atom is within the cutoff of a ligand atom at the crystal positions.
+    let crystal = b.crystal_positions();
+    let ligand = b.ligand_range();
+    let within = |k: usize| {
+        ligand
+            .clone()
+            .any(|l| len(sub(crystal[k], crystal[l])) < b.cutoff())
+    };
+    let parent = |h: usize| {
+        b.component()
+            .bonds()
+            .iter()
+            .find_map(|bond| match bond.atoms {
+                [i, j] if i == h => Some(j),
+                [i, j] if j == h => Some(i),
+                _ => None,
+            })
+            .expect("a hydrogen is bonded")
+    };
+    let brute: Vec<bool> = (0..b.positions().len())
+        .map(|k| b.elements()[k] == Element::H && (ligand.contains(&k) || within(parent(k))))
+        .collect();
+    assert_eq!(r.free, brute, "the freed hydrogens are the rule's");
+    let freed = brute.iter().filter(|&&f| f).count();
+    let hydrogens = b.elements().iter().filter(|&&e| e == Element::H).count();
+    println!("{freed} of {hydrogens} hydrogens freed");
+    assert!(
+        freed > 0 && freed < hydrogens,
+        "the rule frees some and holds some"
+    );
+    // **The leg's 100 Å binding frees every hydrogen**, by the same rule on the system's own
+    // positions, without its QEq: every protein hydrogen's heavy atom is within 100 Å of benzene.
+    let system = the_system();
+    let atoms = system.component().atoms();
+    let ligand_atoms = system.atoms_in(pantometry_forcefield::Part::Ligand);
+    let mut farthest = 0.0f64;
+    for bond in system.component().bonds() {
+        for (h, x) in [
+            (bond.atoms[0], bond.atoms[1]),
+            (bond.atoms[1], bond.atoms[0]),
+        ] {
+            if atoms[h].element == Element::H && atoms[x].element != Element::H {
+                let d = ligand_atoms
+                    .iter()
+                    .map(|&l| len(sub(atoms[x].at, atoms[l].at)))
+                    .fold(f64::INFINITY, f64::min);
+                farthest = farthest.max(d);
+            }
+        }
+    }
+    println!(
+        "a hydrogen's heavy atom is at most {:.2} Å from benzene",
+        farthest / ANGSTROM
+    );
+    assert!(farthest < 100.0 * ANGSTROM);
+    let worst = |at: &[[f64; 3]]| {
+        let f = b.force_field().evaluate(at).forces;
+        (0..at.len())
+            .filter(|&k| r.free[k])
+            .map(|k| len(f[k]))
+            .fold(0.0f64, f64::max)
+    };
+    let (after, before) = (worst(b.positions()), worst(placed.positions()));
+    println!(
+        "the largest force on a freed hydrogen: {:.3e} kcal/mol/Å relaxed, {:.3e} as placed",
+        after / pantometry_forcefield::minimise::KCAL_PER_MOL_ANGSTROM,
+        before / pantometry_forcefield::minimise::KCAL_PER_MOL_ANGSTROM
+    );
+    assert!(after <= Binding::HYDROGEN_TOLERANCE);
+    assert!(before > 10.0 * Binding::HYDROGEN_TOLERANCE);
+    let mut moved = 0;
+    for k in 0..b.positions().len() {
+        if r.free[k] {
+            moved += usize::from(b.positions()[k] != placed.positions()[k]);
+        } else {
+            assert_eq!(
+                b.positions()[k],
+                placed.positions()[k],
+                "atom {k} kept its bits"
+            );
+        }
+    }
+    assert!(moved > 0);
+    // The contacts a freed hydrogen makes: the held ones cannot move.
+    let near = |at: &[[f64; 3]]| -> Vec<(f64, usize, usize)> {
+        closest_hydrogen_contacts(&b, at, 100)
+            .into_iter()
+            .filter(|c| r.free[c.1] || r.free[c.2])
+            .take(3)
+            .collect()
+    };
+    let (c0, c1) = (near(placed.positions()), near(b.positions()));
+    for (label, c) in [("placed", &c0), ("relaxed", &c1)] {
+        let text: Vec<String> = c.iter().map(|&x| contact_label(&b, x)).collect();
+        println!("{label}: {}", text.join("; "));
+    }
+    assert!(c1[0].0 > c0[0].0, "the closest contact is relieved");
+    let e = |at: &[[f64; 3]]| b.force_field().energy(at).total;
+    assert!(e(b.positions()) < e(placed.positions()));
+    let s = leg_box(&b, &small_solvation(3.5, 5.5, 0x4E1));
+    let given = b.positions();
+    let shift = sub(s.positions()[0], given[0]);
+    assert_eq!(
+        b.elements()[0],
+        Element::N,
+        "the first atom is heavy, so not moved onto a bond"
+    );
+    let edge = s.cell().lengths()[0];
+    // Each freed hydrogen in the box is where the relaxation put it, less only SHAKE's move onto
+    // its bond's length — at most 0.05 Å, phase 1 measured 0.046 on this pocket — and, for every
+    // one the relaxation moved more than 0.1 Å, nearer its relaxed place than its placed one.
+    let (mut farthest, mut far_moved) = (0.0f64, 0);
+    for k in 0..given.len() {
+        let in_box = sub(s.positions()[k], shift);
+        if b.elements()[k] != Element::H {
+            assert!(len(sub(in_box, given[k])) <= 4.0 * EPS * edge);
+        } else if r.free[k] {
+            let to_relaxed = len(sub(in_box, given[k]));
+            farthest = farthest.max(to_relaxed);
+            assert!(to_relaxed <= 0.05 * ANGSTROM, "hydrogen {k} {to_relaxed:e}");
+            if len(sub(given[k], placed.positions()[k])) > 0.1 * ANGSTROM {
+                far_moved += 1;
+                assert!(
+                    to_relaxed < len(sub(in_box, placed.positions()[k])),
+                    "hydrogen {k}"
+                );
+            }
+        }
+    }
+    println!(
+        "in the box, a freed hydrogen at most {:.4} Å from its relaxed place; {far_moved} moved \
+         more than 0.1 Å by the relaxation",
+        farthest / ANGSTROM
+    );
+    assert!(far_moved > 0);
+}
+
+/// **W4's solvation is the numbers it says**, each field pinned to a literal: a 12 Å margin,
+/// 33.00 waters per nm³, the 1.4 Å clearance and the oxygen's 2.6 Å, `r_c` = 9 Å, δ = 10⁻⁶, the
+/// seed, and chloride.
+#[test]
+fn w4s_solvation_is_its_numbers() {
+    let w4 = Solvation::w4();
+    assert_eq!(w4.margin, 12.0 * ANGSTROM);
+    assert_eq!(w4.density, 33.0e27 * water::molecular_mass());
+    assert_eq!(w4.clearance, 1.4 * ANGSTROM);
+    assert_eq!(w4.oxygen_clearance, 2.6 * ANGSTROM);
+    assert_eq!(w4.cutoff, 9.0 * ANGSTROM);
+    assert_eq!(w4.accuracy, 1e-6);
+    assert_eq!(w4.seed, 0x4_4A7E);
+    assert_eq!(w4.counter_ion, pantometry_forcefield::Ion::chloride());
+}
+
+/// **The oxygen's rule at its two edges**, on one lattice water of a 25 Å box and two carbon atoms
+/// placed about its oxygen by hand: the angle `a–O–b` at 89° and at 91°, each atom at 2.59 Å or
+/// 2.61 Å from the oxygen, either side of W4's 2.6 Å. Only both atoms inside 2.6 Å **and** more
+/// than 90° apart removes the water; every hydrogen of it is more than 1.4 Å from both, so the
+/// clearance removes none. The atoms are put along the bisector of the angle, in a plane away
+/// from the water's hydrogens.
+#[test]
+fn the_oxygens_rule_is_between_two_atoms_past_ninety_degrees_within_two_point_six() {
+    let w4 = Solvation::w4();
+    let lattice = WaterBox::lattice_box([8, 8, 8], w4.density, w4.seed);
+    let keep = 3 * 64 + 3 * 8 + 3;
+    let drop: Vec<bool> = (0..lattice.count()).map(|w| w != keep).collect();
+    let one = lattice.without_waters(&drop);
+    let water = [one.positions()[0], one.positions()[1], one.positions()[2]];
+    let o = water[0];
+    // The plane: perpendicular to the water's own plane, through the oxygen, along the H–O–H
+    // bisector's opposite, so both carbons are on the side away from the hydrogens.
+    let mid = [0, 1, 2].map(|k| 0.5 * (water[1][k] + water[2][k]) - o[k]);
+    let away = [-mid[0] / len(mid), -mid[1] / len(mid), -mid[2] / len(mid)];
+    let hh = sub(water[1], water[2]);
+    let n = [
+        mid[1] * hh[2] - mid[2] * hh[1],
+        mid[2] * hh[0] - mid[0] * hh[2],
+        mid[0] * hh[1] - mid[1] * hh[0],
+    ];
+    let side = [n[0] / len(n), n[1] / len(n), n[2] / len(n)];
+    let elements = [Element::C, Element::C];
+    let mut seen = Vec::new();
+    for degrees in [89.0f64, 91.0] {
+        let half = (0.5 * degrees).to_radians();
+        let (s, c) = half.sin_cos();
+        let u = [0, 1, 2].map(|k| c * away[k] + s * side[k]);
+        let v = [0, 1, 2].map(|k| c * away[k] - s * side[k]);
+        for (ra, rb) in [(2.59, 2.59), (2.59, 2.61), (2.61, 2.61)] {
+            let a = [0, 1, 2].map(|k| o[k] + ra * ANGSTROM * u[k]);
+            let b = [0, 1, 2].map(|k| o[k] + rb * ANGSTROM * v[k]);
+            let angle = (dot(sub(a, o), sub(b, o)) / (len(sub(a, o)) * len(sub(b, o))))
+                .acos()
+                .to_degrees();
+            assert!((angle - degrees).abs() < 1e-9, "{angle}");
+            let clear = water
+                .iter()
+                .all(|&p| len(sub(p, a)) > 1.4 * ANGSTROM && len(sub(p, b)) > 1.4 * ANGSTROM);
+            assert!(clear, "no water atom within the clearance");
+            let removed = w4.removed(&one, &[a, b], &elements)[0];
+            println!("{degrees}°, {ra} and {rb} Å: removed {removed}");
+            seen.push(removed);
+        }
+    }
+    assert_eq!(seen, [false, false, false, true, false, false]);
+}
+
+/// **The preparation draws on other streams than the windows**: no stage of the leg's
+/// preparation has the seed of any window the leg could run, at any of the grid's candidates.
+#[test]
+fn the_preparation_draws_on_other_streams_than_the_windows() {
+    let stages = SolvatedComplex::preparation(LEG_FLEXIBILITY).len();
+    let prepared: std::collections::BTreeSet<u64> = (0..stages)
+        .map(|k| SolvatedComplex::stage_seed(PREPARATION_SEED, k))
+        .collect();
+    let windows: std::collections::BTreeSet<u64> = (0..grid().len())
+        .map(|g| window_seed(PROTOCOL.seed, g))
+        .collect();
+    assert_eq!(prepared.len(), stages);
+    assert!(prepared.is_disjoint(&windows));
+}
+
+/// Phase 1's crevice water: lattice water 4663 of W4's box around the whole of 181L, which the
+/// melt pushed into the crevice between Arg95 and Trp126 until a 2 fs step turned it past what
+/// SETTLE solves.
+const CREVICE_WATER: usize = 4663;
+
+/// **The crevice water between Arg95 and Trp126 is removed, and by the rule that is for it**: W4's
+/// lattice around the whole of 181L as phase 1 built it — the crystal's positions, hydrogens as
+/// placed, the 20 × 21 × 24 lattice — and lattice water [`CREVICE_WATER`], checked by brute force
+/// over 27 images to be that water: its oxygen within 2.6 Å of heavy atoms of Arg95 and of Trp126,
+/// two of them on opposite sides of it. **The clearance alone keeps it** (every atom of it 1.4 Å
+/// or more from every complex atom), and the oxygen's rule, between two heavy atoms, removes it.
+/// No QEq is needed: the box's waters are a matter of positions.
+#[test]
+fn the_crevice_water_between_arg95_and_trp126_is_removed() {
+    let system = the_system();
+    let atoms = system.component().atoms();
+    let at: Vec<[f64; 3]> = atoms.iter().map(|a| a.at).collect();
+    let elements: Vec<Element> = atoms.iter().map(|a| a.element).collect();
+    let w4 = Solvation::w4();
+    let (k, shift) = w4.lattice_for(&at);
+    assert_eq!(k, [20, 21, 24], "phase 1's lattice");
+    let lattice = WaterBox::lattice_box(k, w4.density, w4.seed);
+    let complex: Vec<[f64; 3]> = at
+        .iter()
+        .map(|p| [p[0] + shift[0], p[1] + shift[1], p[2] + shift[2]])
+        .collect();
+    let only: Vec<bool> = (0..lattice.count()).map(|w| w != CREVICE_WATER).collect();
+    let one = lattice.without_waters(&only);
+    let water = &lattice.positions()[3 * CREVICE_WATER..3 * CREVICE_WATER + 3];
+    assert_eq!(one.positions(), water);
+    let l = lattice.cell().lengths();
+    let nearest = |p: [f64; 3], q: [f64; 3]| {
+        let mut best = [f64::INFINITY; 3];
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for m in -1..=1 {
+                    let image = [
+                        q[0] + f64::from(i) * l[0],
+                        q[1] + f64::from(j) * l[1],
+                        q[2] + f64::from(m) * l[2],
+                    ];
+                    let v = sub(p, image);
+                    if dot(v, v) < dot(best, best) {
+                        best = v;
+                    }
+                }
+            }
+        }
+        best
+    };
+    let closest = water
+        .iter()
+        .flat_map(|&p| complex.iter().map(move |&c| len(nearest(p, c))))
+        .fold(f64::INFINITY, f64::min);
+    let close: Vec<(usize, [f64; 3])> = (0..complex.len())
+        .filter(|&i| elements[i] != Element::H)
+        .map(|i| (i, nearest(water[0], complex[i])))
+        .filter(|(_, v)| len(*v) < w4.oxygen_clearance)
+        .collect();
+    let residues: std::collections::BTreeSet<String> = close
+        .iter()
+        .map(|&(i, _)| system.residue_of(i).label())
+        .collect();
+    let mut most_opposite = 1.0f64;
+    for (a, &(_, u)) in close.iter().enumerate() {
+        for &(_, v) in &close[..a] {
+            most_opposite = most_opposite.min(dot(u, v) / (len(u) * len(v)));
+        }
+    }
+    println!(
+        "water {CREVICE_WATER}: {:.3} Å from the complex at closest; {} heavy atoms within {:.3} \
+         Å of its oxygen, of {residues:?}, the widest pair at cos {most_opposite:.3}",
+        closest / ANGSTROM,
+        close.len(),
+        w4.oxygen_clearance / ANGSTROM
+    );
+    assert!(residues.contains("A:ARG95") && residues.contains("A:TRP126"));
+    assert!(most_opposite < 0.0, "two of them on opposite sides");
+    assert!(closest >= w4.clearance, "the clearance alone keeps it");
+    let clearance_only = Solvation {
+        oxygen_clearance: 0.0,
+        ..w4
+    };
+    assert_eq!(clearance_only.removed(&one, &complex, &elements), [false]);
+    assert_eq!(w4.removed(&one, &complex, &elements), [true], "removed");
+}
+
+/// **The leg's box keeps a neighbour list, and so does its decoupling, and neither moves a bit**:
+/// the 3 Å pocket through [`leg_box`], its field's list at [`PeriodicForceField::NEIGHBOUR_SKIN`],
+/// its decoupling's too; twelve steps of the leg's own dynamics at a state part-way along the
+/// path go through the decoupling's list — one evaluation a step and one to start, at least one
+/// build — and end on the same bits, positions and velocities, as the same box without a list.
+#[test]
+fn the_legs_box_keeps_a_neighbour_list() {
+    let solvation = small_solvation(3.5, 6.0, 0x4E2);
+    let b = pocket3();
+    let with = leg_box(b, &solvation);
+    let without = SolvatedComplex::new(b, &solvation).unwrap();
+    assert!(without.field().neighbour_list().is_none());
+    let skin = PeriodicForceField::NEIGHBOUR_SKIN;
+    assert_eq!(with.field().neighbour_list().map(|l| l.skin), Some(skin));
+    let run = |s: &SolvatedComplex| {
+        let d = s.decoupling();
+        let mut at = s.positions().to_vec();
+        let mut md = s
+            .dynamics(LEG_FLEXIBILITY)
+            .with_bath(Bath::Langevin {
+                temperature: KELVIN,
+                friction: 50e12,
+                seed: 5,
+            })
+            .thermalised(&at, KELVIN, 5);
+        let potential = AtLambda {
+            hamiltonian: &d,
+            lambda: Lambda::new(0.5, 0.5, 1.0),
+        };
+        md.run(&potential, &mut at, 0.5 * FS, 12);
+        (at, md.velocities().to_vec(), d.field().neighbour_list())
+    };
+    let (a, va, list) = run(&with);
+    let (b2, vb, none) = run(&without);
+    let list = list.expect("the decoupling keeps a list");
+    println!("the decoupling's list: {list:?}");
+    assert_eq!(list.skin, skin);
+    assert_eq!(list.evaluations, 13);
+    assert!(list.builds >= 1);
+    assert!(none.is_none());
+    let bits =
+        |x: &[[f64; 3]]| -> Vec<[u64; 3]> { x.iter().map(|p| p.map(f64::to_bits)).collect() };
+    assert_eq!(bits(&a), bits(&b2), "positions");
+    assert_eq!(bits(&va), bits(&vb), "velocities");
+}
+
+/// **The leg's preparation is the frozen melt and then the release**, as the numbers say:
+/// [`SolvatedComplex::preparation`] at [`LEG_FLEXIBILITY`] is 1000 steps of 0.5 fs at 50 ps⁻¹ and
+/// 500 of 2 fs at 5 ps⁻¹ with the protein frozen, then 400 of 0.5 fs at 50 ps⁻¹ and 250 of 2 fs
+/// at 5 ps⁻¹ with it free — 0.5, 1, 0.2 and 0.5 ps; a frozen protein has the melt alone, a zone
+/// the release at the zone. **And [`SolvatedComplex::prepare`] runs the stages it is given**: on
+/// the 3 Å pocket, four short stages with different steps, time steps and frictions are each the
+/// steps they say, the protein keeps its bits through the frozen ones and moves in the others, the
+/// last dynamics frees what the last stage frees, and the end is, to the bit, the same stages run
+/// by hand — thermalised from the stage's seed where the flexibility changes, the velocities carried
+/// where it does not.
+#[test]
+fn the_preparation_is_the_melt_then_the_release() {
+    let stage = |flexibility, time_step, steps, friction| Stage {
+        flexibility,
+        time_step,
+        steps,
+        friction,
+    };
+    let melt = [
+        stage(Flexibility::Frozen, 0.5e-15, 1000, 50e12),
+        stage(Flexibility::Frozen, 2e-15, 500, 5e12),
+    ];
+    let release = |f| [stage(f, 0.5e-15, 400, 50e12), stage(f, 2e-15, 250, 5e12)];
+    assert_eq!(LEG_FLEXIBILITY, Flexibility::Mobile);
+    let mut want = melt.to_vec();
+    want.extend(release(Flexibility::Mobile));
+    let leg = SolvatedComplex::preparation(LEG_FLEXIBILITY);
+    assert_eq!(leg, want);
+    for (st, ps) in leg.iter().zip([0.5, 1.0, 0.2, 0.5]) {
+        assert!((st.duration() / (ps * 1e-12) - 1.0).abs() < 1e-12);
+    }
+    assert_eq!(SolvatedComplex::preparation(Flexibility::Frozen), melt);
+    let zone = Flexibility::Zone(8.0 * ANGSTROM);
+    let mut zoned = melt.to_vec();
+    zoned.extend(release(zone));
+    assert_eq!(SolvatedComplex::preparation(zone), zoned);
+
+    // Not the 298.15 K everything else here runs at, so that a temperature not passed on is seen.
+    const WARM: f64 = 310.0;
+    let s = small3(0x9E3);
+    let d = s.decoupling();
+    let potential = AtLambda {
+        hamiltonian: &d,
+        lambda: Lambda::COUPLED,
+    };
+    let short = [
+        stage(Flexibility::Frozen, 0.5e-15, 4, 50e12),
+        stage(Flexibility::Frozen, 1e-15, 3, 5e12),
+        stage(Flexibility::Mobile, 0.5e-15, 3, 20e12),
+        stage(Flexibility::Mobile, 1e-15, 2, 5e12),
+    ];
+    let protein = 0..s.binding().pocket_len();
+    let mut at = s.positions().to_vec();
+    let mut seen = Vec::new();
+    let md = s.prepare(&potential, &short, WARM, 0x51, &mut at, |k, st, md, now| {
+        assert_eq!(md.steps(), st.steps as u64, "stage {k}");
+        assert_eq!(
+            md.frozen(),
+            s.dynamics(st.flexibility).frozen(),
+            "stage {k}"
+        );
+        let still = protein.clone().all(|i| now[i] == s.positions()[i]);
+        seen.push((k, still));
+    });
+    assert_eq!(seen, [(0, true), (1, true), (2, false), (3, false)]);
+    assert!(md.frozen().iter().all(|&f| !f));
+    let Bath::Langevin { temperature, .. } = md.bath() else {
+        panic!("a bath")
+    };
+    assert_eq!(temperature, WARM);
+    // By hand.
+    let mut by_hand = s.positions().to_vec();
+    let bath = |st: &Stage, k: usize| Bath::Langevin {
+        temperature: WARM,
+        friction: st.friction,
+        seed: window_seed(0x51 ^ SolvatedComplex::PREPARATION_STREAM, k),
+    };
+    let mut m = s
+        .dynamics(Flexibility::Frozen)
+        .with_bath(bath(&short[0], 0))
+        .thermalised(
+            &by_hand,
+            WARM,
+            window_seed(0x51 ^ SolvatedComplex::PREPARATION_STREAM, 0),
+        );
+    m.run(&potential, &mut by_hand, 0.5e-15, 4);
+    let v = m.velocities().to_vec();
+    let mut m = s
+        .dynamics(Flexibility::Frozen)
+        .with_bath(bath(&short[1], 1))
+        .with_velocities(v);
+    m.run(&potential, &mut by_hand, 1e-15, 3);
+    let mut m = s
+        .dynamics(Flexibility::Mobile)
+        .with_bath(bath(&short[2], 2))
+        .thermalised(
+            &by_hand,
+            WARM,
+            window_seed(0x51 ^ SolvatedComplex::PREPARATION_STREAM, 2),
+        );
+    m.run(&potential, &mut by_hand, 0.5e-15, 3);
+    let v = m.velocities().to_vec();
+    let mut m = s
+        .dynamics(Flexibility::Mobile)
+        .with_bath(bath(&short[3], 3))
+        .with_velocities(v);
+    m.run(&potential, &mut by_hand, 1e-15, 2);
+    assert_eq!(at, by_hand, "positions to the bit");
+    assert_eq!(md.velocities(), m.velocities(), "velocities to the bit");
+}
+
+/// **The leg's schedule starts the restraint in one interval**: [`SCHEDULE`] on [`grid`] is λ_r 0
+/// and 1, then λ_e 0.5 and 0, then λ_v 0.9 to 0 by 0.1 — fourteen windows — and the insertion is
+/// W3's, below 0.1 and at most twice.
+#[test]
+fn the_legs_schedule_starts_the_restraint_in_one_interval() {
+    let g = grid();
+    let states: Vec<[f64; 3]> = SCHEDULE.iter().map(|&k| g[k].components()).collect();
+    let mut want = vec![
+        [0.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 0.5, 1.0],
+        [1.0, 0.0, 1.0],
+    ];
+    for k in (0..=9).rev() {
+        want.push([1.0, 0.0, f64::from(k) / 10.0]);
+    }
+    assert_eq!(states.len(), 14);
+    for (got, want) in states.iter().zip(&want) {
+        for c in 0..3 {
+            assert!((got[c] - want[c]).abs() < 1e-15, "{got:?} against {want:?}");
+        }
+    }
+    assert_eq!((OVERLAP_THRESHOLD, INSERTION_ROUNDS), (0.1, 2));
+}
+
+/// Each point's distance to the nearest of a set of atoms, by minimum image, up to `reach`
+/// (anything farther reads `reach`): the atoms in cells at least `reach` wide, so that the 27
+/// cells about a point hold every atom within `reach` of it.
+struct Nearest {
+    cell: PeriodicBox,
+    reach: f64,
+    counts: [usize; 3],
+    cells: Vec<Vec<[f64; 3]>>,
+}
+
+impl Nearest {
+    fn new(cell: PeriodicBox, atoms: &[[f64; 3]], reach: f64) -> Nearest {
+        let l = cell.lengths();
+        let counts = [0, 1, 2].map(|k| (l[k] / reach).floor() as usize);
+        assert!(counts.iter().all(|&c| c >= 3), "three cells an axis");
+        let mut cells = vec![Vec::new(); counts[0] * counts[1] * counts[2]];
+        for &p in atoms {
+            let i = Nearest::index(&cell, counts, p);
+            cells[i].push(p);
+        }
+        Nearest {
+            cell,
+            reach,
+            counts,
+            cells,
+        }
+    }
+
+    fn home(cell: &PeriodicBox, counts: [usize; 3], p: [f64; 3]) -> [usize; 3] {
+        let w = cell.wrap(p);
+        let l = cell.lengths();
+        [0, 1, 2].map(|k| ((w[k] / l[k] * counts[k] as f64) as usize).min(counts[k] - 1))
+    }
+
+    fn index(cell: &PeriodicBox, counts: [usize; 3], p: [f64; 3]) -> usize {
+        let h = Nearest::home(cell, counts, p);
+        (h[0] * counts[1] + h[1]) * counts[2] + h[2]
+    }
+
+    fn distance(&self, p: [f64; 3]) -> f64 {
+        let c = self.counts;
+        let h = Nearest::home(&self.cell, c, p);
+        let mut best = self.reach * self.reach;
+        for dx in [c[0] - 1, 0, 1] {
+            for dy in [c[1] - 1, 0, 1] {
+                for dz in [c[2] - 1, 0, 1] {
+                    let i = (((h[0] + dx) % c[0]) * c[1] + (h[1] + dy) % c[1]) * c[2]
+                        + (h[2] + dz) % c[2];
+                    for &q in &self.cells[i] {
+                        let v = self.cell.minimum_image(sub(p, q));
+                        best = best.min(dot(v, v));
+                    }
+                }
+            }
+        }
+        best.sqrt()
+    }
+}
+
+/// Water's number density, nm⁻³, at least each of `shells` from every complex atom in `at`: the
+/// oxygens counted, and the volume as the share of a grid of `spacing` that far.
+fn far_densities(s: &SolvatedComplex, at: &[[f64; 3]], shells: &[f64], spacing: f64) -> Vec<f64> {
+    let cell = s.cell();
+    let reach = shells.iter().copied().fold(0.0, f64::max);
+    let near = Nearest::new(cell, &at[..s.complex_atoms()], reach);
+    let l = cell.lengths();
+    let n = [0, 1, 2].map(|k| (l[k] / spacing).round() as usize);
+    let mut volume = vec![0usize; shells.len()];
+    for i in 0..n[0] {
+        for j in 0..n[1] {
+            for k in 0..n[2] {
+                let p = [
+                    (i as f64 + 0.5) * l[0] / n[0] as f64,
+                    (j as f64 + 0.5) * l[1] / n[1] as f64,
+                    (k as f64 + 0.5) * l[2] / n[2] as f64,
+                ];
+                let r = near.distance(p);
+                for (v, &t) in volume.iter_mut().zip(shells) {
+                    *v += usize::from(r >= t);
+                }
+            }
+        }
+    }
+    let total = (n[0] * n[1] * n[2]) as f64;
+    let mut oxygens = vec![0usize; shells.len()];
+    for w in s.field().rigid_waters() {
+        let r = near.distance(at[w[0]]);
+        for (o, &t) in oxygens.iter_mut().zip(shells) {
+            *o += usize::from(r >= t);
+        }
+    }
+    oxygens
+        .iter()
+        .zip(&volume)
+        .map(|(&o, &v)| o as f64 / (v as f64 / total * cell.volume() * 1e27))
+        .collect()
+}
+
+/// **What the mobile leg costs, and the box it starts from** (release, one core, about twenty
+/// minutes; run once before production):
+///
+/// - **the hydrogens**: the whole of 181L as placed and relaxed in vacuum ([`leg_relaxed`]), the
+///   closest hydrogen contacts before and after, and Thr54's amide H against Asp47's Oδ1;
+/// - **the box**: the waters each rule removes, phase 1's rule (every oxygen within 2.6 Å of a
+///   heavy atom) counted beside it, and [`CREVICE_WATER`]'s fate;
+/// - **the preparation** the leg runs ([`SolvatedComplex::preparation`] at [`LEG_FLEXIBILITY`]),
+///   stage by stage;
+/// - **the density**: then 1 ps more at 2 fs in the last stage's bath, water's number density
+///   farther than 6, 8, 10 and 12 Å from every complex atom every 50 fs, against W3's 33.00 nm⁻³;
+/// - **the step**: ms a step at 2 fs in the protocol's bath through the list, the fastest and
+///   slowest of three runs of ten, an evaluation with and without the list, the couplings at every
+///   candidate;
+/// - **NVE** at 2 fs over 0.3 ps and at 1 fs over 0.3 ps from the same state: RMS, drift, ⟨T⟩ and
+///   the worst held bond;
+/// - **the leg**: [`SCHEDULE`]'s windows of [`PROTOCOL`], and each inserted one.
+///
+/// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p the_cost_of_the_mobile_leg_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "the whole complex in water, released and timed, about twenty minutes with --release: run with --release -- --ignored --nocapture"]
+fn the_cost_of_the_mobile_leg_measured() {
+    let dir = results_dir();
+    let name = "mobile";
+    let _lock = Lock::take(&dir, name);
+    let t = std::time::Instant::now();
+    let placed = whole_binding();
+    log(
+        &dir,
+        name,
+        &format!("the whole binding in {:.0} s", t.elapsed().as_secs_f64()),
+    );
+    let t1 = std::time::Instant::now();
+    let relaxed = leg_relaxed(&placed);
+    let r = relaxed.hydrogen_relaxation().unwrap();
+    log(
+        &dir,
+        name,
+        &format!(
+            "hydrogens relaxed in {:.1} s: complex {:?} in {} steps, protein alone {:?} in {}, \
+             benzene alone {:?} in {}",
+            t1.elapsed().as_secs_f64(),
+            r.complex.status,
+            r.complex.steps,
+            r.pocket.status,
+            r.pocket.steps,
+            r.ligand.status,
+            r.ligand.steps
+        ),
+    );
+    for (label, b) in [("placed", &placed), ("relaxed", &relaxed)] {
+        let c = closest_hydrogen_contacts(b, b.positions(), 6);
+        let text: Vec<String> = c.iter().map(|&x| contact_label(b, x)).collect();
+        log(&dir, name, &format!("{label}: {}", text.join("; ")));
+    }
+    let find = |residue: &str, atom: &str| {
+        let s = the_system();
+        (0..placed.positions().len())
+            .find(|&k| s.residue_of(k).label() == residue && s.atom_name(k) == atom)
+            .unwrap()
+    };
+    let (h, o) = (find("A:THR54", "H"), find("A:ASP47", "OD1"));
+    log(
+        &dir,
+        name,
+        &format!(
+            "Thr54 H … Asp47 OD1: {:.3} Å placed, {:.3} Å relaxed",
+            len(sub(placed.positions()[h], placed.positions()[o])) / ANGSTROM,
+            len(sub(relaxed.positions()[h], relaxed.positions()[o])) / ANGSTROM
+        ),
+    );
+
+    let t2 = std::time::Instant::now();
+    let w4 = Solvation::w4();
+    let s = leg_box(&relaxed, &w4);
+    let n = s.complex_atoms();
+    let lattice = WaterBox::lattice_box(s.lattice(), w4.density, w4.seed);
+    let clearance_only = Solvation {
+        oxygen_clearance: 0.0,
+        ..w4
+    }
+    .removed(&lattice, &s.positions()[..n], relaxed.elements());
+    let both = w4.removed(&lattice, &s.positions()[..n], relaxed.elements());
+    let cell = s.cell();
+    let heavy: Vec<[f64; 3]> = (0..n)
+        .filter(|&k| relaxed.elements()[k] != Element::H)
+        .map(|k| s.positions()[k])
+        .collect();
+    let phase1 = (0..lattice.count())
+        .filter(|&w| {
+            clearance_only[w]
+                || heavy.iter().any(|&p| {
+                    let v = cell.minimum_image(sub(lattice.positions()[3 * w], p));
+                    len(v) < w4.oxygen_clearance
+                })
+        })
+        .count();
+    let count = |m: &[bool]| m.iter().filter(|&&x| x).count();
+    // 18 419 g/mol at 0.73 cm³/g, in waters at 33.00 nm⁻³.
+    let volume = 18_419.0 / 6.022_140_76e23 * 0.73 * 1e-6 * 33.0e27;
+    log(
+        &dir,
+        name,
+        &format!(
+            "the box in {:.0} s: {} atoms, {} waters, {} Cl-; of {} lattice waters the clearance \
+             removes {}, the oxygen between two heavy atoms {} more, {} in all (phase 1's rule \
+             would remove {}; the protein's volume at 0.73 cm³/g is {volume:.0}); the crevice \
+             water {}: clearance {}, either rule {}",
+            t2.elapsed().as_secs_f64(),
+            s.positions().len(),
+            s.waters(),
+            s.ions(),
+            lattice.count(),
+            count(&clearance_only),
+            count(&both) - count(&clearance_only),
+            s.overlapping(),
+            phase1,
+            CREVICE_WATER,
+            clearance_only[CREVICE_WATER],
+            both[CREVICE_WATER]
+        ),
+    );
+    assert_eq!(count(&both), s.overlapping());
+
+    let d = s.decoupling();
+    let potential = AtLambda {
+        hamiltonian: &d,
+        lambda: Lambda::COUPLED,
+    };
+    let mut at = s.positions().to_vec();
+    let t3 = std::time::Instant::now();
+    let mut md = s.prepare(
+        &potential,
+        &SolvatedComplex::preparation(LEG_FLEXIBILITY),
+        KELVIN,
+        PREPARATION_SEED,
+        &mut at,
+        |k, st, md, _| {
+            log(
+                &dir,
+                name,
+                &format!(
+                    "stage {k}: {} steps of {} fs, {:?}, {} ps⁻¹: {:.0} s in all, T {:.1} K, U \
+                     {:.1} kcal/mol",
+                    st.steps,
+                    st.time_step / FS,
+                    st.flexibility,
+                    st.friction / 1e12,
+                    t3.elapsed().as_secs_f64(),
+                    md.temperature(),
+                    kcal(md.potential_energy().unwrap())
+                ),
+            )
+        },
+    );
+
+    // The density.
+    let shells = [
+        6.0 * ANGSTROM,
+        8.0 * ANGSTROM,
+        10.0 * ANGSTROM,
+        12.0 * ANGSTROM,
+    ];
+    let mut series: Vec<Vec<f64>> = vec![Vec::new(); shells.len()];
+    let t4 = std::time::Instant::now();
+    for _ in 0..20 {
+        md.run(&potential, &mut at, 2.0 * FS, 25);
+        for (s2, x) in series
+            .iter_mut()
+            .zip(far_densities(&s, &at, &shells, ANGSTROM))
+        {
+            s2.push(x);
+        }
+    }
+    for (k, x) in series.iter().enumerate() {
+        let e = Estimate::of(x);
+        let half = |r: std::ops::Range<usize>| x[r.clone()].iter().sum::<f64>() / r.len() as f64;
+        log(
+            &dir,
+            name,
+            &format!(
+                "water farther than {:.0} Å from the complex: {:.3} ± {:.3} nm⁻³ ({:+.2}% of \
+                 33.00), halves {:.3} and {:.3}; n {}, τ {:.2} samples",
+                shells[k] / ANGSTROM,
+                e.mean,
+                e.error,
+                100.0 * (e.mean / 33.0 - 1.0),
+                half(0..10),
+                half(10..20),
+                e.samples,
+                e.tau
+            ),
+        );
+    }
+    log(
+        &dir,
+        name,
+        &format!("the density's 1 ps in {:.0} s", t4.elapsed().as_secs_f64()),
+    );
+
+    // The step.
+    let mut md = md.with_bath(Bath::Langevin {
+        temperature: KELVIN,
+        friction: PROTOCOL.friction,
+        seed: 0x5EEF,
+    });
+    let mut chunks = Vec::new();
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        md.run(&potential, &mut at, 2.0 * FS, 10);
+        chunks.push(t.elapsed().as_secs_f64() / 10.0);
+    }
+    let fastest = chunks.iter().copied().fold(f64::INFINITY, f64::min);
+    let slowest = chunks.iter().copied().fold(0.0, f64::max);
+    let time = |f: &dyn Fn(), k: usize| {
+        let mut best = f64::INFINITY;
+        for _ in 0..k {
+            let t = std::time::Instant::now();
+            f();
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        best
+    };
+    let listed = time(&|| drop(d.field().evaluate(&at)), 5);
+    let cells = d.field().clone().without_neighbour_list();
+    let unlisted = time(&|| drop(cells.evaluate(&at)), 3);
+    let states = grid();
+    let couplings = time(&|| drop(d.couplings(&at, &states)), 3);
+    log(
+        &dir,
+        name,
+        &format!(
+            "{:.1}–{:.1} ms a step at 2 fs, {} degrees of freedom; an evaluation {:.1} ms through \
+             the list, {:.1} by the cell list; the couplings at {} candidates {:.1} ms; the list {:?}",
+            fastest * 1e3,
+            slowest * 1e3,
+            md.degrees_of_freedom(),
+            listed * 1e3,
+            unlisted * 1e3,
+            states.len(),
+            couplings * 1e3,
+            d.field().neighbour_list()
+        ),
+    );
+
+    // NVE.
+    let mobile = s.mobile(LEG_FLEXIBILITY);
+    let template = s.dynamics(LEG_FLEXIBILITY);
+    let v = md.velocities().to_vec();
+    for (dt, steps) in [(2.0 * FS, 150), (1.0 * FS, 300)] {
+        let (rms, drift, temperature, bond) =
+            nve(&s, &potential, &template, &mobile, &at, &v, dt, steps);
+        log(
+            &dir,
+            name,
+            &format!(
+                "NVE at {} fs over 0.3 ps: RMS {:.4} kcal/mol, drift {:+.4} kcal/mol/ps, ⟨T⟩ {:.1} \
+                 K, worst held bond {:.1e}",
+                dt / FS,
+                kcal(rms),
+                kcal(drift) * 1e-12,
+                temperature,
+                bond
+            ),
+        );
+    }
+
+    // The leg.
+    let per_window = |step: f64| {
+        (PROTOCOL.steps_per_window() as f64 * step + PROTOCOL.samples as f64 * couplings) / 3600.0
+    };
+    let windows = SCHEDULE.len() as f64;
+    log(
+        &dir,
+        name,
+        &format!(
+            "the leg: {} windows of {} steps ({:.0} ps each), a window {:.1}–{:.1} h, {:.0}–{:.0} h in \
+             all before any is inserted, {:.1}–{:.1} h each inserted; the preparation {:.0} min",
+            SCHEDULE.len(),
+            PROTOCOL.steps_per_window(),
+            PROTOCOL.steps_per_window() as f64 * PROTOCOL.time_step / 1e-12,
+            per_window(fastest),
+            per_window(slowest),
+            windows * per_window(fastest),
+            windows * per_window(slowest),
+            per_window(fastest),
+            per_window(slowest),
+            t3.elapsed().as_secs_f64() / 60.0
+        ),
+    );
+    log(
+        &dir,
+        name,
+        &format!("the measurement took {:.0} s", t.elapsed().as_secs_f64()),
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The complex leg: written, not run
 
 /// What one window recorded, read back from its file.
 #[derive(Clone, Debug)]
@@ -2017,26 +3051,40 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
 }
 
 /// **Benzene decoupled from T4 lysozyme L99A in TIP3P, the complex leg, and the binding free
-/// energy it closes with W3's solvent leg.** Phase 2: **not run in phase 1**, and it refuses to run
-/// without `PANTOMETRY_W4_FLEXIBILITY`, the decision phase 1 leaves to the user. The whole of 181L
-/// in W4's box, melted as the cost measurement melts it (the same `start.txt` if it is there), the
-/// Boresch restraint chosen by 3c's rule at that start, [`SCHEDULE`] on [`grid`] with W3's
-/// [`PROTOCOL`], a window added at the candidate between any two whose overlap is below
-/// [`OVERLAP_THRESHOLD`], up to twice. Each window is written to `window_NN.txt` in [`results_dir`]
-/// as it runs and read back if there, so a stopped run resumes; progress is in `complex.log`.
-/// Printed: each interval, the three segments, BAR and TI, the halves, the release, and
-/// `ΔG°_bind = ΔG_solvent − ΔG_complex − ΔG°_release` with W3's solvent leg.
-/// `PANTOMETRY_W4_FLEXIBILITY=… PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield
-/// --test benzene_bound_in_tip3p the_complex_leg_measured -- --ignored --nocapture`.
+/// energy it closes with W3's solvent leg.** **Not run yet**: written, its pieces tested, its cost
+/// measured (`the_cost_of_the_mobile_leg_measured`). The whole of 181L as [`whole_complex`]
+/// builds it — the hydrogens relaxed in vacuum first, the neighbour list on — **the protein free**
+/// ([`LEG_FLEXIBILITY`]), prepared by [`SolvatedComplex::preparation`]: the frozen melt and then
+/// the release, 0.2 ps at 0.5 fs and 0.5 ps at 2 fs, before any window (kept in `prepared.txt`
+/// and read back if there). The Boresch restraint chosen by 3c's rule at that start, [`SCHEDULE`]
+/// on [`grid`] with W3's [`PROTOCOL`], and a window added at the candidate between any two whose
+/// overlap is below [`OVERLAP_THRESHOLD`], [`INSERTION_ROUNDS`] rounds at most
+/// ([`pantometry_forcefield::free_energy::refine_schedule`]). Each window is written to
+/// `window_NN.txt` in [`results_dir`] as it runs and read back if there, so a stopped run resumes;
+/// progress is in `complex.log`. Printed: each insertion, each interval, the three segments, BAR
+/// and TI, the halves, the release, and `ΔG°_bind = ΔG_solvent − ΔG_complex − ΔG°_release` with
+/// W3's solvent leg. `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p the_complex_leg_measured -- --ignored --nocapture`.
 #[test]
-#[ignore = "the complex leg: days with --release, and not to be run until its flexibility is chosen"]
+#[ignore = "the complex leg: days with --release, and not to be run until production is started"]
 fn the_complex_leg_measured() {
-    let flexibility = chosen_flexibility();
+    let flexibility = LEG_FLEXIBILITY;
     let dir = results_dir();
     let _lock = Lock::take(&dir, "complex");
     let t = std::time::Instant::now();
     let s = whole_complex();
-    let start = melted(&s, &dir, "complex");
+    let coupled = s.decoupling();
+    let start = prepared(
+        &s,
+        &AtLambda {
+            hamiltonian: &coupled,
+            lambda: Lambda::COUPLED,
+        },
+        &SolvatedComplex::preparation(flexibility),
+        &dir,
+        "prepared.txt",
+        "complex",
+    );
     let restraint = anchors(s.binding(), &start[..s.complex_atoms()]);
     let kt = BOLTZMANN.to_si() * KELVIN;
     let release = kcal(restraint.release_free_energy(KELVIN));
@@ -2063,34 +3111,30 @@ fn the_complex_leg_measured() {
     };
     let mut schedule: Vec<usize> = SCHEDULE.to_vec();
     let mut records: Vec<Recorded> = schedule.iter().map(|&g| window(&leg, &dir, g)).collect();
-    for round in 0..2 {
-        let mut inserted = Vec::new();
-        for k in 0..schedule.len() - 1 {
-            let bar = interval_bar(&records[k], &records[k + 1], kt);
-            if bar.overlap < OVERLAP_THRESHOLD {
-                let between = (schedule[k] + schedule[k + 1]) / 2;
-                log(
-                    &dir,
-                    "complex",
-                    &format!(
-                        "round {round}: overlap {:.3} between candidates {} and {}",
-                        bar.overlap,
-                        schedule[k],
-                        schedule[k + 1]
-                    ),
-                );
-                if between > schedule[k] {
-                    inserted.push((k + 1, between));
-                }
-            }
-        }
-        if inserted.is_empty() {
-            break;
-        }
-        for (offset, (pos, g)) in inserted.into_iter().enumerate() {
-            schedule.insert(pos + offset, g);
-            records.insert(pos + offset, window(&leg, &dir, g));
-        }
+    let found = refine_schedule(
+        &mut schedule,
+        &mut records,
+        OVERLAP_THRESHOLD,
+        INSERTION_ROUNDS,
+        |a, b| interval_bar(a, b, kt).overlap,
+        |g| window(&leg, &dir, g),
+    );
+    for f in &found {
+        log(
+            &dir,
+            "complex",
+            &format!(
+                "round {}: overlap {:.3} between candidates {} and {}: {}",
+                f.round,
+                f.overlap,
+                f.between[0],
+                f.between[1],
+                f.inserted
+                    .map_or("nothing between them".to_string(), |g| format!(
+                        "inserted {g}"
+                    ))
+            ),
+        );
     }
     let to_kcal = |x: f64| kcal(kt * x);
     for k in 0..records.len() - 1 {

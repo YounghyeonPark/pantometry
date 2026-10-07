@@ -28,23 +28,39 @@
 //!
 //! **The water** is [`WaterBox::lattice_box`] at [`Solvation::density`] — W3's 33.00 nm⁻³, where Yeh
 //! and Hummer measure TIP3P's pressure under Ewald at −2.9 ± 2.5 bar — **less every water with an
-//! atom within [`Solvation::clearance`] of a complex atom** ([`WaterBox::without_overlaps`]), W3's
-//! 1.4 Å, **and every water whose oxygen is within [`Solvation::oxygen_clearance`] of a complex
-//! heavy atom**, 2.6 Å, about the shortest O···N or O···O hydrogen bond, both by minimum image.
+//! atom within [`Solvation::clearance`] of a complex atom**, W3's 1.4 Å, **and every water whose
+//! oxygen is within [`Solvation::oxygen_clearance`] of two heavy atoms of the complex on opposite
+//! sides of it** — `(O − a)·(O − b) < 0`, the angle `a–O–b` past 90°, the oxygen inside the sphere
+//! that has `ab` for its diameter — 2.6 Å being about the shortest O···N or O···O hydrogen bond;
+//! every distance by minimum image ([`Solvation::removed`]).
 //!
 //! **The second rule is there because the first let a water into the protein.** With 1.4 Å alone,
-//! 181L's box lost 775 waters, about the protein's volume — its mass, 18 419 g/mol, at the usual
-//! partial specific volume of a protein, 0.73 cm³/g (a typical value, not T4 lysozyme's measured
-//! one), is 22 330 Å³, 737 waters — and one lattice water sat in a crevice between Arg95 and
-//! Trp126. Melted at 0.5 fs with the protein frozen it went in further, its oxygen 1.77 Å from
-//! Arg95's Nε and a hydrogen 0.83 Å from it: **a TIP3P hydrogen has no van der Waals term**, so
-//! nothing but its oxygen's keeps it off an atom whose charge pulls it, and against a frozen
-//! protein the oxygen's was not enough. The first 2 fs step after the melt put 415 kcal mol⁻¹ Å⁻¹
-//! on that oxygen, the fourteenth turned a water past what SETTLE can solve. With the oxygen's
-//! clearance the box loses 911 of its 10 080 lattice waters, **174 more than the protein's volume,
-//! so it is about 1.7% under-dense**, which TIP3P's compressibility (57.4 × 10⁻⁶ bar⁻¹, Izadi et
-//! al.) makes some −300 bar. There is
-//! no barostat; what the density costs the complex leg is not measured here.
+//! 181L's box as phase 1 built it lost 780 waters, about the protein's volume — its mass, 18 419
+//! g/mol, at the usual partial specific volume of a protein, 0.73 cm³/g (a typical value, not T4
+//! lysozyme's measured one), is 22 330 Å³, 737 waters — and lattice water 4663 sat in a crevice
+//! between Arg95 and Trp126, its oxygen within 2.6 Å of nine of their heavy atoms. Melted at 0.5 fs
+//! with the protein frozen it went in further, its oxygen 1.77 Å from Arg95's Nε and a hydrogen
+//! 0.83 Å from it: **a TIP3P hydrogen has no van der Waals term**, so nothing but its oxygen's keeps
+//! it off an atom whose charge pulls it, and against a frozen protein the oxygen's was not enough.
+//! The first 2 fs step after the melt put 415 kcal mol⁻¹ Å⁻¹ on that oxygen, the fourteenth turned
+//! a water past what SETTLE can solve.
+//!
+//! **Why between two, and not near one.** Phase 1 removed every water whose oxygen was within 2.6 Å
+//! of any heavy atom: 911 of 10 080, 174 more than the protein's volume, so the box was about 1.7%
+//! under-dense, some −300 bar by TIP3P's compressibility (57.4 × 10⁻⁶ bar⁻¹, Izadi et al.). But a
+//! water too close to one side of the protein is pushed straight back out by the melt, as at the
+//! rest of the surface; **a water too close to two atoms on opposite sides of it has no direction
+//! that relieves both**, and a frozen protein cannot open the gap. Lattice water 4663's widest pair
+//! is at cos −0.947. The rule needs no tuning — 90° is where "between" begins — and is checked by
+//! brute force over 27 images. On 181L with its hydrogens relaxed (the leg's box) the clearance
+//! removes 788, the oxygen's rule 19 more, 807 in all, against phase 1's 909 for the same box; and
+//! **water far from the protein is then within about 0.1–0.4% of the lattice's 33.00 nm⁻³,
+//! depending on the shell**: 33.035 nm⁻³ beyond 10 Å, 33.122 beyond 6, over 1 ps after the leg's
+//! preparation, twenty frames, while the potential energy was still falling
+//! (`tests/benzene_bound_in_tip3p.rs`, `the_cost_of_the_mobile_leg_measured`). The shells differ
+//! by more than each one's standard error, so that error is not the uncertainty of the density.
+//! With the hydrogens relaxed, the clearance alone removes water 4663 too; with them as placed it
+//! does not, and the oxygen's rule does, which a test holds. There is no barostat.
 //!
 //! # Counter-ions
 //!
@@ -89,20 +105,34 @@
 //! ([`Complex::zone`]'s rule: a residue moves when a heavy atom of it is within the radius of a
 //! ligand atom at the crystal pose), or nothing frozen. The ligand, the water and the ions always
 //! move. A frozen atom keeps its bits ([`MolecularDynamics::with_frozen`]); a held bond with one
-//! end frozen holds the other at its length, and one frozen at both is skipped. Which of the three
-//! the complex leg should use is a question about the physics and the cost, measured in
-//! `tests/benzene_bound_in_tip3p.rs`, and not settled here.
+//! end frozen holds the other at its length, and one frozen at both is skipped. Phase 1 measured
+//! all three at the same cost a step; the complex leg moves the whole protein.
+//!
+//! # Preparing a leg
+//!
+//! [`SolvatedComplex::preparation`] is what a leg runs before its first window, as [`Stage`]s that
+//! [`SolvatedComplex::prepare`] runs: **the melt** ([`SolvatedComplex::MELT`]), 0.5 ps at 0.5 fs
+//! in a 50 ps⁻¹ bath and 1 ps at 2 fs in a 5 ps⁻¹ one with the protein frozen, which takes out the
+//! lattice and the clearances' contacts; then, for a protein that moves, **the release**
+//! ([`SolvatedComplex::release`]), 0.2 ps at 0.5 fs in a 50 ps⁻¹ bath and 0.5 ps at 2 fs in a
+//! 5 ps⁻¹ one. **Released straight into 2 fs** from the frozen melt, residues within 8 Å of benzene
+//! free drifted +149 kcal/mol/ps in NVE and within 10 Å SHAKE failed on a protein C–H: the crystal's
+//! contacts — a backbone amide H 1.50 Å from an Asp Oδ1 among them, which the frozen protein carried
+//! with 3 235 kcal mol⁻¹ Å⁻¹ on it — let go at the first step. Each stage that frees what the one
+//! before held starts from Maxwell–Boltzmann velocities; the others carry theirs on.
 //!
 //! # Not here
 //!
-//! No barostat, no cation, no triclinic box, no rotation of the complex, no neighbour list.
+//! No barostat, no cation, no triclinic box, no rotation of the complex. The neighbour list is
+//! opt-in ([`SolvatedComplex::with_neighbour_list`]), as it is for the force field.
 
 use crate::binding::Binding;
 use crate::ccd::{Element, ANGSTROM};
 use crate::complex::Complex;
-use crate::dynamics::MolecularDynamics;
+use crate::dynamics::{Bath, MolecularDynamics, Potential};
 use crate::energy::Unsupported;
 use crate::ewald::EwaldParameters;
+use crate::free_energy::window_seed;
 use crate::periodic::{PeriodicBox, PeriodicDecoupling, PeriodicForceField};
 use crate::pme::PmeParameters;
 use crate::shake::Shake;
@@ -159,7 +189,8 @@ pub struct Solvation {
     pub density: f64,
     /// A water with an atom within this of a complex atom is removed, metres.
     pub clearance: f64,
-    /// A water whose oxygen is within this of a heavy atom of the complex is removed too, metres.
+    /// A water whose oxygen is within this of two heavy atoms of the complex on opposite sides of
+    /// it — the angle at the oxygen between them more than 90° — is removed too, metres.
     pub oxygen_clearance: f64,
     /// The real-space cutoff, metres.
     pub cutoff: f64,
@@ -173,8 +204,8 @@ pub struct Solvation {
 
 impl Solvation {
     /// W4's: a 12 Å margin, 33.00 waters per nm³ (W3's), a 1.4 Å clearance (W3's) and 2.6 Å from
-    /// a water oxygen to a heavy atom, `r_c` = 9 Å,
-    /// δ = 10⁻⁶ through the mesh, and chloride.
+    /// a water oxygen to two heavy atoms either side of it, `r_c` = 9 Å, δ = 10⁻⁶ through the
+    /// mesh, and chloride.
     pub fn w4() -> Solvation {
         Solvation {
             margin: 12.0 * ANGSTROM,
@@ -186,6 +217,94 @@ impl Solvation {
             seed: 0x4_4A7E,
             counter_ion: Ion::chloride(),
         }
+    }
+}
+
+impl Solvation {
+    /// The lattice a complex whose atoms are at `positions` (metres) is put in — waters along each
+    /// axis, each edge the complex's extent and both margins rounded up to whole spacings — and the
+    /// shift that moves the complex rigidly to the box's centre, metres. See the module
+    /// documentation, "The box".
+    ///
+    /// # Panics
+    ///
+    /// If `positions` is empty.
+    pub fn lattice_for(&self, positions: &[[f64; 3]]) -> ([usize; 3], [f64; 3]) {
+        assert!(!positions.is_empty(), "a complex has atoms");
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for p in positions {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let spacing = water::cube_root(water::molecular_mass() / self.density);
+        let lattice =
+            [0, 1, 2].map(|k| ((hi[k] - lo[k] + 2.0 * self.margin) / spacing).ceil() as usize);
+        let l = WaterBox::lattice_box(lattice, self.density, self.seed)
+            .cell()
+            .lengths();
+        let shift = [0, 1, 2].map(|k| 0.5 * l[k] - 0.5 * (lo[k] + hi[k]));
+        (lattice, shift)
+    }
+
+    /// One mark per water of `lattice`, `true` for each this solvation removes around a complex
+    /// whose atoms are at `complex` (in the box, metres) and of `elements`, every distance by
+    /// minimum image: **every water with an atom within [`Solvation::clearance`] of a complex
+    /// atom, and every water whose oxygen is within [`Solvation::oxygen_clearance`] of two heavy
+    /// atoms of the complex that lie on opposite sides of it** — `(O − a)·(O − b) < 0`, the angle
+    /// `a–O–b` more than 90°, the oxygen inside the sphere on `ab` as its diameter. See the module
+    /// documentation for why the second rule is that and not every heavy atom.
+    ///
+    /// # Panics
+    ///
+    /// If `elements` is not one per atom of `complex`.
+    pub fn removed(
+        &self,
+        lattice: &WaterBox,
+        complex: &[[f64; 3]],
+        elements: &[Element],
+    ) -> Vec<bool> {
+        assert_eq!(complex.len(), elements.len(), "one element per atom");
+        let cell = lattice.cell();
+        let d =
+            |a: [f64; 3], b: [f64; 3]| cell.minimum_image([a[0] - b[0], a[1] - b[1], a[2] - b[2]]);
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let c2 = self.clearance * self.clearance;
+        let o2 = self.oxygen_clearance * self.oxygen_clearance;
+        let heavy: Vec<[f64; 3]> = complex
+            .iter()
+            .zip(elements)
+            .filter(|(_, &e)| e != Element::H)
+            .map(|(p, _)| *p)
+            .collect();
+        let at = lattice.positions();
+        let mut close = Vec::new();
+        (0..lattice.count())
+            .map(|w| {
+                let atoms = &at[3 * w..3 * w + 3];
+                if atoms.iter().any(|&p| {
+                    complex.iter().any(|&c| {
+                        let v = d(p, c);
+                        dot(v, v) < c2
+                    })
+                }) {
+                    return true;
+                }
+                close.clear();
+                close.extend(
+                    heavy
+                        .iter()
+                        .map(|&h| d(atoms[0], h))
+                        .filter(|&v| dot(v, v) < o2),
+                );
+                close
+                    .iter()
+                    .enumerate()
+                    .any(|(i, &a)| close[i + 1..].iter().any(|&b| dot(a, b) < 0.0))
+            })
+            .collect()
     }
 }
 
@@ -239,6 +358,28 @@ pub enum Flexibility {
     Mobile,
 }
 
+/// One stage of preparing a box for a leg ([`SolvatedComplex::prepare`]): `steps` steps of
+/// `time_step` seconds in a Langevin bath of `friction` per second, with the protein held as
+/// `flexibility` says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stage {
+    /// How much of the protein moves.
+    pub flexibility: Flexibility,
+    /// The time step, seconds.
+    pub time_step: f64,
+    /// How many steps.
+    pub steps: usize,
+    /// The bath's friction, per second.
+    pub friction: f64,
+}
+
+impl Stage {
+    /// `steps × time_step`, seconds.
+    pub fn duration(&self) -> f64 {
+        self.steps as f64 * self.time_step
+    }
+}
+
 /// A complex in a box of rigid TIP3P water with its counter-ions: see the module documentation.
 /// Atoms in the order the complex's ([`Binding`]'s complex order), the waters, oxygen first, then
 /// the ions.
@@ -286,21 +427,9 @@ impl SolvatedComplex {
 
         // The box: the extent and the margin, in whole lattice spacings.
         let at = binding.positions();
-        let mut lo = [f64::INFINITY; 3];
-        let mut hi = [f64::NEG_INFINITY; 3];
-        for p in at {
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
-        }
-        let spacing = water::cube_root(water::molecular_mass() / solvation.density);
-        let lattice =
-            [0, 1, 2].map(|k| ((hi[k] - lo[k] + 2.0 * solvation.margin) / spacing).ceil() as usize);
+        let (lattice, shift) = solvation.lattice_for(at);
         let full = WaterBox::lattice_box(lattice, solvation.density, solvation.seed);
         let cell = full.cell();
-        let l = cell.lengths();
-        let shift = [0, 1, 2].map(|k| 0.5 * l[k] - 0.5 * (lo[k] + hi[k]));
         let mut solute: Vec<[f64; 3]> = at
             .iter()
             .map(|p| [p[0] + shift[0], p[1] + shift[1], p[2] + shift[2]])
@@ -321,24 +450,7 @@ impl SolvatedComplex {
             .collect();
         let before = solute.clone();
         shake.constrain_positions(&complex_masses, &fixed, &before, &mut solute);
-        let near = full.without_overlaps(&solute, solvation.clearance);
-        let heavy: Vec<[f64; 3]> = solute
-            .iter()
-            .zip(binding.elements())
-            .filter(|(_, &e)| e != Element::H)
-            .map(|(p, _)| *p)
-            .collect();
-        let o2 = solvation.oxygen_clearance * solvation.oxygen_clearance;
-        let buried: Vec<bool> = (0..near.count())
-            .map(|w| {
-                let o = near.positions()[3 * w];
-                heavy.iter().any(|&h| {
-                    let d = cell.minimum_image([o[0] - h[0], o[1] - h[1], o[2] - h[2]]);
-                    d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < o2
-                })
-            })
-            .collect();
-        let kept = near.without_waters(&buried);
+        let kept = full.without_waters(&solvation.removed(&full, &solute, binding.elements()));
         let overlapping = full.count() - kept.count();
 
         // The ions, each where the oxygen farthest from the complex and the ions placed was.
@@ -512,6 +624,119 @@ impl SolvatedComplex {
             .with_constraints(Settle::tip3p(self.field.rigid_waters().to_vec()))
             .with_bond_constraints(self.shake.clone())
             .with_frozen(frozen)
+    }
+
+    /// The same box with the force field's real-space pairs kept in a Verlet neighbour list of
+    /// skin `skin` metres ([`PeriodicForceField::with_neighbour_list`]): the same bits at every
+    /// evaluation, and [`SolvatedComplex::decoupling`] keeps a list of its own.
+    ///
+    /// # Panics
+    ///
+    /// If the skin is not positive and finite.
+    pub fn with_neighbour_list(mut self, skin: f64) -> SolvatedComplex {
+        self.field = self.field.with_neighbour_list(skin);
+        self
+    }
+
+    /// **The melt**, phase 1's, with the protein frozen: 0.5 ps at 0.5 fs in a 50 ps⁻¹ bath —
+    /// W2's, which takes out the lattice's strain and the clearance's contacts without a step a
+    /// hydrogen could cross a neighbour in — then 1 ps at 2 fs in a 5 ps⁻¹ one.
+    pub const MELT: [Stage; 2] = [
+        Stage {
+            flexibility: Flexibility::Frozen,
+            time_step: 0.5e-15,
+            steps: 1000,
+            friction: 50e12,
+        },
+        Stage {
+            flexibility: Flexibility::Frozen,
+            time_step: 2e-15,
+            steps: 500,
+            friction: 5e12,
+        },
+    ];
+
+    /// **The release** of a protein that moves after a frozen melt: 0.2 ps at 0.5 fs in a
+    /// 50 ps⁻¹ bath, then 0.5 ps at 2 fs in a 5 ps⁻¹ one, at `flexibility`. See the module
+    /// documentation for what it is for.
+    pub fn release(flexibility: Flexibility) -> [Stage; 2] {
+        [
+            Stage {
+                flexibility,
+                time_step: 0.5e-15,
+                steps: 400,
+                friction: 50e12,
+            },
+            Stage {
+                flexibility,
+                time_step: 2e-15,
+                steps: 250,
+                friction: 5e12,
+            },
+        ]
+    }
+
+    /// **What a leg at `flexibility` runs before its first window**: [`SolvatedComplex::MELT`],
+    /// and then, unless the protein is [`Flexibility::Frozen`], [`SolvatedComplex::release`] at
+    /// `flexibility`.
+    pub fn preparation(flexibility: Flexibility) -> Vec<Stage> {
+        let mut stages = SolvatedComplex::MELT.to_vec();
+        if flexibility != Flexibility::Frozen {
+            stages.extend(SolvatedComplex::release(flexibility));
+        }
+        stages
+    }
+
+    /// The key mixed into a preparation's seed, so that its stages draw from other streams than
+    /// the windows of a campaign seeded alike ([`SolvatedComplex::stage_seed`]).
+    pub const PREPARATION_STREAM: u64 = 0x5D58_8B65_6C07_8965;
+
+    /// Stage `k`'s seed in a preparation seeded `seed`:
+    /// [`window_seed`]`(seed ^ PREPARATION_STREAM, k)`.
+    pub fn stage_seed(seed: u64, k: usize) -> u64 {
+        window_seed(seed ^ SolvatedComplex::PREPARATION_STREAM, k)
+    }
+
+    /// Runs `stages` in order on `potential` from `at`, in place, at `temperature` kelvin, each
+    /// stage's dynamics [`SolvatedComplex::dynamics`] at its flexibility in its own bath, seeded
+    /// [`SolvatedComplex::stage_seed`]`(seed, k)` for stage `k`. **The first stage, and any whose flexibility is
+    /// not the one before it, starts from Maxwell–Boltzmann velocities** drawn from that seed —
+    /// atoms just released have none — and every other carries the velocities on. `on_stage`
+    /// is given each stage's index, the stage, its dynamics and the positions as it ended; the
+    /// dynamics returned is the last stage's.
+    ///
+    /// # Panics
+    ///
+    /// If `stages` is empty, or `at` is not one position per atom.
+    pub fn prepare(
+        &self,
+        potential: &(impl Potential + ?Sized),
+        stages: &[Stage],
+        temperature: f64,
+        seed: u64,
+        at: &mut [[f64; 3]],
+        mut on_stage: impl FnMut(usize, &Stage, &MolecularDynamics, &[[f64; 3]]),
+    ) -> MolecularDynamics {
+        assert!(!stages.is_empty(), "a preparation has a stage");
+        let mut last: Option<(Flexibility, MolecularDynamics)> = None;
+        for (k, stage) in stages.iter().enumerate() {
+            let s = SolvatedComplex::stage_seed(seed, k);
+            let md = self.dynamics(stage.flexibility).with_bath(Bath::Langevin {
+                temperature,
+                friction: stage.friction,
+                seed: s,
+            });
+            let mut md = match last {
+                Some((f, ref before)) if f == stage.flexibility => {
+                    md.with_velocities(before.velocities().to_vec())
+                }
+                _ => md.thermalised(at, temperature, s),
+            };
+            md.run(potential, at, stage.time_step, stage.steps);
+            on_stage(k, stage, &md, at);
+            last = Some((stage.flexibility, md));
+        }
+        last.expect("a stage ran").1
     }
 
     /// The ligand decoupled from everything else in the box, with no restraint.

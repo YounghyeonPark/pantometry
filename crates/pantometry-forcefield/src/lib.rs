@@ -147,7 +147,9 @@
 //!   rigid TIP3P with **counter-ions** ([`Ion::chloride`], Joung and Cheatham's, read secondarily)
 //!   so that the box is neutral, PME at δ = 10⁻⁶, every bond to a hydrogen of the complex held, and
 //!   three ways of holding the protein ([`Flexibility`]), step W4 of explicit water. The complex
-//!   leg it is for is written and not yet run. See [`solvated`].
+//!   leg it is for is written — the protein free and released after a frozen melt
+//!   ([`SolvatedComplex::preparation`]), a window inserted wherever neighbours overlap too little
+//!   ([`free_energy::refine_schedule`]) — and not yet run. See [`solvated`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -459,7 +461,7 @@ pub use complex::{Complex, ComplexError, Estimate, Frame, Record, Solvent};
 pub use dynamics::{Bath, MolecularDynamics, Potential};
 pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use ewald::{Ewald, EwaldEnergy, EwaldEvaluation, EwaldParameters};
-pub use free_energy::{Bar, FreeEnergy, Protocol, Quadrature, Sample, Window, Windows};
+pub use free_energy::{Bar, FreeEnergy, Insertion, Protocol, Quadrature, Sample, Window, Windows};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use neighbours::NeighbourListStatus;
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
@@ -469,7 +471,7 @@ pub use periodic::{
 pub use pme::{Pme, PmeParameters};
 pub use qeq::{Charges, Qeq, QeqError};
 pub use shake::Shake;
-pub use solvated::{Flexibility, Ion, SolvatedComplex, Solvation, SolvationError};
+pub use solvated::{Flexibility, Ion, SolvatedComplex, Solvation, SolvationError, Stage};
 pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
 pub use water::{Settle, WaterBox};

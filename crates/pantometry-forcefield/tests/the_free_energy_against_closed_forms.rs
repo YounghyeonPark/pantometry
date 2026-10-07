@@ -14,7 +14,7 @@ use pantometry_core::Rng;
 use pantometry_forcefield::alchemy::SoftCoreTerm;
 use pantometry_forcefield::boresch::STANDARD_VOLUME;
 use pantometry_forcefield::energy::Pair;
-use pantometry_forcefield::free_energy::{bar, bar_correlated, bennett_chain};
+use pantometry_forcefield::free_energy::{bar, bar_correlated, bennett_chain, refine_schedule};
 use pantometry_forcefield::uff::KCAL_PER_MOL;
 use pantometry_forcefield::{
     Alchemical, Boresch, Coupling, CrossPair, Decoupling, Element, Estimate, Lambda, Protocol,
@@ -186,6 +186,120 @@ fn bar_is_calibrated_on_independent_samples() {
     let b = bar(&same, &same);
     assert!(b.delta.abs() < 1e-15, "{}", b.delta);
     assert_eq!(b.overlap, 0.5);
+}
+
+/// One window of the wells below: candidate `g` and, per sample, the reduced energy at every
+/// candidate.
+struct Well {
+    g: usize,
+    energies: Vec<Vec<f64>>,
+}
+
+/// **Windows inserted where neighbours overlap too little recover a closed form**: seventeen
+/// candidate states, isotropic harmonic wells in three dimensions with `k_g = k₀ 2^{5g/8}`, and a
+/// schedule of the two ends alone. Each window is 2000 exact, independent samples of its own well,
+/// with the reduced energy at every candidate, so that a window inserted later needs nothing of
+/// the others run again. The overlap of two wells `c` apart in stiffness is 0.0010 for `c = 1024`
+/// (the ends), 0.048 for 32 and 0.23 for `√32`, by quadrature of `p₀p₁/(p₀ + p₁)`: so the rule,
+/// [`refine_schedule`] below 0.1, must insert candidate 8 in the first round, 4 and 12 in the
+/// second, and stop — each decision several standard errors of an overlap from the threshold.
+/// Asserted: exactly that schedule, those runs in that order and those findings; every interval
+/// the rule left at 0.1 or above, and every one it split below; **BAR along the refined chain
+/// within 4σ of `(3/2) ln(k₁₆/k₀) = 15 ln 2`**; and with one round, the schedule `0, 8, 16` with
+/// both its intervals still below.
+#[test]
+fn windows_inserted_where_neighbours_overlap_little_recover_a_closed_form() {
+    let k = |g: usize| (5.0 * g as f64 / 8.0 * 2f64.ln()).exp();
+    let run = |g: usize| {
+        let mut rng = Rng::for_index(0x1E5, g as u64);
+        let width = 1.0 / k(g).sqrt();
+        let energies = (0..2000)
+            .map(|_| {
+                let x = [0, 1, 2].map(|_| rng.gaussian() * width);
+                let r2 = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+                (0..17).map(|c| 0.5 * k(c) * r2).collect()
+            })
+            .collect();
+        Well { g, energies }
+    };
+    let delta =
+        |w: &Well, to: usize| -> Vec<f64> { w.energies.iter().map(|e| e[to] - e[w.g]).collect() };
+    let overlap = |a: &Well, b: &Well| {
+        let reverse: Vec<f64> = delta(b, a.g).iter().map(|x| -x).collect();
+        bar(&delta(a, b.g), &reverse).overlap
+    };
+    let refine = |rounds: usize| {
+        let mut schedule = vec![0, 16];
+        let mut records = vec![run(0), run(16)];
+        let mut ran = Vec::new();
+        let found = refine_schedule(&mut schedule, &mut records, 0.1, rounds, overlap, |g| {
+            ran.push(g);
+            run(g)
+        });
+        (schedule, records, ran, found)
+    };
+    let (schedule, records, ran, found) = refine(5);
+    for f in &found {
+        println!(
+            "round {}: {:?} at {:.4}, inserted {:?}",
+            f.round, f.between, f.overlap, f.inserted
+        );
+    }
+    assert_eq!(schedule, [0, 4, 8, 12, 16]);
+    assert_eq!(ran, [8, 4, 12]);
+    let rows: Vec<(usize, [usize; 2], Option<usize>)> = found
+        .iter()
+        .map(|f| (f.round, f.between, f.inserted))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (0, [0, 16], Some(8)),
+            (1, [0, 8], Some(4)),
+            (1, [8, 16], Some(12))
+        ]
+    );
+    assert!(found.iter().all(|f| f.overlap < 0.1));
+    for (r, g) in records.iter().zip(&schedule) {
+        assert_eq!(r.g, *g);
+    }
+    for w in records.windows(2) {
+        let o = overlap(&w[0], &w[1]);
+        println!("{} → {}: overlap {o:.4}", w[0].g, w[1].g);
+        assert!(o >= 0.1);
+    }
+    let chain: Vec<(Vec<f64>, Vec<f64>)> = (0..records.len())
+        .map(|j| {
+            let prev = if j > 0 {
+                delta(&records[j], records[j - 1].g)
+            } else {
+                Vec::new()
+            };
+            let next = if j + 1 < records.len() {
+                delta(&records[j], records[j + 1].g)
+            } else {
+                Vec::new()
+            };
+            (prev, next)
+        })
+        .collect();
+    let f = bennett_chain(&chain);
+    let exact = 15.0 * 2f64.ln();
+    println!(
+        "BAR along the refined chain {:.4} ± {:.4} against {exact:.4}",
+        f.value, f.error
+    );
+    assert!((f.value - exact).abs() < 4.0 * f.error);
+    let (schedule, records, ran, found) = refine(1);
+    assert_eq!(schedule, [0, 8, 16]);
+    assert_eq!(ran, [8]);
+    assert_eq!(found.len(), 1);
+    for w in records.windows(2) {
+        assert!(
+            overlap(&w[0], &w[1]) < 0.1,
+            "a round fewer leaves them below"
+        );
+    }
 }
 
 /// **TI and BAR from MD windows recover two harmonic wells' `(3/2) k_BT ln(k₁/k₀)`.** One carbon
