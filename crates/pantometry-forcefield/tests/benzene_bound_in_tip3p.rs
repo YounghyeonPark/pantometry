@@ -1406,25 +1406,97 @@ fn log(dir: &std::path::Path, name: &str, line: &str) {
     writeln!(f, "{line}").expect("the log");
 }
 
-/// Writes positions one atom a line, exactly (`{:e}` round-trips).
-fn write_positions(path: &std::path::Path, at: &[[f64; 3]]) {
-    let text: String = at
-        .iter()
-        .map(|p| format!("{:e} {:e} {:e}\n", p[0], p[1], p[2]))
-        .collect();
-    std::fs::write(path, text).expect("positions");
+/// A float as text that parses back to the same bits: `{:e}`, Rust's shortest form that
+/// round-trips. Every number the leg writes goes through this, and
+/// `positions_round_trip_to_the_bit` holds it to the bit, subnormals, `−0.0` and the extremes
+/// included.
+fn exact(x: f64) -> String {
+    format!("{x:e}")
 }
 
-fn read_positions(path: &std::path::Path) -> Option<Vec<[f64; 3]>> {
+/// FNV-1a, 64-bit, over each float's bits, little-endian: a digest that tells two runs' inputs
+/// apart, written here so that nothing new is a dependency.
+fn digest(xs: impl IntoIterator<Item = f64>) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for x in xs {
+        for b in x.to_bits().to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// [`digest`] of positions, atom by atom, axis by axis.
+fn positions_digest(at: &[[f64; 3]]) -> u64 {
+    digest(at.iter().flatten().copied())
+}
+
+/// Writes `header` (one line), then the positions one atom a line, each number [`exact`], then a
+/// trailer `# end N digest`, **to `path` with the extension `partial` and renamed to `path` once
+/// complete**: a run killed while writing leaves no file at `path`, and a file cut short anywhere
+/// is refused on reading ([`read_positions`]).
+fn write_positions(path: &std::path::Path, header: &str, at: &[[f64; 3]]) {
+    assert!(!header.contains('\n'), "a header is one line");
+    let mut text = format!("{header}\n");
+    for p in at {
+        text.push_str(&format!(
+            "{} {} {}\n",
+            exact(p[0]),
+            exact(p[1]),
+            exact(p[2])
+        ));
+    }
+    text.push_str(&format!(
+        "# end {} {:016x}\n",
+        at.len(),
+        positions_digest(at)
+    ));
+    let partial = path.with_extension("partial");
+    std::fs::write(&partial, text).expect("positions");
+    std::fs::rename(&partial, path).expect("rename");
+}
+
+/// A positions file's header line and its positions.
+type Header = (String, Vec<[f64; 3]>);
+
+/// What [`write_positions`] wrote at `path`: `None` when there is no file; its header and
+/// positions when it is whole; and why not when it is not — no trailer, a line that is not three
+/// numbers, or a count or digest the positions read back do not match.
+fn read_positions(path: &std::path::Path) -> Option<Result<Header, String>> {
     let text = std::fs::read_to_string(path).ok()?;
-    Some(
-        text.lines()
-            .map(|l| {
-                let v: Vec<f64> = l.split_whitespace().map(|x| x.parse().unwrap()).collect();
-                [v[0], v[1], v[2]]
-            })
-            .collect(),
-    )
+    Some(parse_positions(&text))
+}
+
+/// [`read_positions`]'s reading of a file's text.
+fn parse_positions(text: &str) -> Result<Header, String> {
+    let mut lines = text.lines();
+    let header = lines
+        .next()
+        .ok_or_else(|| "an empty file".to_string())?
+        .to_string();
+    let mut at = Vec::new();
+    for line in lines {
+        if let Some(end) = line.strip_prefix("# end ") {
+            let mut words = end.split_whitespace();
+            let n: Option<usize> = words.next().and_then(|x| x.parse().ok());
+            let d = words.next().and_then(|x| u64::from_str_radix(x, 16).ok());
+            return match (n, d) {
+                (Some(n), _) if n != at.len() => {
+                    Err(format!("{} positions where the trailer says {n}", at.len()))
+                }
+                (Some(_), Some(d)) if d == positions_digest(&at) => Ok((header, at)),
+                (Some(_), Some(_)) => Err("the positions' digest is not the trailer's".into()),
+                _ => Err(format!("a trailer cut short: {line:?}")),
+            };
+        }
+        let v: Result<Vec<f64>, _> = line.split_whitespace().map(str::parse).collect();
+        match v {
+            Ok(v) if v.len() == 3 => at.push([v[0], v[1], v[2]]),
+            _ => return Err(format!("not a position: {line:?}")),
+        }
+    }
+    Err("no trailer: the file is not whole".into())
 }
 
 /// **The leg's hydrogens**: `binding`'s, each system's own, relaxed in vacuum with every heavy
@@ -1480,19 +1552,69 @@ fn whole_complex() -> SolvatedComplex {
     leg_box(&leg_relaxed(&whole_binding()), &Solvation::w4())
 }
 
-/// `stages` of [`SolvatedComplex::prepare`] on `potential` from the box as built, read from
-/// `file` in `dir` if a run has written it, and each stage logged as it ends.
+/// The header [`prepared`] writes and reads back: every stage literally (flexibility, time step,
+/// steps, friction), the seed and every stage's seed as [`SolvatedComplex::stage_seed`] derives
+/// it, the temperature, the atom count, and a digest of the box's positions **as built**, before
+/// any stage — which moves with the hydrogens' relaxation, the solvation and the lattice.
+fn prepared_header(s: &SolvatedComplex, stages: &[Stage], seed: u64, temperature: f64) -> String {
+    let st: Vec<String> = stages
+        .iter()
+        .map(|st| {
+            format!(
+                "{:?}/{}/{}/{}",
+                st.flexibility,
+                exact(st.time_step),
+                st.steps,
+                exact(st.friction)
+            )
+        })
+        .collect();
+    let seeds: Vec<String> = (0..stages.len())
+        .map(|k| format!("{:016x}", SolvatedComplex::stage_seed(seed, k)))
+        .collect();
+    let seeding = format!("seed {seed:#x} stage-seeds {}", seeds.join(","));
+    format!(
+        "# prepared stages {} {seeding} temperature {} atoms {} built {:016x}",
+        st.join(","),
+        exact(temperature),
+        s.positions().len(),
+        positions_digest(s.positions())
+    )
+}
+
+/// `stages` of [`SolvatedComplex::prepare`] on `potential` from the box as built, at `seed` and
+/// `temperature`, each stage logged as it ends, and the end written to `file` in `dir`
+/// ([`write_positions`], atomically) under [`prepared_header`]. **Read back instead when a run has
+/// written it with the same header**; a file prepared differently, or not whole, is refused by
+/// name, never reused.
+#[allow(clippy::too_many_arguments)]
 fn prepared(
     s: &SolvatedComplex,
     potential: &dyn pantometry_forcefield::Potential,
     stages: &[Stage],
+    seed: u64,
+    temperature: f64,
     dir: &std::path::Path,
     file: &str,
     name: &str,
 ) -> Vec<[f64; 3]> {
     let path = dir.join(file);
-    if let Some(at) = read_positions(&path) {
-        assert_eq!(at.len(), s.positions().len(), "{file} is another system's");
+    let want = prepared_header(s, stages, seed, temperature);
+    if let Some(read) = read_positions(&path) {
+        let (head, at) = read.unwrap_or_else(|why| {
+            panic!(
+                "{} is not whole ({why}): remove it to prepare again",
+                path.display()
+            )
+        });
+        assert_eq!(
+            head,
+            want,
+            "{} was prepared differently: remove it, and every window_NN.txt run from it, to \
+             prepare again",
+            path.display()
+        );
+        assert_eq!(at.len(), s.positions().len());
         return at;
     }
     let t = std::time::Instant::now();
@@ -1500,8 +1622,8 @@ fn prepared(
     s.prepare(
         potential,
         stages,
-        KELVIN,
-        PREPARATION_SEED,
+        temperature,
+        seed,
         &mut at,
         |k, stage, md, _| {
             log(
@@ -1521,7 +1643,7 @@ fn prepared(
             )
         },
     );
-    write_positions(&path, &at);
+    write_positions(&path, &want, &at);
     at
 }
 
@@ -1746,6 +1868,8 @@ fn the_cost_of_each_flexibility_measured() {
         &s,
         &coupled,
         &SolvatedComplex::MELT,
+        PREPARATION_SEED,
+        KELVIN,
         &dir,
         "start.txt",
         name,
@@ -2905,22 +3029,39 @@ fn sample_window(
     at
 }
 
-fn header(g: usize, l: Lambda, flexibility: Flexibility, atoms: usize) -> String {
-    let p = PROTOCOL;
+/// Window `g`'s header: the candidate and its λ, the protocol, the atom count, the flexibility,
+/// the number of candidates, **and digests of the leg's start and of its Boresch restraint**
+/// (anchors, references and force constants), so that a window run from another preparation, or
+/// another restraint, is refused rather than mixed with these.
+fn header(leg: &Leg, g: usize) -> String {
+    let p = leg.protocol;
+    let l = leg.grid[g];
+    let r = leg.restraint;
+    let restraint = digest(
+        r.receptor
+            .iter()
+            .chain(&r.ligand)
+            .map(|&i| i as f64)
+            .chain(r.reference)
+            .chain(r.force_constants),
+    );
     format!(
-        "# candidate {g} lambda {:e} {:e} {:e} protocol {:e} {:e} {:e} {} {} {} {} atoms {atoms} \
-         flexibility {flexibility:?} states {}",
-        l.restraint,
-        l.electrostatics,
-        l.van_der_waals,
-        p.time_step,
-        p.temperature,
-        p.friction,
+        "# candidate {g} lambda {} {} {} protocol {} {} {} {} {} {} {} atoms {} flexibility {:?} \
+         states {} start {:016x} restraint {restraint:016x}",
+        exact(l.restraint),
+        exact(l.electrostatics),
+        exact(l.van_der_waals),
+        exact(p.time_step),
+        exact(p.temperature),
+        exact(p.friction),
         p.equilibration,
         p.stride,
         p.samples,
         p.seed,
-        grid().len()
+        leg.start.len(),
+        leg.flexibility,
+        leg.grid.len(),
+        positions_digest(&leg.start)
     )
 }
 
@@ -2961,24 +3102,52 @@ fn parse(text: &str) -> Recorded {
     }
 }
 
-/// The leg's inputs.
+/// The leg's inputs: its decoupling with the restraint on, the dynamics every window starts from,
+/// the prepared start, the protocol and the candidates. The real leg's are [`PROTOCOL`] and
+/// [`grid`]; the resume test's are a few steps on a pocket.
 struct Leg {
     decoupling: PeriodicDecoupling,
     template: MolecularDynamics,
     start: Vec<[f64; 3]>,
     flexibility: Flexibility,
+    restraint: Boresch,
+    protocol: Protocol,
+    grid: Vec<Lambda>,
 }
 
-/// Window `g`'s record: from its file if a run completed it with this protocol, or run now —
-/// written sample by sample to a `.partial` file, renamed when complete. W3's.
+/// The leg from a prepared `start`: the Boresch restraint chosen there by 3c's rule, on the box's
+/// decoupling, and the leg's flexibility.
+fn leg_from(
+    s: &SolvatedComplex,
+    start: Vec<[f64; 3]>,
+    protocol: Protocol,
+    grid: Vec<Lambda>,
+) -> Leg {
+    let restraint = anchors(s.binding(), &start[..s.complex_atoms()]);
+    Leg {
+        decoupling: s.decoupling().with_restraint(restraint),
+        template: s.dynamics(LEG_FLEXIBILITY),
+        start,
+        flexibility: LEG_FLEXIBILITY,
+        restraint,
+        protocol,
+        grid,
+    }
+}
+
+/// Window `g`'s record: **from its file if a run completed it under the same header**
+/// ([`header`]), or run now — written sample by sample to `window_NN.partial`, which is begun
+/// afresh whatever a killed run left there, and renamed to `window_NN.txt` when complete. A
+/// finished window is never run again; a partial one is never read. W3's.
 // Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
 // builds on 1.78.
 #[allow(clippy::manual_is_multiple_of)]
 fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
     use std::io::Write;
     let path = dir.join(format!("window_{g:02}.txt"));
-    let grid = grid();
-    let want = header(g, grid[g], leg.flexibility, leg.start.len());
+    let grid = &leg.grid;
+    let p = leg.protocol;
+    let want = header(leg, g);
     if let Ok(text) = std::fs::read_to_string(&path) {
         assert_eq!(
             text.lines().next().unwrap_or(""),
@@ -2987,14 +3156,14 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
             path.display()
         );
         let r = parse(&text);
-        assert_eq!(r.energies.len(), PROTOCOL.samples);
+        assert_eq!(r.energies.len(), p.samples);
         return r;
     }
     let t = std::time::Instant::now();
     let partial = path.with_extension("partial");
     let mut file = std::io::BufWriter::new(std::fs::File::create(&partial).expect("partial"));
     writeln!(file, "{want}").unwrap();
-    let total = PROTOCOL.steps_per_window();
+    let total = p.steps_per_window();
     log(
         dir,
         "complex",
@@ -3008,17 +3177,20 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
         &leg.decoupling,
         &leg.start,
         &leg.template,
-        PROTOCOL,
+        p,
         g,
         grid[g],
-        &grid,
+        grid,
         |s, c| {
             let mut line = format!(
-                "{s} {:e} {:e} {:e}",
-                c[0].gradient[0], c[0].gradient[1], c[0].gradient[2]
+                "{s} {} {} {}",
+                exact(c[0].gradient[0]),
+                exact(c[0].gradient[1]),
+                exact(c[0].gradient[2])
             );
             for x in &c[1..] {
-                line.push_str(&format!(" {:e}", x.energy));
+                line.push(' ');
+                line.push_str(&exact(x.energy));
             }
             writeln!(file, "{line}").unwrap();
             taken += 1;
@@ -3031,7 +3203,7 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
                     &format!(
                         "candidate {g}: {taken} of {} samples, step {s} of {total}, {secs:.0} s, \
                          {:.1} ms per step",
-                        PROTOCOL.samples,
+                        p.samples,
                         secs * 1e3 / s as f64
                     ),
                 );
@@ -3039,7 +3211,8 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
         },
     );
     let seconds = t.elapsed().as_secs_f64();
-    writeln!(file, "# done seconds {seconds:e}").unwrap();
+    writeln!(file, "# done seconds {}", exact(seconds)).unwrap();
+    file.flush().unwrap();
     drop(file);
     std::fs::rename(&partial, &path).expect("rename");
     log(
@@ -3048,6 +3221,211 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
         &format!("window at candidate {g} done in {seconds:.0} s"),
     );
     parse(&std::fs::read_to_string(&path).unwrap())
+}
+
+/// A fresh directory under the system's temporary one for a test that writes files, named by the
+/// process and `tag`.
+#[cfg(not(target_family = "wasm"))]
+fn fresh_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("pantometry-w4-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).expect("a temporary directory");
+    d
+}
+
+/// **Positions round-trip to the bit**: forty-two numbers — the smallest subnormal and the
+/// largest, the smallest normal, `±0.0`, `±f64::MAX`, ε, a third, a tenth and thirty more from
+/// arbitrary bits (no NaN, no infinity) — through [`exact`] alone and through
+/// [`write_positions`] and [`read_positions`], header and all, `to_bits` equal, `−0.0` kept apart
+/// from `0.0`; nothing is left at the `.partial` path; and **the file cut short at every byte**
+/// short of its last newline is refused, whatever it then parses as.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn positions_round_trip_to_the_bit() {
+    let mut xs = vec![
+        f64::from_bits(1),
+        f64::from_bits(0x000f_ffff_ffff_ffff),
+        f64::MIN_POSITIVE,
+        -0.0,
+        0.0,
+        f64::MAX,
+        -f64::MAX,
+        f64::EPSILON,
+        1.0 / 3.0,
+        0.1,
+        -2.5e-10,
+        1e-300,
+    ];
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    while xs.len() < 42 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let x = f64::from_bits(state);
+        if x.is_finite() {
+            xs.push(x);
+        }
+    }
+    for &x in &xs {
+        let back: f64 = exact(x).parse().unwrap();
+        assert_eq!(back.to_bits(), x.to_bits(), "{x:e}");
+    }
+    let at: Vec<[f64; 3]> = xs.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let dir = fresh_dir("round-trip");
+    let path = dir.join("positions.txt");
+    write_positions(&path, "# a header", &at);
+    assert!(!path.with_extension("partial").exists());
+    let (head, back) = read_positions(&path).expect("written").expect("whole");
+    assert_eq!(head, "# a header");
+    let bits =
+        |v: &[[f64; 3]]| -> Vec<[u64; 3]> { v.iter().map(|p| p.map(f64::to_bits)).collect() };
+    assert_eq!(bits(&back), bits(&at));
+    let text = std::fs::read_to_string(&path).unwrap();
+    for cut in (0..text.len() - 1).filter(|&k| text.is_char_boundary(k)) {
+        assert!(
+            parse_positions(&text[..cut]).is_err(),
+            "cut at byte {cut} of {} read as whole",
+            text.len()
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What a panic said.
+#[cfg(not(target_family = "wasm"))]
+fn refusal(f: impl FnOnce()) -> String {
+    let e = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).expect_err("refused");
+    e.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// **A killed leg resumes to the same bits**, through the leg's own [`prepared`], [`leg_from`] and
+/// [`window`] on the 3 Å pocket, two stages of preparation and windows of eight 0.5 fs steps and
+/// three samples, at candidates 0 and 8, in temporary directories:
+///
+/// - **uninterrupted**: preparation and both windows;
+/// - **killed and resumed**: preparation and window 0, then what a run killed during window 8
+///   leaves — its `.partial` file, a header and one sample — then the leg again. Window 0 is
+///   read, not run (its file's bytes, the run's `seconds` among them, unchanged), `prepared.txt`
+///   is read, the partial is begun afresh and renamed, and **every gradient and energy of both
+///   records is the uninterrupted run's to the bit**.
+///
+/// And each guard refuses by name: the preparation asked for with another seed, a window asked for
+/// from a start one ulp away, and a `prepared.txt` cut short.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn a_killed_leg_resumes_to_the_same_bits() {
+    // The restraint's nine candidates: windows 0 and 8 are its ends.
+    let restraint_grid = || grid()[..9].to_vec();
+    let s = small3(0x2E5);
+    let coupled = s.decoupling();
+    let potential = AtLambda {
+        hamiltonian: &coupled,
+        lambda: Lambda::COUPLED,
+    };
+    let stages = [
+        Stage {
+            flexibility: Flexibility::Frozen,
+            time_step: 0.5e-15,
+            steps: 3,
+            friction: 50e12,
+        },
+        Stage {
+            flexibility: LEG_FLEXIBILITY,
+            time_step: 0.5e-15,
+            steps: 2,
+            friction: 50e12,
+        },
+    ];
+    let protocol = Protocol {
+        time_step: 0.5e-15,
+        temperature: KELVIN,
+        friction: 50e12,
+        equilibration: 2,
+        stride: 2,
+        samples: 3,
+        seed: 0x2E6,
+    };
+    let start = |dir: &std::path::Path, seed: u64| {
+        prepared(
+            &s,
+            &potential,
+            &stages,
+            seed,
+            KELVIN,
+            dir,
+            "prepared.txt",
+            "complex",
+        )
+    };
+    let run = |dir: &std::path::Path, schedule: &[usize]| -> Vec<Recorded> {
+        let leg = leg_from(&s, start(dir, PREPARATION_SEED), protocol, restraint_grid());
+        schedule.iter().map(|&g| window(&leg, dir, g)).collect()
+    };
+    let whole = fresh_dir("whole");
+    let full = run(&whole, &[0, 8]);
+    let killed = fresh_dir("killed");
+    run(&killed, &[0]);
+    let bytes = |p: std::path::PathBuf| std::fs::read(p).expect("a file");
+    let (finished, prepared_bytes) = (
+        bytes(killed.join("window_00.txt")),
+        bytes(killed.join("prepared.txt")),
+    );
+    let text = std::fs::read_to_string(whole.join("window_08.txt")).unwrap();
+    let partial: String = text.lines().take(2).map(|l| format!("{l}\n")).collect();
+    std::fs::write(killed.join("window_08.partial"), partial).unwrap();
+    let resumed = run(&killed, &[0, 8]);
+    // Compared whole, not printed: a difference would dump the file.
+    assert!(
+        bytes(killed.join("window_00.txt")) == finished,
+        "window 0 read, not run"
+    );
+    assert!(bytes(killed.join("prepared.txt")) == prepared_bytes);
+    assert!(!killed.join("window_08.partial").exists());
+    let f64s = |v: &[f64]| -> Vec<u64> { v.iter().map(|x| x.to_bits()).collect() };
+    assert_eq!(full.len(), resumed.len());
+    for (a, b) in full.iter().zip(&resumed) {
+        assert_eq!(a.grid, b.grid);
+        assert_eq!(
+            a.lambda.components().map(f64::to_bits),
+            b.lambda.components().map(f64::to_bits)
+        );
+        assert_eq!(a.gradients.len(), protocol.samples);
+        let flat = |r: &Recorded| -> Vec<u64> {
+            let mut v = f64s(&r.gradients.iter().flatten().copied().collect::<Vec<_>>());
+            for e in &r.energies {
+                v.extend(f64s(e));
+            }
+            v
+        };
+        assert_eq!(flat(a), flat(b), "candidate {}", a.grid);
+    }
+    println!(
+        "resumed: {} records, {} numbers each the uninterrupted run's",
+        resumed.len(),
+        resumed[0].gradients.len() * 3 + resumed[0].energies.len() * restraint_grid().len()
+    );
+
+    let why = refusal(|| drop(start(&killed, PREPARATION_SEED + 1)));
+    assert!(why.contains("prepared differently"), "{why}");
+    let mut moved = start(&killed, PREPARATION_SEED);
+    moved[0][0] = f64::from_bits(moved[0][0].to_bits() + 1);
+    let leg = leg_from(&s, moved, protocol, restraint_grid());
+    let why = refusal(|| drop(window(&leg, &killed, 0)));
+    assert!(why.contains("was run differently"), "{why}");
+    let cut = fresh_dir("cut");
+    std::fs::write(
+        cut.join("prepared.txt"),
+        &prepared_bytes[..prepared_bytes.len() - 30],
+    )
+    .unwrap();
+    let why = refusal(|| drop(start(&cut, PREPARATION_SEED)));
+    assert!(why.contains("not whole"), "{why}");
+    for d in [whole, killed, cut] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
 
 /// **Benzene decoupled from T4 lysozyme L99A in TIP3P, the complex leg, and the binding free
@@ -3070,7 +3448,15 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
 fn the_complex_leg_measured() {
     let flexibility = LEG_FLEXIBILITY;
     let dir = results_dir();
-    let _lock = Lock::take(&dir, "complex");
+    let lock = Lock::take(&dir, "complex");
+    log(
+        &dir,
+        "complex",
+        &format!(
+            "the leg begins; its lock is {} — remove it by hand only once no run is writing here",
+            lock.0.display()
+        ),
+    );
     let t = std::time::Instant::now();
     let s = whole_complex();
     let coupled = s.decoupling();
@@ -3081,11 +3467,14 @@ fn the_complex_leg_measured() {
             lambda: Lambda::COUPLED,
         },
         &SolvatedComplex::preparation(flexibility),
+        PREPARATION_SEED,
+        KELVIN,
         &dir,
         "prepared.txt",
         "complex",
     );
-    let restraint = anchors(s.binding(), &start[..s.complex_atoms()]);
+    let leg = leg_from(&s, start, PROTOCOL, grid());
+    let restraint = leg.restraint;
     let kt = BOLTZMANN.to_si() * KELVIN;
     let release = kcal(restraint.release_free_energy(KELVIN));
     log(
@@ -3094,7 +3483,7 @@ fn the_complex_leg_measured() {
         &format!(
             "{} atoms, flexibility {flexibility:?}; Boresch: receptor {:?}, ligand {:?}; r₀ {:.3} \
              Å, θ_A {:.1}°, θ_B {:.1}°; release to 1 M {release:+.3} kcal/mol (extended {:+.3})",
-            start.len(),
+            leg.start.len(),
             restraint.receptor,
             restraint.ligand,
             restraint.reference[0] / ANGSTROM,
@@ -3103,12 +3492,6 @@ fn the_complex_leg_measured() {
             kcal(restraint.release_free_energy_extended(KELVIN))
         ),
     );
-    let leg = Leg {
-        decoupling: s.decoupling().with_restraint(restraint),
-        template: s.dynamics(flexibility),
-        start,
-        flexibility,
-    };
     let mut schedule: Vec<usize> = SCHEDULE.to_vec();
     let mut records: Vec<Recorded> = schedule.iter().map(|&g| window(&leg, &dir, g)).collect();
     let found = refine_schedule(

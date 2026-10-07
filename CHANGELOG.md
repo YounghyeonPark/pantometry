@@ -3357,15 +3357,60 @@ protects nothing.
   - **The wells' `f.error < 0.1` was not earned** and is dropped; the 4σ comparison stays.
   - The crevice test printed "2.6 Å" as a literal; it prints the clearance in use.
 
+  **Resume, hardened before production** (the leg runs about five days). Each window already
+  resumed: written to `.partial`, renamed when complete, its header checked on reading back.
+  `prepared.txt` was reused too. What was missing, and what each now has:
+
+  | gap | before | after |
+  | --- | --- | --- |
+  | `prepared.txt` reused after the preparation changed | only its atom count was checked: other stages, another seed or `stage_seed`, another temperature or other hydrogens would have been taken silently | a header with every stage literally, the seed and every stage's derived seed, the temperature, the atom count and an FNV-1a digest of the box's positions as built; a mismatch refused by name ("was prepared differently") |
+  | a window tied to its start | the header named the candidate, the protocol and the atom count | it also carries digests of the prepared start's bits and of the Boresch restraint's anchors, references and force constants: a window from another preparation is refused ("was run differently") |
+  | `write_positions` not atomic | written in place: a kill mid-write left a short file that read back as positions | written to `.partial` and renamed, with a trailer `# end N digest`; a file cut short anywhere is refused ("not whole") |
+  | the numbers' round trip | asserted in a comment | every number goes through one `exact`, `{:e}`, and a test holds it to the bit |
+  | the lock | its message said to remove a stale one by hand | the leg's first log line also gives its path |
+
+  The window and preparation code was factored so that a cheap leg drives the same functions:
+  `Leg` carries its protocol, its candidates and its restraint, and `leg_from` builds one from a
+  prepared start. Nothing is checkpointed inside a window: a crash loses at most that window,
+  about 9 h. Both new tests write to the system's temporary directory and are compiled out on
+  `wasm32`, which has no filesystem; `--target wasm32-wasip1 --no-run` builds.
+
+  - **`positions_round_trip_to_the_bit`**: forty-two numbers — the smallest and largest
+    subnormal, the smallest normal, `±0.0`, `±f64::MAX`, ε, a third, a tenth and thirty from
+    arbitrary bits — through `exact` and through `write_positions`/`read_positions`, with
+    `to_bits` equal and `−0.0` kept apart from `0.0`. No `.partial` is left behind, and the file
+    cut at every byte short of its last newline is refused;
+  - **`a_killed_leg_resumes_to_the_same_bits`** (8.6 s with the test above, unoptimised): the
+    3 Å pocket through `prepared`, `leg_from` and `window` — two short stages, windows of eight
+    0.5 fs steps and three samples at candidates 0 and 8 — run whole in one temporary directory.
+    In another, preparation and window 0 are run, then what a kill during window 8 leaves (its
+    `.partial`, a header and one sample), then the leg again. Window 0's file is unchanged to the
+    byte, so it was read and not run; `prepared.txt` is unchanged; the partial is begun afresh
+    and renamed; and every gradient and energy of both records is the uninterrupted run's to the
+    bit. Another seed, a start one ulp away, and a `prepared.txt` cut 30 bytes short are each
+    refused by name.
+
+  **Sabotage: six, every one caught**, each applied by script with an anchor checked to occur
+  once before any write, under an aside copy named for the run, and restored by copy, `touch`
+  and SHA-256:
+  - the preparation header without the seed or the stage seeds (the other seed is not refused);
+  - the start digest left out of the window header (the one-ulp start is not refused);
+  - a write in place cut 20 bytes short (both tests: the round trip reads "a trailer cut short",
+    the resume "not whole");
+  - the numbers at `{:.6e}` (both: the largest subnormal's bits differ, and the digest refuses the
+    file);
+  - a finished window run again (window 0's bytes differ, its `seconds` with them);
+  - a partial read as finished (it has no "done" line and panics on reading back).
+
   **Not run**: the production leg, W3's production, the workspace suite and the gate.
 
-  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **438 tests, forty-one of
-  them ignored**: 397 run by default (386 and 40 before). The new: two unit tests in
-  `free_energy`, eight default — three of them the review's — and one ignored (the mobile leg's
-  cost) in `benzene_bound_in_tip3p.rs`, and one in `the_free_energy_against_closed_forms.rs`.
-  386 + 11 is the 397, and 40 + 1 the 41. Twenty sabotages in all, thirteen before the review and
-  seven after, every one caught where this says; equal seeds with the stream kept is a probe, and
-  passes, as it should.
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **440 tests, forty-one of
+  them ignored**: 399 run by default (386 and 40 before). The new: two unit tests in
+  `free_energy`; ten default — three of them the review's and two the resume's — and one ignored
+  (the mobile leg's cost) in `benzene_bound_in_tip3p.rs`; and one in
+  `the_free_energy_against_closed_forms.rs`. 386 + 13 is the 399, and 40 + 1 the 41. Twenty-six
+  sabotages in all: thirteen before the review, seven after it and six for the resume, every one
+  caught where this says. Equal seeds with the stream kept is a probe, and it passes, as it should.
 
 ### Changed
 
