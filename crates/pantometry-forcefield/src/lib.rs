@@ -435,6 +435,7 @@ pub mod energy;
 pub mod ewald;
 pub mod free_energy;
 pub mod minimise;
+pub mod neighbours;
 pub mod pdb;
 pub mod periodic;
 pub mod pme;
@@ -460,6 +461,7 @@ pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use ewald::{Ewald, EwaldEnergy, EwaldEvaluation, EwaldParameters};
 pub use free_energy::{Bar, FreeEnergy, Protocol, Quadrature, Sample, Window, Windows};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
+pub use neighbours::NeighbourListStatus;
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use periodic::{
     PeriodicBox, PeriodicDecoupling, PeriodicEnergy, PeriodicEvaluation, PeriodicForceField,

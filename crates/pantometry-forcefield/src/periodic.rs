@@ -77,8 +77,9 @@
 //!
 //! [`PeriodicForceField`] is UFF in the box: the four bonded terms on whole molecules, every
 //! non-bonded pair that is neither 1-2 nor 1-3 inside the cutoff by minimum image (a cell list
-//! of cells at least half the cutoff wide, each pair visited once), the correction above, and
-//! [`Ewald`] with the same exclusions. It is a [`Potential`], so [`crate::MolecularDynamics`]
+//! of cells at least half the cutoff wide, each pair visited once — or, on request, a Verlet
+//! list with a skin that visits the same pairs in the same order, [`crate::neighbours`]), the
+//! correction above, and [`Ewald`] with the same exclusions. It is a [`Potential`], so [`crate::MolecularDynamics`]
 //! integrates it unchanged. It never builds the `N²` pair list [`ForceField::new`] keeps. The
 //! atoms are the solute's, then the waters', then any ions' ([`PeriodicForceField::with_ions`]):
 //! point charges with a van der Waals term, bonded to nothing, for a solvated complex
@@ -157,8 +158,9 @@
 //! # Not here
 //!
 //! **Smooth PME is opt-in** ([`PeriodicForceField::with_mesh`]); classical Ewald is the default.
-//! **No neighbour list** with a skin: the cell list is rebuilt at each
-//! evaluation, `O(N)`. **No triclinic box, no barostat**; constraints are the dynamics' —
+//! **The neighbour list is opt-in** ([`PeriodicForceField::with_neighbour_list`],
+//! [`crate::neighbours`]); without it the cell list is rebuilt at each evaluation, `O(N)`, and
+//! with it the bits are the same. **No triclinic box, no barostat**; constraints are the dynamics' —
 //! [`crate::water`]'s SETTLE and [`crate::shake`]'s bonds — not the force field's. **No implicit
 //! solvent in the box**, and no QEq for a periodic system: the charges are given.
 
@@ -168,6 +170,7 @@ use crate::ccd::Component;
 use crate::dynamics::Potential;
 use crate::energy::{coulomb, ForceField, Pair, Unsupported};
 use crate::ewald::{add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters};
+use crate::neighbours::NeighbourList;
 use crate::uff::UffType;
 use crate::water;
 use std::f64::consts::PI;
@@ -297,11 +300,66 @@ impl Exclusions {
     }
 }
 
+/// The most cells a pair search makes: 2²² (4 194 304, 34 MB of offsets). Past it every axis has
+/// at most 128 cells, which are then wider than half the cutoff and so still hold every pair, in
+/// another order. Uncapped, a cutoff of 0.01 Å asked for 83.6 GB and the process aborted on the
+/// allocation. No system this crate has built comes near the cap: W4's box, 62.35 × 65.47 ×
+/// 74.82 Å at 9 Å, is 13 × 14 × 16 = 2 912 cells, so every existing search keeps its order.
+pub(crate) const MOST_CELLS: f64 = 4_194_304.0;
+
+/// How many cells the pairs nearer than one cell apart are searched over.
+pub(crate) const REACH: usize = 2;
+
+/// The cells along each axis of a pair search at `cutoff` in a box of edges `l`: as many as are at
+/// least half the cutoff wide, capped at 128 an axis when there would be more than
+/// [`MOST_CELLS`]; `None` when an axis has fewer than five, and every pair is visited instead.
+pub(crate) fn cell_grid(l: [f64; 3], cutoff: f64) -> Option<[usize; 3]> {
+    // Cells at least half the cutoff wide, and the 5³ about each. There is no 3³ branch of
+    // cutoff-wide cells: three of those across is six half-cells, so it would never be taken.
+    let across = l.map(|x| (2.0 * x / cutoff).floor());
+    let mut cells = across.map(|c| c as usize);
+    if across[0] * across[1] * across[2] > MOST_CELLS {
+        cells = cells.map(|c| c.min(128));
+    }
+    if cells.iter().any(|&c| c < 2 * REACH + 1) {
+        None
+    } else {
+        Some(cells)
+    }
+}
+
+/// The cell of wrapped point `p` in a box of edges `l` cut into `cells`.
+#[inline(always)]
+pub(crate) fn cell_of(p: [f64; 3], l: [f64; 3], cells: [usize; 3]) -> [usize; 3] {
+    [0, 1, 2].map(|a| ((p[a] / l[a] * cells[a] as f64) as usize).min(cells[a] - 1))
+}
+
+/// The minimum-image separation `w_i − w_j` of two wrapped points and its square: `d ∓ L` on an
+/// axis where `|d| > L/2`.
+#[inline(always)]
+pub(crate) fn separation(
+    wi: [f64; 3],
+    wj: [f64; 3],
+    l: [f64; 3],
+    half: [f64; 3],
+) -> ([f64; 3], f64) {
+    let mut d = sub(wi, wj);
+    for a in 0..3 {
+        if d[a] > half[a] {
+            d[a] -= l[a];
+        } else if d[a] < -half[a] {
+            d[a] += l[a];
+        }
+    }
+    let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    (d, r2)
+}
+
 /// Calls `f(i, j, d, r²)` for every pair `i < j` whose minimum-image separation `d = r_i − r_j`
 /// is shorter than `cutoff`, once each, in an order fixed by the positions' bits: by `i`, then by
 /// the cells about `i`'s in a fixed order, then by `j` within a cell. A cell list: cells at least
 /// half the cutoff wide and the 125 about each when the box is at least five such cells across
-/// every axis, and every pair when it is fewer.
+/// every axis, and every pair when it is fewer ([`cell_grid`]).
 ///
 /// The minimum image of two wrapped points is `d ∓ L` when `|d| > L/2`: a comparison, not a
 /// rounding, and exact. A pair exactly half a box apart keeps `d`, which is as near as `d − L`.
@@ -317,37 +375,23 @@ pub(crate) fn for_each_pair(
     let w: Vec<[f64; 3]> = at.iter().map(|p| cell.wrap(*p)).collect();
     let rc2 = cutoff * cutoff;
     let mut visit = |i: usize, j: usize| {
-        let mut d = sub(w[i], w[j]);
-        for a in 0..3 {
-            if d[a] > half[a] {
-                d[a] -= l[a];
-            } else if d[a] < -half[a] {
-                d[a] += l[a];
-            }
-        }
-        let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        let (d, r2) = separation(w[i], w[j], l, half);
         if r2 < rc2 {
             f(i, j, d, r2);
         }
     };
-    // Cells at least half the cutoff wide, and the 5³ about each. There is no 3³ branch of
-    // cutoff-wide cells: three of those across is six half-cells, so it would never be taken.
-    let reach = 2usize;
-    let cells = l.map(|x| (2.0 * x / cutoff).floor() as usize);
-    if cells.iter().any(|&c| c < 2 * reach + 1) {
+    let reach = REACH;
+    let Some(cells) = cell_grid(l, cutoff) else {
         for i in 0..n {
             for j in i + 1..n {
                 visit(i, j);
             }
         }
         return;
-    }
-    let index = |p: [f64; 3]| -> [usize; 3] {
-        [0, 1, 2].map(|a| ((p[a] / l[a] * cells[a] as f64) as usize).min(cells[a] - 1))
     };
     let flat = |c: [usize; 3]| (c[0] * cells[1] + c[1]) * cells[2] + c[2];
     let total = cells[0] * cells[1] * cells[2];
-    let home: Vec<[usize; 3]> = w.iter().map(|p| index(*p)).collect();
+    let home: Vec<[usize; 3]> = w.iter().map(|p| cell_of(*p, l, cells)).collect();
     let mut start = vec![0usize; total + 1];
     for c in &home {
         start[flat(*c) + 1] += 1;
@@ -453,9 +497,11 @@ pub struct PeriodicForceField {
     /// `[x_i, D_i]`, metres and joules.
     vdw: Vec<[f64; 2]>,
     bonds: Vec<[usize; 2]>,
-    exclusions: Exclusions,
+    pub(crate) exclusions: Exclusions,
     /// `[atom, the atom it is reached from]`, breadth first, roots left out.
     tree: Vec<[usize; 2]>,
+    /// The real-space pairs' Verlet list, when one is asked for ([`crate::neighbours`]).
+    pub(crate) neighbours: Option<NeighbourList>,
 }
 
 /// What a [`PeriodicDecoupling`] gives the shared evaluation.
@@ -615,6 +661,7 @@ impl PeriodicForceField {
             bonds,
             exclusions: Exclusions::from_pairs(n, &excluded),
             tree,
+            neighbours: None,
         })
     }
 
@@ -654,6 +701,7 @@ impl PeriodicForceField {
         }
         self.ions += ions.len();
         self.exclusions = Exclusions::from_pairs(self.charges.len(), self.exclusions.pairs());
+        self.neighbours = self.neighbours.as_ref().map(NeighbourList::emptied);
         self
     }
 
@@ -686,7 +734,8 @@ impl PeriodicForceField {
     }
 
     /// The same force field in another box, with the same α, cutoff and integer wave vectors — or
-    /// mesh — ([`Ewald::with_cell`]): for a derivative with respect to the box.
+    /// mesh — ([`Ewald::with_cell`]): for a derivative with respect to the box. A neighbour list
+    /// starts again empty, with the same skin.
     ///
     /// # Panics
     ///
@@ -694,6 +743,7 @@ impl PeriodicForceField {
     pub fn with_cell(&self, cell: PeriodicBox) -> PeriodicForceField {
         let mut f = self.clone();
         f.ewald = self.ewald.with_cell(cell);
+        f.neighbours = self.neighbours.as_ref().map(NeighbourList::emptied);
         f
     }
 
@@ -846,9 +896,10 @@ impl PeriodicForceField {
             }
         }
 
-        // The pairs inside the cutoff.
+        // The pairs inside the cutoff: by the cell list, or by the neighbour list in the cell
+        // list's order.
         let q = &self.charges;
-        for_each_pair(&cell, at, cutoff, |i, j, d, r2| {
+        let pair_term = |i: usize, j: usize, d: [f64; 3], r2: f64| {
             if self.exclusions.contains(i, j) {
                 return;
             }
@@ -892,7 +943,11 @@ impl PeriodicForceField {
                 }
             }
             add_pair(&mut forces, &mut virial, i, j, d, radial);
-        });
+        };
+        match &self.neighbours {
+            Some(list) => list.for_each_pair(&cell, at, cutoff, &self.exclusions, pair_term),
+            None => for_each_pair(&cell, at, cutoff, pair_term),
+        }
 
         // The excluded pairs' correction, outside the group.
         for &[i, j] in self.exclusions.pairs() {

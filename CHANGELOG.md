@@ -3068,6 +3068,136 @@ protects nothing.
   the review and five after, every one caught; the background × 1.0003 is a probe of how far the
   check sees, and passes, as the test says.
 
+- **`pantometry-forcefield` keeps its real-space pairs in a Verlet neighbour list, opt-in, and
+  changes no bit doing it: 16% off a step of W4's 30 105-atom box.** New module `neighbours`.
+  `PeriodicForceField::with_neighbour_list(skin)` keeps every pair within `r_c + s` and rebuilds
+  the list when any atom has moved more than `s/2` since the last build, by minimum image;
+  `PeriodicForceField::NEIGHBOUR_SKIN` is 2 Å, the fastest measured; `neighbour_list()` reports
+  the builds, evaluations and pairs kept. **The default path is the cell list as it was.**
+  - **The same bits, not a bound.** The list visits the pairs inside the cutoff that the cell list
+    visits, in the cell list's order: each evaluation puts every atom in the cutoff's cells as the
+    cell list would and visits each atom's listed partners by `(which of the 125 cells about its
+    own, j)`, the separations computed by the same function from the same wrapped positions. So
+    every sum is the same sequence of additions. Changing both to one order would have been simpler
+    and would have moved every pinned bit of the default path; it was not done. The keys are
+    recomputed only for atoms whose cell changed since the last evaluation, and each atom's run is
+    re-sorted by insertion, a comparison an entry when nothing moved.
+  - **The rule, proved in the module**: with `u_i` the minimum image of atom `i`'s displacement,
+    `r_i(t) = r_i(0) + u_i + nL`, and the minimum-image distance is 1-Lipschitz, so a pair's
+    distance falls by at most `|u_i| + |u_j|`. While no `|u| > s/2`, a pair left out at `≥ r_c + s`
+    is still at `≥ r_c`, which the cutoff does not take. A `10⁻⁹` relative margin on the list's
+    radius covers the rounding of each step of that argument. A frozen atom's displacement is
+    exactly zero; an atom given a whole box length away has not moved.
+  - **The cell list's allocation is capped**: `(2L/r_c)³` cells asked for 83.6 GB at a 0.01 Å
+    cutoff and aborted; past 2²² cells every axis now has at most 128, which are wider and hold
+    every pair in another order. W4's box is 13 × 14 × 16 = 2 912 cells, so no existing search
+    changes order.
+
+  **Checked** (`tests/a_neighbour_list_is_the_cell_lists_bits.rs`, four default tests in 10 s
+  unoptimised, and one ignored that runs them long; eight unit tests in `neighbours`, 11 s):
+  - **along molecular dynamics, with and without the list, every step's positions, velocities and
+    potential energy the same bits**, every tenth step's whole evaluation — fourteen energy terms,
+    every force, the virial — and **the builds exactly the count an independent replay of the rule
+    gives** from the trajectory, at the skin the test asked for; the skin the list reports is
+    asserted to be that one, and printed. Each run is 40–60 steps with a skin small enough for a
+    build every three to six: W1's flexible UFF water, 64 molecules, no constraint, 60 steps of
+    0.5 fs at 0.3 Å (11 builds); W2's rigid TIP3P, 125 waters under SETTLE, 60 of 1 fs at 0.6 Å
+    (16); W3's benzene under SETTLE and SHAKE through `PeriodicDecoupling` at λ = (0, 0.5, 0.7), in
+    the 27-water box too small for cells (14) and in 64 waters (17), 60 of 1 fs at 0.6 Å, every
+    twentieth step the decoupling's energy at five states and its forces — through the decoupling's
+    own list — and its couplings at every state, **which never read a list**, so that comparison
+    says only that none is used there; and **181L's 3 Å pocket and benzene through the mesh, the
+    protein frozen**, 832 atoms of which 70 held, 40 of 1 fs at 0.8 Å (9 builds), every frozen
+    atom's bits the start's at the last step and the mobile atoms moved. **The same at length**
+    (`the_long_trajectories_are_the_same_bits`, ignored, 271 s unoptimised): 300 steps at 0.3–1 Å
+    (45, 45, 37 and 43 builds), 216 waters at 6 Å, 125 around benzene at 6 Å, and the 5 Å pocket
+    with its chloride at 5.5 Å, 1 857 atoms of which 233 held, 200 steps (35). These were the
+    default tests first, at 3.3 min; the gate runs each default test twice, so they were cut to the
+    short runs above;
+  - **the list's calls are the cell list's, `(i, j, d, r²)` to the bit and in order, at every step**
+    of 200 on boxes cut into six cells, into fewer than five, and with the list past half the box,
+    and **their pairs the brute-force set over 27 images** every tenth step;
+  - **a pair from `r_c + s − ε` that ends at `r_c − ε/2` is not missed**, no atom having moved `s/2`;
+    **two atoms each moving `0.75 s` towards each other** from just outside the list rebuild it and
+    are found `s/2` inside the cutoff; **`s/2 + ε` rebuilds and `s/2 − ε` does not**, along an axis
+    and along a diagonal; and **a water moved three box lengths** builds nothing — each case's
+    evaluation compared by `to_bits`, the virial included, so that `−0.0` is not `0.0`, and its
+    calls compared with `d` to the bit;
+  - a new box or new atoms start the list again; **a cutoff of 0.01 Å is searched, not aborted**,
+    its pairs, and those at 1.6 and 1.9 Å, the minimum image's of every pair; and **a capped grid
+    where there are pairs to find**: 2 500 points in a 100 Å cube at 1.2 Å, 166³ cells capped to
+    128³, the cell list's pairs the brute-force set over 27 images (more than ten), and a list's
+    calls the cell list's to the bit through the capped grid's keys, before and after every point
+    moves and more than a hundred change cell.
+
+  **Sabotage: six, every one caught**, each applied by a script with an anchor that must occur
+  once, run against the unit tests and the whole test file with `--no-fail-fast` — the long
+  trajectories, and then again the four of them that the integration file could see against its
+  short ones — and restored by copy, `touch` and SHA-256, no `git checkout`. In the short file
+  each of those four fails all four tests: the rebuild at `s` and the unmoved atom counted by the
+  replay, the missing skin by the bits at step 1, the dropped pair by the whole evaluation and the
+  decoupled energy. Each: the rebuild at `s` instead of `s/2` (three unit
+  tests — a pair missed at step 40 of the trajectory — and every replay); the list built at `r_c`
+  without the skin (three unit tests, every trajectory's bits at step 1); one pair dropped at every
+  build (the calls, every trajectory's bits); an atom that has not moved, as a frozen atom has not,
+  counted as moved (four unit tests, every replay); the displacement without its minimum image
+  (**only the water moved by whole box lengths**: a trajectory's positions are continuous, so no
+  run of the dynamics can see it, and it costs builds, never a pair); and the 125 cells in another
+  order (the calls, every trajectory's bits). Three of the six cost only builds — a rule that
+  rebuilds too often is never wrong — so what catches them is the replay's count, not the bits.
+
+  **A review found checks that could not see what they were for** (unearned-pass-hunter; the
+  coordinator reproduced the first). Each sabotage was run against the revised tests and restored
+  by copy, `touch` and SHA-256:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | the capped grid searching nothing (`return` when an axis has 128 cells) | passed: the only capped case was 0.01 Å, where there is nothing to find | caught by the capped grid with pairs, 2 500 points at 1.2 Å |
+  | the list keeping twice the skin asked for | passed the integration file (builds 6, 9, 8, 9, 9, all ≥ 3): the replay took its skin from the list | caught in all four by the skin asserted, and **with that assertion taken out, by the replay alone** at the skin asked for, builds apart at steps 6–9 |
+  | a separation's zero handed on as `−0.0` | passed everything: no result's bit changes — the sums absorb it, `0.0 + −0.0 = 0.0` — and the trajectories have no exact zeros | caught by the calls, `d` to the bit, now compared in the two-water cases, whose molecules lie in one plane |
+  | a partner's key not recomputed when only the partner changed cell | caught by W1–W3 and the unit trajectory; **W4 passes it**, at 0.4 Å and at 0.8 Å | the same; nothing here claims W4 sees it |
+
+  - **The couplings comparison cannot fail**: `cross_terms` reads the group's pairs by brute force
+    and never the list, so it is kept and said to be a check that no list is used there.
+  - **The cost test asserted its bits after the table was printed**; each list's end, positions
+    and velocities, is now asserted against the cell list's before its row is printed.
+  - **`same_bits` compared by `==`**, to which `−0.0` is `0.0`; it compares bits now, the virial
+    included, and a unit test holds the comparison to telling the two apart where `==` cannot.
+
+  **The cost on W4's box** (`the_cost_on_w4s_box_measured`, ignored, release, one core, run
+  twice, exit 0 both times — the second after the review, its bits asserted before each row is
+  printed): 30 105 atoms, built in 210 s, melted 0.15 ps at 0.5 fs with the protein frozen, then
+  from that one state 50 steps of 2 fs each, every list's trajectory, positions and velocities, the
+  cell list's to the bit. Milliseconds, the first run then the second:
+
+  | | pairs kept | an evaluation | one that builds | a step | builds in 50 steps |
+  | --- | --- | --- | --- | --- | --- |
+  | cell list | — | 400.3, 319.1 | — | 400.5, 329.9 | — |
+  | skin 1 Å | 6 165 129 | 296.3, 235.5 | 528.7, 426.6 | 355.5, 291.0 | 12 |
+  | skin 1.5 Å | 7 192 760 | 296.3, 237.3 | 568.8, 462.5 | 351.6, 285.5 | 8 |
+  | skin 2 Å | 8 279 403 | 295.7, 241.6 | 622.0, 485.7 | 337.7, 285.9 | 5 |
+  | skin 2.5 Å | 9 430 201 | 315.4, 249.8 | 666.2, 527.4 | 347.1, 290.6 | 4 |
+
+  - **An evaluation that does not build is 24–26% cheaper; a step at 2 Å, 13–16%**, because a
+    build costs 190–350 ms — the cell list's own search at `r_c + s`, more pairs than the
+    evaluation it saves — and comes every ten steps. The two runs differ by a fifth on every row
+    alike, the cell list's included: the machine, not the code, since the default path is
+    unchanged and the builds are the same counts. Phase 1 read 328–375 ms a step. **1.5 and 2 Å
+    are not told apart** — 2 Å first by 14 ms in one run, behind by 0.4 in the other — and 2 Å is
+    the default as the better of the two over both; 1 and 2.5 Å are slower in both.
+  - **What it buys the complex leg**: about a seventh, 172–195 h to roughly 145–170 h on one core,
+    if the step's share holds. **A neighbour list is not what makes the leg cheap**; the pair
+    terms themselves — `erfc`, the Lennard-Jones pair, the force — are most of what is left.
+
+  **Not here**: a rebuild by the two largest displacements (`|u|₁ + |u|₂ > s`), tighter and less
+  often; a cheaper build; threads. **Not run**: W3's and W4's production tests, the gate.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **426 tests, forty of them
+  ignored**: 386 run by default (374 and 38 before). The new: four default and two ignored — the
+  long trajectories and the cost — in `a_neighbour_list_is_the_cell_lists_bits.rs`, and eight unit
+  tests in `neighbours`. 374 + 12 is the 386, and 38 + 2 the 40. Ten sabotages, every one caught
+  where this says it is.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as
