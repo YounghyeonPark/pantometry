@@ -2866,6 +2866,208 @@ protects nothing.
   kernel's own `fft`, `fft2`, `ifft` and `ifft2` call the platform's `cos` and `sin` at every
   butterfly, and so are not the same bits across platforms — which `pantometry-optics` uses.
 
+- **`pantometry-forcefield` puts T4 lysozyme L99A and benzene (PDB 181L) in a box of TIP3P with
+  its counter-ions, checks the box against closed forms, and measures what each way of holding the
+  protein costs — and stops there.** This is step W4 of the explicit-water track, phase 1: the
+  complex leg it is for is written (`the_complex_leg_measured`, ignored) and **not run**, because
+  which flexibility it runs is a decision left open, and it refuses to start without one. New
+  module `solvated`.
+  - **`SolvatedComplex::new(binding, solvation)`** takes a `Binding` and puts it in water as it
+    stands. **A binding whose cutoff reaches every residue is the whole protein**, in the system's
+    own atom order (asserted), so the whole of 181L and a pocket cut from it for the tests go
+    through the same code. Its charges are the binding's: QEq on the protein at +9 and on benzene
+    at 0, so benzene's are 3c-3's and W3's to the bit (asserted). Hydrogens are where 2c-1 placed
+    them, each moved along its own bond onto the length SHAKE holds it at (at most 0.046 Å on the
+    5 Å pocket), heavy atoms where they were: a start off the constraints is a step in the energy
+    at the first step, and the first `h²` run read a ratio of 0.98 for it, the same 7.7 kcal/mol at
+    every step size.
+  - **No bonded term needed a periodic version.** `PeriodicForceField::whole` walks a protein's
+    peptide bonds as it walks a water's two, so every bend, torsion and inversion reads the
+    positions it reads in vacuum, and 1-2 and 1-3 pairs are taken out of van der Waals and Ewald
+    alike, across the box or not. `Binding::component` and `Binding::pocket_component` give the
+    complex and the receptor as components.
+  - **The box** is orthorhombic in the coordinates as given (`WaterBox::lattice_box`, new), each edge
+    the complex's extent plus a 12 Å margin on each side, the cutoff and 3 Å, in whole spacings of a
+    lattice at W3's 33.00 nm⁻³. Turning 181L to its tightest box was measured and not done: the best
+    of 20 000 uniform rotations saves 10.5% of the volume.
+  - **Two clearances, and why the second.** Every water with an atom within 1.4 Å of a complex
+    atom goes (W3's rule), 775 for 181L, about the protein's volume (18 419 g/mol at the usual
+    0.73 cm³/g, a typical value, is 737 waters). **That let a lattice water into a crevice between
+    Arg95 and Trp126**, and the melt at 0.5 fs with the protein frozen pushed it in: its oxygen
+    1.77 Å from Arg95's Nε, a hydrogen 0.83 Å from it — a TIP3P hydrogen has no van der Waals term,
+    and against a frozen protein its oxygen's was not enough. The first 2 fs step put
+    415 kcal mol⁻¹ Å⁻¹ on it, and the fourteenth turned a water past what SETTLE solves. Found by
+    stepping a copy one step at a time from the melt's saved state, the forces through the mesh
+    checked against the classical sum on the way (5.99e-13 N at worst, of an RMS 3.7e-9), so that
+    the mesh was not the cause. So **every water whose oxygen is within 2.6 Å of a complex heavy atom
+    goes too**, about the shortest O···N or O···O hydrogen bond: 911 of 10 080, **174 more than the
+    protein's volume, so the box is about 1.7% under-dense**, some −300 bar by TIP3P's
+    compressibility. There is no barostat, and what that costs the leg is not measured.
+  - **Counter-ions**: one chloride per elementary charge of the complex's formal charge, nine for
+    181L, each where the water whose oxygen is farthest from every complex atom and every ion
+    placed was, by minimum image; deterministic. The net charge is −7.3e-14 e. **The chloride is
+    Joung and Cheatham's for TIP3P**, σ = 4.477 656 957 Å and ε = 0.148 912 744 kJ/mol as OpenMM's
+    `amber14/tip3p.xml` carries them (commit `7f4bb348`, fetched 2026-10-07, SHA-256
+    `3f4b188d…83d9`), **read secondarily**: the paper was not opened. They were fitted with
+    Lorentz–Berthelot against TIP3P; here an ion combines by UFF's geometric rule, as a water
+    oxygen does, 4.216 Å against the oxygen where the arithmetic rule gives 4.281. A complex no
+    chloride neutralises is refused by name (`SolvationError::NoCounterIon`): `Element` has no
+    sodium. `PeriodicForceField::with_ions` adds ions after the waters, a point charge and a
+    Lennard-Jones term each, bonded to nothing.
+  - **The potential** is the solvated field with PME chosen at δ = 10⁻⁶ (order 8 on 64 × 64 × 128
+    for 181L) and `r_c` = 9 Å; the dynamics holds every water by SETTLE and **every bond to a
+    hydrogen of the complex** by SHAKE, 1 320 of them, which share atoms in every methyl and amine.
+    For those the constrained distribution is not the stiff-bond one without a Fixman correction;
+    it is left out, as MD codes leave it out.
+  - **`Flexibility`**: `Frozen` (the protein), `Zone(r)` (`Complex::zone`'s residues free, the rest
+    frozen) or `Mobile`. The ligand, the water and the ions always move.
+
+  **Checked against closed forms and exact identities** (`tests/benzene_bound_in_tip3p.rs`, ten
+  default tests in 18 s unoptimised, and a unit test of `WaterBox::lattice_box`, on 181L's 3 Å pocket, 82 atoms and neutral, and its 5 Å
+  pocket, 245 atoms and +1):
+  - **the box is what it says**: the net charge −2.2e-15 e against the sum's rounding bound of
+    3.9e-10; one chloride, the last atom, −1; the lattice at 33.00 nm⁻³ to `8 ε` on a 9 × 9 × 8 box,
+    each edge the extent and both margins and less than a spacing more, centred to 1e-14; the heavy
+    atoms moved rigidly to `4 ε L`, every held bond at its length to 2e-12; **every water removed
+    and only those**, the lattice rebuilt, each water's centre of mass at `(g + ½) L_a/k_a` written
+    in the test, and both clearances tested by brute force over 27 images of each pair, the
+    survivors in order to the bit; the ion on the oxygen of the water farthest from the complex by
+    the same brute force, 12.45 Å from it; **and two half-charged ions**, the second farthest from the
+    complex and the first (11.26 Å);
+  - **an ion is a charge and a Lennard-Jones term**: a chloride beside one water at 3 to 7 Å is
+    `4ε_ij[(σ_ij/r)¹² − (σ_ij/r)⁶]` with geometric `σ_ij` and `ε_ij` from Joung and Cheatham's and
+    Jorgensen's numbers, to 1e-13 of the two parts; `x⁶ = 2σ⁶` to 16 ε; σ OpenMM's printed
+    0.4477656957373345 nm as a literal; `x/2` and ε AMBER's `frcmod.ionsjc_tip3p`, `R_min/2` 2.513 Å
+    and 0.035 591 0 kcal/mol, to their printed digits (ambermini, commit `f7c421c4`, SHA-256
+    `eb7a1a59…8a55`);
+  - **a protein in a large box is the vacuum protein**: the 5 Å pocket and benzene, +1, in cubes of
+    48, 64 and 80 Å at `r_c = L/2` — as given, the bonded terms the vacuum's to the bit; moved so
+    that the chain crosses all three faces and each atom wrapped on its own, the bonded terms and van
+    der Waals to 6.3e-15 of their sum. **The electrostatics are the vacuum's plus
+    `k_e[Q²ξ/2L + (2π/3V)(Q Σ q r² − μ²)]`**, the Wigner energy and the quadratic part of the
+    periodic potential summed over pairs — derived here, translation-invariant, and for `Q` = 0 W1's
+    tinfoil term. At 48 Å: −9.452 kcal/mol, of which Wigner −9.814 and quadratic +0.384, left
+    −0.021. **What is left falls as `L⁻⁵`**, 3.996 and 2.985 against 4.214 and 3.052, energy and
+    forces alike, in W1's quarter; **and its departure shrinks as the next harmonic's `L⁻⁷`
+    says**, by 0.422 against a predicted 0.463 whatever its coefficient, held to ±0.15;
+  - **the end states are the systems they say**, on the 5 Å pocket with its chloride, every atom
+    mobile after a few constrained steps: coupled, the solvated field less benzene alone in the
+    box plus benzene in vacuum; decoupled with the restraint on, a field built without benzene —
+    pocket, waters, ion — plus benzene in vacuum plus `Boresch::energy`, energy to 1e-12 of the
+    parts and every force, the restraint's added, to 1e-12 of the largest;
+  - **`∂U/∂λ_r`, `∂U/∂λ_e`, `∂U/∂λ_v` against central differences** of the whole energy at four
+    states, each to the tolerance it earns and able to see a part in 10³;
+  - **every state of `couplings` its own `coupling`** to the bit over all 33 candidates, their
+    differences the whole energy's to 64 ε, and **the decoupled reciprocal energy the rest's own
+    whole sum plus `λ_e` times the cross term** of three whole sums through the mesh at `λ_e` = 1,
+    0.4 and 0, the cross term held to be a thousand times the tolerance;
+  - **each flexibility freezes what it says**: the masks, every frozen atom's bits after ten steps
+    and every mobile one moved, the held bonds every bond to a hydrogen, and the degrees of freedom
+    `3 N_free − 3 N_water − N_held` (1 614, 1 653 and 1 784 on the 3 Å box);
+  - **constrained NVE on the pocket falls as `h²`**: the 3 Å pocket, benzene and eight waters 2.5 Å
+    clear of it, in 52 Å with `r_c` = 26 Å, 0.1 ps. Over sixteen starts (ignored, release) the
+    ratio per halving was 4.620–5.194 from 2 fs, 4.131–4.253 from 1 fs and 4.032–4.062 from 0.5 fs,
+    and **the excess over four shrank by 0.234–0.262**, W3's check that sees an error of lower order.
+    Bands 4.2–5.8, 3.95–4.45, 3.99–4.10 and 0.20–0.30, the last earned from these starts. **2 fs is further from `h²` here than for
+    benzene in water** (W3 4.229–4.508): the bends with a hydrogen in them are the stiffest motion
+    left, and nothing holds them. RMS error at 2 fs 0.24–0.93 kcal/mol over 0.1 ps;
+  - **the Boresch release is its closed form** at the anchors 3c's rule chooses on the 3 Å box
+    (backbone 2, 1, 0 and benzene 70, 75, 74; r₀ 4.551 Å, θ_A 79.7°, θ_B 107.3°): Clark et al.'s eq 6
+    by quadrature, −8.2282747767 kcal/mol, against the extended eq 7 to 1e-9, and eq 7 apart from it
+    by the closed form of its two approximations to 1e-12.
+
+  **Sabotage: eighteen, every one caught**, each applied by a script with an anchor that must
+  occur once, run against the whole test file with `--no-fail-fast`, and restored by copy, `touch`
+  and SHA-256 — no `git checkout`: the ion at the nearest water (the box); the complex's shift's
+  sign (the box, `h²`); the start off the held bonds (the box, `h²`); the dynamics without SHAKE on
+  the complex (the flexibilities); the zone at twice its radius (the flexibilities); the clearance
+  10% short, one margin for two, and no oxygen clearance (each the box); the chloride's `x` as
+  `2^⅓ σ` (the ion, the box); an ion without its well (the ion alone — the end states build the
+  rest with the same `with_ions`, so they could not see it, which is why the ion's test exists); an
+  ion without its charge (the ion, the box); the lattice box a cube of its first edge (four tests);
+  the excluded pairs' correction without the minimum image, and the background's sign (each the
+  large box); the rest and cross reciprocal energies swapped (the couplings, the end states, the
+  derivatives); the release without one power of `r₀` (the release); SHAKE's `Δq/h` × 0.99 (`h²`
+  alone). **One passed a check it was aimed at**: the restraint scaled by `λ_r²` was caught by the
+  couplings but not by the derivatives, which sampled `λ_r` at ½, where `2λ_r U_B = U_B`. The state
+  is a quarter now, and the derivatives catch it too.
+
+  **The cost of each flexibility** (`the_cost_of_each_flexibility_measured`, ignored, release, one
+  core, 25 min; run once, exit 0). **The system**: 30 105 atoms — 2 616 of the complex, 9 160 waters,
+  9 Cl⁻ — in 62.35 × 65.47 × 74.82 Å, built in 176 s, nearly all of it QEq on the protein.
+  **Melted** with the protein frozen, 0.5 ps at 0.5 fs in a 50 ps⁻¹ bath (389 s, 297.6 K, U −79 141
+  kcal/mol), then 1 ps at 2 fs in a 5 ps⁻¹ one (296.6 K, U −81 691). **One evaluation is 318 ms**,
+  146 of it van der Waals in real space, the protein's bonded terms 0.4; **the couplings at all 33
+  candidates 32.7 ms**, a tenth of a step, taken once in fifty. A protein let go from the frozen start was
+  equilibrated 0.2 ps at 0.5 fs (50 ps⁻¹) and 0.5 ps at 2 fs (5 ps⁻¹) before anything was
+  measured; then NVE over 0.3 ps at 2 and 1 fs from the same state.
+
+  | | mobile complex atoms | degrees of freedom | ms a step at 2 fs | NVE 2 fs: RMS, drift | NVE 1 fs: RMS, drift | the leg |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | protein frozen | 12 | 55 017 | 328–375 | 1.18, −2.45 | 0.42, −1.90 | 171–195 h |
+  | residues within 8 Å free | 719 | 56 776 | 331–335 | 1.41, −2.46 | 0.82, −1.64 | 172–174 h |
+  | residues within 12 Å free | 1 248 | 58 095 | 331–340 | 1.67, −2.04 | 0.86, −1.50 | 172–177 h |
+  | nothing frozen | 2 616 | 61 515 | 332–346 | 2.10, +0.20 | 1.37, +0.13 | 172–180 h |
+
+  kcal/mol and kcal/mol/ps over the box; ms the fastest and slowest of three runs of ten steps;
+  the leg 17 windows × (20 ps + 200 ps) at 2 fs with 2 000 samples at every candidate.
+  - **Every option is stable at 2 fs once equilibrated, and none is cheaper**: the step is the
+    force field's, which evaluates every atom whether it moves or not, so freezing the protein buys
+    nothing in time. Every held bond stayed within 1.0e-12 of its length.
+  - **Not equilibrated, a released protein is not**: the first run went from the frozen melt
+    straight to NVE, and with residues within 8 Å free read an RMS of 77.8 kcal/mol and a drift of
+    +149 kcal/mol/ps at 2 fs (21.6 at 1 fs), and within 10 Å SHAKE failed on a protein C–H. The
+    crystal's contacts — a backbone amide H 1.50 Å from an Asp Oδ1 among them, which the frozen protein carried
+    with 3 235 kcal mol⁻¹ Å⁻¹ on it — are released at the first step. The leg's windows each
+    equilibrate 20 ps, at 2 fs: **a released protein needs its own 0.5 fs start first**, which the
+    leg does not yet do.
+  - **NVE's error is the cutoff's more than the step's**: the RMS falls 1.5 to 2.8 times from 2 to
+    1 fs, not four, and the drift of about −2 kcal/mol/ps with the protein frozen or zoned barely
+    moves with the step, W3's plain cutoff stepping as pairs cross it, now over 30 000 atoms.
+  - **The leg is about a week on one core whatever is frozen**: 172–195 h for 17 windows, 10–11 h a
+    window. The schedule is the restraint on in four intervals, the charges off in two and the van
+    der Waals in ten (3c-3's restraint grid, W3's charges and van der Waals). **The overlap
+    reasoning**: W3's thirteen windows in water had none below 0.225 (λ_v 0.4 → 0.3), and 3c-3's
+    restraint intervals in the GB complex overlapped 0.48–0.50 at a quarter the spacing used here,
+    so the restraint could be two intervals and the leg fifteen windows, 152 h; in the complex the
+    soft-core end puts benzene in a cavity that is empty in L99A, not in water, so its van der
+    Waals end is unlikely to overlap worse than W3's, but that is not measured. **The restraint on
+    alone is four windows, about 40 h**; its free energy in 3c-3 was +0.72 kcal/mol.
+  - **What would make it cheaper** (not done): a neighbour list with a skin, since the pair loop
+    without charges is nearly half of an evaluation and the cell list visits 3.7 times the cutoff
+    sphere's volume; a
+    truncated octahedron, about 30% less water; threads; or a smaller margin.
+
+  **Decisions left to the user**: the flexibility (`PANTOMETRY_W4_FLEXIBILITY`); whether the box's
+  1.7% under-density matters enough for a barostat or a recount; whether the protein's hydrogens
+  are relaxed in vacuum first, as 3b and 3c did; and whether the restraint needs four intervals.
+
+  **A review found five checks that could not see a defect** (numerics-reviewer; the coordinator
+  reproduced the second). Each sabotage below was run against the revised tests, restored by copy,
+  `touch` and SHA-256:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | the lattice's sites × 0.95, its cell at full spacing (126 waters removed for 112) | passed: the test rebuilt the lattice with the same `lattice_box` | caught by each water's centre of mass at `(g + ½) L_a/k_a`, written in the test (the box, the two ions), and by `lattice_box`'s unit test, which also holds equal counts to `lattice_at`'s waters |
+  | `CHLORIDE_SIGMA` × 1.05 | passed: σ was its own reference | caught by σ as OpenMM prints it and `R_min/2` as AMBER's file prints it, 2.513 Å |
+  | the ions' distances never updated by the ions placed | passed: no test had two ions | caught by two half-charged chlorides, both sites by brute force including the first ion |
+  | SHAKE's `Δq/h` × 0.9995 | passed: shrink 0.3326 inside W3's 0.15–0.35 | caught by the band earned here, 0.20–0.30 (× 0.999 too, at 0.3818; it moved none of the three ratios out of its band — the shrink is the only guard of an `O(h)` error) |
+  | the Ewald background × 1.01 | caught only by the departure's shrink, 1.310, the ±25% `L⁻⁵` band passing | the same, now stated in the test as the guard: × 1.001 caught (0.751), × 1.0003 not (0.541, inside 0.463 ± 0.15) |
+
+  - **A force tolerance with no headroom is gone**: `bonded_off < 1e-3 × the largest force` held
+    the closed-form force of the box along with the vacuum's, 6.1e-12 against 6.5e-12 N. The
+    forces less both are what the rate and the quarter hold, and that check stays.
+  - **What the end-state test cannot see is now said in it**: its coupled expectation is built from
+    the solvated field itself, and its decoupled one from the same `with_ions`, so an error in
+    assembling either cancels; the ion, the large box and the box tests hold those.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **412 tests, thirty-eight of
+  them ignored**: 374 run by default (363 and 35 before). The new: ten default and three ignored —
+  the cost, the `h²` band, and the complex leg — in `benzene_bound_in_tip3p.rs`, and one unit test
+  in `water`. 363 + 11 is the 374, and 35 + 3 the 38. Twenty-three sabotages in all, eighteen before
+  the review and five after, every one caught; the background × 1.0003 is a probe of how far the
+  check sees, and passes, as the test says.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

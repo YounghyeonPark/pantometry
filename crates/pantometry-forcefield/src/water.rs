@@ -194,7 +194,7 @@ pub fn body_frame() -> [[f64; 3]; 3] {
 
 /// The cube root of `x > 0` by bisection on its bits' range, `+ − × ÷` only: the same on every
 /// platform, where the platform's `cbrt` need not be. Within an ulp of the exact root.
-fn cube_root(x: f64) -> f64 {
+pub(crate) fn cube_root(x: f64) -> f64 {
     let (mut lo, mut hi) = if x < 1.0 { (x, 1.0) } else { (1.0, x) };
     for _ in 0..2100 {
         let mid = 0.5 * (lo + hi);
@@ -546,6 +546,66 @@ impl WaterBox {
         }
     }
 
+    /// `counts[0] × counts[1] × counts[2]` waters on a simple cubic lattice at `density` kg m⁻³, in
+    /// the orthorhombic box those counts fill: the spacing is the volume per water's cube root,
+    /// `(m/ρ)^⅓`, by the same bisection as [`WaterBox::lattice_at`], and each edge is its count of
+    /// spacings, so the lattice is at `density` to the rounding of three products. Each water's
+    /// centre of mass is on its site, `(g + ½)` spacings along each axis with `g` the water's index
+    /// read as `[x, y, z]` with `z` fastest, and each is turned by its own uniform rotation from
+    /// `seed`, as in [`WaterBox::lattice_at`]. For a box around a solute that is not a cube
+    /// ([`crate::solvated`]). Equal counts give `lattice_at`'s waters and rotations, though not
+    /// its bits: there the spacing is the cube's edge over the count.
+    ///
+    /// # Panics
+    ///
+    /// If a count is zero or the density is not positive and finite.
+    pub fn lattice_box(counts: [usize; 3], density: f64, seed: u64) -> WaterBox {
+        assert!(counts.iter().all(|&k| k > 0), "a box of no water");
+        assert!(
+            density.is_finite() && density > 0.0,
+            "a density must be positive and finite"
+        );
+        let n = counts[0] * counts[1] * counts[2];
+        let spacing = cube_root(molecular_mass() / density);
+        let body = body_frame();
+        let mut positions = Vec::with_capacity(3 * n);
+        for w in 0..n {
+            let g = [
+                w / (counts[1] * counts[2]),
+                (w / counts[2]) % counts[1],
+                w % counts[2],
+            ];
+            let site = g.map(|i| (i as f64 + 0.5) * spacing);
+            let rotation = uniform_rotation(seed, w as u64);
+            for p in body {
+                let q = [0, 1, 2].map(|r| dot(rotation[r], p));
+                positions.push([site[0] + q[0], site[1] + q[1], site[2] + q[2]]);
+            }
+        }
+        WaterBox {
+            cell: PeriodicBox::new(counts.map(|k| k as f64 * spacing)),
+            positions,
+        }
+    }
+
+    /// The same box without the waters `drop` marks, one mark a water: the others keep their order
+    /// and their bits. What a counter-ion that takes a water's place leaves ([`crate::solvated`]).
+    ///
+    /// # Panics
+    ///
+    /// If `drop` is not one mark per water.
+    pub fn without_waters(&self, drop: &[bool]) -> WaterBox {
+        assert_eq!(drop.len(), self.count(), "one mark per water");
+        let positions = (0..self.count())
+            .filter(|&w| !drop[w])
+            .flat_map(|w| self.positions[3 * w..3 * w + 3].iter().copied())
+            .collect();
+        WaterBox {
+            cell: self.cell,
+            positions,
+        }
+    }
+
     /// The same box without every water that has an atom within `clearance` metres of an atom of
     /// `solute` (metres, any image; the distance by minimum image): the waters a solute placed in
     /// the box would overlap. The others keep their order and their bits. The solute's positions
@@ -698,5 +758,48 @@ mod tests {
     fn avogadro_is_the_crates() {
         // The molecular mass is the masses' sum, 18.015 g/mol.
         assert!((molecular_mass() * AVOGADRO * 1e3 - 18.015).abs() < 1e-12);
+    }
+
+    /// **`lattice_box` is a lattice at its density, and equal counts are `lattice_at`'s waters.**
+    /// On 3 × 4 × 5: the number density `N/V` is the one asked for to `8 ε`, each edge its count of
+    /// one spacing, and each water's centre of mass at `(g + ½) L_a/k_a`, `g` its index with `z`
+    /// fastest, to `16 ε L`. On 4 × 4 × 4 against `lattice_at(4)`: the same box and every position,
+    /// to `16 ε L`: the spacings differ only by rounding, and the rotations are the same draws.
+    #[test]
+    fn a_lattice_box_is_its_lattice() {
+        let density = 33.0e27 * molecular_mass();
+        let k = [3usize, 4, 5];
+        let b = WaterBox::lattice_box(k, density, 0x1A7);
+        let l = b.cell().lengths();
+        assert_eq!(b.count(), 60);
+        let number = b.count() as f64 / b.cell().volume();
+        assert!((number / 33.0e27 - 1.0).abs() <= 8.0 * f64::EPSILON);
+        let spacing = l[0] / k[0] as f64;
+        let m = masses();
+        for w in 0..b.count() {
+            let g = [w / (k[1] * k[2]), (w / k[2]) % k[1], w % k[2]];
+            let p = &b.positions()[3 * w..3 * w + 3];
+            for a in 0..3 {
+                assert!((l[a] / k[a] as f64 - spacing).abs() <= 4.0 * f64::EPSILON * spacing);
+                let com = (m[0] * p[0][a] + m[1] * p[1][a] + m[2] * p[2][a]) / (m[0] + m[1] + m[2]);
+                let site = (g[a] as f64 + 0.5) * l[a] / k[a] as f64;
+                assert!(
+                    (com - site).abs() <= 16.0 * f64::EPSILON * l[a],
+                    "water {w} axis {a}"
+                );
+            }
+        }
+        let cube = WaterBox::lattice_box([4; 3], density, 0x1A7);
+        let at = WaterBox::lattice_at(4, density, 0x1A7);
+        let side = at.cell().lengths()[0];
+        for a in 0..3 {
+            assert!((cube.cell().lengths()[a] - side).abs() <= 16.0 * f64::EPSILON * side);
+        }
+        assert_eq!(cube.count(), at.count());
+        for (p, q) in cube.positions().iter().zip(at.positions()) {
+            for a in 0..3 {
+                assert!((p[a] - q[a]).abs() <= 16.0 * f64::EPSILON * side);
+            }
+        }
     }
 }

@@ -79,7 +79,13 @@
 //! non-bonded pair that is neither 1-2 nor 1-3 inside the cutoff by minimum image (a cell list
 //! of cells at least half the cutoff wide, each pair visited once), the correction above, and
 //! [`Ewald`] with the same exclusions. It is a [`Potential`], so [`crate::MolecularDynamics`]
-//! integrates it unchanged. It never builds the `N²` pair list [`ForceField::new`] keeps.
+//! integrates it unchanged. It never builds the `N²` pair list [`ForceField::new`] keeps. The
+//! atoms are the solute's, then the waters', then any ions' ([`PeriodicForceField::with_ions`]):
+//! point charges with a van der Waals term, bonded to nothing, for a solvated complex
+//! ([`crate::solvated`]). A protein is a solute like any other: its chain is made whole through its
+//! peptide bonds as a water is through its two, so no bonded term needed a periodic version, and
+//! `tests/benzene_bound_in_tip3p.rs` holds a pocket of 181L cut by every face to the vacuum force
+//! field.
 //!
 //! # Decoupling inside the box
 //!
@@ -440,6 +446,8 @@ pub struct PeriodicForceField {
     solute: usize,
     /// The rigid TIP3P waters after the solute, oxygen first.
     waters: Vec<[usize; 3]>,
+    /// How many monatomic ions follow the waters ([`PeriodicForceField::with_ions`]).
+    ions: usize,
     ewald: Ewald,
     charges: Vec<f64>,
     /// `[x_i, D_i]`, metres and joules.
@@ -600,6 +608,7 @@ impl PeriodicForceField {
             bonded,
             solute: n_solute,
             waters: rigid,
+            ions: 0,
             ewald: Ewald::new(cell, parameters),
             charges,
             vdw,
@@ -630,6 +639,27 @@ impl PeriodicForceField {
         assert_eq!(charges.len(), self.solute, "one charge per solute atom");
         self.charges[..self.solute].copy_from_slice(&charges);
         self
+    }
+
+    /// The same force field with `ions` appended after every atom it has, in order: each a point
+    /// charge with a UFF-form van der Waals term `[x, D]` ([`crate::solvated::Ion`]), combined with
+    /// every other atom by UFF's geometric rule as a water oxygen is, bonded to nothing, excluded
+    /// from nothing. Counter-ions for a charged solute ([`crate::solvated`]). Every term is the
+    /// force field's own — the cell list, Ewald and its background, the long-range correction —
+    /// so an ion is one more atom and nothing else changes.
+    pub fn with_ions(mut self, ions: &[crate::solvated::Ion]) -> PeriodicForceField {
+        for ion in ions {
+            self.charges.push(ion.charge);
+            self.vdw.push([ion.vdw_distance, ion.vdw_energy]);
+        }
+        self.ions += ions.len();
+        self.exclusions = Exclusions::from_pairs(self.charges.len(), self.exclusions.pairs());
+        self
+    }
+
+    /// How many ions follow the waters: the last atoms.
+    pub fn ion_atoms(&self) -> usize {
+        self.ions
     }
 
     /// The rigid TIP3P waters, atom indices, oxygen first: what [`crate::water::Settle::tip3p`]

@@ -473,6 +473,8 @@ struct Model {
     ligand_charge: i32,
     qeq_solves: [usize; 2],
     complex: ForceField,
+    component: Component,
+    pocket_component: Component,
     pocket: ForceField,
     ligand: ForceField,
     in_pocket: ForceField,
@@ -642,6 +644,8 @@ impl Binding {
                 ligand_charge,
                 qeq_solves: [qp.iterations, ql.iterations],
                 complex,
+                component: cc,
+                pocket_component: pc,
                 pocket: pocket_ff,
                 ligand: ligand_ff,
                 in_pocket,
@@ -714,6 +718,19 @@ impl Binding {
     /// The QEq solves the pocket's and the ligand's charges took.
     pub fn qeq_solves(&self) -> [usize; 2] {
         self.model.qeq_solves
+    }
+
+    /// The complex as one component, complex order: the pocket's residues with every bond among
+    /// them, then the ligand. What [`crate::PeriodicForceField::solvated`] takes to put the
+    /// complex in a box ([`crate::solvated`]).
+    pub fn component(&self) -> &Component {
+        &self.model.component
+    }
+
+    /// The pocket alone as one component, its atoms the complex's first [`Binding::pocket_len`]:
+    /// the complex without its ligand, which is the receptor of a decoupling's end state.
+    pub fn pocket_component(&self) -> &Component {
+        &self.model.pocket_component
     }
 
     /// The complex's force field, with the charges.

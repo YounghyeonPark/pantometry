@@ -143,6 +143,11 @@
 //!   (`tests/benzene_hydrated_in_tip3p.rs`, ignored), against experiment's −0.90 ± 0.20 and
 //!   GAFF/TIP3P's −0.81 ± 0.02 (FreeSolv v0.52); nothing is asserted against either. See
 //!   [`shake`].
+//! - [`SolvatedComplex`] puts a [`Binding`] — the whole of 181L, or a pocket of it — in a box of
+//!   rigid TIP3P with **counter-ions** ([`Ion::chloride`], Joung and Cheatham's, read secondarily)
+//!   so that the box is neutral, PME at δ = 10⁻⁶, every bond to a hydrogen of the complex held, and
+//!   three ways of holding the protein ([`Flexibility`]), step W4 of explicit water. The complex
+//!   leg it is for is written and not yet run. See [`solvated`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -384,8 +389,8 @@
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
 //!   Not here: Poisson–Boltzmann, GB with a solute dielectric other than 1, and a cutoff.
 //!   **Explicit water is under way**: the periodic box and Ewald ([`periodic`]), rigid TIP3P
-//!   ([`water`]) and benzene's hydration in it ([`shake`]) are here, and smooth PME ([`pme`]) for
-//!   the solvated complex, which is the next step.
+//!   ([`water`]) and benzene's hydration in it ([`shake`]) are here, and smooth PME ([`pme`]) and
+//!   the solvated complex ([`solvated`]), whose complex leg is the next step.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
@@ -435,6 +440,7 @@ pub mod periodic;
 pub mod pme;
 pub mod qeq;
 pub mod shake;
+pub mod solvated;
 pub mod solvation;
 pub mod uff;
 pub mod water;
@@ -461,6 +467,7 @@ pub use periodic::{
 pub use pme::{Pme, PmeParameters};
 pub use qeq::{Charges, Qeq, QeqError};
 pub use shake::Shake;
+pub use solvated::{Flexibility, Ion, SolvatedComplex, Solvation, SolvationError};
 pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
 pub use uff::{Parameters, TableI, UffType};
 pub use water::{Settle, WaterBox};
