@@ -126,19 +126,25 @@
 //! it is called. The reciprocal sum's phase factors start from **the platform's `sin` and `cos`**
 //! of each atom's three fractional coordinates — 3N calls an evaluation — and are carried to
 //! higher `k` by complex multiplication, so across platforms the reciprocal energy can differ in
-//! its last bits, as UFF's torsion `cos` already makes every trajectory of this crate do.
+//! its last bits, as UFF's torsion `cos` already makes every trajectory of this crate do. **The
+//! particle mesh does not** ([`crate::pme`]): its transform's twiddles are its own `sin` and `cos`,
+//! and with it the whole sum is the same bits on every platform, which a test pins.
 //!
 //! # Cost, and what is not here
 //!
 //! Classical Ewald: the reciprocal sum is `N` times the number of wave vectors, which at a fixed
-//! accuracy grows as the box's volume, so at fixed `r_c` the cost goes as `N²`. Smooth particle-mesh
-//! Ewald (Essmann et al., *J. Chem. Phys.* **103**, 8577 (1995)) is the production method and is
-//! **not here**; this sum is the reference it will be checked against. See [`crate::periodic`]
-//! for the measured cost.
+//! accuracy grows as the box's volume, so at fixed `r_c` the cost goes as `N²`. See
+//! [`crate::periodic`] for the measured cost. **Smooth particle-mesh Ewald** (Essmann et al., *J.
+//! Chem. Phys.* **103**, 8577 (1995)) replaces the reciprocal sum when asked
+//! ([`Ewald::with_mesh`], [`crate::pme`]), at `O(N + K log K)`: 23 ms where this sum takes 1.6 s
+//! at 24 000 atoms and `δ = 10⁻⁶`, both timed on a loaded machine. Everything else here — real space, the self term, the exclusions, the
+//! background, and α — is shared by both, and this sum stays the default and the reference the
+//! mesh is checked against where the claim is convergence.
 
 use crate::ccd::ANGSTROM;
 use crate::energy::COULOMB_KCAL;
 use crate::periodic::{for_each_pair, Exclusions, PeriodicBox};
+use crate::pme::{Pme, PmeParameters};
 use crate::uff::KCAL_PER_MOL;
 use pantometry_core::math::exp;
 use std::f64::consts::{FRAC_2_SQRT_PI, PI};
@@ -644,12 +650,17 @@ pub struct EwaldEvaluation {
 /// A classical Ewald sum for one box and one set of [`EwaldParameters`]: the wave vectors,
 /// computed once. The charges and positions are given to each evaluation. See the module
 /// documentation.
+///
+/// **Or its reciprocal part by smooth particle-mesh Ewald** ([`Ewald::with_mesh`],
+/// [`crate::pme`]): the real space, the self term, the excluded pairs and the background are the
+/// same either way, and only the reciprocal sum is replaced. The classical sum is the default.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ewald {
     cell: PeriodicBox,
     parameters: EwaldParameters,
     waves: Vec<Wave>,
     extent: [usize; 3],
+    mesh: Option<Pme>,
 }
 
 impl Ewald {
@@ -693,9 +704,26 @@ impl Ewald {
             parameters,
             waves: Vec::new(),
             extent,
+            mesh: None,
         };
         ewald.waves = ewald.waves_for(&integers);
         ewald
+    }
+
+    /// The same sum with its reciprocal part by smooth particle-mesh Ewald on `mesh`'s order and
+    /// grid, at this sum's α ([`crate::pme`]). `k_c` and the wave vectors are then not used.
+    ///
+    /// # Panics
+    ///
+    /// As [`Pme::new`].
+    pub fn with_mesh(mut self, mesh: PmeParameters) -> Ewald {
+        self.mesh = Some(Pme::new(self.cell, self.parameters.alpha, mesh));
+        self
+    }
+
+    /// The mesh, when the reciprocal part is by particle-mesh Ewald.
+    pub fn mesh(&self) -> Option<&Pme> {
+        self.mesh.as_ref()
     }
 
     /// The wave vectors `integers` in this sum's box.
@@ -718,9 +746,9 @@ impl Ewald {
             .collect()
     }
 
-    /// The same sum, the same α, `r_c` and **the same integer wave vectors**, in another box: what
-    /// a derivative with respect to the box needs, so that no wave vector enters or leaves as the
-    /// box changes.
+    /// The same sum, the same α, `r_c` and **the same integer wave vectors** — or the same mesh —
+    /// in another box: what a derivative with respect to the box needs, so that no wave vector
+    /// enters or leaves as the box changes.
     ///
     /// # Panics
     ///
@@ -736,6 +764,7 @@ impl Ewald {
             parameters: self.parameters,
             waves: Vec::new(),
             extent: self.extent,
+            mesh: self.mesh.as_ref().map(|m| m.with_cell(cell)),
         };
         ewald.waves = ewald.waves_for(&integers);
         ewald
@@ -751,7 +780,8 @@ impl Ewald {
         self.parameters
     }
 
-    /// How many wave vectors of the half space are summed.
+    /// How many wave vectors of the half space the classical sum has; with a mesh they are not
+    /// summed.
     pub fn wave_vectors(&self) -> usize {
         self.waves.len()
     }
@@ -799,6 +829,9 @@ impl Ewald {
         mut forces: Option<&mut [[f64; 3]]>,
         virial: &mut [[f64; 3]; 3],
     ) -> (f64, f64) {
+        if let Some(mesh) = &self.mesh {
+            return mesh.reciprocal(charges, group, at, forces, virial);
+        }
         let n = at.len();
         let l = self.cell.lengths();
         // Phase factors exp(i 2π m x_a / L_a) for m = 0..=extent_a, per axis, laid out [m][atom].

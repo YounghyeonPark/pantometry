@@ -142,10 +142,16 @@
 //! scale**, 20 000–30 000 atoms, where the reciprocal sum is most of a second an evaluation; at W3's
 //! few thousand, real space is half the cost, and a neighbour list would save more than PME.
 //!
+//! **With the particle mesh** ([`PeriodicForceField::with_mesh`], [`crate::pme`]) the reciprocal
+//! part of the 24 000-atom box is 33 ms at `10⁻⁵` and 23 ms at `10⁻⁶` with the order and grid
+//! [`crate::PmeParameters::for_accuracy`] chooses, and 4.9 and 5.6 ms at 3 000 atoms, timed on a
+//! machine under load, against 681 and 1 575 ms for the classical sum at 24 000; real space
+//! is then nearly all of it. The decoupling's cross terms go through the mesh as well.
+//!
 //! # Not here
 //!
-//! **No smooth PME**: classical Ewald only, the reference PME will be checked against; its cost
-//! is measured above. **No neighbour list** with a skin: the cell list is rebuilt at each
+//! **Smooth PME is opt-in** ([`PeriodicForceField::with_mesh`]); classical Ewald is the default.
+//! **No neighbour list** with a skin: the cell list is rebuilt at each
 //! evaluation, `O(N)`. **No triclinic box, no barostat**; constraints are the dynamics' —
 //! [`crate::water`]'s SETTLE and [`crate::shake`]'s bonds — not the force field's. **No implicit
 //! solvent in the box**, and no QEq for a periodic system: the charges are given.
@@ -637,8 +643,20 @@ impl PeriodicForceField {
         self.solute
     }
 
-    /// The same force field in another box, with the same α, cutoff and integer wave vectors
-    /// ([`Ewald::with_cell`]): for a derivative with respect to the box.
+    /// The same force field with the Ewald sum's reciprocal part by smooth particle-mesh Ewald on
+    /// `mesh`'s order and grid ([`Ewald::with_mesh`], [`crate::pme`]): every other term, the
+    /// decoupling's cross terms included, is unchanged.
+    ///
+    /// # Panics
+    ///
+    /// As [`crate::Pme::new`].
+    pub fn with_mesh(mut self, mesh: crate::pme::PmeParameters) -> PeriodicForceField {
+        self.ewald = self.ewald.with_mesh(mesh);
+        self
+    }
+
+    /// The same force field in another box, with the same α, cutoff and integer wave vectors — or
+    /// mesh — ([`Ewald::with_cell`]): for a derivative with respect to the box.
     ///
     /// # Panics
     ///
@@ -1217,8 +1235,28 @@ mod tests {
     /// to the bit.
     #[test]
     fn the_cross_terms_are_the_evaluations_coupling() {
+        cross_terms_against_the_evaluation(None);
+    }
+
+    /// The same through the particle mesh: the couplings take the cross term from one forward
+    /// transform of the rest and the group as one complex grid, the evaluation from the same grid
+    /// with the potentials' inverse transform as well, and they agree as the classical sum's do.
+    /// On a grid of 16 × 8 × 32, so that each axis's own size is in the split of `C(m)` and `C(−m)`.
+    #[test]
+    fn the_cross_terms_are_the_evaluations_coupling_through_the_mesh() {
+        cross_terms_against_the_evaluation(Some(crate::pme::PmeParameters {
+            order: 5,
+            grid: [16, 8, 32],
+        }));
+    }
+
+    fn cross_terms_against_the_evaluation(mesh: Option<crate::pme::PmeParameters>) {
         let water = WaterBox::lattice(3, 0x3C0);
-        let field = water.force_field(4.6 * ANGSTROM, 1e-8);
+        let mut field = water.force_field(4.6 * ANGSTROM, 1e-8);
+        if let Some(m) = mesh {
+            field = field.with_mesh(m);
+        }
+        assert_eq!(field.ewald().mesh().is_some(), mesh.is_some());
         let mut q = field.charges().to_vec();
         q[0] += 0.1;
         let field = field.with_charges(q);
@@ -1258,5 +1296,30 @@ mod tests {
             assert_eq!(one.gradient.map(f64::to_bits), c.gradient.map(f64::to_bits));
         }
         assert!(fast[0].gradient[1].abs() > 1e-3 * scale);
+        // And the evaluation's reciprocal energy itself, which every comparison above, being a
+        // difference or symmetric in the two sets, cannot tell from the rest and the group
+        // swapped: the rest's own whole sum plus λ_e times the cross term of three whole sums.
+        let reciprocal = |keep: &dyn Fn(usize) -> bool| {
+            let q: Vec<f64> = (0..group.len())
+                .map(|i| if keep(i) { field.charges()[i] } else { 0.0 })
+                .collect();
+            field.clone().with_charges(q).energy(at).ewald.reciprocal
+        };
+        let all = reciprocal(&|_| true);
+        let rest = reciprocal(&|i| !group[i]);
+        let own = reciprocal(&|i| group[i]);
+        for l in [
+            Lambda::COUPLED,
+            Lambda::new(0.0, 0.5, 1.0),
+            Lambda::new(0.0, 0.0, 1.0),
+        ] {
+            let e = d.core(at, l, false).energy.ewald.reciprocal;
+            let want = rest + l.electrostatics * (all - rest - own);
+            assert!(
+                (e - want).abs() <= 64.0 * f64::EPSILON * scale,
+                "{l:?}: {e} against {want}"
+            );
+        }
+        assert!((all - rest).abs() > 1e-3 * scale);
     }
 }

@@ -2663,6 +2663,209 @@ protects nothing.
   ten default and three ignored in `benzene_hydrated_in_tip3p.rs`. 319 + 25 is the 344, and
   30 + 4 the 34.
 
+- **`pantometry-forcefield` has smooth particle-mesh Ewald: the reciprocal part of the Ewald sum
+  by cardinal B-splines on a grid, opt-in, before W4.** New module `pme`. W4's solvated complex is
+  about 24 000 atoms, where the classical reciprocal sum is 0.5–1.6 s an evaluation; through the
+  mesh it is 23–34 ms, and more accurate at the same `δ`. `Ewald::with_mesh` and `PeriodicForceField::with_mesh` take a
+  `PmeParameters { order, grid }`; **the classical sum stays the default, and every existing test
+  passes unchanged.** Real space, the self term, the exclusions, the background and α are shared,
+  and are the classical field's to the bit with the mesh in use.
+  - **Written from Essmann et al. 1995 (and Darden et al. 1993), no library's code read**, every
+    formula derived in the module documentation: the B-spline and its recursion from the
+    truncated-power closed form, the derivative `M_n′ = M_{n−1}(u) − M_{n−1}(u − 1)`, the Euler
+    factor `|b(m)|²` from asking the interpolation to be exact at integers, the influence function,
+    the forces as the analytic derivative of the spline, and the virial — exact for this energy,
+    since under a strain every fractional coordinate and `b(m)` is fixed. **Poisson's summation
+    gives the interpolation in closed form**: one charge's interpolated phase is
+    `e^{2πimu/K}(1 + Σ_{p≠0} r_p e^{−2πipu})/(1 + Σ_{p≠0} r_p)`, `r_p = (x/(x − p))ⁿ`, `x = m/K`, which
+    the tests sum with no grid, no transform and no `b(m)` table.
+  - **The odd-order zero of `b(m)` at `m = K/2`**: `Σ_s M_n(s)(−1)^s` is exactly zero for odd `n`
+    (`M_n(s) = M_n(n − s)`, opposite signs), so `|b(K/2)|²` is infinite; for even `n` it is `1/T²`,
+    `T` the tangent number — `1/3`, `2/15`, `17/315`, `62/2835`, `1382/155925` for 4 to 12, checked.
+    **Every vector with some `m_a = K_a/2` is left out**, at every order: the Nyquist vector has no
+    sign under a shear either, and there `r₁ = ±1`, so the interpolation carries no information.
+    The bias estimate counts it among the vectors left out.
+  - **Its own transform, and the same bits on every platform.** `pantometry_core::transform`
+    computes its twiddles from the platform's `cos` and `sin` at every butterfly — so a mesh built
+    on it would differ across platforms, and pay 2.4 million `sin_cos` per 64³ transform — and is
+    one- and two-dimensional. The kernel was not changed: the mesh's three-dimensional radix-2
+    transform takes its twiddles from a table built once by its own Taylor series on `[0, π/4]` and
+    the circle's exact symmetries (on the circle to 4 ε, the double angle to 8 ε, `√½` at the
+    eighth to 1 ε). With the splines arithmetic and `G` through the kernel's `exp`, the mesh is
+    `+ − × ÷`, `sqrt`, `floor` and `exp`: **a test pins its reciprocal energy, a force and a virial
+    component to the bit**, written on `x86_64-pc-windows-gnu`, for CI's other platforms to hold.
+    The classical sum's phases still start from the platform's `sin_cos`.
+  - **Decoupling**: the energy is a quadratic form in the grid, so `E(all) − E(rest) − E(group)` is
+    `Σ G Re(F_rest* F_group)` exactly; the rest and the group go in as one complex grid, real and
+    imaginary, are separated by `C(m) ± C(−m)*`, and with one inverse transform of
+    `G(F_rest + λF_group) + iλG F_rest` give both sets of atoms their potentials. A decoupled
+    evaluation costs one evaluation, and `couplings` one forward transform. `E(group)` is never
+    computed, as before.
+  - **Choosing the grid and the order** (`PmeParameters::for_accuracy`): the classical `δ`, in the
+    same units `k_e Q/r_c`, against **estimates derived here** for uncorrelated charges — the
+    spread `σ_E ≈ k_e (Q/πV)[Σ_m w² (⟨|η|²⟩ + ⟨η⟩²)]^½` and the mean of each charge's own term,
+    `Pme::self_bias`, their averages in closed form per axis — **held together, `(σ² + b²)^½ ≤ δ`**:
+    for each order 4 to 8 the coarsest axis doubled until it is met (`grid_for`), then the cheapest
+    by `PmeParameters::cost`, `atoms × n³ + 2 K log₂ K`, measured on this machine. The first model,
+    `4 n³` against `3 K log K`, overweighted the spline by about three and chose order 4 on 64³ at
+    24 000 atoms where order 6 on 32³ was half the time. Unlike the classical sum's, the target
+    includes the bias, which is not a constant per configuration here and is ten times σ on
+    disordered charges; for water, whose molecules cancel most of it, it is conservative.
+  - **Checked against closed forms** (`tests/the_particle_mesh_against_closed_forms.rs`):
+    - the B-spline at every order from 3 to 12 against its truncated-power sum, worst 0.074 of a
+      tolerance of `8 ε` of the sum's terms; the partition of unity and its derivative; the
+      derivative identity to the bit;
+    - `|b(m)|²` against its cotangent series (`cos(θ/2)`, `1 − 2s²/3`, `c(1 − s²/3)`,
+      `1 − s² + 2s⁴/15` for orders 3–6, `s = sin θ/2`) to 4.9e-15; the denominator at `K/2` below
+      `5e-34` for orders 3, 5, 7, 9, 11 (exactly 0 at 3); the tangent numbers to `1e-13`;
+    - **the mesh is its interpolation's Fourier series**: the reciprocal energy against the series
+      summed with no grid, in a 13 × 9.5 × 17 Å box on a 16 × 8 × 32 grid with a net charge, to
+      2.2e-16, 3.3e-16 and 3.0e-15 at orders 5, 6 and 8;
+    - **Madelung's constants exact on the grid**: the spline is exact at integer `u`, so NaCl (64
+      ions) and CsCl (16) with every ion on a grid point give `1.747564594633183` against
+      `1.747564594633182` (6.7e-16) and `1.762674773070970` against `1.762674773070988` (1.8e-14)
+      at orders 3, 4, 6 and 8 alike, the real-space tail summed back by brute force; moved off the
+      grid, 9.2e-7 to 4.9e-12 at 32³;
+    - **a lone charge is the Wigner lattice** `ξ = −2.837297479480620` on a grid point to 1.9e-13 at
+      every order on 32³, and on 16³ the lattice less exactly the vectors the grid leaves out (the
+      Nyquist planes among them) to 3.5e-14, those vectors 1.5e-5 of it; off the grid, its mean
+      error over 4³ offsets is `self_bias` to 3.9e-3, 3.6e-3, 2.2e-4, 1.8e-4 and 8.2e-6 at orders
+      3, 4, 5, 6, 8 — held to twice `4⁻ⁿ`, the share of the harmonics four offsets do not cancel;
+    - **the rates, measured**: for odd `n` the `±p` aliases cancel in `R` and `η` is imaginary to
+      leading order, so **where every charge has the same offset in its cell** — each charge's own
+      term, and NaCl, whose ions are a whole number of grid spacings apart — the energy falls as
+      `K^{−2⌈n/2⌉}` and orders 3 and 4, 5 and 6 converge alike: NaCl 3.86, 3.89, 5.88, 5.94, 8.00
+      from 32³ to 64³, held to `[r − 0.4, r + 0.6]`. **That is all the pairing covers** (found by
+      the review, below): charges at several offsets have cross terms a phase error enters at first
+      order. CsCl's even orders, 4.08, 6.19, 8.31, are held to `n`; its odd orders (4.03, 6.07) are
+      printed. Forces on eight disordered boxes fall as `K^{−(n−1)}`: 1.97, 3.10, 4.03, 5.16, 7.36 for
+      orders 3, 4, 5, 6, 8, and `n − 1` on every doubling to 128³, held to `[n − 1.3, n − 0.2]`.
+      Translating every charge moves the energy at the spread's rate: `n` at even orders, 4.03,
+      6.01, 7.83, held to `[n − 0.4, n + 0.6]`; at odd orders not settled (4.20 and 6.29 from 16³ to
+      32³, between `n − 1` and `n` by 128³) and printed; the classical sum by 2e-16;
+    - **the estimates against 48 disordered boxes** of 96 charges in 18 × 15.5 × 21 Å: the mean
+      error 0.986–1.023 of `self_bias`, held to 0.85–1.15; the RMS about it 0.886–1.107 of
+      `energy_error`, each case held to `1 ± 3/√(2N)` (0.69–1.31) and their geometric mean, 0.973, to
+      `1 ± 3/√(12N)` (0.875–1.125). **Found: neither is the error of water.** On 64 lattice TIP3P
+      waters the mesh's reciprocal error is −0.33 to 0.40 of `self_bias` over orders 4 to 8 and up to
+      3.9 σ: each charge's two neighbours of the opposite sign a bond away cancel most of its own
+      term. The classical sum's `reciprocal_bias`, measured on point charges in W1, fails on water
+      the same way (1e-5 at 24 000 atoms: 5.2e-3 of the reciprocal energy as computed, 3.1e-2 with
+      the bias taken out);
+    - **`for_accuracy` delivers `δ`**: on sixteen disordered boxes the RMS error at its choice is
+      0.99 and 0.96 of `δ` at 10⁻⁴ and 10⁻⁵, held to `δ (1 + 3/√32)`; on the water box 0.04–0.24 of it
+      at every order's grid, held to `δ`. The grid meets its estimate, the same grid with its
+      last-doubled axis halved does not, the spacings stay within a factor of two, and the choice is
+      the cheapest of the five orders by `cost`;
+    - the forces against central differences of the mesh's own energy, at orders 4 and 6 in a cube
+      and 5 in a 14 × 12 × 16 Å box on 16 × 8 × 32, with a net charge and exclusions, worst 0.10 of
+      the tolerance; **the net force is not zero, and is exactly the energy's derivative under a
+      rigid translation** (1.6–3.9e-4 of the RMS force at 16³, 1.6e-5–1.0e-4 at 32³; the classical
+      sum's 6e-15), each axis against a central difference; the virial's diagonal against the
+      strain of the mesh's own energy and its off-diagonal against a shear of the series, with the
+      real space switched off, on 16³ and on 16 × 8 × 32;
+    - a decoupling of two TIP3P waters from 25 through the mesh, on a 16 × 8 × 32 grid: `∂U/∂λ_e` the
+      three whole sums' cross terms to 8e-33 J of 6.1e-22, **the decoupled reciprocal energy itself
+      the rest's own whole sum plus `λ_e` times that cross term** at `λ_e` = 1, 0.4 and 0, to 9.6e-17,
+      5.1e-17 and 1.3e-17 of the parts, the couplings at five states the whole energy's differences
+      to 1e-12 of its parts, the λ derivatives and the forces (on the group and the rest) against
+      central differences; and a unit test, also on 16 × 8 × 32, holding the couplings'
+      one-transform path to the evaluation's to 64 ε and the evaluation's reciprocal energy to the
+      same three whole sums.
+  - **The cost** (release, one core, `x86_64-pc-windows-gnu`; TIP3P lattice boxes, `r_c` = 9 Å; the
+    reciprocal part alone, the best of seven; errors against the classical sum at `k_c = 9α`,
+    energy relative to the reciprocal energy, forces to the RMS force; at the choice the
+    bias-inclusive target makes, from one run on a loaded machine — real space 31 and 234–257 ms
+    against 26 and 195 unloaded):
+
+    | atoms | δ | classical: waves, ms, energy, forces | mesh as chosen: order, grid, ms, energy, forces |
+    | --- | --- | --- | --- |
+    | 3 000 | 10⁻⁵ | 1 051, 17.8, 2.6e-3, 5.2e-4 | 6, 32³, 4.9, 3.3e-5, 1.0e-5 |
+    | 3 000 | 10⁻⁶ | 2 192, 35.0, 3.1e-4, 9.2e-5 | 8, 32³, 5.6, 1.3e-5, 2.7e-6 |
+    | 24 000 | 10⁻⁵ | 5 537, 681, 5.2e-3, 1.3e-3 | 6, 64³, 33.5, 1.6e-5, 6.1e-6 |
+    | 24 000 | 10⁻⁶ | 12 838, 1 575, 1.6e-3, 2.3e-4 | 8, 64³, 22.9, 5.9e-6, 1.3e-6 |
+
+    Real space and the exclusions are the same for both and now nearly all of an evaluation. At
+    every setting the chosen mesh is more accurate than the classical sum at the same `δ` — 24 to
+    330 times in energy, 34 to 210 in forces — and at 24 000 atoms 20 to 70 times cheaper. The
+    σ-only target this replaced chose order 6 on 32³ at 24 000 atoms and `10⁻⁵`, 8.7 ms, whose
+    forces were 1.5 times the classical sum's error.
+  - **Found on the way: the cell list allocates `(2L/r_c)³` cells.** A test that switched real
+    space off with `r_c` = 0.01 Å asked for 83.6 GB and aborted; it uses 0.5 Å. Not changed here.
+  - **Not here**: a triclinic box, a real-to-complex transform, threads, a force target for the
+    grid; and the transform stays in this crate, private — moving it to the kernel changes the
+    kernel's public API and is a separate decision, see below.
+
+  **Sabotage: twenty-four, every one caught**, each applied by a script that
+  copies the file aside, runs the new test file and the unit tests one after the other, and
+  restores by copy, `touch` and SHA-256 (no `git checkout`): the spline's grid index rounded where
+  its weights are floored (eight tests), and off by one in the gather alone (five); `b(m)` dropped
+  (nine); the derivative from the spline an order down (six, the closed form among them); the
+  Nyquist plane kept in `G` with its `b(K/2)` (nine — the pole at odd order), its `b(K/2)` alone
+  (the Euler test), and only its sign restored in `signed` (the spread estimate: `G` was still zero
+  there, so no energy moved); the decoupling's `C(−m)` read at `+m` (the decoupling) and the group
+  spread into the rest's grid (the decoupling and the unit test); the group's potential without
+  λ (the decoupling's forces); the inverse transform with the forward sign (five, and the
+  transform's unit test); axis 0's grid size in the spread (the series, the non-cubic forces) and in
+  the force alone (the non-cubic forces — which a review of the plan found no test could see, all
+  being cubic, so the 14 × 12 × 16 Å case was added first); the second axis gathered with the wrong
+  stride (four); the virial's stress without `π²/α²` (the virial); the twiddles' octant reflection
+  not swapped (thirteen, both unit tests); the spline recursion's first weight (twelve); the bias
+  without the vectors left out (the lone charge at α = 0.5 Å⁻¹, added for it), the spread without
+  the alias variance (two) and with half of it (the lone charge through `self_bias`; **the spread
+  test's band does not see a factor √2**); the grid doubled on the finest axis (the chosen-grid
+  test's new spacing check, and the water box); the mesh ignored (ten); `with_cell` dropping the
+  mesh (the virial). **One is a program that is right**: the grid index off by one in the spread
+  and the gather alike is a translation of the whole system by one grid spacing, under which the
+  mesh's energy is invariant, and only the pinned bits saw it. **One did not compile at first** —
+  `as f64 <` read as generics — and was rewritten and run again before it was counted.
+
+  **A review found eight checks that could not see a defect, and each now has the test that
+  fails it** (numerics-reviewer and physics-checker; the latter wrote an independent numpy SPME
+  that reproduced the printed rates to every digit). Each sabotage below was run against the
+  revised tests and caught, by the same script, restored by copy, `touch` and SHA-256:
+
+  | sabotage | before | after |
+  | --- | --- | --- |
+  | the rest and the group swapped in the spread and the gather — 94% wrong in `E_recip` at `λ_e = 1` | passed: every decoupling check was a difference or symmetric in the two sets, and the forces are the exact gradient of the wrong energy | caught by the decoupled reciprocal energy against the rest's own whole sum plus `λ_e` times the cross term, to 9.6e-17 of the parts, in the integration test and the unit test |
+  | the virial's `m₂` from axis 0's grid | passed: the virial ran on a cubic grid only | caught on 16 × 8 × 32 |
+  | the decoupling's `−m` index on axis 1 from axis 0's grid | passed: decoupling ran on cubic grids only | caught on 16 × 8 × 32, in both tests |
+  | the spread estimate with `L_x` on every axis | passed: the estimates were measured in cubes only, and it changes the grids `for_accuracy` chooses | caught in an 18 × 15.5 × 21 Å box |
+  | the bias with `L_x` on every axis | passed, likewise | caught by the lone charge in 15 × 12 × 18 Å, the estimates and the delivery test |
+  | σ × 2/3, and σ × 1.5 | passed the band 0.6–1.7 on sixteen boxes | caught: 48 boxes, each case held to `1 ± 3/√(2N)` and the geometric mean of six to `1 ± 3/√(12N)` |
+  | the cost comparison reversed, the dearest order chosen | passed: nothing tested the choice | caught: the choice is asserted to minimise `PmeParameters::cost` over the five orders |
+  | — `for_accuracy` holding σ alone to `δ` | the bias, measured at 10.6–13.2 σ on disordered charges, was outside the target, so the error at its choice could be ten times `δ`; nothing measured it, and it was not measured before the change | the target is `(σ² + b²)^½`, and the RMS error at the choice is measured: 0.99 and 0.96 of `δ` |
+
+  And what the review found in the prose and the bands, each made to say what the code measures:
+
+  | claim | before | after |
+  | --- | --- | --- |
+  | the energy's rate | "an energy's error falls as `K^{−2⌈n/2⌉}`" | only where every charge has one offset — the self term, NaCl; a generic crystal and the spread of disordered charges do not pair (an independent implementation: about `n`; here, odd orders between `n − 1` and `n` by 128³). CsCl's odd orders and the translation rate's odd orders are printed, not asserted |
+  | the translation rate at odd orders | held to `[2⌈n/2⌉ − 0.6, +1.2]` from 16³ to 32³, which one doubling finer fails (2.00, 3.97, 6.22 at 32³→64³) | even orders held to `[n − 0.4, n + 0.6]`, asymptotic over 16³–128³; odd orders printed |
+  | `bias > 3σ` | asserted at every order, though for odd orders the ratio falls as `1/K` | asserted at even orders, where it is fixed |
+  | the water box | held to `|bias| + 4σ`, 4.5–20.6 times the measured error | held to `δ`, which the target promises; `4σ` is not earned there (measured up to 3.9 σ), and both ratios are printed |
+  | the water ratio | 0.06–0.32 in the test, −0.17 to 0.32 elsewhere | −0.33 to 0.40, in all three |
+  | the estimates' measured range | "0.95–1.12 and 0.85–1.40 over grids to 64³" with no 64³ case | the six cases' values as measured |
+  | the mean's "systematic 3% shortfall" | from sixteen boxes in a cube | 1.3 standard errors; 48 boxes measure 0.986–1.023 |
+  | CsCl on the grid | the measured value shown as the constant | both, `1.762674773070970` against `1.762674773070988` |
+  | "Madelung's constants to `1e-14`" | CsCl is 1.8e-14 off | 6.7e-16 and 1.8e-14 |
+
+  The forces' rate, `n − 1`, was checked on every doubling to 128³ for orders 3 to 8 and holds.
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **398 tests, thirty-five of
+  them ignored**: 363 run by default (344 and 34 before). The new: two unit tests in `pme` (the
+  roots of unity, one frequency in one bin), one in `periodic` (the couplings through the mesh),
+  and sixteen default and one ignored (the cost) in `the_particle_mesh_against_closed_forms.rs`,
+  which takes 29 s in debug on one thread. 344 + 19 is the 363, and 34 + 1 the 35. Thirty-two
+  sabotages in all, twenty-four before the review and eight after, every one caught.
+
+  **Not changed, and why: the kernel's transform.** A three-dimensional transform with tabulated,
+  platform-independent twiddles belongs in `pantometry_core::transform`; adding it there is a
+  change to the kernel's public API, so it is in this crate, private: moving it is a separate
+  decision, not made here. The
+  kernel's own `fft`, `fft2`, `ifft` and `ifft2` call the platform's `cos` and `sin` at every
+  butterfly, and so are not the same bits across platforms — which `pantometry-optics` uses.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

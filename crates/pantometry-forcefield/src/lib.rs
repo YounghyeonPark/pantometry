@@ -115,9 +115,12 @@
 //!   ([`EwaldParameters::for_accuracy`]). Analytic forces and the virial, a [`Potential`] for the
 //!   dynamics, and [`PeriodicDecoupling`], an [`Alchemical`] whose Coulomb coupling is the Ewald
 //!   sum's cross terms and whose decoupled state is [`Decoupling`]'s. The complementary error
-//!   function is this crate's own ([`ewald::erfc`], at most 3.21 ulp against mpmath). No PME yet:
-//!   at W4's 24 000 atoms one evaluation is 0.7–1.3 s, most of it reciprocal. See [`periodic`] and
-//!   [`ewald`].
+//!   function is this crate's own ([`ewald::erfc`], at most 3.21 ulp against mpmath). At W4's
+//!   24 000 atoms one classical evaluation is 0.7–1.4 s, most of it reciprocal; **smooth
+//!   particle-mesh Ewald** ([`pme`], [`PeriodicForceField::with_mesh`]) replaces that part on
+//!   request, 23–34 ms there, written from Essmann et al. (1995) with its own transform, and checked
+//!   against the interpolation's Fourier series, Madelung's and Wigner's constants exactly on the
+//!   grid, and the convergence rates its order predicts. See [`periodic`], [`ewald`] and [`pme`].
 //! - [`water`] is **rigid TIP3P water**, step W2 of explicit water: Jorgensen et al.'s Table I
 //!   (1983, read as two readable sources reproduce it), the O–O Lennard-Jones term as a UFF pair
 //!   so that a water oxygen mixes with a UFF solute by UFF's own geometric rule — a stated
@@ -277,6 +280,16 @@
 //! against mpmath; a decoupling's end states and `∂U/∂λ` against the systems and sums they are;
 //! and dynamics in the box the same bits however it is cut into calls.
 //!
+//! Smooth particle-mesh Ewald against closed forms (`tests/the_particle_mesh_against_closed_forms.rs`):
+//! the B-spline against its truncated-power sum at every order from 3 to 12, the Euler factor
+//! `|b(m)|²` against its cotangent series, its zero at `K/2` for odd orders exactly and the tangent
+//! numbers for even ones; the mesh's energy against the interpolation's Fourier series summed with
+//! no grid, to `3e-15`; NaCl's and CsCl's Madelung constants and a lone charge's Wigner lattice
+//! exact on the grid at every order; the energy's error falling as `K^{−2⌈n/2⌉}` and the forces' as
+//! `K^{−(n−1)}`, measured; the derived bias and spread against sixteen disordered boxes; the forces
+//! and the virial as this energy's derivatives, the net force as its translation derivative; a
+//! decoupling's cross terms as three whole sums; and the bits pinned.
+//!
 //! Rigid water against closed forms (`tests/a_rigid_water_against_closed_forms.rs`): Table I as it
 //! stands, ε and σ from `A` and `C`, the charges summing to zero exactly and the dipole
 //! `2 q_H r_OH cos(θ/2)`; the box's force field written out pair by pair, and a UFF solute's pair
@@ -320,7 +333,9 @@
 //! specify. It would change their bits, and is left to be decided with those.
 //! [`pdb`]'s superposition is arithmetic and `sqrt`, but turning a rotor calls `sin` and `cos`.
 //! [`ewald`]'s `erfc` and Gaussians are its own and the kernel's `exp`, the same everywhere; its
-//! reciprocal sum starts from the platform's `sin_cos` of each atom's three coordinates.
+//! reciprocal sum starts from the platform's `sin_cos` of each atom's three coordinates. [`pme`]'s
+//! does not: its transform's twiddles are its own Taylor series, so the mesh is the same bits on
+//! every platform, and a test pins them.
 //!
 //! # What is deliberately not in it
 //!
@@ -369,8 +384,8 @@
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
 //!   Not here: Poisson–Boltzmann, GB with a solute dielectric other than 1, and a cutoff.
 //!   **Explicit water is under way**: the periodic box and Ewald ([`periodic`]), rigid TIP3P
-//!   ([`water`]) and benzene's hydration in it ([`shake`]) are here; the solvated complex is the
-//!   next step, and there is no smooth PME yet.
+//!   ([`water`]) and benzene's hydration in it ([`shake`]) are here, and smooth PME ([`pme`]) for
+//!   the solvated complex, which is the next step.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by
@@ -417,6 +432,7 @@ pub mod free_energy;
 pub mod minimise;
 pub mod pdb;
 pub mod periodic;
+pub mod pme;
 pub mod qeq;
 pub mod shake;
 pub mod solvation;
@@ -442,6 +458,7 @@ pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use periodic::{
     PeriodicBox, PeriodicDecoupling, PeriodicEnergy, PeriodicEvaluation, PeriodicForceField,
 };
+pub use pme::{Pme, PmeParameters};
 pub use qeq::{Charges, Qeq, QeqError};
 pub use shake::Shake;
 pub use solvation::{DecoupledSolvation, GeneralizedBorn, Rescaling};
