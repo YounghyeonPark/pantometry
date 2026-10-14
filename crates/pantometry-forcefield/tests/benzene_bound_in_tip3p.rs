@@ -30,9 +30,9 @@
 //! - after the leg, **benzene's coupling taken apart**: its van der Waals by protein UFF type, the
 //!   waters and the ions, and its cross Coulomb by class, summing to the field's own coupling and
 //!   to the whole evaluation's `U(coupled) − U(decoupled)` within their bounds; and **the refined
-//!   window at λ_r 0.5** the one the insertion would run, to its header and its bits.
+//!   window at λ_r 0.25** the one the insertion would run, to its header and its bits.
 //!
-//! Ignored, in release: the leg (`the_complex_leg_measured`, run once), its window at λ_r 0.5
+//! Ignored, in release: the leg (`the_complex_leg_measured`, run once), its window at λ_r 0.25
 //! (`the_restraint_interval_refined`), and where its 3.85 kcal/mol comes from
 //! (`where_the_binding_error_comes_from_measured`).
 
@@ -4617,18 +4617,19 @@ fn where_the_binding_error_comes_from_measured() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The restraint interval refined: a window at λ_r 0.5
+// The restraint interval refined: a window at λ_r 0.25
 
-/// The candidate the refined window runs at: λ_r 0.5 with everything coupled, `grid()[6]`. **Not
-/// what the insertion would choose first**: `refine_schedule` puts `⌊(0 + 8)/2⌋` = 4, λ_r 0.25,
-/// between 0 and 8, and reaches 6 only in its second round, between 4 and 8. Run here at 6 because
-/// λ_r 0.5 is the window asked for; a window at 6 is the one the second round would run, to the
-/// header and to the bit (`the_refined_window_is_the_one_the_insertion_runs`).
-const REFINED_CANDIDATE: usize = 6;
+/// The candidate the refined window runs at: λ_r 0.25 with everything coupled, `grid()[4]`. **What
+/// the insertion would choose first**: `refine_schedule` puts `⌊(0 + 8)/2⌋` = 4 between 0 and 8.
+/// Chosen over λ_r 0.5 (`grid()[6]`) because the unrestrained end is the hard one: read from windows
+/// 0 and 8 alone, one-sided estimates toward 4 kept 378 and 442 effective samples of 2000, toward 6
+/// 247 and 1 263. A window at 4 is the one the first round would run, to the header and to the bit
+/// (`the_refined_window_is_the_one_the_insertion_runs`).
+const REFINED_CANDIDATE: usize = 4;
 
 /// The schedule's windows read back, each refused unless its file is there — none is run — and the
 /// window at [`REFINED_CANDIDATE`] read back or run, through [`window`]: resumable, written as
-/// `window_06.txt`, its header the leg's.
+/// `window_04.txt`, its header the leg's.
 fn refined_records(
     leg: &Leg,
     dir: &std::path::Path,
@@ -4660,12 +4661,12 @@ fn with_refined(records: &[Recorded], refined: &Recorded) -> Vec<Recorded> {
 
 /// **The refined window's header is window 0's but for its candidate**: on the 3 Å pocket, the
 /// leg's [`header`] at [`REFINED_CANDIDATE`] is its header at 0 with `candidate 0 lambda 0e0 1e0
-/// 1e0` replaced by `candidate 6 lambda 5e-1 1e0 1e0`, and nothing else; and the protocol and the
+/// 1e0` replaced by `candidate 4 lambda 2.5e-1 1e0 1e0`, and nothing else; and the protocol and the
 /// state count in it are the ones `window_00.txt` of the production run carries, literally, so the
 /// refined window can only be read back beside windows that ran under them.
 #[test]
 fn the_refined_windows_header_is_window_zeros_but_its_candidate() {
-    assert_eq!(grid()[REFINED_CANDIDATE], Lambda::new(0.5, 1.0, 1.0));
+    assert_eq!(grid()[REFINED_CANDIDATE], Lambda::new(0.25, 1.0, 1.0));
     let s = small3(0x2E5);
     let leg = production_leg(&s, s.positions().to_vec());
     let zero = header(&leg, 0);
@@ -4676,7 +4677,7 @@ fn the_refined_windows_header_is_window_zeros_but_its_candidate() {
         refined,
         zero.replacen(
             "# candidate 0 lambda 0e0 1e0 1e0 ",
-            "# candidate 6 lambda 5e-1 1e0 1e0 ",
+            "# candidate 4 lambda 2.5e-1 1e0 1e0 ",
             1
         )
     );
@@ -4687,7 +4688,7 @@ fn the_refined_windows_header_is_window_zeros_but_its_candidate() {
 /// pocket with [`a_killed_leg_resumes_to_the_same_bits`]'s short stages and windows, the leg's
 /// [`refine_schedule`] from windows 0 and 8, told every interval overlaps too little, inserts 4,
 /// then 2 and 6, through [`window`] — the call [`the_complex_leg_measured`] makes. In another
-/// directory, windows 0 and 8 and then [`refined_records`] run the window at 6 alone. Its file's
+/// directory, windows 0 and 8 and then [`refined_records`] run the window at 4 alone. Its file's
 /// header line is the inserted one's, and every gradient and energy the same bits. And
 /// [`refined_records`] refuses a directory without the schedule's windows rather than run them.
 #[cfg(not(target_family = "wasm"))]
@@ -4763,7 +4764,7 @@ fn the_refined_window_is_the_one_the_insertion_runs() {
     let (read, refined) = refined_records(&leg, &alone, &[0, 8]);
     assert_eq!(read.len(), 2);
     let first = |d: &std::path::Path| {
-        std::fs::read_to_string(d.join("window_06.txt"))
+        std::fs::read_to_string(d.join("window_04.txt"))
             .unwrap()
             .lines()
             .next()
@@ -4772,7 +4773,7 @@ fn the_refined_window_is_the_one_the_insertion_runs() {
     };
     assert_eq!(first(&alone), first(&inserted));
     assert_eq!(first(&alone), header(&leg, REFINED_CANDIDATE));
-    let other = &records[3];
+    let other = &records[2];
     assert_eq!(other.grid, REFINED_CANDIDATE);
     let bits = |r: &Recorded| -> Vec<u64> {
         let mut v: Vec<u64> = r.gradients.iter().flatten().map(|x| x.to_bits()).collect();
@@ -4787,27 +4788,27 @@ fn the_refined_window_is_the_one_the_insertion_runs() {
             .iter()
             .map(|r| r.grid)
             .collect::<Vec<_>>(),
-        [0, 6, 8]
+        [0, 4, 8]
     );
     for d in [inserted, alone] {
         let _ = std::fs::remove_dir_all(d);
     }
 }
 
-/// **The restraint interval refined: a window at λ_r 0.5** (release, one core, about nine hours,
+/// **The restraint interval refined: a window at λ_r 0.25** (release, one core, about nine hours,
 /// one window). The leg's box and start as [`the_complex_leg_measured`] has them —
 /// [`whole_complex`], [`production_start`] reading `prepared.txt` back through its header check,
 /// [`production_leg`] — in the same results directory; the fourteen windows of [`SCHEDULE`] read
 /// back through [`window`]'s header check, none run; and the window at [`REFINED_CANDIDATE`] run
-/// through [`window`], written to `window_06.partial` and renamed `window_06.txt` when complete,
+/// through [`window`], written to `window_04.partial` and renamed `window_04.txt` when complete,
 /// so a stopped run resumes, its progress in `refined.log`. Before it runs, its header is checked
 /// against `window_00.txt`'s first line with the candidate and λ replaced. Printed: BAR over
-/// 0 → 0.5 → 1 with each interval's overlap, against the single interval's +2.205; the restraint-on
+/// 0 → 0.25 → 1 with each interval's overlap, against the single interval's +2.205; the restraint-on
 /// segment both ways; the complex leg and `ΔG°_bind` recomputed with the refined window.
 /// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
 /// benzene_bound_in_tip3p the_restraint_interval_refined -- --ignored --nocapture`.
 #[test]
-#[ignore = "one window of the complex leg at λ_r 0.5, about nine hours with --release: run with --release -- --ignored --nocapture"]
+#[ignore = "one window of the complex leg at λ_r 0.25, about nine hours with --release: run with --release -- --ignored --nocapture"]
 fn the_restraint_interval_refined() {
     let dir = results_dir();
     let lock = Lock::take(&dir, "complex");
@@ -4835,7 +4836,7 @@ fn the_restraint_interval_refined() {
         header(&leg, REFINED_CANDIDATE),
         zero.replacen(
             "# candidate 0 lambda 0e0 1e0 1e0 ",
-            "# candidate 6 lambda 5e-1 1e0 1e0 ",
+            "# candidate 4 lambda 2.5e-1 1e0 1e0 ",
             1
         ),
         "the refined window's header is window 0's but for its candidate"

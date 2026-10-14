@@ -3471,7 +3471,7 @@ protects nothing.
     +2.205 ± 0.187. Its TI, +19.4 ± 4.3 from two end points, is no estimate. With no restraint,
     benzene turns among the pocket's symmetric orientations, so ⟨U_B⟩ there is tens of kcal/mol.
     BAR's +2.2 is about what that gives: kT ln 6 to kT ln 12, 1.1–1.5 kcal/mol for the
-    orientations, plus the confinement. One window at λ_r 0.5, about 9 h, would test it. The
+    orientations, plus the confinement. One more window between λ_r 0 and 1, about 9 h, would test it. The
     resume reads the fourteen back.
 
 - **Where W4's 3.85 kcal/mol comes from, measured once: benzene's van der Waals made GAFF's takes
@@ -3570,23 +3570,23 @@ protects nothing.
     kind and a class. **The van der Waals parameters are rebuilt from the types, TIP3P and the
     chloride, not read from the field**, so the identity checks them as well as the sums.
 
-  **A window at λ_r 0.5, written and not run.** `the_restraint_interval_refined` (ignored, about
+  **A window at λ_r 0.25, written and not run.** `the_restraint_interval_refined` (ignored, about
   nine hours).
   - **The leg.** It takes the leg's lock and uses the leg's box, start and leg (`production_start`
     and `production_leg`, which `the_complex_leg_measured` now calls too). It refuses to start
     unless all fourteen windows are on disk, reads them back through `window`'s header check, and
-    runs `grid()[6]` through `window`, so the run resumes and writes `window_06.txt`. It logs to
+    runs `grid()[4]` through `window`, so the run resumes and writes `window_04.txt`. It logs to
     `refined.log`, because `Leg` now carries its log's name, which is not in the header, so
     `complex.log` is left alone.
   - **The header.** Before the window runs, its header is checked against `window_00.txt`'s first
-    line with `candidate 0 lambda 0e0 1e0 1e0` replaced by `candidate 6 lambda 5e-1 1e0 1e0`.
-  - **What it prints.** BAR over 0 → 0.5 → 1 with each interval's overlap, against the single
+    line with `candidate 0 lambda 0e0 1e0 1e0` replaced by `candidate 4 lambda 2.5e-1 1e0 1e0`.
+  - **What it prints.** BAR over 0 → 0.25 → 1 with each interval's overlap, against the single
     interval. Then the restraint segment, the complex leg and `ΔG°_bind`, with the window and
     without it.
-  - **Candidate 6, not 4.** λ_r 0.5 is `grid()[6]`. The insertion would put `⌊(0 + 8)/2⌋` = 4 (λ_r
-    0.25) first and reach 6 only in its second round. Read from windows 0 and 8 alone, one-sided
-    estimates toward 4 have 378 and 442 effective samples of 2000, and toward 6 they have 247 and
-    1 263. Recorded, not acted on: the constant is one line.
+  - **Candidate 4, λ_r 0.25, not 6.** The insertion puts `⌊(0 + 8)/2⌋` = 4 first, and the
+    unrestrained end is the hard one. Read from windows 0 and 8 alone, one-sided estimates toward
+    4 have 378 and 442 effective samples of 2000, and toward 6 (λ_r 0.5) they have 247 and 1 263.
+    The window was first written at 6, then moved to 4 before it ran.
 
   **Checked**:
   - `the_refined_windows_header_is_window_zeros_but_its_candidate`: the header differs from window
@@ -3594,7 +3594,7 @@ protects nothing.
     literally.
   - `the_refined_window_is_the_one_the_insertion_runs` (cheap windows on the 3 Å pocket):
     `refine_schedule` is told that every interval overlaps too little and inserts 4, then 2 and 6.
-    A window at 6 run alone by `refined_records` has the inserted window's header line and the
+    A window at 4 run alone by `refined_records` has the inserted window's header line and the
     same bits. `refined_records` refuses a directory without the schedule's windows, and the
     window goes in its place.
 
@@ -3607,7 +3607,7 @@ protects nothing.
   - **Three caught first by a side check** (each with a variant among the four above that
     reaches the identity): `C_3` pairs counted at zero energy, the tail zeroed, and the ion class's Coulomb
     dropped.
-  - **Four against the refined window**: candidate 4 instead of 6, and the protocol's sample
+  - **Four against the refined window**: candidate 6 instead of 4, and the protocol's sample
     count 2001 (each caught by the header test); the existence check removed, so that
     `refined_records` runs window 0 rather than refusing; and the refined window inserted one
     place early (each caught by the insertion test).
