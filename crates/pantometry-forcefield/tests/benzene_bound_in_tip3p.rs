@@ -26,20 +26,30 @@
 //! - phase 2, **the leg's pieces**: its hydrogens relaxed in vacuum first, a stationary point in
 //!   what was freed; phase 1's crevice water between Arg95 and Trp126 removed, by the rule for it;
 //!   its box and its decoupling through a neighbour list, the same bits; its preparation the frozen
-//!   melt and then the release, run as the stages say; and its schedule.
+//!   melt and then the release, run as the stages say; and its schedule;
+//! - after the leg, **benzene's coupling taken apart**: its van der Waals by protein UFF type, the
+//!   waters and the ions, and its cross Coulomb by class, summing to the field's own coupling and
+//!   to the whole evaluation's `U(coupled) − U(decoupled)` within their bounds; and **the refined
+//!   window at λ_r 0.5** the one the insertion would run, to its header and its bits.
+//!
+//! Ignored, in release: the leg (`the_complex_leg_measured`, run once), its window at λ_r 0.5
+//! (`the_restraint_interval_refined`), and where its 3.85 kcal/mol comes from
+//! (`where_the_binding_error_comes_from_measured`).
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
 
+mod hydration;
 mod protein;
 
+use pantometry_forcefield::energy::Pair;
 use pantometry_forcefield::ewald::COULOMB;
 use pantometry_forcefield::free_energy::{bennett_chain, refine_schedule, window_seed};
-use pantometry_forcefield::uff::{self, KCAL_PER_MOL};
+use pantometry_forcefield::uff::{self, UffType, KCAL_PER_MOL};
 use pantometry_forcefield::water::{self, WaterBox};
 use pantometry_forcefield::{
     Alchemical, AtLambda, Bath, Binding, Boresch, Complex, Component, Coupling, Element, Estimate,
-    EwaldParameters, Flexibility, Lambda, MolecularDynamics, PeriodicBox, PeriodicDecoupling,
+    EwaldParameters, Flexibility, Ion, Lambda, MolecularDynamics, PeriodicBox, PeriodicDecoupling,
     PeriodicEnergy, PeriodicForceField, Protocol, SolvatedComplex, Solvation, Stage, System,
 };
 use pantometry_units::BOLTZMANN;
@@ -2985,7 +2995,8 @@ fn trapezoid(records: &[Recorded]) -> (f64, f64) {
 /// One window of the leg, as `Windows` would run it at schedule position `index`: the template's
 /// dynamics in the protocol's bath, thermalised from `window_seed(protocol.seed, index)`, at
 /// `lambda`, from `start`. After the equilibration, every `stride` steps, `on` is given the step
-/// and the couplings at `lambda` followed by every one of `states`. Returns where it ended. W3's.
+/// and the couplings at `lambda` followed by every one of `states`. Returns where it ended. W3's,
+/// on [`sample_frames`].
 #[allow(clippy::too_many_arguments)]
 fn sample_window(
     h: &PeriodicDecoupling,
@@ -2996,6 +3007,27 @@ fn sample_window(
     lambda: Lambda,
     states: &[Lambda],
     mut on: impl FnMut(u64, &[Coupling]),
+) -> Vec<[f64; 3]> {
+    let mut lambdas = vec![lambda];
+    lambdas.extend_from_slice(states);
+    sample_frames(h, start, template, p, index, lambda, |s, at| {
+        on(s, &h.couplings(at, &lambdas))
+    })
+}
+
+/// The frames a window samples: the template's dynamics in the protocol's bath, thermalised from
+/// `window_seed(protocol.seed, index)`, at `lambda`, from `start`; after the equilibration, every
+/// `stride` steps, `on` is given the step and the positions. Returns where it ended. What
+/// [`sample_window`] records couplings from, and what the decomposition takes its frames from, so
+/// that both are the leg's own dynamics.
+fn sample_frames(
+    h: &PeriodicDecoupling,
+    start: &[[f64; 3]],
+    template: &MolecularDynamics,
+    p: Protocol,
+    index: usize,
+    lambda: Lambda,
+    mut on: impl FnMut(u64, &[[f64; 3]]),
 ) -> Vec<[f64; 3]> {
     let seed = window_seed(p.seed, index);
     let mut md = template
@@ -3012,8 +3044,6 @@ fn sample_window(
     };
     let mut at = start.to_vec();
     md.prepare(&potential, &at);
-    let mut lambdas = vec![lambda];
-    lambdas.extend_from_slice(states);
     let mut taken = 0;
     // Clippy on current stable suggests `u64::is_multiple_of`, stabilised in 1.87; this crate
     // builds on 1.78.
@@ -3022,7 +3052,7 @@ fn sample_window(
         md.step(&potential, &mut at, p.time_step);
         let s = md.steps();
         if s > p.equilibration && (s - p.equilibration) % p.stride == 0 {
-            on(s, &h.couplings(&at, &lambdas));
+            on(s, &at);
             taken += 1;
         }
     }
@@ -3113,6 +3143,9 @@ struct Leg {
     restraint: Boresch,
     protocol: Protocol,
     grid: Vec<Lambda>,
+    /// The log a window's progress goes to, `NAME.log` in the results directory: `complex` for
+    /// the leg. **Not in the header**: where a window logs changes no bit of what it records.
+    log: &'static str,
 }
 
 /// The leg from a prepared `start`: the Boresch restraint chosen there by 3c's rule, on the box's
@@ -3132,6 +3165,7 @@ fn leg_from(
         restraint,
         protocol,
         grid,
+        log: "complex",
     }
 }
 
@@ -3166,7 +3200,7 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
     let total = p.steps_per_window();
     log(
         dir,
-        "complex",
+        leg.log,
         &format!(
             "window at candidate {g} λ = {:?} begins: {total} steps",
             grid[g]
@@ -3199,7 +3233,7 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
                 let secs = t.elapsed().as_secs_f64();
                 log(
                     dir,
-                    "complex",
+                    leg.log,
                     &format!(
                         "candidate {g}: {taken} of {} samples, step {s} of {total}, {secs:.0} s, \
                          {:.1} ms per step",
@@ -3217,7 +3251,7 @@ fn window(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
     std::fs::rename(&partial, &path).expect("rename");
     log(
         dir,
-        "complex",
+        leg.log,
         &format!("window at candidate {g} done in {seconds:.0} s"),
     );
     parse(&std::fs::read_to_string(&path).unwrap())
@@ -3428,6 +3462,33 @@ fn a_killed_leg_resumes_to_the_same_bits() {
     }
 }
 
+/// The leg's prepared start, from [`whole_complex`]: [`prepared`] with the coupled box, the
+/// preparation at [`LEG_FLEXIBILITY`], [`PREPARATION_SEED`] and 298.15 K, kept in `prepared.txt` in
+/// `dir` and read back, header checked, when a run has written it. The one place the leg's start
+/// is asked for: the leg, the refined window and the decomposition all call it.
+fn production_start(s: &SolvatedComplex, dir: &std::path::Path) -> Vec<[f64; 3]> {
+    let coupled = s.decoupling();
+    prepared(
+        s,
+        &AtLambda {
+            hamiltonian: &coupled,
+            lambda: Lambda::COUPLED,
+        },
+        &SolvatedComplex::preparation(LEG_FLEXIBILITY),
+        PREPARATION_SEED,
+        KELVIN,
+        dir,
+        "prepared.txt",
+        "complex",
+    )
+}
+
+/// The leg as [`the_complex_leg_measured`] runs it from `start`: [`leg_from`] with [`PROTOCOL`]
+/// and [`grid`]. A window of any leg this returns has the header the leg's own would have.
+fn production_leg(s: &SolvatedComplex, start: Vec<[f64; 3]>) -> Leg {
+    leg_from(s, start, PROTOCOL, grid())
+}
+
 /// **Benzene decoupled from T4 lysozyme L99A in TIP3P, the complex leg, and the binding free
 /// energy it closes with W3's solvent leg.** **Run once**, at `db8a90f`, from 2026-10-07 to
 /// 2026-10-13, exit 0 after 539 298 s on one core, with no window inserted: the complex leg BAR
@@ -3462,21 +3523,7 @@ fn the_complex_leg_measured() {
     );
     let t = std::time::Instant::now();
     let s = whole_complex();
-    let coupled = s.decoupling();
-    let start = prepared(
-        &s,
-        &AtLambda {
-            hamiltonian: &coupled,
-            lambda: Lambda::COUPLED,
-        },
-        &SolvatedComplex::preparation(flexibility),
-        PREPARATION_SEED,
-        KELVIN,
-        &dir,
-        "prepared.txt",
-        "complex",
-    );
-    let leg = leg_from(&s, start, PROTOCOL, grid());
+    let leg = production_leg(&s, production_start(&s, &dir));
     let restraint = leg.restraint;
     let kt = BOLTZMANN.to_si() * KELVIN;
     let release = kcal(restraint.release_free_energy(KELVIN));
@@ -3581,6 +3628,1280 @@ fn the_complex_leg_measured() {
             to_kcal(h2.value),
             SOLVENT_LEG.0,
             records.iter().map(|r| r.seconds).sum::<f64>(),
+            t.elapsed().as_secs_f64()
+        ),
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Where the 3.85 kcal/mol comes from: benzene's interaction with what surrounds it, taken apart
+
+/// What an atom around benzene is, for the decomposition: a protein atom by its UFF type, an atom
+/// of a water, or an ion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    Protein(UffType),
+    Water,
+    Ion,
+}
+
+impl Kind {
+    fn label(self) -> String {
+        match self {
+            Kind::Protein(t) => format!("protein {}", t.label()),
+            Kind::Water => "water".into(),
+            Kind::Ion => "ions".into(),
+        }
+    }
+
+    /// Its class, an index into [`CLASSES`].
+    fn class(self) -> usize {
+        match self {
+            Kind::Protein(_) => 0,
+            Kind::Water => 1,
+            Kind::Ion => 2,
+        }
+    }
+}
+
+/// The classes the electrostatics are split into. **The reciprocal sum is not a sum over pairs**,
+/// so the cross Coulomb energy is split by zeroing every charge outside a class: the cross term is
+/// linear in the rest's charges, its real-space pairs and its background alike, so the classes'
+/// sum to the whole's to rounding.
+const CLASSES: [&str; 3] = ["protein", "water", "ions"];
+
+/// **Benzene in a box, set up to be taken apart**: every atom's kind and its van der Waals `[x, D]`
+/// — **rebuilt here** from the binding's UFF types, TIP3P's oxygen and the chloride, not read from
+/// the force field, so that the identity with the field's own coupling checks the parameters as
+/// well as the sums — and the decoupling the coupling is read from, with one more per class with
+/// every charge outside it zeroed.
+struct Surroundings {
+    cell: PeriodicBox,
+    cutoff: f64,
+    ligand: std::ops::Range<usize>,
+    /// Each atom's kind; `None` for benzene's.
+    kinds: Vec<Option<Kind>>,
+    vdw: Vec<[f64; 2]>,
+    /// Benzene's carbons: its ring.
+    ring: Vec<usize>,
+    /// The protein's heavy atoms.
+    heavy: Vec<bool>,
+    whole: PeriodicDecoupling,
+    /// [`CLASSES`]' decouplings, `None` for a class with no atom.
+    classes: Vec<Option<PeriodicDecoupling>>,
+}
+
+/// Benzene's van der Waals with one kind of atom: the pairs inside the cutoff, the long-range
+/// correction's share, and how many pairs.
+#[derive(Clone, Copy, Debug, Default)]
+struct Share {
+    pairs: f64,
+    tail: f64,
+    count: usize,
+}
+
+/// One frame's van der Waals, kind by kind, with `Σ |term|` and the number of terms for the
+/// rounding bound.
+struct VanDerWaals {
+    by_kind: std::collections::BTreeMap<Kind, Share>,
+    magnitude: f64,
+    terms: usize,
+}
+
+impl VanDerWaals {
+    fn total(&self) -> f64 {
+        self.by_kind.values().map(|s| s.pairs + s.tail).sum()
+    }
+
+    fn class(&self, c: usize) -> f64 {
+        self.by_kind
+            .iter()
+            .filter(|(k, _)| k.class() == c)
+            .map(|(_, s)| s.pairs + s.tail)
+            .sum()
+    }
+}
+
+/// The decomposition held to the field: each sum's discrepancy over its bound, so that a ratio
+/// above 1 is a failure.
+#[derive(Clone, Copy, Debug)]
+struct Identity {
+    /// `Σ` kinds against the couplings' `U(λ_v = 1) − U(λ_v = 0)`, both at `λ_e` = 0.
+    van_der_waals: f64,
+    /// `Σ` classes against the couplings' cross Coulomb energy.
+    coulomb: f64,
+    /// Both against the whole evaluation's `U(coupled) − U(decoupled)`, when asked for.
+    evaluation: Option<f64>,
+}
+
+impl Identity {
+    fn worst(&self) -> f64 {
+        self.van_der_waals
+            .max(self.coulomb)
+            .max(self.evaluation.unwrap_or(0.0))
+    }
+}
+
+impl Surroundings {
+    fn new(
+        whole: PeriodicDecoupling,
+        ligand: std::ops::Range<usize>,
+        kinds: Vec<Option<Kind>>,
+        vdw: Vec<[f64; 2]>,
+        ring: Vec<usize>,
+        heavy: Vec<bool>,
+    ) -> Surroundings {
+        let n = kinds.len();
+        assert_eq!(whole.group().len(), n);
+        assert_eq!(vdw.len(), n);
+        for i in 0..n {
+            assert_eq!(
+                whole.group()[i],
+                kinds[i].is_none(),
+                "atom {i}: benzene or not"
+            );
+            assert_eq!(
+                whole.group()[i],
+                ligand.contains(&i),
+                "atom {i}: the ligand"
+            );
+        }
+        // No pair across is excluded, so every pair inside the cutoff counts.
+        assert!(whole
+            .field()
+            .excluded_pairs()
+            .iter()
+            .all(|&[i, j]| whole.group()[i] == whole.group()[j]));
+        let field = whole.field();
+        let (cell, cutoff) = (field.cell(), field.ewald().parameters().cutoff);
+        let classes = (0..CLASSES.len())
+            .map(|c| {
+                if !kinds.iter().any(|k| k.is_some_and(|k| k.class() == c)) {
+                    return None;
+                }
+                let q: Vec<f64> = (0..n)
+                    .map(|i| match kinds[i] {
+                        Some(k) if k.class() != c => 0.0,
+                        _ => field.charges()[i],
+                    })
+                    .collect();
+                Some(
+                    PeriodicDecoupling::new(&field.clone().with_charges(q), whole.group())
+                        .expect("benzene decouples"),
+                )
+            })
+            .collect();
+        Surroundings {
+            cell,
+            cutoff,
+            ligand,
+            kinds,
+            vdw,
+            ring,
+            heavy,
+            whole,
+            classes,
+        }
+    }
+
+    /// Benzene's `[x, D]` as the field has them.
+    fn uff_benzene(&self) -> Vec<[f64; 2]> {
+        self.vdw[self.ligand.clone()].to_vec()
+    }
+
+    /// The minimum-image separation of atoms `a < b` from wrapped positions `w`, as the field's
+    /// cross terms take it — a comparison per axis, exact — and its square.
+    fn separation(&self, w: &[[f64; 3]], a: usize, b: usize) -> ([f64; 3], f64) {
+        let l = self.cell.lengths();
+        let mut d = sub(w[a], w[b]);
+        for x in 0..3 {
+            if d[x] > 0.5 * l[x] {
+                d[x] -= l[x];
+            } else if d[x] < -0.5 * l[x] {
+                d[x] += l[x];
+            }
+        }
+        (d, dot(d, d))
+    }
+
+    /// Benzene's van der Waals with everything else at `at`, kind by kind, **with benzene's own
+    /// `[x, D]` replaced by `benzene`** and every other atom's as built, combined by UFF's
+    /// geometric rule: every pair inside the cutoff, and each kind's share of the long-range
+    /// correction, `2 (2π/V) [S₆ᵏ S₆ᴮ/(9 r_c⁹) − 2 S₃ᵏ S₃ᴮ/(3 r_c³)]` with `S_m = Σ √D x^m`.
+    fn van_der_waals(&self, at: &[[f64; 3]], benzene: &[[f64; 2]]) -> VanDerWaals {
+        assert_eq!(benzene.len(), self.ligand.len());
+        let param = |k: usize| {
+            if self.ligand.contains(&k) {
+                benzene[k - self.ligand.start]
+            } else {
+                self.vdw[k]
+            }
+        };
+        let w: Vec<[f64; 3]> = at.iter().map(|p| self.cell.wrap(*p)).collect();
+        let rc2 = self.cutoff * self.cutoff;
+        let mut by_kind: std::collections::BTreeMap<Kind, Share> = Default::default();
+        let (mut magnitude, mut terms) = (0.0, 0usize);
+        for g in self.ligand.clone() {
+            for (j, kind) in self.kinds.iter().enumerate() {
+                let Some(kind) = *kind else { continue };
+                let (a, b) = (g.min(j), g.max(j));
+                let (_, r2) = self.separation(&w, a, b);
+                if r2 >= rc2 {
+                    continue;
+                }
+                let (pa, pb) = (param(a), param(b));
+                let pair = Pair {
+                    atoms: [a, b],
+                    distance: (pa[0] * pb[0]).sqrt(),
+                    well: (pa[1] * pb[1]).sqrt(),
+                };
+                let u = pair.energy(r2.sqrt());
+                let share = by_kind.entry(kind).or_default();
+                share.pairs += u;
+                share.count += 1;
+                magnitude += u.abs();
+                terms += 1;
+            }
+        }
+        let sums = |p: [f64; 2]| {
+            let x3 = p[0] * p[0] * p[0];
+            [p[1].sqrt() * x3 * x3, p[1].sqrt() * x3]
+        };
+        let mut group = [0.0; 2];
+        for p in benzene {
+            let s = sums(*p);
+            group[0] += s[0];
+            group[1] += s[1];
+        }
+        let mut rest: std::collections::BTreeMap<Kind, [f64; 2]> = Default::default();
+        for (j, kind) in self.kinds.iter().enumerate() {
+            if let Some(kind) = kind {
+                let s = sums(self.vdw[j]);
+                let e = rest.entry(*kind).or_default();
+                e[0] += s[0];
+                e[1] += s[1];
+            }
+        }
+        let rc3 = self.cutoff * self.cutoff * self.cutoff;
+        let rc9 = rc3 * rc3 * rc3;
+        let volume = self.cell.volume();
+        for (kind, s) in rest {
+            let tail = 2.0 * 2.0 * std::f64::consts::PI / volume
+                * (s[0] * group[0] / (9.0 * rc9) - 2.0 * s[1] * group[1] / (3.0 * rc3));
+            by_kind.entry(kind).or_default().tail = tail;
+            magnitude += tail.abs();
+            terms += 1;
+        }
+        VanDerWaals {
+            by_kind,
+            magnitude,
+            terms,
+        }
+    }
+
+    /// Benzene's cross Coulomb energy with each class at `at`, joules: each class's decoupling's
+    /// own, at full strength.
+    fn coulomb(&self, at: &[[f64; 3]]) -> [f64; 3] {
+        let mut c = [0.0; 3];
+        for (k, d) in self.classes.iter().enumerate() {
+            if let Some(d) = d {
+                c[k] = d.couplings(at, &[Lambda::COUPLED])[0].gradient[1];
+            }
+        }
+        c
+    }
+
+    /// The field's own: benzene's whole van der Waals with the rest, `U(0, 0, 1) − U(0, 0, 0)` of
+    /// the couplings, and the cross Coulomb energy.
+    fn coupling(&self, at: &[[f64; 3]]) -> (f64, f64) {
+        let c = self.whole.couplings(
+            at,
+            &[Lambda::new(0.0, 0.0, 1.0), Lambda::new(0.0, 0.0, 0.0)],
+        );
+        (c[0].energy - c[1].energy, c[0].gradient[1])
+    }
+
+    /// **The parts held to the whole**: the kinds' van der Waals against the couplings' to the
+    /// summation bound `2 (n + 1) ε Σ|term|` — the two sums add the same `n` terms in different
+    /// orders, the long-range correction split by kind among them — and the classes' Coulomb to
+    /// `64 ε` of the whole evaluation's parts (W1's and W3's bound for the cross terms through the
+    /// mesh, measured against the evaluation at the frame given). With `evaluation`, both against
+    /// the whole evaluation's `U(coupled) − U(decoupled)` as well, to `64 ε` of both evaluations'
+    /// parts: another path through the field, the pair search and the mesh's potentials.
+    fn identity(
+        &self,
+        at: &[[f64; 3]],
+        vdw: &VanDerWaals,
+        coulomb: [f64; 3],
+        scale: f64,
+        evaluation: bool,
+    ) -> Identity {
+        let (whole_vdw, whole_coulomb) = self.coupling(at);
+        let vdw_bound = 2.0 * (vdw.terms as f64 + 1.0) * EPS * vdw.magnitude;
+        let parts_coulomb: f64 = coulomb.iter().sum();
+        let c_bound = 64.0 * EPS * scale;
+        let evaluation = evaluation.then(|| {
+            let on = self.whole.energy(at, Lambda::COUPLED);
+            let off = self.whole.energy(at, Lambda::new(0.0, 0.0, 0.0));
+            let bound = 64.0 * EPS * (magnitude(&on) + magnitude(&off)) + vdw_bound;
+            ((on.total - off.total) - (vdw.total() + parts_coulomb)).abs() / bound
+        });
+        Identity {
+            van_der_waals: (vdw.total() - whole_vdw).abs() / vdw_bound,
+            coulomb: (parts_coulomb - whole_coulomb).abs() / c_bound,
+            evaluation,
+        }
+    }
+
+    /// The scale of the Coulomb bound at `at`: the whole evaluation's parts.
+    fn scale(&self, at: &[[f64; 3]]) -> f64 {
+        magnitude(&self.whole.energy(at, Lambda::COUPLED))
+    }
+
+    /// The atoms of each kind within `radius` of a ring carbon, and the protein's heavy atoms
+    /// among them.
+    fn contacts(
+        &self,
+        at: &[[f64; 3]],
+        radius: f64,
+    ) -> (std::collections::BTreeMap<Kind, usize>, usize) {
+        let w: Vec<[f64; 3]> = at.iter().map(|p| self.cell.wrap(*p)).collect();
+        let mut near: std::collections::BTreeMap<Kind, usize> = Default::default();
+        let mut heavy = 0;
+        for (j, kind) in self.kinds.iter().enumerate() {
+            let Some(kind) = *kind else { continue };
+            let close = self.ring.iter().any(|&g| {
+                let (a, b) = (g.min(j), g.max(j));
+                self.separation(&w, a, b).1 < radius * radius
+            });
+            if close {
+                *near.entry(kind).or_default() += 1;
+                heavy += usize::from(self.heavy[j]);
+            }
+        }
+        (near, heavy)
+    }
+}
+
+/// The ligand's carbons in the complex's order.
+fn ring_of(elements: &[Element], ligand: std::ops::Range<usize>) -> Vec<usize> {
+    ligand.filter(|&i| elements[i] == Element::C).collect()
+}
+
+/// A solvated complex set up to be taken apart: the protein by its UFF types, the waters, the
+/// ions.
+// Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
+// builds on 1.78.
+#[allow(clippy::manual_is_multiple_of)]
+fn complex_surroundings(s: &SolvatedComplex) -> Surroundings {
+    let n = s.positions().len();
+    let nc = s.complex_atoms();
+    let first_ion = n - s.ions();
+    let b = s.binding();
+    let ligand = s.ligand();
+    let ion = Ion::chloride();
+    let oxygen = water::oxygen_vdw();
+    assert!(
+        s.field().charges()[first_ion..]
+            .iter()
+            .all(|&q| q == ion.charge),
+        "the ions are chlorides"
+    );
+    let mut kinds = Vec::with_capacity(n);
+    let mut vdw = Vec::with_capacity(n);
+    for i in 0..n {
+        if i < nc {
+            let t = b.types()[i];
+            let p = t.parameters();
+            vdw.push([p.vdw_distance, p.vdw_energy]);
+            kinds.push((!ligand.contains(&i)).then_some(Kind::Protein(t)));
+        } else if i < first_ion {
+            vdw.push(if (i - nc) % 3 == 0 {
+                oxygen
+            } else {
+                [0.0, 0.0]
+            });
+            kinds.push(Some(Kind::Water));
+        } else {
+            vdw.push([ion.vdw_distance, ion.vdw_energy]);
+            kinds.push(Some(Kind::Ion));
+        }
+    }
+    let heavy = (0..n)
+        .map(|i| i < nc && !ligand.contains(&i) && b.elements()[i] != Element::H)
+        .collect();
+    Surroundings::new(
+        s.decoupling(),
+        ligand.clone(),
+        kinds,
+        vdw,
+        ring_of(b.elements(), ligand),
+        heavy,
+    )
+}
+
+/// W3's benzene in its water, set up the same way.
+// Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
+// builds on 1.78.
+#[allow(clippy::manual_is_multiple_of)]
+fn water_surroundings(b: &hydration::Benzene, w: &hydration::Solvated) -> Surroundings {
+    let nb = b.at.len();
+    let n = w.at.len();
+    let oxygen = water::oxygen_vdw();
+    let mut kinds = Vec::with_capacity(n);
+    let mut vdw = Vec::with_capacity(n);
+    for (i, t) in b.types.iter().enumerate() {
+        let p = t.parameters();
+        vdw.push([p.vdw_distance, p.vdw_energy]);
+        kinds.push(None);
+        assert!(i < nb);
+    }
+    for i in nb..n {
+        vdw.push(if (i - nb) % 3 == 0 {
+            oxygen
+        } else {
+            [0.0, 0.0]
+        });
+        kinds.push(Some(Kind::Water));
+    }
+    let elements: Vec<Element> = b.component.atoms().iter().map(|a| a.element).collect();
+    Surroundings::new(
+        w.decoupling(),
+        0..nb,
+        kinds,
+        vdw,
+        ring_of(&elements, 0..nb),
+        vec![false; n],
+    )
+}
+
+/// **GAFF's benzene van der Waals**, `[x, D]` in UFF's form: `x = 2 R*/2`, `D = ε`, for `ca` on
+/// each carbon and `ha` on each hydrogen. Read from `gaff.dat` (GAFF 1.7, Nov 2013) in ambermini
+/// (github.com/choderalab/ambermini, commit `f7c421c46dca9f0e`, `share/amber/dat/leap/parm/gaff.dat`,
+/// SHA-256 `95e3c655…44d8433`), its `MOD4 RE` block: `ca 1.9080 0.0860 OPLS` and
+/// `ha 1.4590 0.0150 Spellmeyer`; and the same in OpenMM's `gaff.xml` (openmmforcefields, commit
+/// `3f73b6ff`, from gaff-1.81.dat): `ca` σ 0.3399669508 nm, ε 0.359824 kJ/mol, and `ha` σ
+/// 0.2599642460 nm, ε 0.06276 kJ/mol, which are the same numbers through `R*/2 = 2^⅙ σ/2` and
+/// 4.184. **Combined here by UFF's geometric rule with everything else, which GAFF is not**: GAFF
+/// combines by Lorentz–Berthelot against GAFF and AMBER atoms, so this is a hybrid, benzene's
+/// size and depth GAFF's and the mixing and the environment UFF's and TIP3P's.
+fn gaff_benzene(elements: &[Element]) -> Vec<[f64; 2]> {
+    elements
+        .iter()
+        .map(|e| match e {
+            Element::C => [2.0 * 1.9080 * ANGSTROM, 0.0860 * KCAL_PER_MOL],
+            Element::H => [2.0 * 1.4590 * ANGSTROM, 0.0150 * KCAL_PER_MOL],
+            other => panic!("benzene has no {other:?}"),
+        })
+        .collect()
+}
+
+/// [`Surroundings`] at `at` held to the field: the kinds' van der Waals to the couplings' and the
+/// classes' Coulomb to the cross Coulomb energy, both to the whole evaluation's `U(coupled) −
+/// U(decoupled)` too, each within its bound ([`Surroundings::identity`]). Every kind carries a share
+/// of the long-range correction and has pairs exactly when its energy from them is not zero; water
+/// has pairs; every class with an atom has a Coulomb energy of its own; and GAFF's benzene
+/// ([`gaff_benzene`]) moves every kind's pair energy. Returns how many protein types have pairs.
+fn surroundings_sum_to_the_coupling(name: &str, sur: &Surroundings, at: &[[f64; 3]]) -> usize {
+    let vdw = sur.van_der_waals(at, &sur.uff_benzene());
+    let coulomb = sur.coulomb(at);
+    let id = sur.identity(at, &vdw, coulomb, sur.scale(at), true);
+    let (whole_vdw, whole_c) = sur.coupling(at);
+    println!(
+        "{name}: van der Waals {:+.4} kcal/mol in {} terms, {:+.2e} of it off the coupling's \
+         ({:.1e} of the bound); Coulomb {:+.4} ({:.1e} of the bound); against the evaluation \
+         {:.1e} of the bound",
+        kcal(whole_vdw),
+        vdw.terms,
+        kcal(vdw.total() - whole_vdw),
+        id.van_der_waals,
+        kcal(whole_c),
+        id.coulomb,
+        id.evaluation.unwrap()
+    );
+    for (k, share) in &vdw.by_kind {
+        println!(
+            "  {:<13} {:+.5} kcal/mol, {} pairs, tail {:+.2e}",
+            k.label(),
+            kcal(share.pairs + share.tail),
+            share.count,
+            kcal(share.tail)
+        );
+        assert!(share.tail != 0.0, "{name}: {k:?}'s tail");
+        assert_eq!(share.count == 0, share.pairs == 0.0, "{name}: {k:?}");
+    }
+    for c in 0..CLASSES.len() {
+        if sur.classes[c].is_some() {
+            println!(
+                "  {:<13} Coulomb {:+.5} kcal/mol",
+                CLASSES[c],
+                kcal(coulomb[c])
+            );
+            assert_ne!(coulomb[c], 0.0, "{name}: {}", CLASSES[c]);
+        }
+    }
+    assert!(
+        vdw.by_kind[&Kind::Water].count > 0,
+        "{name}: water within the cutoff"
+    );
+    assert!(id.worst() <= 1.0, "{name}: {id:?}");
+    let gaff = sur.van_der_waals(at, &gaff_benzene(&ring_and_hydrogens(sur)));
+    for (k, share) in vdw.by_kind.iter().filter(|(_, s)| s.count > 0) {
+        assert_ne!(
+            share.pairs, gaff.by_kind[k].pairs,
+            "{name}: {k:?} under GAFF"
+        );
+    }
+    vdw.by_kind
+        .iter()
+        .filter(|(k, s)| matches!(k, Kind::Protein(_)) && s.count > 0)
+        .count()
+}
+
+/// **Benzene's surroundings sum to its coupling**: on the 3 Å pocket in water as built, by its five
+/// protein types or more, and on W3's small water box, [`surroundings_sum_to_the_coupling`]. The
+/// pocket is neutral and has no ion: [`an_ions_share_of_benzenes_coupling_is_its_own`] is that
+/// branch.
+#[test]
+fn benzenes_surroundings_sum_to_its_coupling() {
+    let s = small3(0x5EC0);
+    let sur = complex_surroundings(&s);
+    assert!(sur.classes[2].is_none(), "the 3 Å pocket is neutral");
+    let types = surroundings_sum_to_the_coupling("3 Å pocket", &sur, s.positions());
+    assert!(types >= 5, "{types} protein types");
+    let b = hydration::Benzene::new(None);
+    let w = hydration::Solvated::new(&b, 3, 0x5EC2, 2.3 * ANGSTROM, 4.6 * ANGSTROM, 1e-5);
+    surroundings_sum_to_the_coupling("W3's small box", &water_surroundings(&b, &w), &w.at);
+}
+
+/// **An ion's share of benzene's coupling is its own**: the 5 Å pocket with its chloride, as built,
+/// [`surroundings_sum_to_the_coupling`], the ion a kind and a class of its own.
+#[test]
+fn an_ions_share_of_benzenes_coupling_is_its_own() {
+    let s = small5(0x5EC1);
+    let sur = complex_surroundings(&s);
+    assert!(sur.classes[2].is_some(), "the 5 Å pocket has its chloride");
+    let types = surroundings_sum_to_the_coupling("5 Å pocket", &sur, s.positions());
+    assert!(types >= 5, "{types} protein types");
+}
+
+/// Benzene's elements as a surroundings' ligand has them: carbons on its ring, hydrogens else.
+fn ring_and_hydrogens(sur: &Surroundings) -> Vec<Element> {
+    sur.ligand
+        .clone()
+        .map(|i| {
+            if sur.ring.contains(&i) {
+                Element::C
+            } else {
+                Element::H
+            }
+        })
+        .collect()
+}
+
+/// The decomposition's frames: W3's and the leg's 2 fs in a 1 ps⁻¹ bath at 298.15 K, 4 ps
+/// discarded and then 320 frames 50 fs apart, 16 ps; seeded apart from every window.
+const FRAMES: Protocol = Protocol {
+    time_step: 2e-15,
+    temperature: KELVIN,
+    friction: 1e12,
+    equilibration: 2_000,
+    stride: 25,
+    samples: 320,
+    seed: 0x4_4DEC,
+};
+
+/// A protein atom is in contact with benzene within this of a ring carbon.
+const CONTACT: f64 = 4.5 * ANGSTROM;
+
+/// One frame, taken apart.
+struct Taken {
+    uff: VanDerWaals,
+    gaff: VanDerWaals,
+    coulomb: [f64; 3],
+    near: std::collections::BTreeMap<Kind, usize>,
+    heavy: usize,
+}
+
+/// `frames` frames of `sur`'s box from `start` through [`sample_frames`] on `h` at `lambda` with
+/// `template`, each taken apart under UFF's benzene and GAFF's, and held to the field's coupling;
+/// every twentieth frame also against the whole evaluation. Returns the frames, the worst
+/// identity, and the milliseconds a step.
+// Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
+// builds on 1.78.
+#[allow(clippy::manual_is_multiple_of)]
+fn take_apart(
+    sur: &Surroundings,
+    h: &PeriodicDecoupling,
+    start: &[[f64; 3]],
+    template: &MolecularDynamics,
+    lambda: Lambda,
+    name: &str,
+) -> (Vec<Taken>, Identity, f64) {
+    let uff = sur.uff_benzene();
+    let gaff = gaff_benzene(&ring_and_hydrogens(sur));
+    let mut taken: Vec<Taken> = Vec::new();
+    let mut worst = Identity {
+        van_der_waals: 0.0,
+        coulomb: 0.0,
+        evaluation: Some(0.0),
+    };
+    let mut scale = sur.scale(start);
+    let t = std::time::Instant::now();
+    let mut last = (0u64, 0.0f64);
+    sample_frames(h, start, template, FRAMES, 0, lambda, |step, at| {
+        let k = taken.len();
+        let full = k % 20 == 0;
+        if full {
+            scale = sur.scale(at);
+        }
+        let v = sur.van_der_waals(at, &uff);
+        let g = sur.van_der_waals(at, &gaff);
+        let c = sur.coulomb(at);
+        let id = sur.identity(at, &v, c, scale, full);
+        worst.van_der_waals = worst.van_der_waals.max(id.van_der_waals);
+        worst.coulomb = worst.coulomb.max(id.coulomb);
+        if let (Some(w), Some(e)) = (&mut worst.evaluation, id.evaluation) {
+            *w = w.max(e);
+        }
+        let (near, heavy) = sur.contacts(at, CONTACT);
+        if (k + 1) % 40 == 0 {
+            let secs = t.elapsed().as_secs_f64();
+            println!(
+                "{name}: frame {} at step {step}, {secs:.0} s, {:.1} ms a step since the last \
+                 report; vdW {:+.3} kcal/mol, {heavy} heavy atoms within 4.5 Å",
+                k + 1,
+                (secs - last.1) * 1e3 / (step - last.0) as f64,
+                kcal(v.total())
+            );
+            last = (step, secs);
+        }
+        taken.push(Taken {
+            uff: v,
+            gaff: g,
+            coulomb: c,
+            near,
+            heavy,
+        });
+    });
+    let per_step = t.elapsed().as_secs_f64() * 1e3 / FRAMES.steps_per_window() as f64;
+    (taken, worst, per_step)
+}
+
+/// `Estimate::of` in kcal/mol from joules.
+fn estimate_kcal(xs: impl Iterator<Item = f64>) -> Estimate {
+    let v: Vec<f64> = xs.map(kcal).collect();
+    Estimate::of(&v)
+}
+
+fn pm(e: &Estimate) -> String {
+    format!("{:+.3} ± {:.3} (τ {:.1})", e.mean, e.error, e.tau)
+}
+
+/// The free energy of turning benzene's van der Waals into GAFF's on `taken`, by Zwanzig's
+/// `ΔG = −kT ln ⟨exp(−βΔU)⟩`, kcal/mol, with what says whether to trust it: the error of the mean
+/// weight carried through the logarithm, the spread of `βΔU`, the second cumulant `⟨ΔU⟩ − β σ²/2`,
+/// the effective sample size `(Σw)²/Σw²` of the weights, and the same on each half.
+struct Zwanzig {
+    mean: Estimate,
+    exp: f64,
+    exp_error: f64,
+    spread: f64,
+    cumulant: f64,
+    ess: f64,
+    halves: [f64; 2],
+}
+
+fn zwanzig(du: &[f64], kt: f64) -> Zwanzig {
+    let exp_of = |x: &[f64]| -> (f64, f64, f64) {
+        let b: Vec<f64> = x.iter().map(|u| u / kt).collect();
+        let m = b.iter().copied().fold(f64::INFINITY, f64::min);
+        let w: Vec<f64> = b.iter().map(|y| (-(y - m)).exp()).collect();
+        let e = Estimate::of(&w);
+        let sum: f64 = w.iter().sum();
+        let ess = sum * sum / w.iter().map(|v| v * v).sum::<f64>();
+        (
+            kcal(kt * (m - e.mean.ln())),
+            kcal(kt * e.error / e.mean),
+            ess,
+        )
+    };
+    let (exp, exp_error, ess) = exp_of(du);
+    let half = du.len() / 2;
+    let mean = estimate_kcal(du.iter().copied());
+    let n = du.len() as f64;
+    let mu = du.iter().sum::<f64>() / n;
+    let var = du.iter().map(|u| (u - mu) * (u - mu)).sum::<f64>() / n;
+    Zwanzig {
+        mean,
+        exp,
+        exp_error,
+        spread: var.sqrt() / kt,
+        cumulant: kcal(mu - var / (2.0 * kt)),
+        ess,
+        halves: [exp_of(&du[..half]).0, exp_of(&du[half..]).0],
+    }
+}
+
+/// **Where the binding's 3.85 kcal/mol comes from** (release, one core; 10 000 steps of the
+/// complex, about seventy minutes at 300 ms a step and three hours at the 1 000 its one run had):
+/// frames of benzene bound and in water, its interaction with what surrounds it taken apart, and
+/// the same frames with GAFF's benzene van der Waals.
+///
+/// - **Frames.** The leg's own: [`production_start`] reads `prepared.txt` back through its header
+///   check (refused if absent: nothing is written to the results directory), and
+///   [`sample_frames`] runs the leg's dynamics and Hamiltonian at window 0's state — coupled, the
+///   restraint off — from it, [`FRAMES`]; then W3's box ([`hydration::w3_solvated`]) melted as W3
+///   melts it ([`hydration::w3_melt`]), through the same [`sample_frames`] and [`FRAMES`].
+/// - **Taken apart** ([`Surroundings`]): benzene's van der Waals with each protein UFF type, the
+///   waters and the ions, its cross Coulomb with each class, and the protein's heavy atoms within
+///   4.5 Å of its ring; means with [`Estimate`]'s autocorrelation-aware errors. Window 0's 2000
+///   samples give the whole van der Waals and Coulomb over 200 ps beside them.
+/// - **GAFF's benzene** ([`gaff_benzene`], a hybrid): `⟨ΔU⟩` bound and in water,
+///   `ΔΔG_bind ≈ ⟨ΔU⟩_complex − ⟨ΔU⟩_water` to first order with `ΔU = U_GAFF − U_UFF`, and
+///   Zwanzig's estimate with its spread and effective sample size.
+/// - **Every frame held to the field**: the parts' sums against the coupling, and every twentieth
+///   against the whole evaluation ([`Surroundings::identity`]), asserted after everything is
+///   printed.
+///
+/// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p where_the_binding_error_comes_from_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "frames of the whole complex and of W3's box, about seventy minutes with --release: run with --release -- --ignored --nocapture"]
+fn where_the_binding_error_comes_from_measured() {
+    let dir = results_dir();
+    for f in ["prepared.txt", "window_00.txt"] {
+        assert!(
+            dir.join(f).exists(),
+            "{} is not there: this measurement reads the leg's results and writes none",
+            dir.join(f).display()
+        );
+    }
+    let t = std::time::Instant::now();
+    let kt = BOLTZMANN.to_si() * KELVIN;
+    let s = whole_complex();
+    let leg = production_leg(&s, production_start(&s, &dir));
+    println!(
+        "the leg's box and start read back in {:.0} s",
+        t.elapsed().as_secs_f64()
+    );
+
+    // Window 0 at the same state: the whole van der Waals (candidate 12, λ = (1, 0, 1), less the
+    // restraint) and the cross Coulomb energy, over its 2000 samples.
+    let g = grid();
+    assert_eq!(g[0], Lambda::new(0.0, 1.0, 1.0));
+    assert_eq!(g[12], Lambda::new(1.0, 0.0, 1.0));
+    let w0 = window(&leg, &dir, 0);
+    let w0_vdw = estimate_kcal(
+        w0.energies
+            .iter()
+            .zip(&w0.gradients)
+            .map(|(e, d)| e[12] - d[0]),
+    );
+    let w0_c = estimate_kcal(w0.gradients.iter().map(|d| d[1]));
+
+    let bound = complex_surroundings(&s);
+    let (complex, complex_id, complex_ms) = take_apart(
+        &bound,
+        &leg.decoupling,
+        &leg.start,
+        &leg.template,
+        g[0],
+        "complex",
+    );
+    if complex_ms > 400.0 {
+        println!("**{complex_ms:.0} ms a step on the complex, above 400: the run was slowed**");
+    }
+
+    let benzene = hydration::Benzene::new(Some(pocket3().ligand_force_field().charges().to_vec()));
+    assert_eq!(
+        &benzene.types[..],
+        &pocket3().types()[pocket3().ligand_range()]
+    );
+    let w3 = hydration::w3_solvated(&benzene);
+    let w3_decoupling = w3.decoupling();
+    let w3_template = w3.dynamics(&benzene);
+    let mut w3_start = w3.at.clone();
+    let tm = std::time::Instant::now();
+    hydration::w3_melt(&w3_decoupling, &w3_template, KELVIN, &mut w3_start);
+    println!(
+        "W3's box, {} waters, melted in {:.0} s",
+        w3.waters,
+        tm.elapsed().as_secs_f64()
+    );
+    let free = water_surroundings(&benzene, &w3);
+    let (water, water_id, water_ms) = take_apart(
+        &free,
+        &w3_decoupling,
+        &w3_start,
+        &w3_template,
+        Lambda::COUPLED,
+        "water",
+    );
+
+    // The tables.
+    println!(
+        "\n{} frames each, {} fs apart after {} ps; {complex_ms:.0} ms a step bound, {water_ms:.1} \
+         in water",
+        FRAMES.samples,
+        FRAMES.stride as f64 * FRAMES.time_step / FS,
+        FRAMES.equilibration as f64 * FRAMES.time_step * 1e12
+    );
+    println!(
+        "\n| benzene's van der Waals with | bound (kcal/mol) | in water | atoms within 4.5 Å |"
+    );
+    println!("| --- | --- | --- | --- |");
+    let kinds: std::collections::BTreeSet<Kind> = complex
+        .iter()
+        .chain(&water)
+        .flat_map(|f| f.uff.by_kind.keys().copied())
+        .collect();
+    let of = |frames: &[Taken], f: &dyn Fn(&VanDerWaals) -> f64| {
+        estimate_kcal(frames.iter().map(|x| f(&x.uff)))
+    };
+    let near_of = |frames: &[Taken], k: Kind| {
+        let v: Vec<f64> = frames
+            .iter()
+            .map(|x| x.near.get(&k).copied().unwrap_or(0) as f64)
+            .collect();
+        Estimate::of(&v)
+    };
+    for &k in &kinds {
+        let share = |v: &VanDerWaals| v.by_kind.get(&k).map_or(0.0, |s| s.pairs + s.tail);
+        let b = of(&complex, &share);
+        let n = near_of(&complex, k);
+        let w = (k == Kind::Water).then(|| of(&water, &share));
+        println!(
+            "| {} | {} | {} | {:.1} ± {:.1} |",
+            k.label(),
+            pm(&b),
+            w.map_or("".into(), |w| pm(&w)),
+            n.mean,
+            n.error
+        );
+    }
+    let total_b = estimate_kcal(complex.iter().map(|x| x.uff.total()));
+    let total_w = estimate_kcal(water.iter().map(|x| x.uff.total()));
+    println!("| **all** | {} | {} | |", pm(&total_b), pm(&total_w));
+    for c in 0..CLASSES.len() {
+        let b = estimate_kcal(complex.iter().map(|x| x.uff.class(c)));
+        println!("| {} (class) | {} | | |", CLASSES[c], pm(&b));
+    }
+    let heavy = Estimate::of(&complex.iter().map(|x| x.heavy as f64).collect::<Vec<_>>());
+    println!(
+        "\nprotein heavy atoms within 4.5 Å of a ring carbon: {:.2} ± {:.2} (τ {:.1}), from {} to {}",
+        heavy.mean,
+        heavy.error,
+        heavy.tau,
+        complex.iter().map(|x| x.heavy).min().unwrap(),
+        complex.iter().map(|x| x.heavy).max().unwrap()
+    );
+    println!(
+        "window 0 over 200 ps: van der Waals {}, Coulomb {}",
+        pm(&w0_vdw),
+        pm(&w0_c)
+    );
+
+    println!("\n| benzene's cross Coulomb with | bound (kcal/mol) | in water |");
+    println!("| --- | --- | --- |");
+    for c in 0..CLASSES.len() {
+        let b = estimate_kcal(complex.iter().map(|x| x.coulomb[c]));
+        let w = (c == 1).then(|| estimate_kcal(water.iter().map(|x| x.coulomb[c])));
+        println!(
+            "| {} | {} | {} |",
+            CLASSES[c],
+            pm(&b),
+            w.map_or("".into(), |w| pm(&w))
+        );
+    }
+    let cb = estimate_kcal(complex.iter().map(|x| x.coulomb.iter().sum()));
+    let cw = estimate_kcal(water.iter().map(|x| x.coulomb.iter().sum()));
+    println!("| **all** | {} | {} |", pm(&cb), pm(&cw));
+
+    // The pairs, UFF's against the hybrid's.
+    println!("\n| benzene atom with | UFF x_ij (Å), D_ij (kcal/mol) | hybrid x_ij, D_ij |");
+    println!("| --- | --- | --- |");
+    let gaff = gaff_benzene(&[Element::C, Element::H]);
+    let uff_c = UffType::CR.parameters();
+    let uff_h = UffType::H.parameters();
+    let mut seen = std::collections::BTreeSet::new();
+    for (j, kind) in bound.kinds.iter().enumerate() {
+        let Some(kind) = *kind else { continue };
+        let p = bound.vdw[j];
+        if p[1] == 0.0 || !seen.insert(kind) {
+            continue;
+        }
+        for (name, u, h) in [
+            ("C", [uff_c.vdw_distance, uff_c.vdw_energy], gaff[0]),
+            ("H", [uff_h.vdw_distance, uff_h.vdw_energy], gaff[1]),
+        ] {
+            println!(
+                "| {name} with {} | {:.4}, {:.4} | {:.4}, {:.4} |",
+                kind.label(),
+                (u[0] * p[0]).sqrt() / ANGSTROM,
+                kcal((u[1] * p[1]).sqrt()),
+                (h[0] * p[0]).sqrt() / ANGSTROM,
+                kcal((h[1] * p[1]).sqrt())
+            );
+        }
+    }
+
+    // GAFF's benzene on the same frames.
+    let du = |frames: &[Taken]| -> Vec<f64> {
+        frames
+            .iter()
+            .map(|x| x.gaff.total() - x.uff.total())
+            .collect()
+    };
+    let (zb, zw) = (zwanzig(&du(&complex), kt), zwanzig(&du(&water), kt));
+    println!("\n| ΔU = U_hybrid − U_UFF | bound | in water |");
+    println!("| --- | --- | --- |");
+    for c in 0..2 {
+        let b = estimate_kcal(complex.iter().map(|x| x.gaff.class(c) - x.uff.class(c)));
+        let w =
+            (c == 1).then(|| estimate_kcal(water.iter().map(|x| x.gaff.class(c) - x.uff.class(c))));
+        println!(
+            "| ⟨ΔU⟩ with {} | {} | {} |",
+            CLASSES[c],
+            pm(&b),
+            w.map_or("".into(), |w| pm(&w))
+        );
+    }
+    for (name, f) in [
+        (
+            "⟨ΔU⟩",
+            &(|z: &Zwanzig| pm(&z.mean)) as &dyn Fn(&Zwanzig) -> String,
+        ),
+        ("σ(βΔU)", &|z: &Zwanzig| format!("{:.3}", z.spread)),
+        ("⟨ΔU⟩ − βσ²/2", &|z: &Zwanzig| {
+            format!("{:+.3}", z.cumulant)
+        }),
+        ("Zwanzig −kT ln⟨e^(−βΔU)⟩", &|z: &Zwanzig| {
+            format!("{:+.3} ± {:.3}", z.exp, z.exp_error)
+        }),
+        ("Zwanzig, halves", &|z: &Zwanzig| {
+            format!("{:+.3}, {:+.3}", z.halves[0], z.halves[1])
+        }),
+        ("effective samples", &|z: &Zwanzig| {
+            format!("{:.1} of {}", z.ess, FRAMES.samples)
+        }),
+    ] {
+        println!("| {name} | {} | {} |", f(&zb), f(&zw));
+    }
+    let first = zb.mean.mean - zw.mean.mean;
+    let first_error = (zb.mean.error * zb.mean.error + zw.mean.error * zw.mean.error).sqrt();
+    let exp = zb.exp - zw.exp;
+    let exp_error = (zb.exp_error * zb.exp_error + zw.exp_error * zw.exp_error).sqrt();
+    println!(
+        "\nΔΔG_bind = ΔG_bind(hybrid) − ΔG_bind(UFF) = ΔG_swap(bound) − ΔG_swap(water): first order \
+         ⟨ΔU⟩_bound − ⟨ΔU⟩_water = {first:+.3} ± {first_error:.3}; second cumulant {:+.3}; \
+         Zwanzig {exp:+.3} ± {exp_error:.3} kcal/mol. The binding is {:.2} too strong against \
+         experiment; a positive ΔΔG is GAFF's benzene binding less.",
+        zb.cumulant - zw.cumulant,
+        -9.04 - -5.19
+    );
+
+    println!(
+        "\nthe identity, worst over the frames (1 is the bound): complex van der Waals {:.3}, \
+         Coulomb {:.3}, against the evaluation {:.3}; water {:.3}, {:.3}, {:.3}. {:.0} s in all",
+        complex_id.van_der_waals,
+        complex_id.coulomb,
+        complex_id.evaluation.unwrap(),
+        water_id.van_der_waals,
+        water_id.coulomb,
+        water_id.evaluation.unwrap(),
+        t.elapsed().as_secs_f64()
+    );
+    assert!(complex_id.worst() <= 1.0, "{complex_id:?}");
+    assert!(water_id.worst() <= 1.0, "{water_id:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The restraint interval refined: a window at λ_r 0.5
+
+/// The candidate the refined window runs at: λ_r 0.5 with everything coupled, `grid()[6]`. **Not
+/// what the insertion would choose first**: `refine_schedule` puts `⌊(0 + 8)/2⌋` = 4, λ_r 0.25,
+/// between 0 and 8, and reaches 6 only in its second round, between 4 and 8. Run here at 6 because
+/// λ_r 0.5 is the window asked for; a window at 6 is the one the second round would run, to the
+/// header and to the bit (`the_refined_window_is_the_one_the_insertion_runs`).
+const REFINED_CANDIDATE: usize = 6;
+
+/// The schedule's windows read back, each refused unless its file is there — none is run — and the
+/// window at [`REFINED_CANDIDATE`] read back or run, through [`window`]: resumable, written as
+/// `window_06.txt`, its header the leg's.
+fn refined_records(
+    leg: &Leg,
+    dir: &std::path::Path,
+    schedule: &[usize],
+) -> (Vec<Recorded>, Recorded) {
+    for &g in schedule {
+        let path = dir.join(format!("window_{g:02}.txt"));
+        assert!(
+            path.exists(),
+            "{} is not there: the refined window reads the leg's windows and runs none of them",
+            path.display()
+        );
+    }
+    let records = schedule.iter().map(|&g| window(leg, dir, g)).collect();
+    (records, window(leg, dir, REFINED_CANDIDATE))
+}
+
+/// The leg's records with the refined window in its place, path order.
+fn with_refined(records: &[Recorded], refined: &Recorded) -> Vec<Recorded> {
+    let mut all = records.to_vec();
+    let at = all
+        .iter()
+        .position(|r| r.grid > refined.grid)
+        .expect("a window after the refined one");
+    assert!(at > 0 && all[at - 1].grid < refined.grid);
+    all.insert(at, refined.clone());
+    all
+}
+
+/// **The refined window's header is window 0's but for its candidate**: on the 3 Å pocket, the
+/// leg's [`header`] at [`REFINED_CANDIDATE`] is its header at 0 with `candidate 0 lambda 0e0 1e0
+/// 1e0` replaced by `candidate 6 lambda 5e-1 1e0 1e0`, and nothing else; and the protocol and the
+/// state count in it are the ones `window_00.txt` of the production run carries, literally, so the
+/// refined window can only be read back beside windows that ran under them.
+#[test]
+fn the_refined_windows_header_is_window_zeros_but_its_candidate() {
+    assert_eq!(grid()[REFINED_CANDIDATE], Lambda::new(0.5, 1.0, 1.0));
+    let s = small3(0x2E5);
+    let leg = production_leg(&s, s.positions().to_vec());
+    let zero = header(&leg, 0);
+    let refined = header(&leg, REFINED_CANDIDATE);
+    assert!(zero.contains(" protocol 2e-15 2.9815e2 1e12 10000 50 2000 281214 atoms "));
+    assert!(zero.contains(" flexibility Mobile states 33 start "));
+    assert_eq!(
+        refined,
+        zero.replacen(
+            "# candidate 0 lambda 0e0 1e0 1e0 ",
+            "# candidate 6 lambda 5e-1 1e0 1e0 ",
+            1
+        )
+    );
+    assert_ne!(refined, zero);
+}
+
+/// **The refined window is the one the insertion runs**, to the header and to the bit: on the 3 Å
+/// pocket with [`a_killed_leg_resumes_to_the_same_bits`]'s short stages and windows, the leg's
+/// [`refine_schedule`] from windows 0 and 8, told every interval overlaps too little, inserts 4,
+/// then 2 and 6, through [`window`] — the call [`the_complex_leg_measured`] makes. In another
+/// directory, windows 0 and 8 and then [`refined_records`] run the window at 6 alone. Its file's
+/// header line is the inserted one's, and every gradient and energy the same bits. And
+/// [`refined_records`] refuses a directory without the schedule's windows rather than run them.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn the_refined_window_is_the_one_the_insertion_runs() {
+    let restraint_grid = || grid()[..9].to_vec();
+    let s = small3(0x2E5);
+    let coupled = s.decoupling();
+    let potential = AtLambda {
+        hamiltonian: &coupled,
+        lambda: Lambda::COUPLED,
+    };
+    let stages = [
+        Stage {
+            flexibility: Flexibility::Frozen,
+            time_step: 0.5e-15,
+            steps: 3,
+            friction: 50e12,
+        },
+        Stage {
+            flexibility: LEG_FLEXIBILITY,
+            time_step: 0.5e-15,
+            steps: 2,
+            friction: 50e12,
+        },
+    ];
+    let protocol = Protocol {
+        time_step: 0.5e-15,
+        temperature: KELVIN,
+        friction: 50e12,
+        equilibration: 2,
+        stride: 2,
+        samples: 3,
+        seed: 0x2E6,
+    };
+    let leg_in = |dir: &std::path::Path| {
+        let start = prepared(
+            &s,
+            &potential,
+            &stages,
+            PREPARATION_SEED,
+            KELVIN,
+            dir,
+            "prepared.txt",
+            "complex",
+        );
+        leg_from(&s, start, protocol, restraint_grid())
+    };
+    let inserted = fresh_dir("inserted");
+    let leg = leg_in(&inserted);
+    let mut schedule = vec![0, 8];
+    let mut records: Vec<Recorded> = schedule
+        .iter()
+        .map(|&g| window(&leg, &inserted, g))
+        .collect();
+    refine_schedule(
+        &mut schedule,
+        &mut records,
+        OVERLAP_THRESHOLD,
+        INSERTION_ROUNDS,
+        |_, _| 0.0,
+        |g| window(&leg, &inserted, g),
+    );
+    assert_eq!(schedule, [0, 2, 4, 6, 8]);
+
+    let alone = fresh_dir("refined");
+    let leg = leg_in(&alone);
+    let why = refusal(|| drop(refined_records(&leg, &alone, &[0, 8])));
+    assert!(why.contains("runs none of them"), "{why}");
+    for g in [0, 8] {
+        window(&leg, &alone, g);
+    }
+    let (read, refined) = refined_records(&leg, &alone, &[0, 8]);
+    assert_eq!(read.len(), 2);
+    let first = |d: &std::path::Path| {
+        std::fs::read_to_string(d.join("window_06.txt"))
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(first(&alone), first(&inserted));
+    assert_eq!(first(&alone), header(&leg, REFINED_CANDIDATE));
+    let other = &records[3];
+    assert_eq!(other.grid, REFINED_CANDIDATE);
+    let bits = |r: &Recorded| -> Vec<u64> {
+        let mut v: Vec<u64> = r.gradients.iter().flatten().map(|x| x.to_bits()).collect();
+        for e in &r.energies {
+            v.extend(e.iter().map(|x| x.to_bits()));
+        }
+        v
+    };
+    assert_eq!(bits(&refined), bits(other));
+    assert_eq!(
+        with_refined(&read, &refined)
+            .iter()
+            .map(|r| r.grid)
+            .collect::<Vec<_>>(),
+        [0, 6, 8]
+    );
+    for d in [inserted, alone] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// **The restraint interval refined: a window at λ_r 0.5** (release, one core, about nine hours,
+/// one window). The leg's box and start as [`the_complex_leg_measured`] has them —
+/// [`whole_complex`], [`production_start`] reading `prepared.txt` back through its header check,
+/// [`production_leg`] — in the same results directory; the fourteen windows of [`SCHEDULE`] read
+/// back through [`window`]'s header check, none run; and the window at [`REFINED_CANDIDATE`] run
+/// through [`window`], written to `window_06.partial` and renamed `window_06.txt` when complete,
+/// so a stopped run resumes, its progress in `refined.log`. Before it runs, its header is checked
+/// against `window_00.txt`'s first line with the candidate and λ replaced. Printed: BAR over
+/// 0 → 0.5 → 1 with each interval's overlap, against the single interval's +2.205; the restraint-on
+/// segment both ways; the complex leg and `ΔG°_bind` recomputed with the refined window.
+/// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p the_restraint_interval_refined -- --ignored --nocapture`.
+#[test]
+#[ignore = "one window of the complex leg at λ_r 0.5, about nine hours with --release: run with --release -- --ignored --nocapture"]
+fn the_restraint_interval_refined() {
+    let dir = results_dir();
+    let lock = Lock::take(&dir, "complex");
+    log(
+        &dir,
+        "refined",
+        &format!(
+            "the refined window begins; its lock is {} — remove it by hand only once no run is \
+             writing here",
+            lock.0.display()
+        ),
+    );
+    assert!(
+        dir.join("prepared.txt").exists(),
+        "no prepared.txt in {}: the refined window starts from the leg's",
+        dir.display()
+    );
+    let t = std::time::Instant::now();
+    let s = whole_complex();
+    let mut leg = production_leg(&s, production_start(&s, &dir));
+    leg.log = "refined";
+    let zero = std::fs::read_to_string(dir.join("window_00.txt")).expect("window_00.txt");
+    let zero = zero.lines().next().unwrap_or("");
+    assert_eq!(
+        header(&leg, REFINED_CANDIDATE),
+        zero.replacen(
+            "# candidate 0 lambda 0e0 1e0 1e0 ",
+            "# candidate 6 lambda 5e-1 1e0 1e0 ",
+            1
+        ),
+        "the refined window's header is window 0's but for its candidate"
+    );
+    let kt = BOLTZMANN.to_si() * KELVIN;
+    let to_kcal = |x: f64| kcal(kt * x);
+    let release = kcal(leg.restraint.release_free_energy(KELVIN));
+    let (records, refined) = refined_records(&leg, &dir, &SCHEDULE);
+    let all = with_refined(&records, &refined);
+    for (name, path) in [
+        ("one interval", vec![records[0].clone(), records[1].clone()]),
+        (
+            "refined",
+            vec![records[0].clone(), refined.clone(), records[1].clone()],
+        ),
+    ] {
+        for k in 0..path.len() - 1 {
+            let bar = interval_bar(&path[k], &path[k + 1], kt);
+            log(
+                &dir,
+                "refined",
+                &format!(
+                    "{name}: λ_r {} → {}: BAR {:+.3} ± {:.3} kcal/mol, overlap {:.3}",
+                    path[k].lambda.restraint,
+                    path[k + 1].lambda.restraint,
+                    to_kcal(bar.delta),
+                    to_kcal(bar.error()),
+                    bar.overlap
+                ),
+            );
+        }
+        let c = chain(&path, kt);
+        let (ti, te) = trapezoid(&path);
+        log(
+            &dir,
+            "refined",
+            &format!(
+                "{name}: the restraint on, BAR {:+.3} ± {:.3}, TI {ti:+.3} ± {te:.3} kcal/mol",
+                to_kcal(c.value),
+                to_kcal(c.error)
+            ),
+        );
+    }
+    for (name, path) in [("one interval", &records), ("refined", &all)] {
+        let total = chain(path, kt);
+        let (bar, bar_error) = (to_kcal(total.value), to_kcal(total.error));
+        let bind = SOLVENT_LEG.0 - bar - release;
+        let error = (SOLVENT_LEG.1 * SOLVENT_LEG.1 + bar_error * bar_error).sqrt();
+        log(
+            &dir,
+            "refined",
+            &format!(
+                "{name}: {} windows, complex leg BAR {bar:+.3} ± {bar_error:.3}; ΔG°_bind = \
+                 {:+.3} − ({bar:+.3}) − ({release:+.3}) = {bind:+.3} ± {error:.3} kcal/mol \
+                 (the single interval's run: +2.205 ± 0.187 for the restraint, −9.043 ± 0.294)",
+                path.len(),
+                SOLVENT_LEG.0
+            ),
+        );
+    }
+    log(
+        &dir,
+        "refined",
+        &format!(
+            "the refined window took {:.0} s, {:.0} s in all",
+            refined.seconds,
             t.elapsed().as_secs_f64()
         ),
     );

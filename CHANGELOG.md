@@ -3474,6 +3474,152 @@ protects nothing.
     orientations, plus the confinement. One window at λ_r 0.5, about 9 h, would test it. The
     resume reads the fourteen back.
 
+- **Where W4's 3.85 kcal/mol comes from, measured once: benzene's van der Waals made GAFF's takes
+  1.71 ± 0.06 of it off, and the same swap makes hydration 2.12 less favourable. The evidence is
+  for a benzene that is too sticky everywhere, not for one too sticky against the protein.**
+  `where_the_binding_error_comes_from_measured` (ignored), at `44b1673` plus this change, release,
+  one core, run once, exit 0 after 8 445 s. It reads `prepared.txt` and `window_00.txt` back
+  through their header checks and writes nothing to the leg's directory. Nothing asserts a value.
+  - **The frames.** The window files hold energies, not frames, so new frames were run through the
+    leg's own dynamics (`sample_frames`, which `sample_window` is now written on): the leg's box,
+    start and Hamiltonian at window 0's state, coupled with the restraint off, 4 ps discarded and
+    then 320 frames 50 fs apart (16 ps). W3's box went through the same function and protocol,
+    built by W3's code (`w3_solvated`, `w3_melt`, moved into `tests/hydration` so that W3's
+    measurement and this one are one box) and melted as W3 melts it.
+  - **Benzene's surroundings, taken apart** (kcal/mol, means with `Estimate`'s errors; these are
+    interaction energies, not free energies):
+
+    | van der Waals with | bound | in water | atoms within 4.5 Å of a ring carbon |
+    | --- | --- | --- | --- |
+    | protein `C_3` | −8.584 ± 0.085 | | 12.8 |
+    | protein `H_` | −6.332 ± 0.079 | | 34.0 |
+    | protein `C_R` | −2.830 ± 0.061 | | 3.0 |
+    | protein `O_2` | −0.871 ± 0.016 | | 1.9 |
+    | protein `N_R` | −0.774 ± 0.013 | | 0.8 |
+    | protein `S_3+2` | −0.437 ± 0.029 | | 0.8 |
+    | protein, five more types | −0.020 | | 0 |
+    | water | −1.616 ± 0.041 | −12.308 ± 0.134 | 5.1 |
+    | ions | −0.001 | | 0 |
+    | **all** | **−21.465 ± 0.121** | **−12.308 ± 0.134** | |
+    | cross Coulomb, all | −1.678 ± 0.072 (protein −1.145, water −0.480, ions −0.053) | −2.702 ± 0.318 | |
+
+    19.34 ± 0.24 protein heavy atoms within 4.5 Å of the ring, 13 to 25. **Window 0's 200 ps at
+    the same state give the whole van der Waals −21.399 ± 0.278**, agreeing with the frames. **Its
+    cross Coulomb is −1.318 ± 0.022, 0.36 from the frames' −1.678 ± 0.072, five of their errors**:
+    16 ps after a 0.7 ps release has not sampled what 200 ps did, and the frames' errors understate
+    the Coulomb's uncertainty. The swap below is van der Waals alone.
+  - **GAFF's benzene, a hybrid.** `ca` R*/2 1.9080 Å, ε 0.0860 kcal/mol and `ha` 1.4590 Å, 0.0150.
+    Read from `gaff.dat` (GAFF 1.7) in ambermini at `f7c421c4`, SHA-256 `95e3c655…44d8433`. The same
+    values appear in OpenMM's `gaff.xml` (openmmforcefields `3f73b6ff`, from gaff-1.81.dat) through
+    `R*/2 = 2^⅙ σ/2` and 4.184. They are put into UFF's form as `x = 2 R*/2` and **combined by UFF's
+    geometric rule with UFF's protein, TIP3P's oxygen and the chloride, which GAFF is not**. Only
+    benzene's pairs with its surroundings change, and its own intramolecular pairs stay UFF's.
+    Against UFF's benzene, a carbon pair is 9.5% shallower and 0.5% shorter, and a hydrogen pair 42%
+    shallower and 0.6% longer, whatever the partner. With `ΔU = U_hybrid − U_UFF`:
+
+    | | bound | in water |
+    | --- | --- | --- |
+    | ⟨ΔU⟩ | +3.953 ± 0.031 (protein +3.677, water +0.276) | +2.222 ± 0.037 |
+    | ⟨ΔU⟩ over ⟨U⟩ | 18.4% | 18.1% |
+    | σ(βΔU) | 0.59 | 0.56 |
+    | ⟨ΔU⟩ − βσ²/2 | +3.849 | +2.130 |
+    | Zwanzig, `−kT ln⟨e^(−βΔU)⟩` | +3.831 ± 0.037 (halves +3.890, +3.778) | +2.120 ± 0.042 (+2.116, +2.124) |
+    | effective samples `(Σw)²/Σw²` | 180.5 of 320 | 217.5 of 320 |
+
+    **The sign convention.** `ΔΔG_bind = ΔG_bind(hybrid) − ΔG_bind(UFF) = ΔG_swap(bound) −
+    ΔG_swap(water)`, which is ≈ ⟨ΔU⟩_bound − ⟨ΔU⟩_water to first order. In the leg's terms, the
+    swap raises each coupled state by its `ΔG_swap`, and so lowers each decoupling leg by it. The
+    form `−(⟨ΔU⟩_bound − ⟨ΔU⟩_water)` is the same with `ΔU` taken the other way, as `U_UFF −
+    U_hybrid`. **First order +1.732 ± 0.048, second cumulant +1.719, Zwanzig +1.711 ± 0.056
+    kcal/mol**. With σ(βΔU) under 0.6 and more than half the frames effective, the three agree and
+    Zwanzig is reliable on these frames.
+  - **What it supports, and what it does not.**
+    - It supports a van der Waals origin for part of the error: the hybrid binding would be −7.33
+      against −5.19, 2.14 too strong where UFF's is 3.85.
+    - **It does not support a protein-specific excess.** The hybrid weakens benzene's dispersion by
+      the same fraction in the pocket and in water, 18.4% and 18.1%. The binding moves only because
+      the pocket holds 1.74 times the interaction water does, −21.5 against −12.3. A benzene equally
+      too sticky everywhere gives this result.
+    - **The same swap breaks hydration.** Inferred, not run: with benzene's own pairs unchanged
+      there is no vacuum term, so the hybrid's `ΔG_hyd` would be −1.57 + 2.12 = +0.55 against
+      experiment's −0.90. W3's UFF benzene is 0.67 too favourable, and the hybrid would be 1.45 too
+      unfavourable. It is not a better model of benzene in water, so its 1.71 is not a correction to
+      apply.
+    - Left untested: the protein's own UFF parameters (the environment stays UFF), the mixing rule
+      (Lorentz–Berthelot was not run), and the rest of the 3.85, which these frames cannot apportion.
+  - **Each frame held to the field.** For each frame the kinds' van der Waals, with each kind's
+    share of the long-range correction, sum to the couplings' `U(λ_v = 1) − U(λ_v = 0)`. The worst
+    over 320 frames is 0.003 of the summation bound `2 (n + 1) ε Σ|term|`. The classes' cross
+    Coulomb energies sum to the whole within 64 ε of the evaluation's parts, at under 10⁻³ of that.
+    On every twentieth frame both are also checked against the whole evaluation's `U(coupled) −
+    U(decoupled)`, at 0.005 of its bound. In water the same three figures are 0.000, 0.000 and
+    0.005.
+  - **It ran slow, and the slowdown was not worked around.** Building the box took 649 s, where
+    phase 2's took 185. The first 6 000 steps ran at 1 000–1 040 ms a step on 90% of a core, the
+    pattern W4's production run put down to EcoQoS. The last 4 000 ran at 312–316 ms, a mean of 710.
+    **And the run was longer than designed**: 320 frames 25 steps apart is 16 ps, not the 8 ps
+    first written, so it was 10 000 steps of the complex. It now says so.
+
+  **Checked** (two default tests):
+  - `benzenes_surroundings_sum_to_its_coupling` (10 s unoptimised): the 3 Å pocket in water as
+    built, five protein types with pairs, and W3's small box. The identity holds both ways. Every
+    kind has a tail share and has pairs exactly when its pair energy is not zero. Every class with an
+    atom has a Coulomb energy of its own. GAFF's benzene moves every kind that has pairs.
+  - `an_ions_share_of_benzenes_coupling_is_its_own` (38 s unoptimised, mostly the 5 Å pocket's
+    QEq, which the file's other tests share): the 5 Å pocket and its chloride, with the ion both a
+    kind and a class. **The van der Waals parameters are rebuilt from the types, TIP3P and the
+    chloride, not read from the field**, so the identity checks them as well as the sums.
+
+  **A window at λ_r 0.5, written and not run.** `the_restraint_interval_refined` (ignored, about
+  nine hours).
+  - **The leg.** It takes the leg's lock and uses the leg's box, start and leg (`production_start`
+    and `production_leg`, which `the_complex_leg_measured` now calls too). It refuses to start
+    unless all fourteen windows are on disk, reads them back through `window`'s header check, and
+    runs `grid()[6]` through `window`, so the run resumes and writes `window_06.txt`. It logs to
+    `refined.log`, because `Leg` now carries its log's name, which is not in the header, so
+    `complex.log` is left alone.
+  - **The header.** Before the window runs, its header is checked against `window_00.txt`'s first
+    line with `candidate 0 lambda 0e0 1e0 1e0` replaced by `candidate 6 lambda 5e-1 1e0 1e0`.
+  - **What it prints.** BAR over 0 → 0.5 → 1 with each interval's overlap, against the single
+    interval. Then the restraint segment, the complex leg and `ΔG°_bind`, with the window and
+    without it.
+  - **Candidate 6, not 4.** λ_r 0.5 is `grid()[6]`. The insertion would put `⌊(0 + 8)/2⌋` = 4 (λ_r
+    0.25) first and reach 6 only in its second round. Read from windows 0 and 8 alone, one-sided
+    estimates toward 4 have 378 and 442 effective samples of 2000, and toward 6 they have 247 and
+    1 263. Recorded, not acted on: the constant is one line.
+
+  **Checked**:
+  - `the_refined_windows_header_is_window_zeros_but_its_candidate`: the header differs from window
+    0's only in the candidate and λ. It carries `window_00.txt`'s protocol and state count
+    literally.
+  - `the_refined_window_is_the_one_the_insertion_runs` (cheap windows on the 3 Å pocket):
+    `refine_schedule` is told that every interval overlaps too little and inserts 4, then 2 and 6.
+    A window at 6 run alone by `refined_records` has the inserted window's header line and the
+    same bits. `refined_records` refuses a directory without the schedule's windows, and the
+    window goes in its place.
+
+  **Sabotage: eleven, every one caught**, each applied by script at an anchor checked to occur
+  once, in binary mode, under an aside copy named for the run, and restored by copy, `touch` and
+  SHA-256:
+  - **Four that reach the identity itself**, each failing it by 10⁷ to 10¹⁰ of its bound:
+    protein `C_3` pairs skipped, every tail halved, the water oxygen's `x` 0.1% long, and the
+    ion's Coulomb halved.
+  - **Three caught first by a side check** (each with a variant among the four above that
+    reaches the identity): `C_3` pairs counted at zero energy, the tail zeroed, and the ion class's Coulomb
+    dropped.
+  - **Four against the refined window**: candidate 4 instead of 6, and the protocol's sample
+    count 2001 (each caught by the header test); the existence check removed, so that
+    `refined_records` runs window 0 rather than refusing; and the refined window inserted one
+    place early (each caught by the insertion test).
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` counts **446 tests, forty-three of
+  them ignored**: 403 run by default (399 and 41 before). The new: four default tests and two
+  ignored in `benzene_bound_in_tip3p.rs`, which now has 24 default tests (23.5 s unoptimised) and
+  six ignored. `benzene_hydrated_in_tip3p.rs` is unchanged at ten and three. Its box and melt
+  moved into `tests/hydration` with only their parameters changed, and the move was not checked
+  by a run of W3's measurement, which has no results on this machine. **Not run**: `the_restraint_interval_refined`, the workspace suite and the
+  gate.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

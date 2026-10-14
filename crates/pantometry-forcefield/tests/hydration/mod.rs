@@ -7,8 +7,8 @@
 use pantometry_forcefield::uff::{self, UffType};
 use pantometry_forcefield::water::{self, Settle, WaterBox};
 use pantometry_forcefield::{
-    qeq, Component, EwaldParameters, ForceField, MolecularDynamics, PeriodicBox,
-    PeriodicDecoupling, PeriodicForceField, Shake,
+    qeq, AtLambda, Bath, Component, EwaldParameters, ForceField, Lambda, MolecularDynamics,
+    PeriodicBox, PeriodicDecoupling, PeriodicForceField, Shake,
 };
 
 pub const ANGSTROM: f64 = 1e-10;
@@ -168,4 +168,75 @@ impl Solvated {
 /// The TIP3P masses, oxygen first: the crate's.
 pub fn water_masses() -> [f64; 3] {
     water::masses()
+}
+
+/// W3's lattice seed: the measurement's box is turned by it.
+pub const W3_SEED: u64 = 0x3_3A7E;
+
+/// The density W3's box is built at: 33.00 waters per nm³, 0.9872 g/cm³, where Yeh and Hummer
+/// (*J. Phys. Chem. B* **108**, 15873 (2004), read in W2) measure TIP3P's pressure under Ewald at
+/// −2.9 ± 2.5 bar. W2's liquid at 0.997 g/cm³ read +139 to +180 bar; a hydration free energy at
+/// that pressure would carry the solute's partial molar volume times it, a few tenths of a kcal/mol,
+/// so the box is at the model's own density at one atmosphere instead of experiment's.
+pub fn w3_density() -> f64 {
+    33.0e27 * water::molecular_mass()
+}
+
+/// W3's box: 512 lattice waters at [`w3_density`] (24.94 Å, the smallest lattice box past `2 r_c`
+/// plus benzene's 5.0 Å span at `r_c` = 9 Å), less every one with an atom within 1.4 Å of a benzene
+/// atom — five, about benzene's volume in waters (liquid benzene's 89 cm³/mol is 4.9 of water's
+/// 18.07) — and Ewald at δ = 10⁻⁵. Shared by W3's measurement and W4's decomposition, so that the
+/// two are the same box.
+pub fn w3_solvated(benzene: &Benzene) -> Solvated {
+    Solvated::at_density(
+        benzene,
+        8,
+        w3_density(),
+        W3_SEED,
+        1.4 * ANGSTROM,
+        9.0 * ANGSTROM,
+        1e-5,
+    )
+}
+
+/// W3's melt of its box, in place, at `temperature`: 0.5 ps at 0.5 fs in a 50 ps⁻¹ bath at each of
+/// `λ_v` = 0.5 with no charges — the soft core finite where a lattice water overlaps benzene —
+/// `λ_v` = 1 with no charges, and fully coupled; then 20 ps at 2 fs in a 5 ps⁻¹ bath, fully
+/// coupled. W2's melt with the soft core in front of it; every constraint of `template` on
+/// throughout.
+pub fn w3_melt(
+    decoupling: &PeriodicDecoupling,
+    template: &MolecularDynamics,
+    temperature: f64,
+    at: &mut [[f64; 3]],
+) {
+    let potential = AtLambda {
+        hamiltonian: decoupling,
+        lambda: Lambda::COUPLED,
+    };
+    let bath = |friction: f64, seed: u64| Bath::Langevin {
+        temperature,
+        friction,
+        seed,
+    };
+    let mut md = template
+        .clone()
+        .with_bath(bath(50e12, 0xE01))
+        .thermalised(at, temperature, 0xE01);
+    for (k, lambda) in [Lambda::new(0.0, 0.0, 0.5), Lambda::new(0.0, 0.0, 1.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let growing = AtLambda {
+            hamiltonian: decoupling,
+            lambda,
+        };
+        md = md.with_bath(bath(50e12, 0xE10 + k as u64));
+        md.forget_forces();
+        md.run(&growing, at, 0.5 * FS, 1000);
+    }
+    md.forget_forces();
+    md.run(&potential, at, 0.5 * FS, 1000);
+    let mut md = md.with_bath(bath(5e12, 0xE02));
+    md.run(&potential, at, 2.0 * FS, 10_000);
 }

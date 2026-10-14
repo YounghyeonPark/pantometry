@@ -1060,30 +1060,11 @@ fn crystal_charges() -> Vec<f64> {
     b.ligand_force_field().charges().to_vec()
 }
 
-/// The density the box is built at: 33.00 waters per nm³, 0.9872 g/cm³, where Yeh and Hummer
-/// (*J. Phys. Chem. B* **108**, 15873 (2004), read in W2) measure TIP3P's pressure under Ewald at
-/// −2.9 ± 2.5 bar. W2's liquid at 0.997 g/cm³ read +139 to +180 bar; a hydration free energy at
-/// that pressure would carry the solute's partial molar volume times it, a few tenths of a kcal/mol,
-/// so the box is at the model's own density at one atmosphere instead of experiment's.
-fn density() -> f64 {
-    33.0e27 * pantometry_forcefield::water::molecular_mass()
-}
-
-/// 512 lattice waters at [`density`] (24.94 Å, the smallest lattice box past `2 r_c` plus
-/// benzene's 5.0 Å span at `r_c` = 9 Å), less every one with an atom within 1.4 Å of a benzene
-/// atom — five, about benzene's volume in waters (liquid benzene's 89 cm³/mol is 4.9 of water's
-/// 18.07) — and Ewald at δ = 10⁻⁵.
+/// The measurement's box, [`w3_solvated`] (shared with W4's decomposition): 512 lattice waters at
+/// [`w3_density`], less the five benzene overlaps, Ewald at δ = 10⁻⁵, with 3c-3's charges.
 fn measurement() -> Measurement {
     let benzene = Benzene::new(Some(crystal_charges()));
-    let solvated = Solvated::at_density(
-        &benzene,
-        8,
-        density(),
-        0x3_3A7E,
-        1.4 * ANGSTROM,
-        9.0 * ANGSTROM,
-        1e-5,
-    );
+    let solvated = w3_solvated(&benzene);
     let decoupling = solvated.decoupling();
     let template = solvated.dynamics(&benzene);
     Measurement {
@@ -1119,7 +1100,7 @@ fn read_positions(path: &std::path::Path) -> Option<Vec<[f64; 3]>> {
 /// 50 ps⁻¹ bath at each of `λ_v` = 0.5 with no charges — the soft core finite where a lattice
 /// water overlaps benzene — `λ_v` = 1 with no charges, and fully coupled; then 20 ps at 2 fs in a
 /// 5 ps⁻¹ bath, fully coupled. W2's melt with the soft core in front of it; every constraint on
-/// throughout. Read from `start.txt` if a run has written it.
+/// throughout ([`w3_melt`]). Read from `start.txt` if a run has written it.
 fn equilibrated(m: &Measurement, dir: &std::path::Path) -> Vec<[f64; 3]> {
     let path = dir.join("start.txt");
     if let Some(at) = read_positions(&path) {
@@ -1131,37 +1112,8 @@ fn equilibrated(m: &Measurement, dir: &std::path::Path) -> Vec<[f64; 3]> {
         return at;
     }
     let t = std::time::Instant::now();
-    let potential = AtLambda {
-        hamiltonian: &m.decoupling,
-        lambda: Lambda::COUPLED,
-    };
     let mut at = m.solvated.at.clone();
-    let bath = |friction: f64, seed: u64| Bath::Langevin {
-        temperature: KELVIN,
-        friction,
-        seed,
-    };
-    let mut md = m
-        .template
-        .clone()
-        .with_bath(bath(50e12, 0xE01))
-        .thermalised(&at, KELVIN, 0xE01);
-    for (k, lambda) in [Lambda::new(0.0, 0.0, 0.5), Lambda::new(0.0, 0.0, 1.0)]
-        .into_iter()
-        .enumerate()
-    {
-        let growing = AtLambda {
-            hamiltonian: &m.decoupling,
-            lambda,
-        };
-        md = md.with_bath(bath(50e12, 0xE10 + k as u64));
-        md.forget_forces();
-        md.run(&growing, &mut at, 0.5 * FS, 1000);
-    }
-    md.forget_forces();
-    md.run(&potential, &mut at, 0.5 * FS, 1000);
-    let mut md = md.with_bath(bath(5e12, 0xE02));
-    md.run(&potential, &mut at, 2.0 * FS, 10_000);
+    w3_melt(&m.decoupling, &m.template, KELVIN, &mut at);
     write_positions(&path, &at);
     log(
         dir,
