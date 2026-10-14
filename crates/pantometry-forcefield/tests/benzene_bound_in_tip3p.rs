@@ -3429,9 +3429,12 @@ fn a_killed_leg_resumes_to_the_same_bits() {
 }
 
 /// **Benzene decoupled from T4 lysozyme L99A in TIP3P, the complex leg, and the binding free
-/// energy it closes with W3's solvent leg.** **Not run yet**: written, its pieces tested, its cost
-/// measured (`the_cost_of_the_mobile_leg_measured`). The whole of 181L as [`whole_complex`]
-/// builds it — the hydrogens relaxed in vacuum first, the neighbour list on — **the protein free**
+/// energy it closes with W3's solvent leg.** **Run once**, at `db8a90f`, from 2026-10-07 to
+/// 2026-10-13, exit 0 after 539 298 s on one core, with no window inserted: the complex leg BAR
+/// +18.362 ± 0.258 kcal/mol, and `ΔG°_bind` = +1.570 − (+18.362) − (−7.749) = **−9.04 ± 0.29**
+/// against experiment's −5.19 ± 0.16 (the CHANGELOG has the intervals). Nothing here asserts it.
+/// Its cost was measured first (`the_cost_of_the_mobile_leg_measured`). The whole of 181L as
+/// [`whole_complex`] builds it — the hydrogens relaxed in vacuum first, the neighbour list on — **the protein free**
 /// ([`LEG_FLEXIBILITY`]), prepared by [`SolvatedComplex::preparation`]: the frozen melt and then
 /// the release, 0.2 ps at 0.5 fs and 0.5 ps at 2 fs, before any window (kept in `prepared.txt`
 /// and read back if there). The Boresch restraint chosen by 3c's rule at that start, [`SCHEDULE`]
@@ -3444,7 +3447,7 @@ fn a_killed_leg_resumes_to_the_same_bits() {
 /// W3's solvent leg. `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
 /// benzene_bound_in_tip3p the_complex_leg_measured -- --ignored --nocapture`.
 #[test]
-#[ignore = "the complex leg: days with --release, and not to be run until production is started"]
+#[ignore = "the complex leg: six days on one core with --release, run once (2026-10-13)"]
 fn the_complex_leg_measured() {
     let flexibility = LEG_FLEXIBILITY;
     let dir = results_dir();

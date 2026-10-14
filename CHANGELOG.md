@@ -3412,6 +3412,68 @@ protects nothing.
   sabotages in all: thirteen before the review, seven after it and six for the resume, every one
   caught where this says. Equal seeds with the stream kept is a probe, and it passes, as it should.
 
+- **Benzene binds T4 lysozyme L99A in TIP3P at −9.04 ± 0.29 kcal/mol, against experiment's
+  −5.19 ± 0.16: the sign GB got wrong is right, and it binds 3.85 kcal/mol too strongly.** Step W4,
+  the production leg, run once: `the_complex_leg_measured` at `db8a90f`, release, one core, from
+  2026-10-07 to 2026-10-13, exit 0 after 539 298 s. Nothing asserts any of it.
+  - **The run.** 30 417 atoms, the protein free, prepared as phase 2 says: the four stages ended at
+    296.3 K. Boresch: receptor atoms 1344, 1343, 1342 and ligand atoms 2604, 2609, 2608; r₀ 6.615 Å,
+    θ_A 85.8° and θ_B 76.7°; the release to 1 M is −7.749 kcal/mol (−7.766 extended). The fourteen
+    windows ran 34 543–51 014 s each. **No window was inserted**: the lowest overlap was 0.113,
+    above the 0.1 threshold.
+  - **Windows ran up to 3.4× slow, without the run being short of CPU.** From about 2026-10-13
+    09:00 local, a step took 1 064–1 076 ms against 313, while the process still received 91% of a
+    core. Windows' power throttling (EcoQoS) had evidently put the hidden process on slow cores.
+    Turning it off for the process, and raising the priority to AboveNormal, brought the step to
+    297–302 ms within minutes. Neither touches a bit. The λ_v 0.2 and 0.1 windows' 51 014 and
+    48 803 s are that, not the physics.
+  - **The intervals** (BAR, kcal/mol; the overlap to the next window):
+
+    | window | λ_r | λ_e | λ_v | → next | overlap |
+    | --- | --- | --- | --- | --- | --- |
+    | 0 | 0 | 1 | 1 | +2.205 ± 0.187 | 0.113 |
+    | 1 | 1 | 1 | 1 | +0.567 ± 0.012 | 0.486 |
+    | 2 | 1 | 0.5 | 1 | +0.466 ± 0.017 | 0.483 |
+    | 3 | 1 | 0 | 1 | +1.488 ± 0.010 | 0.431 |
+    | 4 | 1 | 0 | 0.9 | +1.487 ± 0.010 | 0.425 |
+    | 5 | 1 | 0 | 0.8 | +1.489 ± 0.011 | 0.430 |
+    | 6 | 1 | 0 | 0.7 | +1.536 ± 0.011 | 0.432 |
+    | 7 | 1 | 0 | 0.6 | +1.551 ± 0.011 | 0.431 |
+    | 8 | 1 | 0 | 0.5 | +1.584 ± 0.012 | 0.438 |
+    | 9 | 1 | 0 | 0.4 | +1.608 ± 0.018 | 0.437 |
+    | 10 | 1 | 0 | 0.3 | +1.591 ± 0.022 | 0.426 |
+    | 11 | 1 | 0 | 0.2 | +1.402 ± 0.094 | 0.379 |
+    | 12 | 1 | 0 | 0.1 | +1.388 ± 0.078 | 0.394 |
+
+    | | solvent (W3) | complex | to the binding |
+    | --- | --- | --- | --- |
+    | restraint on | | +2.205 ± 0.187 | −2.21 |
+    | charges off | +1.227 ± 0.038 | +1.033 ± 0.027 | +0.19 |
+    | van der Waals off | +0.343 ± 0.135 | +15.124 ± 0.176 | −14.78 |
+    | release to 1 M | | −7.749 | +7.75 |
+    | **ΔG°_bind = ΔG_solvent − ΔG_complex − ΔG°_release** | +1.570 | +18.362 ± 0.258 | **−9.04 ± 0.29** |
+
+  - **Against the same pocket under GB** (3c-3), +6.08 ± 0.31. The binding's error goes from +11.3
+    kcal/mol, the wrong sign, to −3.85.
+  - **What the error is not.**
+    - **Sampling**: the halves give +18.307 and +18.414 for the complex leg, 0.11 apart.
+    - **The van der Waals and charge schedules**: every one of their intervals overlaps by 0.379 or
+      more, and their TI matches BAR to 0.03 (+15.094 and +1.032).
+    - **The charges**: they contribute +0.19 to the binding. QEq's charges cannot carry 3.85.
+  - **What it most probably is**, measured nowhere yet: **UFF's van der Waals, between benzene and
+    a protein that is UFF too.** W3 found UFF's benzene 0.67 kcal/mol too sticky against water
+    alone. In the pocket benzene touches dozens of heavy atoms rather than a hydration shell, and
+    the van der Waals term is −14.78 of the −9.04. Separating that from the rest is the next
+    measurement, and it needs no new production: benzene's van der Waals against the protein,
+    atom type by atom type, over the windows already written; and the same frames with another
+    force field's benzene.
+  - **The restraint interval is the least certain.** One interval at an overlap of 0.113 carries
+    +2.205 ± 0.187. Its TI, +19.4 ± 4.3 from two end points, is no estimate. With no restraint,
+    benzene turns among the pocket's symmetric orientations, so ⟨U_B⟩ there is tens of kcal/mol.
+    BAR's +2.2 is about what that gives: kT ln 6 to kT ln 12, 1.1–1.5 kcal/mol for the
+    orientations, plus the confinement. One window at λ_r 0.5, about 9 h, would test it. The
+    resume reads the fourteen back.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as
