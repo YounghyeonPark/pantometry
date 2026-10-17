@@ -3570,7 +3570,7 @@ protects nothing.
     kind and a class. **The van der Waals parameters are rebuilt from the types, TIP3P and the
     chloride, not read from the field**, so the identity checks them as well as the sums.
 
-  **A window at λ_r 0.25, written and not run.** `the_restraint_interval_refined` (ignored, about
+  **A window at λ_r 0.25, written here and run since (the next entry).** `the_restraint_interval_refined` (ignored, about
   nine hours).
   - **The leg.** It takes the leg's lock and uses the leg's box, start and leg (`production_start`
     and `production_leg`, which `the_complex_leg_measured` now calls too). It refuses to start
@@ -3619,6 +3619,32 @@ protects nothing.
   moved into `tests/hydration` with only their parameters changed, and the move was not checked
   by a run of W3's measurement, which has no results on this machine. **Not run**: `the_restraint_interval_refined`, the workspace suite and the
   gate.
+
+- **The restraint interval refined: +2.137 ± 0.163 kcal/mol against the single interval's
+  +2.205 ± 0.187, and `ΔG°_bind` −8.975 ± 0.279.** `the_restraint_interval_refined` ran once at
+  `2b80d79`, release, one core, exit 0 on 2026-10-16 after 36 185 s, with throttling off for the
+  process. Nothing asserts any of it.
+  - **The intervals:**
+
+    | | λ_r 0 → 1 | λ_r 0 → 0.25 | λ_r 0.25 → 1 |
+    | --- | --- | --- | --- |
+    | BAR (kcal/mol) | +2.205 ± 0.187 | +1.314 ± 0.162 | +0.823 ± 0.013 |
+    | overlap | 0.113 | 0.198 | 0.412 |
+
+    The two halves sum to +2.137 ± 0.163, 0.07 from the single interval. That is well inside
+    either error, so the 0.113 interval was not hiding a bias. As the one-sided estimates
+    predicted, the unrestrained end is still the harder one: 0.198 against 0.412.
+  - **TI is still no estimate here.** Three points give +5.864 ± 1.076, because ⟨U_B⟩ falls from
+    tens of kcal/mol at λ_r 0 within a quarter of the path.
+  - **The binding.** With fifteen windows the complex leg is +18.294 ± 0.241, and `ΔG°_bind`
+    = +1.570 − (+18.294) − (−7.749) = **−8.975 ± 0.279** against experiment's −5.19 ± 0.16. It
+    is 3.79 too strong. The sampling and the schedule are now both ruled out, which leaves the
+    force field. GAFF's benzene accounts for 1.71 of that, and only as a uniform weakening that
+    also spoils hydration. The rest, about 2.1, is not apportioned.
+  - **The first attempt was lost to a Windows Update restart** at 2026-10-15 01:30, 25 minutes
+    before the window would have finished. The resume did what it was built for: the partial was
+    not read as a window, the fourteen windows were untouched, and the rerun started the window
+    again after the stale lock was removed by hand. It cost about 9 h.
 
 ### Changed
 

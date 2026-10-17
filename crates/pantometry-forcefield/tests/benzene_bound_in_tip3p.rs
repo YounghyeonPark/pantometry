@@ -4796,7 +4796,11 @@ fn the_refined_window_is_the_one_the_insertion_runs() {
 }
 
 /// **The restraint interval refined: a window at λ_r 0.25** (release, one core, about nine hours,
-/// one window). The leg's box and start as [`the_complex_leg_measured`] has them —
+/// one window). **Run once**, at `2b80d79`, exit 0 on 2026-10-16 after 36 185 s (a first attempt
+/// was cut 25 minutes short by a Windows Update restart): 0 → 0.25 +1.314 ± 0.162 at overlap 0.198,
+/// 0.25 → 1 +0.823 ± 0.013 at 0.412, the restraint on +2.137 ± 0.163 against the single interval's
+/// +2.205 ± 0.187, and `ΔG°_bind` −8.975 ± 0.279. Nothing here asserts it. The leg's box and start
+/// as [`the_complex_leg_measured`] has them —
 /// [`whole_complex`], [`production_start`] reading `prepared.txt` back through its header check,
 /// [`production_leg`] — in the same results directory; the fourteen windows of [`SCHEDULE`] read
 /// back through [`window`]'s header check, none run; and the window at [`REFINED_CANDIDATE`] run
@@ -4808,7 +4812,7 @@ fn the_refined_window_is_the_one_the_insertion_runs() {
 /// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
 /// benzene_bound_in_tip3p the_restraint_interval_refined -- --ignored --nocapture`.
 #[test]
-#[ignore = "one window of the complex leg at λ_r 0.25, about nine hours with --release: run with --release -- --ignored --nocapture"]
+#[ignore = "one window of the complex leg at λ_r 0.25, about ten hours with --release, run once (2026-10-16)"]
 fn the_restraint_interval_refined() {
     let dir = results_dir();
     let lock = Lock::take(&dir, "complex");
