@@ -3646,6 +3646,126 @@ protects nothing.
     not read as a window, the fourteen windows were untouched, and the rerun started the window
     again after the stale lock was removed by hand. It cost about 9 h.
 
+- **The rest of W4's 3.79 kcal/mol, apportioned on saved frames: written, not run.**
+  `the_rest_of_the_binding_error_apportioned_measured` (ignored) measures, by Zwanzig's one-step
+  perturbation of benzene's cross van der Waals on frames sampled at UFF's, three variants that
+  5794556 left untested, with that commit's hybrid beside them:
+  - **0**, GAFF's benzene mixed geometrically, 5794556's hybrid. The frames are that measurement's
+    protocol and seed, so this should give its +1.711 again, which checks the frames.
+  - **1**, Lorentz–Berthelot alone: benzene's UFF `[x, D]` mixed with everything by
+    `x_ij = (x_i + x_j)/2` and `D_ij = √(D_i D_j)`. With `x = 2^⅙ σ`, that is σ arithmetic, and
+    AMBER's `R*_ij = R*_i/2 + R*_j/2`.
+  - **2**, GAFF's benzene with Lorentz–Berthelot, against UFF's protein, TIP3P and the chloride.
+  - **3**, an AMBER-like protein: every protein atom's Lennard-Jones is ff14SB's, by its type
+    from its residue's template. Benzene is GAFF's, mixing is Lorentz–Berthelot, and TIP3P's water
+    and Joung and Cheatham's chloride stay as they are.
+
+  For each, bound and in water: ⟨U⟩ under the current model and under the variant, ⟨ΔU⟩, σ(βΔU),
+  the second cumulant, Zwanzig with its error and halves, and the effective samples. Then
+  `ΔΔG_bind = ΔG_swap(bound) − ΔG_swap(water)` three ways, and the binding that implies against
+  −8.975. **A variant whose σ(βΔU) is above 1.5 on either side is flagged**, with what it would
+  take instead: staged perturbation through intermediate parameters, or a run of the variant
+  itself. Variant 3 is then taken apart to first order by ff14SB type and by residue, the largest
+  first, with the long-range corrections as a row of their own.
+  - **The frames are saved.** They go to `frames/` under `PANTOMETRY_W4_DIR`: `complex.frames`,
+    about 230 MB, and `water.frames`, about 12 MB. Each is binary, every bit kept. The first line
+    holds the protocol literally, the state, a digest of the start, and the frame and atom counts.
+    Then come the frames, each its step and its positions, then a trailer with an FNV-1a digest
+    of every frame byte. A later variant needs no new dynamics. **Each phase is resumable on its
+    own.** Its frames are streamed to `.partial`, which is begun afresh, and renamed once whole.
+    They are read back when a run completed them under the same header. A file that is not whole,
+    or was run differently, is refused by name. Lock and log are `frames/variants.lock` and
+    `frames/variants.log`. Nothing is written beside the leg's files, and the measurement refuses
+    to start without `prepared.txt` rather than prepare one there.
+  - **The protocol is 5794556's.** The leg's box, start and Hamiltonian run at window 0's state:
+    4 ps discarded, then 320 frames 50 fs apart, through `sample_frames` with window 0's seed.
+    W3's box is then melted as W3 melts it and run the same way.
+  - **Every frame is held to its bound.** Each variant's ΔU, summed pair by pair, is checked
+    against the difference of two whole sums of its own. Variant 3's classes are checked against
+    its ΔU, and so are its residues plus the corrections. Variant 0's whole sum is checked against
+    5794556's own `Surroundings::van_der_waals`, and on every twentieth frame the current model's
+    against the field's coupling. All of these are asserted after everything is printed.
+  - **The ff14SB parameters, cited as data.** No code was copied. All come from ambermini at
+    `f7c421c46dca9f0e0f87b10a9c87985b446d8ff9`, the commit GAFF's benzene came from, and are
+    transcribed in `tests/amber/mod.rs`.
+    - **Types**: the `str type` column of `amino12.lib` (SHA-256 `dcd92afb…5378df77`),
+      `aminont12.lib` (`e1ab3075…0897c2ee`) and `aminoct12.lib` (`14c9bdf0…d222a500`), the
+      libraries `leaprc.ff14SB` loads. That covers 181L's nineteen amino acids, His31 as `HIP`,
+      and `NMET` and `CLYS` at the termini.
+    - **Lennard-Jones**: `parm10.dat`'s `MOD4 RE` (`1ca292d5…ff1a2ae6`) and `frcmod.ff14SB`'s
+      `NONB` (`dd2bdcf9…c4b63398`), for `2C`, `3C`, `C8` and `CO`, with `parm10.dat`'s two
+      equivalence lines.
+    - **Cross-check**: a script outside the repository read all 356 template atoms and all thirty
+      types back against OpenMM's `amber14/protein.ff14SB.xml` (openmm `3a2326d0`,
+      `d9f9779c…a7e976b8`). None differs.
+    - **Names**: the dictionary's atom names are AMBER's, apart from the N-terminal `H`, `H2`, `H3`,
+      which `NMET` calls `H1`–`H3`. All three are type `H`.
+    - **ff14SB's new carbon types** `CX`, `2C`, `3C` and `C8` all carry `CT`'s Lennard-Jones, and
+      `CO` carries `C`'s.
+  - **A published value for the model it approximates.** Mobley, Graves, Chodera, McReynolds,
+    Shoichet and Dill, *J. Mol. Biol.* **371**, 1118 (2007), was read from the Chodera lab's PDF
+    (SHA-256 `cc67c7e2…75de908b`). It used a GROMACS port of AMBER96 with GAFF benzene. For benzene
+    to L99A it gives −4.56 ± 0.20 kcal/mol with AM1-CM2 charges (Table 1) and −3.95 ± 0.20 with
+    AM1-BCC (Table 3), against −5.19 ± 0.16. So it binds benzene 0.6–1.2 too weakly, where W4 binds
+    it 3.79 too strongly. The paper does not name its water model, and refers to its previous work
+    for it. It is AMBER96, not ff14SB. The text layout misplaces the table rows by one; reading
+    them in their raw order puts −5.19 on benzene's row.
+
+  **Checked** (six default tests, about 25 s unoptimised in all):
+  - `a_variant_at_the_current_parameters_changes_nothing`. On the 3 Å pocket in water and on
+    W3's small box, each variant's recipe is built with its parameters set to the current ones,
+    the protein's ff14SB `[x, D]` replaced by its UFF ones included. Each gives ΔU = 0 to the bit,
+    at every atom and in every class's correction. So does every variant against itself rebuilt.
+  - `lorentz_berthelot_is_its_formula_for_one_pair`. `ca`–`CT` is 3.8160 Å, √(0.0860 × 0.1094);
+    `ha`–`O` is 3.1202 Å, √(0.0150 × 0.2100); and UFF's `C_R`–TIP3P O is `2^⅙ (σ_i + σ_j)/2`. Each
+    holds within 4 ε, in either order, and the geometric rule's distance differs.
+  - `the_ff14sb_types_are_the_templates`. Literal expectations for thirteen residues: Leu84,
+    Phe153, Met102, Ala99, Val111, Gly107's backbone, His31 as `HIP`, Met1 as `NMET`, Lys162 as
+    `CLYS`, Ser117, Trp126, Arg95 and Asp70. Every protein atom of 181L is typed, with its type's
+    first letter its element's, thirty types in all. Eight types' Lennard-Jones lines are checked,
+    the equivalences among them.
+  - `each_variants_change_is_two_whole_sums_apart`. On both boxes:
+    - each variant's ΔU, pair by pair, against two whole sums;
+    - variant 3's parts against its ΔU;
+    - the current model's sum against the field's coupling, and variant 0's against 5794556's
+      sum.
+
+    All are within 7e-4 of their bounds. Every ΔU is nonzero. In water variant 3's ΔU is variant
+    2's to the bit, and on the pocket it is not.
+  - `frames_round_trip_to_the_bit`. Three frames of fourteen atoms, from the forty-two numbers of
+    the positions' round trip, with steps up to `u64::MAX`, come back with every bit. A cut at
+    every byte is refused, and so is one bit flipped in any frame byte. A writer short of its
+    count refuses to finish.
+  - `an_apportioning_resumes_to_the_same_bits`. On those two boxes, at three frames, with a stale
+    `complex.partial` in place, the first run begins the partial afresh. The second run reads both
+    phases back with their files' bytes unchanged, and every number it measures is the first
+    run's to the bit. A phase asked for at another seed is refused by name. The test also prints
+    the measurement's tables, so its report has run before any long run.
+
+  **Seven sabotages, each caught by its test.** Each was applied by a script in binary mode at an
+  anchor that occurs exactly once, and restored by `cp`, `touch` and a matching SHA-256 from a
+  uniquely named copy.
+
+  | sabotage | caught by |
+  | --- | --- |
+  | Leu `CG` typed `CT` | `LEU84:CG` |
+  | arithmetic ε | `ca–CT` |
+  | an LB σ typo, `x_i + x_i` | `ha–O` |
+  | a frame written through `f32` | the bits |
+  | benzene's override shifted by one atom | ΔU at atom 0 |
+  | the delta's long-range correction dropped | 5.5e9 of the bound |
+  | the header compared by length | the other seed read back |
+
+  **Not run**: the measurement. It is `PANTOMETRY_W4_DIR=… cargo test --release -p
+  pantometry-forcefield --test benzene_bound_in_tip3p
+  the_rest_of_the_binding_error_apportioned_measured -- --ignored --nocapture`. Most of a first
+  run is the complex's 10 000 steps: 50 min at 5794556's unthrottled 312 ms a step, 2 h at its
+  throttled mean of 710. Building the box takes 3–11 min, and W3's box and the arithmetic a few
+  minutes more. Once the frames are saved, a run takes the box's build and a few minutes.
+
+  453 tests are listed in the crate, 44 of them ignored, so 409 run by default (446, 43 and 403
+  before). There is no `powi` or `powf` in either file this change touches.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as

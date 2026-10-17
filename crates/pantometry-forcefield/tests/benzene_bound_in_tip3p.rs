@@ -31,14 +31,22 @@
 //!   waters and the ions, and its cross Coulomb by class, summing to the field's own coupling and
 //!   to the whole evaluation's `U(coupled) − U(decoupled)` within their bounds; and **the refined
 //!   window at λ_r 0.25** the one the insertion would run, to its header and its bits.
+//! - **benzene's cross van der Waals reparametrised**: a variant at the current parameters
+//!   changing nothing to the bit, Lorentz–Berthelot its formula for one pair, ff14SB's types
+//!   the templates' for a handful of residues, each variant's `ΔU` two whole sums apart, frames
+//!   round-tripping to the bit through their file, and the apportioning resuming to the same
+//!   bits.
 //!
 //! Ignored, in release: the leg (`the_complex_leg_measured`, run once), its window at λ_r 0.25
-//! (`the_restraint_interval_refined`), and where its 3.85 kcal/mol comes from
-//! (`where_the_binding_error_comes_from_measured`).
+//! (`the_restraint_interval_refined`), where its 3.85 kcal/mol comes from
+//! (`where_the_binding_error_comes_from_measured`), and where the rest of it does, by Lorentz–
+//! Berthelot, GAFF's benzene and ff14SB's protein on saved frames
+//! (`the_rest_of_the_binding_error_apportioned_measured`).
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
 
+mod amber;
 mod hydration;
 mod protein;
 
@@ -4614,6 +4622,1782 @@ fn where_the_binding_error_comes_from_measured() {
     );
     assert!(complex_id.worst() <= 1.0, "{complex_id:?}");
     assert!(water_id.worst() <= 1.0, "{water_id:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The rest of the 3.79 kcal/mol: benzene's cross van der Waals reparametrised, on saved frames
+
+/// How two atoms' `[x, D]` combine into their pair's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mixing {
+    /// UFF's, eqs 21b and 22: `x_ij = √(x_i x_j)` and `D_ij = √(D_i D_j)`. The field's.
+    Geometric,
+    /// Lorentz–Berthelot, AMBER's and GAFF's: `σ_ij = (σ_i + σ_j)/2` and `ε_ij = √(ε_i ε_j)`. With
+    /// `x = 2^⅙ σ`, linear in σ, that is `x_ij = (x_i + x_j)/2` — AMBER's `R*_ij = R*_i/2 + R*_j/2`
+    /// — and `D_ij = √(D_i D_j)`.
+    LorentzBerthelot,
+}
+
+impl Mixing {
+    /// The pair's `[x_ij, D_ij]`.
+    fn pair(self, a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+        match self {
+            Mixing::Geometric => [(a[0] * b[0]).sqrt(), (a[1] * b[1]).sqrt()],
+            Mixing::LorentzBerthelot => [0.5 * (a[0] + b[0]), (a[1] * b[1]).sqrt()],
+        }
+    }
+}
+
+/// **Benzene's cross van der Waals under one model**: every atom's `[x, D]`, benzene's and the
+/// rest's, and the rule that combines a pair. Only the pairs across are in it; benzene's own pairs
+/// stay UFF's in every variant, so they cancel from every `ΔU` and from every `ΔΔG`.
+#[derive(Clone, Debug)]
+struct CrossModel {
+    vdw: Vec<[f64; 2]>,
+    mixing: Mixing,
+}
+
+/// The variants, in the order [`variants`] builds them. **0 is 5794556's hybrid**, measured again
+/// on the saved frames, which are its frames to the bit if nothing it ran on has changed: its
+/// `ΔΔG` was +1.711 ± 0.056.
+const VARIANTS: [&str; 4] = [
+    "0: GAFF benzene, geometric (5794556's hybrid)",
+    "1: UFF benzene, Lorentz–Berthelot",
+    "2: GAFF benzene, Lorentz–Berthelot",
+    "3: GAFF benzene, ff14SB protein, Lorentz–Berthelot",
+];
+
+/// What each atom around benzene is called in the decomposition: its class (a protein atom's
+/// ff14SB type, `water`, `ions`) and its residue (`A:LEU84`, `water`, `ions`), and a protein atom's
+/// ff14SB `[x, D]`. `None` for benzene's atoms.
+#[derive(Clone, Debug)]
+struct Labels {
+    classes: Vec<String>,
+    class: Vec<Option<usize>>,
+    residues: Vec<String>,
+    residue: Vec<Option<usize>>,
+    amber: Vec<Option<[f64; 2]>>,
+}
+
+impl Labels {
+    fn new() -> Labels {
+        Labels {
+            classes: Vec::new(),
+            class: Vec::new(),
+            residues: Vec::new(),
+            residue: Vec::new(),
+            amber: Vec::new(),
+        }
+    }
+
+    /// The next atom: benzene's when `class` is `None`.
+    fn push(&mut self, class: Option<(&str, &str)>, amber: Option<[f64; 2]>) {
+        let index = |names: &mut Vec<String>, name: &str| {
+            names.iter().position(|n| n == name).unwrap_or_else(|| {
+                names.push(name.to_string());
+                names.len() - 1
+            })
+        };
+        match class {
+            None => {
+                self.class.push(None);
+                self.residue.push(None);
+            }
+            Some((c, r)) => {
+                let c = index(&mut self.classes, c);
+                let r = index(&mut self.residues, r);
+                self.class.push(Some(c));
+                self.residue.push(Some(r));
+            }
+        }
+        self.amber.push(amber);
+    }
+
+    /// The same labels with every protein atom's ff14SB `[x, D]` replaced by `vdw`'s: what makes
+    /// variant 3's protein the current one.
+    fn amber_as(&self, vdw: &[[f64; 2]]) -> Labels {
+        let mut l = self.clone();
+        for (i, a) in l.amber.iter_mut().enumerate() {
+            if a.is_some() {
+                *a = Some(vdw[i]);
+            }
+        }
+        l
+    }
+}
+
+/// An ff14SB type's `[x, D]` in UFF's form, as [`gaff_benzene`] writes GAFF's: `x = 2 R*/2`,
+/// `D = ε` ([`amber`]).
+fn amber_vdw(t: &str) -> [f64; 2] {
+    let (r, e) = amber::lennard_jones(t);
+    [2.0 * r * ANGSTROM, e * KCAL_PER_MOL]
+}
+
+/// [`Labels`] for a solvated complex taken apart as [`complex_surroundings`] takes it: each protein
+/// atom by its ff14SB type from `system`'s residue templates ([`amber::atom_type`]), through the
+/// binding's map back to the system.
+fn complex_labels(s: &SolvatedComplex, system: &System, sur: &Surroundings) -> Labels {
+    let map = s.binding().system_atoms();
+    let mut labels = Labels::new();
+    for (i, kind) in sur.kinds.iter().enumerate() {
+        match kind {
+            None => labels.push(None, None),
+            Some(Kind::Protein(_)) => {
+                let t = amber::atom_type(system, map[i]);
+                let residue = system.residue_of(map[i]).label();
+                labels.push(Some((t, &residue)), Some(amber_vdw(t)));
+            }
+            Some(Kind::Water) => labels.push(Some(("water", "water")), None),
+            Some(Kind::Ion) => labels.push(Some(("ions", "ions")), None),
+        }
+    }
+    labels
+}
+
+/// [`Labels`] for W3's benzene in water: every atom around it water's.
+fn water_labels(sur: &Surroundings) -> Labels {
+    let mut labels = Labels::new();
+    for kind in &sur.kinds {
+        match kind {
+            None => labels.push(None, None),
+            Some(Kind::Water) => labels.push(Some(("water", "water")), None),
+            Some(other) => panic!("W3's box has a {other:?}"),
+        }
+    }
+    labels
+}
+
+/// The model the field is: every `[x, D]` as [`Surroundings`] rebuilt them, combined geometrically.
+fn current_model(sur: &Surroundings) -> CrossModel {
+    CrossModel {
+        vdw: sur.vdw.clone(),
+        mixing: Mixing::Geometric,
+    }
+}
+
+/// A variant: [`current_model`] with **benzene's `[x, D]` replaced by `benzene`** when given,
+/// **every protein atom's by its ff14SB `[x, D]`** from `labels` when `amber`, and combined by
+/// `mixing`. Water stays TIP3P's (hydrogens without a term) and the ions Joung and Cheatham's.
+fn cross_model(
+    sur: &Surroundings,
+    labels: &Labels,
+    benzene: Option<&[[f64; 2]]>,
+    amber: bool,
+    mixing: Mixing,
+) -> CrossModel {
+    let mut vdw = sur.vdw.clone();
+    if let Some(b) = benzene {
+        assert_eq!(b.len(), sur.ligand.len());
+        for (k, i) in sur.ligand.clone().enumerate() {
+            vdw[i] = b[k];
+        }
+    }
+    if amber {
+        for (i, kind) in sur.kinds.iter().enumerate() {
+            if let Some(Kind::Protein(_)) = kind {
+                vdw[i] = labels.amber[i].expect("a protein atom has an ff14SB type");
+            }
+        }
+    }
+    CrossModel { vdw, mixing }
+}
+
+/// The four variants of [`VARIANTS`], GAFF's benzene [`gaff_benzene`]'s.
+fn variants(sur: &Surroundings, labels: &Labels) -> Vec<CrossModel> {
+    let gaff = gaff_benzene(&ring_and_hydrogens(sur));
+    vec![
+        cross_model(sur, labels, Some(&gaff), false, Mixing::Geometric),
+        cross_model(sur, labels, None, false, Mixing::LorentzBerthelot),
+        cross_model(sur, labels, Some(&gaff), false, Mixing::LorentzBerthelot),
+        cross_model(sur, labels, Some(&gaff), true, Mixing::LorentzBerthelot),
+    ]
+}
+
+/// A sum of benzene's cross van der Waals: the pairs inside the cutoff, the long-range correction,
+/// and `Σ|term|` and the number of terms for its rounding.
+#[derive(Clone, Copy, Debug, Default)]
+struct CrossSum {
+    pairs: f64,
+    tail: f64,
+    magnitude: f64,
+    terms: usize,
+}
+
+impl CrossSum {
+    fn total(&self) -> f64 {
+        self.pairs + self.tail
+    }
+}
+
+/// **The long-range correction** of benzene's van der Waals with the atoms `select` keeps, under
+/// `m`: `(4π/V) Σ_g Σ_j D_gj [x_gj¹²/(9 r_c⁹) − 2 x_gj⁶/(3 r_c³)]`, the integral of the pair beyond
+/// the cutoff over a uniform rest, with the rest's atoms counted by their `[x, D]` so that a box of
+/// waters is one term per benzene atom. Under the geometric rule it is [`Surroundings::van_der_waals`]'s
+/// `S₆ S₆ᴮ`, `S₃ S₃ᴮ` form, which Lorentz–Berthelot does not factor into. It does not move with the
+/// atoms: computed once per model.
+fn cross_tail(sur: &Surroundings, m: &CrossModel, select: impl Fn(usize) -> bool) -> CrossSum {
+    let mut groups: std::collections::BTreeMap<[u64; 2], f64> = Default::default();
+    for (j, kind) in sur.kinds.iter().enumerate() {
+        if kind.is_some() && select(j) {
+            *groups.entry(m.vdw[j].map(f64::to_bits)).or_default() += 1.0;
+        }
+    }
+    let rc3 = sur.cutoff * sur.cutoff * sur.cutoff;
+    let rc9 = rc3 * rc3 * rc3;
+    let scale = 4.0 * std::f64::consts::PI / sur.cell.volume();
+    let mut s = CrossSum::default();
+    for g in sur.ligand.clone() {
+        for (bits, count) in &groups {
+            let p = m.mixing.pair(m.vdw[g], bits.map(f64::from_bits));
+            let x3 = p[0] * p[0] * p[0];
+            let x6 = x3 * x3;
+            let t = count * scale * p[1] * (x6 * x6 / (9.0 * rc9) - 2.0 * x6 / (3.0 * rc3));
+            s.tail += t;
+            s.magnitude += t.abs();
+            s.terms += 1;
+        }
+    }
+    s
+}
+
+/// **Benzene's whole cross van der Waals under `m` at `at`**: every pair across inside the cutoff,
+/// by its own loop, and `tail`, [`cross_tail`] over every atom.
+fn cross_sum(sur: &Surroundings, at: &[[f64; 3]], m: &CrossModel, tail: CrossSum) -> CrossSum {
+    let w: Vec<[f64; 3]> = at.iter().map(|p| sur.cell.wrap(*p)).collect();
+    let rc2 = sur.cutoff * sur.cutoff;
+    let mut s = tail;
+    for g in sur.ligand.clone() {
+        for (j, kind) in sur.kinds.iter().enumerate() {
+            if kind.is_none() {
+                continue;
+            }
+            let (a, b) = (g.min(j), g.max(j));
+            let (_, r2) = sur.separation(&w, a, b);
+            if r2 >= rc2 {
+                continue;
+            }
+            let p = m.mixing.pair(m.vdw[a], m.vdw[b]);
+            let u = Pair {
+                atoms: [a, b],
+                distance: p[0],
+                well: p[1],
+            }
+            .energy(r2.sqrt());
+            s.pairs += u;
+            s.magnitude += u.abs();
+            s.terms += 1;
+        }
+    }
+    s
+}
+
+/// `ΔU` from one model to another at one frame, **pair by pair**: each pair's `u_to − u_from` added
+/// to the atom of the rest it is with, and each class's long-range correction's difference.
+#[derive(Clone, Debug)]
+struct Delta {
+    per_atom: Vec<f64>,
+    tail: Vec<f64>,
+    magnitude: f64,
+    terms: usize,
+}
+
+impl Delta {
+    fn total(&self) -> f64 {
+        self.per_atom.iter().sum::<f64>() + self.tail.iter().sum::<f64>()
+    }
+
+    /// By class, pairs and long-range correction.
+    fn by_class(&self, labels: &Labels) -> Vec<f64> {
+        let mut c = self.tail.clone();
+        for (j, u) in self.per_atom.iter().enumerate() {
+            if let Some(k) = labels.class[j] {
+                c[k] += u;
+            }
+        }
+        c
+    }
+
+    /// By residue, pairs only: the long-range correction belongs to no residue.
+    fn by_residue(&self, labels: &Labels) -> Vec<f64> {
+        let mut r = vec![0.0; labels.residues.len()];
+        for (j, u) in self.per_atom.iter().enumerate() {
+            if let Some(k) = labels.residue[j] {
+                r[k] += u;
+            }
+        }
+        r
+    }
+}
+
+/// Each class's [`cross_tail`] under `m`.
+fn class_tails(sur: &Surroundings, labels: &Labels, m: &CrossModel) -> Vec<CrossSum> {
+    (0..labels.classes.len())
+        .map(|c| cross_tail(sur, m, |j| labels.class[j] == Some(c)))
+        .collect()
+}
+
+/// **`ΔU` from `base` to each of `to` at `at`, pair by pair** ([`Delta`]): one search for the
+/// pairs inside the cutoff, `base`'s energy once per pair and each model's beside it; the
+/// long-range corrections from each model's [`class_tails`].
+fn cross_deltas(
+    sur: &Surroundings,
+    labels: &Labels,
+    at: &[[f64; 3]],
+    base: (&CrossModel, &[CrossSum]),
+    to: &[(&CrossModel, &[CrossSum])],
+) -> Vec<Delta> {
+    let n = sur.kinds.len();
+    let mut deltas: Vec<Delta> = to
+        .iter()
+        .map(|(_, tails)| {
+            let mut d = Delta {
+                per_atom: vec![0.0; n],
+                tail: vec![0.0; labels.classes.len()],
+                magnitude: 0.0,
+                terms: 0,
+            };
+            for c in 0..labels.classes.len() {
+                d.tail[c] = tails[c].tail - base.1[c].tail;
+                d.magnitude += tails[c].magnitude + base.1[c].magnitude;
+                d.terms += tails[c].terms;
+            }
+            d
+        })
+        .collect();
+    let w: Vec<[f64; 3]> = at.iter().map(|p| sur.cell.wrap(*p)).collect();
+    let rc2 = sur.cutoff * sur.cutoff;
+    let energy = |m: &CrossModel, a: usize, b: usize, r: f64| {
+        let p = m.mixing.pair(m.vdw[a], m.vdw[b]);
+        Pair {
+            atoms: [a, b],
+            distance: p[0],
+            well: p[1],
+        }
+        .energy(r)
+    };
+    for g in sur.ligand.clone() {
+        for (j, kind) in sur.kinds.iter().enumerate() {
+            if kind.is_none() {
+                continue;
+            }
+            let (a, b) = (g.min(j), g.max(j));
+            let (_, r2) = sur.separation(&w, a, b);
+            if r2 >= rc2 {
+                continue;
+            }
+            let r = r2.sqrt();
+            let u0 = energy(base.0, a, b, r);
+            for (d, (m, _)) in deltas.iter_mut().zip(to) {
+                let u = energy(m, a, b, r);
+                d.per_atom[j] += u - u0;
+                d.magnitude += u.abs() + u0.abs();
+                d.terms += 1;
+            }
+        }
+    }
+    deltas
+}
+
+/// The summation bound for comparing two sums of `terms` terms whose magnitudes sum to
+/// `magnitude`: `2 (n + 1) ε Σ|term|`, [`Surroundings::identity`]'s.
+fn summation_bound(terms: usize, magnitude: f64) -> f64 {
+    2.0 * (terms as f64 + 1.0) * EPS * magnitude
+}
+
+/// The variants at one frame: each one's `ΔU` pair by pair, held to the difference of the two
+/// whole sums ([`cross_sum`]), and variant 3's `ΔU` by class and by residue.
+struct FrameDeltas {
+    du: Vec<f64>,
+    u: f64,
+    u_variants: Vec<f64>,
+    classes: Vec<f64>,
+    residues: Vec<f64>,
+    /// `|ΔU − (U_v − U_current)|` over its bound, the worst variant's.
+    against_sums: f64,
+    /// Variant 3's classes' sum, and its residues' and corrections', against its `ΔU`, over the
+    /// bound.
+    parts: f64,
+}
+
+/// Every model's long-range corrections, which do not move with the atoms: the whole one and the
+/// classes', the current model's first.
+struct Tails {
+    whole: Vec<CrossSum>,
+    classes: Vec<Vec<CrossSum>>,
+}
+
+fn tails(sur: &Surroundings, labels: &Labels, models: &[&CrossModel]) -> Tails {
+    Tails {
+        whole: models
+            .iter()
+            .map(|m| cross_tail(sur, m, |_| true))
+            .collect(),
+        classes: models.iter().map(|m| class_tails(sur, labels, m)).collect(),
+    }
+}
+
+/// [`FrameDeltas`] at `at`, `models` the current model and then the variants, `tails` theirs.
+fn frame_deltas(
+    sur: &Surroundings,
+    labels: &Labels,
+    at: &[[f64; 3]],
+    models: &[&CrossModel],
+    tails: &Tails,
+) -> FrameDeltas {
+    let to: Vec<(&CrossModel, &[CrossSum])> = (1..models.len())
+        .map(|k| (models[k], &tails.classes[k][..]))
+        .collect();
+    let deltas = cross_deltas(sur, labels, at, (models[0], &tails.classes[0]), &to);
+    let sums: Vec<CrossSum> = models
+        .iter()
+        .zip(&tails.whole)
+        .map(|(m, t)| cross_sum(sur, at, m, *t))
+        .collect();
+    let mut against_sums: f64 = 0.0;
+    for (k, d) in deltas.iter().enumerate() {
+        let (s, s0) = (&sums[k + 1], &sums[0]);
+        let bound = summation_bound(
+            d.terms.max(s.terms + s0.terms),
+            d.magnitude + s.magnitude + s0.magnitude,
+        );
+        against_sums = against_sums.max((d.total() - (s.total() - s0.total())).abs() / bound);
+    }
+    let last = deltas.last().expect("a variant");
+    let classes = last.by_class(labels);
+    let residues = last.by_residue(labels);
+    let bound = summation_bound(last.terms, last.magnitude);
+    let by_class: f64 = classes.iter().sum();
+    let by_residue: f64 = residues.iter().sum::<f64>() + last.tail.iter().sum::<f64>();
+    let parts = (by_class - last.total())
+        .abs()
+        .max((by_residue - last.total()).abs())
+        / bound;
+    FrameDeltas {
+        du: deltas.iter().map(Delta::total).collect(),
+        u: sums[0].total(),
+        u_variants: sums[1..].iter().map(CrossSum::total).collect(),
+        classes,
+        residues,
+        against_sums,
+        parts,
+    }
+}
+
+/// The frames' file's first line: `header`, then how many frames of how many atoms.
+fn frames_line(header: &str, frames: usize, atoms: usize) -> String {
+    assert!(!header.contains('\n'), "a header is one line");
+    format!("{header} frames {frames} atoms {atoms}")
+}
+
+/// FNV-1a, 64-bit, [`digest`]'s, carried over `bytes` from `h`.
+fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// FNV-1a's offset basis, [`digest`]'s start.
+const FNV_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// **Frames written as they are sampled**, in binary: [`frames_line`] and a newline, then each
+/// frame as its step (`u64`) and every position's three coordinates (`f64` bits), little-endian,
+/// then a trailer `# end N digest` and a newline, the digest FNV-1a over every byte between the
+/// header and the trailer. **Written to the path with the extension `partial`, begun afresh, and
+/// renamed once complete**: a phase killed while sampling leaves no frames file.
+struct FrameWriter {
+    file: std::io::BufWriter<std::fs::File>,
+    partial: std::path::PathBuf,
+    path: std::path::PathBuf,
+    frames: usize,
+    atoms: usize,
+    written: usize,
+    hash: u64,
+}
+
+impl FrameWriter {
+    fn create(path: &std::path::Path, header: &str, frames: usize, atoms: usize) -> FrameWriter {
+        use std::io::Write;
+        let partial = path.with_extension("partial");
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&partial).expect("frames"));
+        writeln!(file, "{}", frames_line(header, frames, atoms)).expect("frames");
+        FrameWriter {
+            file,
+            partial,
+            path: path.to_path_buf(),
+            frames,
+            atoms,
+            written: 0,
+            hash: FNV_BASIS,
+        }
+    }
+
+    fn push(&mut self, step: u64, at: &[[f64; 3]]) {
+        use std::io::Write;
+        assert_eq!(at.len(), self.atoms, "a frame of the atoms the header says");
+        assert!(
+            self.written < self.frames,
+            "more frames than the header says"
+        );
+        let mut bytes = Vec::with_capacity(8 + 24 * at.len());
+        bytes.extend_from_slice(&step.to_le_bytes());
+        for p in at {
+            for x in p {
+                bytes.extend_from_slice(&x.to_bits().to_le_bytes());
+            }
+        }
+        self.hash = fnv(self.hash, &bytes);
+        self.file.write_all(&bytes).expect("frames");
+        self.written += 1;
+    }
+
+    fn finish(self) {
+        use std::io::Write;
+        let FrameWriter {
+            mut file,
+            partial,
+            path,
+            frames,
+            written,
+            hash,
+            ..
+        } = self;
+        assert_eq!(written, frames, "fewer frames than the header says");
+        writeln!(file, "# end {frames} {hash:016x}").expect("frames");
+        file.flush().expect("frames");
+        drop(file);
+        std::fs::rename(&partial, &path).expect("rename");
+    }
+}
+
+/// Frames read back: the first line, and each frame's step and positions.
+struct Frames {
+    line: String,
+    steps: Vec<u64>,
+    at: Vec<Vec<[f64; 3]>>,
+}
+
+/// What [`FrameWriter`] wrote at `path`: `None` when there is no file, the frames when it is whole,
+/// and why not when it is not.
+fn read_frames(path: &std::path::Path) -> Option<Result<Frames, String>> {
+    let file = std::fs::File::open(path).ok()?;
+    Some(parse_frames(&mut std::io::BufReader::new(file)))
+}
+
+/// [`read_frames`]'s reading: refused for a first line that does not end in `frames N atoms M`, a
+/// frame cut short, or anything after the last frame that is not exactly the trailer with the
+/// count and the digest of the bytes read.
+fn parse_frames(r: &mut impl std::io::BufRead) -> Result<Frames, String> {
+    let mut first = Vec::new();
+    r.read_until(b'\n', &mut first).map_err(|e| e.to_string())?;
+    if first.pop() != Some(b'\n') {
+        return Err("no whole first line".into());
+    }
+    let line = String::from_utf8(first).map_err(|_| "a first line that is not text".to_string())?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let k = words.len();
+    if k < 4 || words[k - 4] != "frames" || words[k - 2] != "atoms" {
+        return Err(format!("a first line without its counts: {line:?}"));
+    }
+    let frames: usize = words[k - 3]
+        .parse()
+        .map_err(|_| "a frame count".to_string())?;
+    let atoms: usize = words[k - 1]
+        .parse()
+        .map_err(|_| "an atom count".to_string())?;
+    let mut buf = vec![0u8; 8 + 24 * atoms];
+    let (mut steps, mut at) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+    let mut hash = FNV_BASIS;
+    let word = |b: &[u8]| u64::from_le_bytes(b.try_into().expect("eight bytes"));
+    for f in 0..frames {
+        r.read_exact(&mut buf)
+            .map_err(|_| format!("cut short in frame {f} of {frames}"))?;
+        hash = fnv(hash, &buf);
+        steps.push(word(&buf[..8]));
+        at.push(
+            (0..atoms)
+                .map(|a| [0, 1, 2].map(|x| f64::from_bits(word(&buf[8 + 24 * a + 8 * x..][..8]))))
+                .collect::<Vec<[f64; 3]>>(),
+        );
+    }
+    let mut rest = Vec::new();
+    r.read_to_end(&mut rest).map_err(|e| e.to_string())?;
+    let want = format!("# end {frames} {hash:016x}\n");
+    if rest != want.as_bytes() {
+        return Err(format!(
+            "the trailer is not {want:?}: {:?}",
+            String::from_utf8_lossy(&rest)
+        ));
+    }
+    Ok(Frames { line, steps, at })
+}
+
+/// [`digest`] of a Boresch restraint: its anchors, references and force constants, as [`header`]
+/// digests them.
+fn restraint_digest(r: &Boresch) -> u64 {
+    digest(
+        r.receptor
+            .iter()
+            .chain(&r.ligand)
+            .map(|&i| i as f64)
+            .chain(r.reference)
+            .chain(r.force_constants),
+    )
+}
+
+/// One phase of the apportioning: a box taken apart ([`Surroundings`], [`Labels`]), the dynamics
+/// its frames are sampled with, and what its frames are run from — `start`, called only when the
+/// frames have to be run, and `identity`, which says what `start` is and goes into the header.
+struct Phase<'a> {
+    name: &'static str,
+    sur: &'a Surroundings,
+    labels: &'a Labels,
+    decoupling: &'a PeriodicDecoupling,
+    template: &'a MolecularDynamics,
+    lambda: Lambda,
+    identity: String,
+    start: &'a dyn Fn() -> Vec<[f64; 3]>,
+}
+
+/// A phase's frames' header: its name, the protocol literally, the state, and its identity.
+fn phase_header(phase: &Phase, p: Protocol) -> String {
+    let l = phase.lambda;
+    format!(
+        "# frames {} protocol {} {} {} {} {} {} {:#x} index 0 lambda {} {} {} {}",
+        phase.name,
+        exact(p.time_step),
+        exact(p.temperature),
+        exact(p.friction),
+        p.equilibration,
+        p.stride,
+        p.samples,
+        p.seed,
+        exact(l.restraint),
+        exact(l.electrostatics),
+        exact(l.van_der_waals),
+        phase.identity
+    )
+}
+
+/// **A phase's frames: read back from `NAME.frames` in `dir` when a run completed them under the
+/// same header**, refused by name when that file is not whole or was run differently, or run now
+/// through [`sample_frames`] at `p` — window 0's seed, 5794556's — streamed to `NAME.partial` and
+/// renamed, then read back from the file, so that what is measured is what was saved.
+// Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
+// builds on 1.78.
+#[allow(clippy::manual_is_multiple_of)]
+fn phase_frames(dir: &std::path::Path, phase: &Phase, p: Protocol) -> Frames {
+    let path = dir.join(format!("{}.frames", phase.name));
+    let header = phase_header(phase, p);
+    let atoms = phase.sur.kinds.len();
+    let want = frames_line(&header, p.samples, atoms);
+    if let Some(read) = read_frames(&path) {
+        let f = read.unwrap_or_else(|why| {
+            panic!(
+                "{} is not whole ({why}): remove it to run the phase again",
+                path.display()
+            )
+        });
+        assert_eq!(
+            f.line,
+            want,
+            "{} was run differently: remove it to run the phase again",
+            path.display()
+        );
+        assert!(
+            f.steps.windows(2).all(|s| s[0] < s[1]),
+            "{}: steps that do not rise",
+            path.display()
+        );
+        log(
+            dir,
+            "variants",
+            &format!("{}: {} frames read back", phase.name, f.at.len()),
+        );
+        return f;
+    }
+    let start = (phase.start)();
+    assert_eq!(start.len(), atoms);
+    let t = std::time::Instant::now();
+    log(
+        dir,
+        "variants",
+        &format!(
+            "{}: {} steps begin, {} frames",
+            phase.name,
+            p.steps_per_window(),
+            p.samples
+        ),
+    );
+    let mut writer = FrameWriter::create(&path, &header, p.samples, atoms);
+    let mut last = (0u64, 0.0f64);
+    sample_frames(
+        phase.decoupling,
+        &start,
+        phase.template,
+        p,
+        0,
+        phase.lambda,
+        |step, at| {
+            writer.push(step, at);
+            if writer.written % 40 == 0 {
+                let secs = t.elapsed().as_secs_f64();
+                log(
+                    dir,
+                    "variants",
+                    &format!(
+                        "{}: frame {} at step {step}, {secs:.0} s, {:.1} ms a step since the last \
+                         report",
+                        phase.name,
+                        writer.written,
+                        (secs - last.1) * 1e3 / (step - last.0) as f64
+                    ),
+                );
+                last = (step, secs);
+            }
+        },
+    );
+    writer.finish();
+    log(
+        dir,
+        "variants",
+        &format!(
+            "{}: frames written in {:.0} s",
+            phase.name,
+            t.elapsed().as_secs_f64()
+        ),
+    );
+    read_frames(&path).expect("just written").expect("whole")
+}
+
+/// A phase's frames, reparametrised: per frame, each variant's `ΔU`, the current model's whole
+/// cross van der Waals and each variant's, variant 3's by class and by residue; and the worst of
+/// each identity over the frames, over its bound.
+#[derive(Clone, Debug, PartialEq)]
+struct Reparametrised {
+    du: Vec<Vec<f64>>,
+    u: Vec<f64>,
+    u_variants: Vec<Vec<f64>>,
+    classes: Vec<Vec<f64>>,
+    residues: Vec<Vec<f64>>,
+    /// Each variant's `ΔU` against the difference of the two whole sums.
+    against_sums: f64,
+    /// Variant 3's classes, and its residues and corrections, against its `ΔU`.
+    parts: f64,
+    /// The current model's whole sum against the field's own coupling, every `every`th frame.
+    against_field: f64,
+    /// Variant 0's whole sum against [`Surroundings::van_der_waals`] with GAFF's benzene, 5794556's
+    /// path, every frame.
+    against_hybrid: f64,
+}
+
+/// **Every frame of a phase reparametrised** ([`frame_deltas`]), the current model's whole sum held
+/// to the field's coupling every `every`th frame, and variant 0's to 5794556's own sum on every one.
+fn reparametrise(phase: &Phase, frames: &Frames, every: usize) -> Reparametrised {
+    let (sur, labels) = (phase.sur, phase.labels);
+    let current = current_model(sur);
+    let vs = variants(sur, labels);
+    let mut models = vec![&current];
+    models.extend(vs.iter());
+    let tails = tails(sur, labels, &models);
+    let gaff = gaff_benzene(&ring_and_hydrogens(sur));
+    let mut r = Reparametrised {
+        du: Vec::new(),
+        u: Vec::new(),
+        u_variants: Vec::new(),
+        classes: Vec::new(),
+        residues: Vec::new(),
+        against_sums: 0.0,
+        parts: 0.0,
+        against_field: 0.0,
+        against_hybrid: 0.0,
+    };
+    for (k, at) in frames.at.iter().enumerate() {
+        let f = frame_deltas(sur, labels, at, &models, &tails);
+        let whole = cross_sum(sur, at, &current, tails.whole[0]);
+        if k % every == 0 {
+            let (field, _) = sur.coupling(at);
+            let bound = summation_bound(whole.terms, whole.magnitude);
+            r.against_field = r.against_field.max((whole.total() - field).abs() / bound);
+        }
+        let hybrid = sur.van_der_waals(at, &gaff);
+        let v0 = cross_sum(sur, at, &vs[0], tails.whole[1]);
+        let bound = summation_bound(hybrid.terms.max(v0.terms), hybrid.magnitude + v0.magnitude);
+        r.against_hybrid = r
+            .against_hybrid
+            .max((hybrid.total() - v0.total()).abs() / bound);
+        r.against_sums = r.against_sums.max(f.against_sums);
+        r.parts = r.parts.max(f.parts);
+        r.du.push(f.du);
+        r.u.push(f.u);
+        r.u_variants.push(f.u_variants);
+        r.classes.push(f.classes);
+        r.residues.push(f.residues);
+    }
+    r
+}
+
+/// **The apportioning**: each phase's frames ([`phase_frames`], read back or run and saved), then
+/// every frame reparametrised ([`reparametrise`]). The frames are the expensive part and each
+/// phase's are saved whole once run, so a run killed in the water phase reruns only that.
+fn apportion(
+    dir: &std::path::Path,
+    p: Protocol,
+    phases: [&Phase; 2],
+    every: usize,
+) -> [Reparametrised; 2] {
+    phases.map(|phase| {
+        let frames = phase_frames(dir, phase, p);
+        let t = std::time::Instant::now();
+        let r = reparametrise(phase, &frames, every);
+        log(
+            dir,
+            "variants",
+            &format!(
+                "{}: {} frames reparametrised in {:.0} s",
+                phase.name,
+                frames.at.len(),
+                t.elapsed().as_secs_f64()
+            ),
+        );
+        r
+    })
+}
+
+/// `ΔG°_bind` with W4's fifteen windows (fd2881e), kcal/mol, and experiment's.
+const W4_BINDING: (f64, f64) = (-8.975, 0.279);
+const EXPERIMENT: (f64, f64) = (-5.19, 0.16);
+
+/// σ(βΔU) above which one step of perturbation is not trusted here.
+const ONE_STEP_SPREAD: f64 = 1.5;
+
+/// The tables: each variant's `ΔU` bound and in water, Zwanzig's estimate, the second cumulant
+/// and the spread, the effective samples and the halves, and `ΔΔG_bind`; then variant 3's by class
+/// and by residue; and the pairs.
+fn report_apportioned(kt: f64, bound: &Reparametrised, water: &Reparametrised, labels: &Labels) {
+    let n = bound.du.len();
+    let mut summary = Vec::new();
+    for (v, name) in VARIANTS.iter().enumerate() {
+        let du_b: Vec<f64> = bound.du.iter().map(|d| d[v]).collect();
+        let du_w: Vec<f64> = water.du.iter().map(|d| d[v]).collect();
+        let (zb, zw) = (zwanzig(&du_b, kt), zwanzig(&du_w, kt));
+        let ub = estimate_kcal(bound.u.iter().copied());
+        let uw = estimate_kcal(water.u.iter().copied());
+        let vb = estimate_kcal(bound.u_variants.iter().map(|u| u[v]));
+        let vw = estimate_kcal(water.u_variants.iter().map(|u| u[v]));
+        println!("\n**Variant {name}**\n\n| | bound | in water |\n| --- | --- | --- |");
+        println!("| ⟨U⟩, current | {} | {} |", pm(&ub), pm(&uw));
+        println!("| ⟨U⟩, the variant's | {} | {} |", pm(&vb), pm(&vw));
+        for (row, f) in [
+            (
+                "⟨ΔU⟩",
+                &(|z: &Zwanzig, _: f64| pm(&z.mean)) as &dyn Fn(&Zwanzig, f64) -> String,
+            ),
+            ("⟨ΔU⟩ over ⟨U⟩", &|z: &Zwanzig, u: f64| {
+                format!("{:.1}%", 100.0 * z.mean.mean / u.abs())
+            }),
+            ("σ(βΔU)", &|z: &Zwanzig, _: f64| {
+                format!("{:.3}", z.spread)
+            }),
+            ("⟨ΔU⟩ − βσ²/2", &|z: &Zwanzig, _: f64| {
+                format!("{:+.3}", z.cumulant)
+            }),
+            (
+                "Zwanzig −kT ln⟨e^(−βΔU)⟩",
+                &|z: &Zwanzig, _: f64| format!("{:+.3} ± {:.3}", z.exp, z.exp_error),
+            ),
+            ("Zwanzig, halves", &|z: &Zwanzig, _: f64| {
+                format!("{:+.3}, {:+.3}", z.halves[0], z.halves[1])
+            }),
+            ("effective samples", &|z: &Zwanzig, _: f64| {
+                format!("{:.1} of {n}", z.ess)
+            }),
+        ] {
+            println!("| {row} | {} | {} |", f(&zb, ub.mean), f(&zw, uw.mean));
+        }
+        let first = zb.mean.mean - zw.mean.mean;
+        let first_error = (zb.mean.error * zb.mean.error + zw.mean.error * zw.mean.error).sqrt();
+        let exp = zb.exp - zw.exp;
+        let exp_error = (zb.exp_error * zb.exp_error + zw.exp_error * zw.exp_error).sqrt();
+        let halves = [zb.halves[0] - zw.halves[0], zb.halves[1] - zw.halves[1]];
+        let reliable = zb.spread <= ONE_STEP_SPREAD && zw.spread <= ONE_STEP_SPREAD;
+        println!(
+            "\nΔΔG_bind = ΔG_swap(bound) − ΔG_swap(water): first order {first:+.3} ± {first_error:.3}; \
+             second cumulant {:+.3}; Zwanzig {exp:+.3} ± {exp_error:.3} (halves {:+.3}, {:+.3}) \
+             kcal/mol; ΔG°_bind {:+.3} + ({exp:+.3}) = {:+.3} against experiment's {:+.2}.{}",
+            zb.cumulant - zw.cumulant,
+            halves[0],
+            halves[1],
+            W4_BINDING.0,
+            W4_BINDING.0 + exp,
+            EXPERIMENT.0,
+            if reliable {
+                String::new()
+            } else {
+                format!(
+                    " **σ(βΔU) above {ONE_STEP_SPREAD}: one step of perturbation is not to be \
+                     trusted here; it wants staged perturbation through intermediate parameters, \
+                     or a run of the variant itself.**"
+                )
+            }
+        );
+        summary.push((
+            name,
+            first,
+            zb.cumulant - zw.cumulant,
+            exp,
+            exp_error,
+            reliable,
+        ));
+    }
+
+    println!(
+        "\n| variant | ΔΔG_bind, first order | second cumulant | Zwanzig | ΔG°_bind | σ(βΔU) ≤ \
+         {ONE_STEP_SPREAD} |\n| --- | --- | --- | --- | --- | --- |"
+    );
+    for (name, first, cumulant, exp, error, reliable) in &summary {
+        println!(
+            "| {name} | {first:+.3} | {cumulant:+.3} | {exp:+.3} ± {error:.3} | {:+.3} | {} |",
+            W4_BINDING.0 + exp,
+            if *reliable { "yes" } else { "**no**" }
+        );
+    }
+    println!(
+        "\nsteps, as differences of the Zwanzig estimates: Lorentz–Berthelot alone {:+.3}; then \
+         GAFF's benzene {:+.3}; then ff14SB's protein {:+.3}. GAFF's benzene under the geometric \
+         rule, 5794556's +1.711, is {:+.3} on these frames. The binding is {:+.2} too strong.",
+        summary[1].3,
+        summary[2].3 - summary[1].3,
+        summary[3].3 - summary[2].3,
+        summary[0].3,
+        W4_BINDING.0 - EXPERIMENT.0
+    );
+
+    // Variant 3 by class and by residue, to first order.
+    let du_w3 = estimate_kcal(water.du.iter().map(|d| d[3]));
+    let mut rows: Vec<(String, Estimate)> = labels
+        .classes
+        .iter()
+        .enumerate()
+        .map(|(c, name)| {
+            (
+                name.clone(),
+                estimate_kcal(bound.classes.iter().map(|x| x[c])),
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| b.1.mean.abs().total_cmp(&a.1.mean.abs()));
+    println!(
+        "\n**Variant 3 by class**, first order: ΔΔG_bind ≈ Σ_c ⟨ΔU_c⟩_bound − ⟨ΔU⟩_water, the water \
+         class's in-water ⟨ΔU⟩ {} beside it.\n\n| class | ⟨ΔU_c⟩ bound (kcal/mol) |\n| --- | --- |",
+        pm(&du_w3)
+    );
+    let mut sum = 0.0;
+    for (name, e) in &rows {
+        sum += e.mean;
+        println!("| {name} | {} |", pm(e));
+    }
+    println!(
+        "| **all** | {sum:+.3} |\n\nfirst order {sum:+.3} − ({:+.3}) = {:+.3}",
+        du_w3.mean,
+        sum - du_w3.mean
+    );
+    let mut res: Vec<(String, Estimate)> = labels
+        .residues
+        .iter()
+        .enumerate()
+        .map(|(r, name)| {
+            (
+                name.clone(),
+                estimate_kcal(bound.residues.iter().map(|x| x[r])),
+            )
+        })
+        .collect();
+    res.sort_by(|a, b| b.1.mean.abs().total_cmp(&a.1.mean.abs()));
+    println!(
+        "\n**Variant 3 by residue**, pairs only:\n\n| residue | ⟨ΔU_r⟩ bound |\n| --- | --- |"
+    );
+    for (name, e) in res.iter().take(15) {
+        println!("| {name} | {} |", pm(e));
+    }
+    let rest: f64 = res.iter().skip(15).map(|(_, e)| e.mean).sum();
+    let corrections = sum - res.iter().map(|(_, e)| e.mean).sum::<f64>();
+    println!(
+        "| {} more | {rest:+.3} |\n| long-range corrections | {corrections:+.3} |",
+        res.len().saturating_sub(15)
+    );
+}
+
+/// **The rest of W4's 3.79 kcal/mol, apportioned** (release, one core; the frames are the cost:
+/// 10 000 steps of the complex, about fifty minutes at 300 ms a step and two and a half hours at
+/// 5794556's throttled 710, and a few minutes of W3's box): benzene's cross van der Waals
+/// reparametrised by Zwanzig's one-step perturbation on frames sampled at UFF's, bound and in
+/// water, for each of [`VARIANTS`]:
+///
+/// 1. **Lorentz–Berthelot alone**: benzene's UFF `[x, D]` mixed with everything by
+///    `x_ij = (x_i + x_j)/2`, `D_ij = √(D_i D_j)` ([`Mixing`]);
+/// 2. **GAFF's benzene with Lorentz–Berthelot**, the environment UFF's and TIP3P's;
+/// 3. **an AMBER-like protein**: every protein atom's Lennard-Jones ff14SB's by its type from its
+///    residue's template ([`amber`]), GAFF's benzene, Lorentz–Berthelot, TIP3P's water and Joung and
+///    Cheatham's chloride as they are;
+///
+/// and 0, 5794556's hybrid again, whose +1.711 these frames should give. Each with `⟨ΔU⟩`,
+/// Zwanzig's estimate, the second cumulant, σ(βΔU), the effective samples and the halves, and
+/// `ΔΔG_bind = ΔG_swap(bound) − ΔG_swap(water)`; a variant whose σ(βΔU) is above
+/// [`ONE_STEP_SPREAD`] on either side is flagged. Variant 3 is then taken apart by ff14SB type and
+/// by residue, to first order.
+///
+/// - **The frames are saved** in `frames/` under `PANTOMETRY_W4_DIR` — `complex.frames` and
+///   `water.frames`, binary, every bit ([`FrameWriter`]), about 230 MB and 13 MB — so that a later
+///   variant needs no new dynamics. Each phase's is read back when a run completed it under the
+///   same header and refused by name when it is not whole or was run differently; a phase killed
+///   while sampling is begun afresh. The lock is `frames/variants.lock`, the log
+///   `frames/variants.log`. **Nothing is written beside the leg's files**: `prepared.txt` is read
+///   back through its header check and refused if it is not there.
+/// - **The protocol is 5794556's**: the leg's box, start and Hamiltonian at window 0's state,
+///   [`FRAMES`] — 4 ps discarded, 320 frames 50 fs apart — through [`sample_frames`] with window 0's
+///   seed; then W3's box melted as W3 melts it, the same way.
+/// - **Every frame held**: each variant's `ΔU` pair by pair against the difference of its two
+///   whole sums, variant 3's classes and residues against its `ΔU`, variant 0's whole sum against
+///   5794556's own ([`Surroundings::van_der_waals`]), and every twentieth frame the current model's
+///   against the field's coupling — each to its summation bound, asserted after everything is
+///   printed.
+///
+/// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p the_rest_of_the_binding_error_apportioned_measured -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "frames of the whole complex and of W3's box, saved, about one to two and a half hours with --release the first time: run with --release -- --ignored --nocapture"]
+fn the_rest_of_the_binding_error_apportioned_measured() {
+    let dir = results_dir();
+    assert!(
+        dir.join("prepared.txt").exists(),
+        "{} is not there: this measurement reads the leg's preparation and writes nothing beside \
+         it",
+        dir.join("prepared.txt").display()
+    );
+    let frames = dir.join("frames");
+    std::fs::create_dir_all(&frames).expect("the frames directory");
+    let _lock = Lock::take(&frames, "variants");
+    let t = std::time::Instant::now();
+    let kt = BOLTZMANN.to_si() * KELVIN;
+    let s = whole_complex();
+    let leg = production_leg(&s, production_start(&s, &dir));
+    log(
+        &frames,
+        "variants",
+        &format!(
+            "the leg's box and start read back in {:.0} s",
+            t.elapsed().as_secs_f64()
+        ),
+    );
+    let g = grid();
+    assert_eq!(g[0], Lambda::new(0.0, 1.0, 1.0));
+    let bound = complex_surroundings(&s);
+    let bound_labels = complex_labels(&s, the_system(), &bound);
+    let complex_start = || leg.start.clone();
+    let complex = Phase {
+        name: "complex",
+        sur: &bound,
+        labels: &bound_labels,
+        decoupling: &leg.decoupling,
+        template: &leg.template,
+        lambda: g[0],
+        identity: format!(
+            "start {:016x} restraint {:016x} flexibility {:?}",
+            positions_digest(&leg.start),
+            restraint_digest(&leg.restraint),
+            leg.flexibility
+        ),
+        start: &complex_start,
+    };
+
+    let benzene = hydration::Benzene::new(Some(pocket3().ligand_force_field().charges().to_vec()));
+    assert_eq!(
+        &benzene.types[..],
+        &pocket3().types()[pocket3().ligand_range()]
+    );
+    let w3 = hydration::w3_solvated(&benzene);
+    let w3_decoupling = w3.decoupling();
+    let w3_template = w3.dynamics(&benzene);
+    let free = water_surroundings(&benzene, &w3);
+    let free_labels = water_labels(&free);
+    let water_start = || {
+        let mut at = w3.at.clone();
+        let tm = std::time::Instant::now();
+        hydration::w3_melt(&w3_decoupling, &w3_template, KELVIN, &mut at);
+        log(
+            &frames,
+            "variants",
+            &format!(
+                "W3's box, {} waters, melted in {:.0} s",
+                w3.waters,
+                tm.elapsed().as_secs_f64()
+            ),
+        );
+        at
+    };
+    let water = Phase {
+        name: "water",
+        sur: &free,
+        labels: &free_labels,
+        decoupling: &w3_decoupling,
+        template: &w3_template,
+        lambda: Lambda::COUPLED,
+        identity: format!(
+            "built {:016x} melted w3_melt {}",
+            positions_digest(&w3.at),
+            exact(KELVIN)
+        ),
+        start: &water_start,
+    };
+
+    let [b, w] = apportion(&frames, FRAMES, [&complex, &water], 20);
+    report_apportioned(kt, &b, &w, &bound_labels);
+
+    // The pairs: benzene's carbon and hydrogen with each partner, UFF's and the variants'.
+    let uff_c = UffType::CR.parameters();
+    let uff_h = UffType::H.parameters();
+    let gaff = gaff_benzene(&[Element::C, Element::H]);
+    println!(
+        "\n| benzene atom with | current x_ij (Å), D_ij (kcal/mol) | 1 | 2 | 3 |\n| --- | --- | --- \
+         | --- | --- |"
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    for (j, kind) in bound.kinds.iter().enumerate() {
+        let Some(kind) = *kind else { continue };
+        let class = bound_labels.class[j].map(|c| bound_labels.classes[c].clone());
+        if bound.vdw[j][1] == 0.0 || !seen.insert((kind, class.clone())) {
+            continue;
+        }
+        let env3 = bound_labels.amber[j].unwrap_or(bound.vdw[j]);
+        for (name, u, h) in [
+            ("C", [uff_c.vdw_distance, uff_c.vdw_energy], gaff[0]),
+            ("H", [uff_h.vdw_distance, uff_h.vdw_energy], gaff[1]),
+        ] {
+            let show = |p: [f64; 2]| format!("{:.4}, {:.4}", p[0] / ANGSTROM, kcal(p[1]));
+            println!(
+                "| {name} with {} ({}) | {} | {} | {} | {} |",
+                kind.label(),
+                class.clone().unwrap_or_default(),
+                show(Mixing::Geometric.pair(u, bound.vdw[j])),
+                show(Mixing::LorentzBerthelot.pair(u, bound.vdw[j])),
+                show(Mixing::LorentzBerthelot.pair(h, bound.vdw[j])),
+                show(Mixing::LorentzBerthelot.pair(h, env3))
+            );
+        }
+    }
+
+    println!(
+        "\nthe identities, worst over the frames (1 is the bound): ΔU against the two sums {:.3} \
+         bound, {:.3} in water; variant 3's parts {:.3}, {:.3}; the field's coupling {:.3}, \
+         {:.3}; 5794556's sum {:.3}, {:.3}. {:.0} s in all",
+        b.against_sums,
+        w.against_sums,
+        b.parts,
+        w.parts,
+        b.against_field,
+        w.against_field,
+        b.against_hybrid,
+        w.against_hybrid,
+        t.elapsed().as_secs_f64()
+    );
+    for r in [&b, &w] {
+        assert!(r.against_sums <= 1.0, "{}", r.against_sums);
+        assert!(r.parts <= 1.0, "{}", r.parts);
+        assert!(r.against_field <= 1.0, "{}", r.against_field);
+        assert!(r.against_hybrid <= 1.0, "{}", r.against_hybrid);
+    }
+}
+
+/// The 3 Å pocket in water and W3's small box, each taken apart with its labels.
+fn small_phases() -> [(Surroundings, Labels, Vec<[f64; 3]>); 2] {
+    let s = small3(0x5EC3);
+    let sur = complex_surroundings(&s);
+    let labels = complex_labels(&s, the_system(), &sur);
+    let at = s.positions().to_vec();
+    let b = hydration::Benzene::new(None);
+    let w = hydration::Solvated::new(&b, 3, 0x5EC4, 2.3 * ANGSTROM, 4.6 * ANGSTROM, 1e-5);
+    let free = water_surroundings(&b, &w);
+    let free_labels = water_labels(&free);
+    [(sur, labels, at), (free, free_labels, w.at.clone())]
+}
+
+/// **A variant at the current parameters changes nothing, exactly**: on the 3 Å pocket in water and
+/// on W3's small box, each variant's recipe ([`cross_model`]) with its parameters set to the current
+/// ones — benzene's UFF `[x, D]` where GAFF's would go, the protein's UFF `[x, D]` where ff14SB's
+/// would ([`Labels::amber_as`]), the geometric rule — gives `ΔU` = 0 to the bit at every atom and
+/// in every class's long-range correction; and every variant against itself rebuilt, Lorentz–Berthelot
+/// included, the same.
+#[test]
+fn a_variant_at_the_current_parameters_changes_nothing() {
+    for (sur, labels, at) in small_phases() {
+        let current = current_model(&sur);
+        let current_tails = class_tails(&sur, &labels, &current);
+        let as_current = labels.amber_as(&sur.vdw);
+        let uff = sur.uff_benzene();
+        let recipes = [
+            (Some(&uff[..]), false),
+            (None, false),
+            (Some(&uff[..]), false),
+            (Some(&uff[..]), true),
+        ];
+        let at_current: Vec<CrossModel> = recipes
+            .iter()
+            .map(|&(b, amber)| cross_model(&sur, &as_current, b, amber, Mixing::Geometric))
+            .collect();
+        let vs = variants(&sur, &labels);
+        let again = variants(&sur, &labels);
+        let ts: Vec<Vec<CrossSum>> = at_current
+            .iter()
+            .chain(&vs)
+            .chain(&again)
+            .map(|m| class_tails(&sur, &labels, m))
+            .collect();
+        let to: Vec<(&CrossModel, &[CrossSum])> = at_current
+            .iter()
+            .enumerate()
+            .map(|(k, m)| (m, &ts[k][..]))
+            .collect();
+        let mut deltas = cross_deltas(&sur, &labels, &at, (&current, &current_tails), &to);
+        for k in 0..vs.len() {
+            deltas.extend(cross_deltas(
+                &sur,
+                &labels,
+                &at,
+                (&vs[k], &ts[4 + k]),
+                &[(&again[k], &ts[8 + k])],
+            ));
+        }
+        for (k, d) in deltas.iter().enumerate() {
+            assert!(d.terms > 0, "{k}: pairs");
+            for (j, u) in d.per_atom.iter().enumerate() {
+                assert_eq!(u.to_bits(), 0, "{k}: atom {j}");
+            }
+            for (c, u) in d.tail.iter().enumerate() {
+                assert_eq!(u.to_bits(), 0, "{k}: class {}", labels.classes[c]);
+            }
+            assert_eq!(d.total().to_bits(), 0, "{k}");
+        }
+    }
+}
+
+/// **Lorentz–Berthelot is its formula for one pair**, written by hand: GAFF's `ca` with ff14SB's
+/// `CT` is `R*_ij = 1.9080 + 1.9080 = 3.8160` Å and `ε_ij = √(0.0860 × 0.1094)` kcal/mol, GAFF's
+/// `ha` with ff14SB's `O` 3.1202 Å and `√(0.0150 × 0.2100)`; UFF's `C_R` with TIP3P's oxygen is
+/// `x_ij = 2^⅙ (σ_i + σ_j)/2` with `σ = x/2^⅙`; each within a few roundings, either order, and the
+/// geometric rule's distance not the same.
+#[test]
+fn lorentz_berthelot_is_its_formula_for_one_pair() {
+    let near = |a: f64, b: f64, what: &str| {
+        assert!(
+            (a - b).abs() <= 4.0 * EPS * b.abs(),
+            "{what}: {a:e} against {b:e}, {:.2} ε",
+            (a - b).abs() / (EPS * b.abs())
+        );
+    };
+    let lb = Mixing::LorentzBerthelot;
+    let gaff = gaff_benzene(&[Element::C, Element::H]);
+    for (benzene, partner, r, e, what) in [
+        (
+            gaff[0],
+            amber_vdw("CT"),
+            3.8160,
+            (0.0860f64 * 0.1094).sqrt(),
+            "ca–CT",
+        ),
+        (
+            gaff[1],
+            amber_vdw("O"),
+            3.1202,
+            (0.0150f64 * 0.2100).sqrt(),
+            "ha–O",
+        ),
+    ] {
+        for p in [lb.pair(benzene, partner), lb.pair(partner, benzene)] {
+            near(p[0], r * ANGSTROM, what);
+            near(p[1], e * KCAL_PER_MOL, what);
+        }
+    }
+    // The two rules agree for ca–CT, whose radii are equal, and not for ha–O.
+    let g = Mixing::Geometric.pair(gaff[1], amber_vdw("O"))[0];
+    assert!(
+        (g - 3.1202 * ANGSTROM).abs() > 1e-3 * ANGSTROM,
+        "ha–O: {} Å geometric",
+        g / ANGSTROM
+    );
+    // UFF's aromatic carbon with TIP3P's oxygen, through σ.
+    let two_sixth = 1.122_462_048_309_373; // 2^⅙
+    let c = UffType::CR.parameters();
+    let c = [c.vdw_distance, c.vdw_energy];
+    let o = water::oxygen_vdw();
+    let sigma = (c[0] / two_sixth + o[0] / two_sixth) / 2.0;
+    for p in [lb.pair(c, o), lb.pair(o, c)] {
+        near(p[0], two_sixth * sigma, "C_R–O by σ");
+        near(p[1], (c[1] * o[1]).sqrt(), "C_R–O depth");
+    }
+    let g = Mixing::Geometric.pair(c, o)[0];
+    assert!(
+        (g - two_sixth * sigma).abs() > 1e-3 * ANGSTROM,
+        "C_R–O: {} Å geometric against {} Å arithmetic",
+        g / ANGSTROM,
+        two_sixth * sigma / ANGSTROM
+    );
+}
+
+/// **The ff14SB types are the templates'**: for a handful of 181L's residues — Leu84, Phe153,
+/// Met102, Ala99, Val111, Gly107's backbone, His31 as `HIP`, Met1 at the N terminus, Lys162 at the C
+/// terminus, Ser117, Trp126, Arg95 and Asp70 — atom by atom against literal expectations read off
+/// `amino12.lib`, `aminont12.lib` and `aminoct12.lib`; the templates those residues take; every
+/// protein atom of 181L typed, each type's first letter its element's (`2C` and `3C` carbons), thirty
+/// types in all; and the Lennard-Jones lines a few types take, equivalences included.
+#[test]
+fn the_ff14sb_types_are_the_templates() {
+    // A residue's number, its name, the template it takes, and some of its atoms' types.
+    type Expected<'a> = (i32, &'a str, &'a str, &'a [(&'a str, &'a str)]);
+    let s = the_system();
+    let atom = |number: i32, name: &str| -> usize {
+        (0..s.component().atoms().len())
+            .find(|&i| {
+                let r = s.residue_of(i);
+                r.part == pantometry_forcefield::Part::Protein
+                    && r.number == number
+                    && s.atom_name(i) == name
+            })
+            .unwrap_or_else(|| panic!("no {name} in residue {number}"))
+    };
+    let expect: [Expected; 13] = [
+        (
+            84,
+            "LEU",
+            "LEU",
+            &[
+                ("N", "N"),
+                ("H", "H"),
+                ("CA", "CX"),
+                ("HA", "H1"),
+                ("CB", "2C"),
+                ("HB2", "HC"),
+                ("CG", "3C"),
+                ("HG", "HC"),
+                ("CD1", "CT"),
+                ("HD11", "HC"),
+                ("CD2", "CT"),
+                ("C", "C"),
+                ("O", "O"),
+            ],
+        ),
+        (
+            153,
+            "PHE",
+            "PHE",
+            &[
+                ("CB", "CT"),
+                ("CG", "CA"),
+                ("CD1", "CA"),
+                ("CZ", "CA"),
+                ("HD1", "HA"),
+                ("HZ", "HA"),
+            ],
+        ),
+        (
+            102,
+            "MET",
+            "MET",
+            &[
+                ("CB", "2C"),
+                ("CG", "2C"),
+                ("HG2", "H1"),
+                ("SD", "S"),
+                ("CE", "CT"),
+                ("HE1", "H1"),
+                ("HB2", "HC"),
+            ],
+        ),
+        (
+            99,
+            "ALA",
+            "ALA",
+            &[("CA", "CX"), ("CB", "CT"), ("HB1", "HC")],
+        ),
+        (
+            111,
+            "VAL",
+            "VAL",
+            &[("CB", "3C"), ("HB", "HC"), ("CG1", "CT"), ("HG11", "HC")],
+        ),
+        (
+            107,
+            "GLY",
+            "GLY",
+            &[
+                ("N", "N"),
+                ("H", "H"),
+                ("CA", "CX"),
+                ("HA2", "H1"),
+                ("HA3", "H1"),
+                ("C", "C"),
+                ("O", "O"),
+            ],
+        ),
+        (
+            31,
+            "HIS",
+            "HIP",
+            &[
+                ("CG", "CC"),
+                ("ND1", "NA"),
+                ("HD1", "H"),
+                ("CE1", "CR"),
+                ("HE1", "H5"),
+                ("NE2", "NA"),
+                ("CD2", "CW"),
+                ("HD2", "H4"),
+            ],
+        ),
+        (
+            1,
+            "MET",
+            "NMET",
+            &[
+                ("N", "N3"),
+                ("H", "H"),
+                ("H2", "H"),
+                ("H3", "H"),
+                ("CA", "CX"),
+                ("HA", "HP"),
+            ],
+        ),
+        (
+            162,
+            "LYS",
+            "CLYS",
+            &[
+                ("C", "C"),
+                ("O", "O2"),
+                ("OXT", "O2"),
+                ("CE", "C8"),
+                ("HE2", "HP"),
+                ("NZ", "N3"),
+                ("HZ1", "H"),
+            ],
+        ),
+        (
+            117,
+            "SER",
+            "SER",
+            &[("OG", "OH"), ("HG", "HO"), ("HB2", "H1")],
+        ),
+        (
+            126,
+            "TRP",
+            "TRP",
+            &[
+                ("CG", "C*"),
+                ("CD1", "CW"),
+                ("CD2", "CB"),
+                ("NE1", "NA"),
+                ("CE2", "CN"),
+                ("HE1", "H"),
+                ("HD1", "H4"),
+            ],
+        ),
+        (
+            95,
+            "ARG",
+            "ARG",
+            &[("NE", "N2"), ("CZ", "CA"), ("HD2", "H1")],
+        ),
+        (
+            70,
+            "ASP",
+            "ASP",
+            &[("CG", "CO"), ("OD1", "O2"), ("HB2", "HC")],
+        ),
+    ];
+    for (number, name, template, atoms) in expect {
+        let first = atom(number, atoms[0].0);
+        assert_eq!(s.residue_of(first).name, name, "residue {number}");
+        assert_eq!(
+            amber::template_name(s.residue_of(first)),
+            template,
+            "residue {number}"
+        );
+        for (a, t) in atoms {
+            assert_eq!(
+                amber::atom_type(s, atom(number, a)),
+                *t,
+                "{name}{number}:{a}"
+            );
+        }
+    }
+    let mut types = std::collections::BTreeSet::new();
+    for i in 0..s.component().atoms().len() {
+        if s.part(i) != pantometry_forcefield::Part::Protein {
+            continue;
+        }
+        let t = amber::atom_type(s, i);
+        amber::lennard_jones(t);
+        let element = match t.trim_start_matches(&['2', '3'][..]).as_bytes()[0] {
+            b'H' => Element::H,
+            b'C' => Element::C,
+            b'N' => Element::N,
+            b'O' => Element::O,
+            b'S' => Element::S,
+            other => panic!("type {t}: {}", other as char),
+        };
+        assert_eq!(s.component().atoms()[i].element, element, "atom {i}: {t}");
+        types.insert(t);
+    }
+    assert_eq!(types.len(), 30, "{types:?}");
+    for (t, line, r, e) in [
+        ("CT", "CT", 1.9080, 0.1094),
+        ("3C", "3C", 1.9080, 0.1094),
+        ("CA", "C*", 1.9080, 0.0860),
+        ("CO", "CO", 1.9080, 0.0860),
+        ("NA", "N", 1.8240, 0.1700),
+        ("HO", "HO", 0.0, 0.0),
+        ("HP", "HP", 1.1000, 0.0157),
+        ("S", "S", 2.0000, 0.2500),
+    ] {
+        assert_eq!(amber::lennard_jones_line(t), line, "{t}");
+        assert_eq!(amber::lennard_jones(t), (r, e), "{t}");
+    }
+}
+
+/// **Each variant's change is two whole sums apart**: on the 3 Å pocket in water as built and on
+/// W3's small box, each variant's `ΔU` pair by pair ([`cross_deltas`]) against `U_variant −
+/// U_current` from two whole sums of their own ([`cross_sum`]), to the summation bound; variant 3's
+/// classes, and its residues with the corrections, against its `ΔU`; the current model's whole sum
+/// against the field's own coupling, and variant 0's against 5794556's [`Surroundings::van_der_waals`];
+/// every variant's `ΔU` not zero; and in water, which has no protein, variant 3's `ΔU` variant 2's to
+/// the bit, where on the pocket it is not.
+#[test]
+fn each_variants_change_is_two_whole_sums_apart() {
+    for (k, (sur, labels, at)) in small_phases().into_iter().enumerate() {
+        let current = current_model(&sur);
+        let vs = variants(&sur, &labels);
+        let mut models = vec![&current];
+        models.extend(vs.iter());
+        let ts = tails(&sur, &labels, &models);
+        let f = frame_deltas(&sur, &labels, &at, &models, &ts);
+        let whole = cross_sum(&sur, &at, &current, ts.whole[0]);
+        let (field, _) = sur.coupling(&at);
+        let to_field =
+            (whole.total() - field).abs() / summation_bound(whole.terms, whole.magnitude);
+        let hybrid = sur.van_der_waals(&at, &gaff_benzene(&ring_and_hydrogens(&sur)));
+        let v0 = cross_sum(&sur, &at, &vs[0], ts.whole[1]);
+        let to_hybrid = (hybrid.total() - v0.total()).abs()
+            / summation_bound(hybrid.terms.max(v0.terms), hybrid.magnitude + v0.magnitude);
+        println!(
+            "{k}: ΔU {:?} kcal/mol; against the sums {:.2e}, parts {:.2e}, the field {:.2e}, \
+             5794556's {:.2e} of their bounds",
+            f.du.iter().map(|&u| kcal(u)).collect::<Vec<_>>(),
+            f.against_sums,
+            f.parts,
+            to_field,
+            to_hybrid
+        );
+        assert!(f.against_sums <= 1.0, "{k}: {}", f.against_sums);
+        assert!(f.parts <= 1.0, "{k}: {}", f.parts);
+        assert!(to_field <= 1.0, "{k}: {to_field}");
+        assert!(to_hybrid <= 1.0, "{k}: {to_hybrid}");
+        for (v, u) in f.du.iter().enumerate() {
+            assert!(u.abs() > 1e-4 * KCAL_PER_MOL, "{k}: variant {v}, {u:e}");
+        }
+        if k == 0 {
+            assert!(
+                (f.du[3] - f.du[2]).abs() > 1e-4 * KCAL_PER_MOL,
+                "the pocket: ff14SB's protein moves ΔU"
+            );
+        } else {
+            assert_eq!(f.du[3].to_bits(), f.du[2].to_bits(), "water has no protein");
+        }
+    }
+}
+
+/// **Frames round-trip to the bit**: three frames of fourteen atoms, the forty-two numbers of
+/// [`positions_round_trip_to_the_bit`] turned, subnormals, `±0.0` and the extremes among them, and
+/// steps up to `u64::MAX`, through [`FrameWriter`] and [`read_frames`]: first line, steps and every
+/// position's `to_bits` equal, nothing left at the `.partial` path; **the file cut short at every
+/// byte** is refused; one bit flipped in any byte of a frame is refused; and a writer given fewer
+/// frames than it promised refuses to finish.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn frames_round_trip_to_the_bit() {
+    let mut xs = vec![
+        f64::from_bits(1),
+        f64::from_bits(0x000f_ffff_ffff_ffff),
+        f64::MIN_POSITIVE,
+        -0.0,
+        0.0,
+        f64::MAX,
+        -f64::MAX,
+        f64::EPSILON,
+        1.0 / 3.0,
+        0.1,
+        -2.5e-10,
+        1e-300,
+    ];
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    while xs.len() < 42 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let x = f64::from_bits(state);
+        if x.is_finite() {
+            xs.push(x);
+        }
+    }
+    let frames: Vec<Vec<[f64; 3]>> = (0..3)
+        .map(|f| {
+            (0..14)
+                .map(|a| [0, 1, 2].map(|x| xs[(3 * a + x + 5 * f) % xs.len()]))
+                .collect()
+        })
+        .collect();
+    let steps = [0, 25, u64::MAX];
+    let dir = fresh_dir("frames");
+    let path = dir.join("test.frames");
+    let mut w = FrameWriter::create(&path, "# frames a header", 3, 14);
+    for (s, f) in steps.iter().zip(&frames) {
+        w.push(*s, f);
+    }
+    w.finish();
+    assert!(!path.with_extension("partial").exists());
+    let back = read_frames(&path).expect("written").expect("whole");
+    assert_eq!(back.line, frames_line("# frames a header", 3, 14));
+    assert_eq!(back.steps, steps);
+    let bits = |v: &[Vec<[f64; 3]>]| -> Vec<Vec<[u64; 3]>> {
+        v.iter()
+            .map(|f| f.iter().map(|p| p.map(f64::to_bits)).collect())
+            .collect()
+    };
+    assert_eq!(bits(&back.at), bits(&frames));
+    let bytes = std::fs::read(&path).unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            parse_frames(&mut &bytes[..cut]).is_err(),
+            "cut at byte {cut} of {} read as whole",
+            bytes.len()
+        );
+    }
+    let start = bytes.iter().position(|&b| b == b'\n').unwrap() + 1;
+    let end = bytes.len() - format!("# end 3 {:016x}\n", 0u64).len();
+    for k in start..end {
+        let mut flipped = bytes.clone();
+        flipped[k] ^= 0x10;
+        assert!(
+            parse_frames(&mut &flipped[..]).is_err(),
+            "a bit flipped at byte {k} read as whole"
+        );
+    }
+    let short = refusal(|| {
+        let mut w = FrameWriter::create(&dir.join("short.frames"), "# short", 2, 14);
+        w.push(0, &frames[0]);
+        w.finish();
+    });
+    assert!(short.contains("fewer frames"), "{short}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **An apportioning resumes to the same bits**, through the measurement's own [`apportion`] on the
+/// 3 Å pocket in water and W3's small box, three frames two 0.5 fs steps apart, in a temporary
+/// directory: run, with a stale `complex.partial` left as a killed run leaves it; then run again,
+/// which reads both phases' frames back, their files' bytes unchanged, **and every number it
+/// measures is the first run's to the bit**; and a phase asked for at another protocol is refused by
+/// name.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn an_apportioning_resumes_to_the_same_bits() {
+    let s = small3(0x5EC5);
+    let sur = complex_surroundings(&s);
+    let labels = complex_labels(&s, the_system(), &sur);
+    let decoupling = s.decoupling();
+    let template = s.dynamics(LEG_FLEXIBILITY);
+    let start = || s.positions().to_vec();
+    let complex = Phase {
+        name: "complex",
+        sur: &sur,
+        labels: &labels,
+        decoupling: &decoupling,
+        template: &template,
+        lambda: Lambda::new(0.0, 1.0, 1.0),
+        identity: format!("built {:016x}", positions_digest(s.positions())),
+        start: &start,
+    };
+    let b = hydration::Benzene::new(None);
+    let w = hydration::Solvated::new(&b, 3, 0x5EC6, 2.3 * ANGSTROM, 4.6 * ANGSTROM, 1e-5);
+    let free = water_surroundings(&b, &w);
+    let free_labels = water_labels(&free);
+    let (wd, wt) = (w.decoupling(), w.dynamics(&b));
+    let water_start = || w.at.clone();
+    let water = Phase {
+        name: "water",
+        sur: &free,
+        labels: &free_labels,
+        decoupling: &wd,
+        template: &wt,
+        lambda: Lambda::COUPLED,
+        identity: format!("built {:016x}", positions_digest(&w.at)),
+        start: &water_start,
+    };
+    let p = Protocol {
+        time_step: 0.5 * FS,
+        equilibration: 2,
+        stride: 2,
+        samples: 3,
+        ..FRAMES
+    };
+    let dir = fresh_dir("apportion");
+    std::fs::write(dir.join("complex.partial"), b"a killed run's frames").unwrap();
+    let first = apportion(&dir, p, [&complex, &water], 1);
+    assert!(!dir.join("complex.partial").exists());
+    let files: Vec<Vec<u8>> = ["complex.frames", "water.frames"]
+        .iter()
+        .map(|f| std::fs::read(dir.join(f)).expect("saved"))
+        .collect();
+    let again = apportion(&dir, p, [&complex, &water], 1);
+    for (f, bytes) in ["complex.frames", "water.frames"].iter().zip(&files) {
+        assert_eq!(&std::fs::read(dir.join(f)).unwrap(), bytes, "{f} rewritten");
+    }
+    let log = std::fs::read_to_string(dir.join("variants.log")).unwrap();
+    assert_eq!(log.matches("frames read back").count(), 2, "{log}");
+    let bits = |r: &Reparametrised| -> Vec<u64> {
+        r.du.iter()
+            .chain(&r.u_variants)
+            .chain(&r.classes)
+            .chain(&r.residues)
+            .flatten()
+            .chain(&r.u)
+            .chain([
+                &r.against_sums,
+                &r.parts,
+                &r.against_field,
+                &r.against_hybrid,
+            ])
+            .map(|x| x.to_bits())
+            .collect()
+    };
+    for (a, b) in first.iter().zip(&again) {
+        assert_eq!(a.du.len(), 3);
+        assert_eq!(bits(a), bits(b));
+        assert!(a.against_sums <= 1.0 && a.parts <= 1.0, "{a:?}");
+        assert!(a.against_field <= 1.0 && a.against_hybrid <= 1.0, "{a:?}");
+    }
+    // The tables the measurement prints, on these three frames: what would otherwise first run
+    // after hours of dynamics.
+    report_apportioned(p.kt(), &first[0], &first[1], &labels);
+    let other = Protocol {
+        seed: p.seed + 1,
+        ..p
+    };
+    let refused = refusal(|| {
+        phase_frames(&dir, &complex, other);
+    });
+    assert!(refused.contains("was run differently"), "{refused}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------------------------
