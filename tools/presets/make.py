@@ -42,7 +42,7 @@ AREA = {
     "08": "matter", "09": "matter", "28": "matter",
     "31": "proteins",
     "33": "proteins",
-    "32": "medicine",
+    "32": "medicine", "34": "medicine",
     "27": "radio",
     "06": "orbits",
     "07": "contact",
@@ -59,14 +59,14 @@ AREAS = [
     ("flow", "Flow", "pressure-driven water, and liquid through a packed bed"),
     ("matter", "Matter", "atoms in a lattice and out of one, and a particle in a well"),
     ("proteins", "Molecules", "a fold's collective motions, and a drug relaxed under a force field"),
-    ("medicine", "A dose in a body", "compartments, clearance, and the curve a dose traces"),
+    ("medicine", "A dose in a body", "compartments, a tablet through the liver, and the curves a dose traces"),
     ("radio", "Resonant cavities", "Maxwell's equations on a Yee grid"),
     ("orbits", "Orbits", "bodies under their own gravity"),
     ("contact", "Contact", "a ball on a floor, losing energy to its dashpot"),
     ("everything", "All of it at once", "five domains, four crates, one clock and one audit"),
 ]
 
-HEADER = r"""//! The thirty-three shipped scenes, offered as starting points.
+HEADER = r"""//! The thirty-four shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -88,7 +88,8 @@ HEADER = r"""//! The thirty-three shipped scenes, offered as starting points.
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-three.
+//! there is no disk to read a scene off. 28 758 bytes for all thirty-four, measured 2026-10-19;
+//! it said twenty-seven kilobytes for thirty-three, which was 27 318.
 
 /// One scene, offered as a starting point.
 pub struct Preset {
@@ -113,10 +114,10 @@ pub struct Preset {
     pub json: &'static str,
     /// A picture of its last frame, as PNG, or `None` when there is nothing to draw.
     ///
-    /// **Four have none.** A `network`, two `winding`s and a compartment model report readings
+    /// **Five have none.** A `network`, two `winding`s and two compartment models report readings
     /// rather than places, so a run of them carries no panel and there is nothing for the shell to
     /// render. They are offered with their words and no tile, which is what they are. This said
-    /// three for as long as the compartment model has been a scene.
+    /// three for as long as the first compartment model had been a scene.
     pub thumb: Option<&'static [u8]>,
 }
 

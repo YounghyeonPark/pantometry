@@ -921,7 +921,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
         // not positions, so `as_field` declines — but then it owes an arm in the match below,
         // and this list is how it says so. Adding a name here without an arm reintroduces
         // exactly the hole: a scene that runs, draws nothing, checks nothing, and passes.
-        const NOTHING_TO_DRAW: [&str; 4] = [
+        const NOTHING_TO_DRAW: [&str; 5] = [
             "11-motor-thermal-network.json",
             "12-winding-heats-a-motor.json",
             "13-winding-that-heats-itself.json",
@@ -930,6 +930,9 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             // could exist at all: "no space" was never what kept pharmacokinetics out of the
             // format.
             "32-a-dose-distributing-and-leaving.json",
+            // The same model with organs in it: blood flow and a liver change what the volumes
+            // are called and not that they are volumes rather than places.
+            "34-a-tablet-that-meets-the-liver-first.json",
         ];
         // Zero for a scene with no panel, which never reads it — the arms below that do are all
         // in the drawn branch.
@@ -1416,6 +1419,184 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 assert!(
                     cleared > 0.7 * dose_mg,
                     "{name}: only {cleared:.1} mg of {dose_mg} cleared in twelve hours"
+                );
+            }
+            // **A tablet: the gut's books exactly, and every organ's place in the terminal phase
+            // from its own balance.**
+            //
+            // - **Before the first step nothing has been taken**, and the tablet is all of the
+            //   books. The dose is taken at the step that reaches it.
+            // - **The loss is `(1 − F)·D` exactly**, booked once when the tablet is taken.
+            // - **The gut empties exactly.** The depot is integrated by `e^{−kₐs}` and not by
+            //   Euler, so at the end it holds `F·D·e^{−kₐ(T − t_lag)}`, to the rounding of one
+            //   product per step — `1.1nε` is the library's own bound for it.
+            // - **The books close**: what is in the body, cleared, still to take, in the gut and
+            //   lost is the dose, to the library's 1e-12, at every frame.
+            // - **Fat holds the drug longest, by exactly what its balance says.** Twenty-four
+            //   hours in, every mode but the slowest is `e^{−50}` gone, so each organ falls by one
+            //   factor `ρ` a step. A tissue's balance `V_t(ρ − 1)C_t/h = Q(C_b − C_t/K_p)` then
+            //   fixes `C_t/C_b = Q/(Q/K_p − V_t(1 − ρ)/h)`, and the liver's, with its clearance on
+            //   the venous blood, `Q/((Q + CL)/K_p − V(1 − ρ)/h)`. `ρ` comes from the blood's own
+            //   last two frames. Fat reads 13.4 times the blood against a `K_p` of 6: it is the
+            //   slowest to empty, so it lags. What the tolerance is earned against is the gut, the
+            //   one input still feeding the liver: 3.4e-8 of the liver's blood supply at 24 h, and
+            //   the three organs depart from their balance by 1.01, 0.012 and 7.6 times that. The
+            //   same three multiples came out at 30 h, where the feed is 130 times smaller —
+            //   measured once, in a throwaway script of the same recurrence — so the departure is
+            //   the gut and not rounding, and 64 times the feed is eight times the worst of them.
+            // - **The note counts the tablet**, which is what `nothing was administered` and the
+            //   note's sum were changed to do.
+            "34-a-tablet-that-meets-the-liver-first.json" => {
+                let DomainSpec::Compartments {
+                    volumes,
+                    perfusions,
+                    depots,
+                    oral,
+                    ..
+                } = &world.scene().domains[0]
+                else {
+                    panic!("{name}: the first domain is the compartment model");
+                };
+                let reading = |frame: &pantometry_world::Frame, label: &str| {
+                    frame
+                        .readings
+                        .iter()
+                        .find(|r| r.domain == "body" && r.label == label)
+                        .unwrap_or_else(|| panic!("{name}: no {label} reading"))
+                        .value
+                };
+                let (dose, f, ka, lag) = (
+                    oral[0].dose_mg,
+                    depots[0].bioavailability,
+                    depots[0].absorption_per_h,
+                    depots[0].lag_h,
+                );
+                let hours = world.scene().duration_s / 3600.0;
+                let steps = world.steps();
+                let h = hours / steps as f64;
+                let books = |frame: &pantometry_world::Frame| {
+                    reading(frame, "in the body")
+                        + reading(frame, "cleared")
+                        + reading(frame, "still to take")
+                        + reading(frame, "in the depot")
+                        + reading(frame, "lost before absorption")
+                };
+
+                // Before the first step, the tablet is everything.
+                let first = &frames[0];
+                // To the two roundings of milligrams to kilograms and back: 400 mg reads
+                // 399.99999999999994.
+                let pending = reading(first, "still to take");
+                assert!(
+                    (pending / dose - 1.0).abs() < 2.0 * f64::EPSILON,
+                    "{name}: {pending} mg still to take before any step, of {dose}"
+                );
+                for label in [
+                    "in the body",
+                    "cleared",
+                    "in the depot",
+                    "lost before absorption",
+                ] {
+                    assert_eq!(
+                        reading(first, label).to_bits(),
+                        0.0f64.to_bits(),
+                        "{name}: {label} before the first step"
+                    );
+                }
+
+                let lost = reading(last, "lost before absorption");
+                let want_lost = dose - f * dose;
+                assert!(
+                    (lost / want_lost - 1.0).abs() < 4.0 * f64::EPSILON,
+                    "{name}: {lost} mg lost before absorption, and (1 - F)D is {want_lost}"
+                );
+                assert_eq!(
+                    reading(last, "still to take").to_bits(),
+                    0.0f64.to_bits(),
+                    "{name}: the tablet is taken"
+                );
+
+                let gut = reading(last, "in the depot");
+                let absorbing = ((hours - lag) / h).round();
+                let want_gut = f * dose * (-ka * (hours - lag)).exp();
+                let gut_off = (gut / want_gut - 1.0).abs();
+                let gut_bound = (1.1 * absorbing + 8.0) * f64::EPSILON;
+                println!(
+                    "  {name}: the gut holds {gut:.6e} mg against F*D*exp(-ka(T - lag)) = \
+                     {want_gut:.6e}, off {gut_off:.2e} against {gut_bound:.2e}"
+                );
+                assert!(
+                    gut_off < gut_bound,
+                    "{name}: the depot holds {gut:e} mg and the exact decay says {want_gut:e}"
+                );
+
+                for frame in &frames {
+                    let off = (books(frame) / dose - 1.0).abs();
+                    assert!(
+                        off < 1e-12,
+                        "{name}: the books at {} s are {} mg of {dose}, {off:.2e} apart",
+                        frame.time_s,
+                        books(frame)
+                    );
+                }
+                assert!(
+                    reading(last, "cleared") > 0.95 * f * dose,
+                    "{name}: only {} mg of the {} absorbed has been cleared in {hours} h",
+                    reading(last, "cleared"),
+                    f * dose
+                );
+
+                // The terminal phase, organ by organ.
+                let before = &frames[frames.len() - 2];
+                let per_frame = (steps / world.scene().frames) as f64;
+                let rho =
+                    ((reading(last, "blood") / reading(before, "blood")).ln() / per_frame).exp();
+                let blood = reading(last, "blood");
+                let volume = |label: &str| {
+                    volumes
+                        .iter()
+                        .find(|c| c.label == label)
+                        .expect("a compartment")
+                };
+                // The gut's feed into the liver, as a fraction of the blood the liver is sent:
+                // the one input the single-mode argument leaves out.
+                let liver_flow = perfusions
+                    .iter()
+                    .find(|p| p.tissue == "liver")
+                    .expect("a perfused liver")
+                    .flow_l_per_h;
+                let feed = ka * gut / (liver_flow * blood);
+                let tolerance = 64.0 * feed;
+                for p in perfusions {
+                    let v = volume(&p.tissue);
+                    let want = p.flow_l_per_h
+                        / ((p.flow_l_per_h + v.clearance_l_per_h) / p.partition
+                            - v.volume_l * (1.0 - rho) / h);
+                    let got = reading(last, &p.tissue) / blood;
+                    let off = (got / want - 1.0).abs();
+                    println!(
+                        "  {name}: {} at {got:.6} times the blood against {want:.6} from its \
+                         balance (K_p {}), off {off:.2e} against {tolerance:.2e}",
+                        p.tissue, p.partition
+                    );
+                    assert!(
+                        off < tolerance,
+                        "{name}: {} holds {got:.8} times the blood, and its balance in the \
+                         terminal phase says {want:.8}",
+                        p.tissue
+                    );
+                }
+                println!("  {name}: the gut still feeds the liver {feed:.2e} of its blood supply");
+                assert!(
+                    feed < 1e-7,
+                    "{name}: the gut still feeds {feed:.2e} of the liver's supply, so the last \
+                     frame is not a single mode and the check above is not about one"
+                );
+
+                let notes = world.notes().join("\n");
+                assert!(
+                    notes.contains(&format!("{dose:.1} mg administered")),
+                    "{name}: the note does not count the tablet: {notes}"
                 );
             }
             // **A minimisation, held to what minimisation guarantees and to one fact about the
@@ -3554,7 +3735,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // would be compared across grids as though it converged to something, and nothing would say.
     // `verify::DIAGNOSTICS` was that list; `Domain::diagnostics` replaced it, so a domain now says
     // which of its own readings describe the solve. This is what stops the drift. It pins all
-    // **74** labels the thirty-three scenes emit, so a new one fails here and has to be decided
+    // **81** labels the thirty-four scenes emit, so a new one fails here and has to be decided
     // about.
     //
     // What the sweep did without it, on `17-a-busbar-with-a-notch`:
@@ -3646,6 +3827,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "atoms []",
             "baseplate [C]",
             "bed temperature [C]",
+            "blood [mg/L]",
             "bond stretch [kcal/mol]",
             "bonds []",
             "cleared [mg]",
@@ -3659,6 +3841,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "electrostatic [kcal/mol]",
             "energy [J]",
             "energy [kcal/mol]",
+            "fat [mg/L]",
             "field energy [J]",
             "flow [g/s]",
             "formal charge [e]",
@@ -3667,10 +3850,14 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "heavy atoms []",
             "housing [C]",
             "in the body [mg]",
+            "in the depot [mg]",
             "invariant [J]",
             "inversion [kcal/mol]",
             "junction [C]",
             "kinetic energy [J]",
+            "lean tissue [mg/L]",
+            "liver [mg/L]",
+            "lost before absorption [mg]",
             "magnetic [J]",
             "mean [C]",
             "mean speed [m/s]",
@@ -3687,6 +3874,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "spent [J]",
             "spread [m]",
             "stator [C]",
+            "still to take [mg]",
             "strain energy [J]",
             "strain x []",
             "strain y []",

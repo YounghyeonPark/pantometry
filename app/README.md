@@ -76,7 +76,7 @@ cost of each is stated in `pantometry-app`'s Cargo.toml — no screen-reader tre
 bar with no title text on a Wayland compositor that will not decorate windows itself. The library's
 own twelve remain clean, and nothing in `crates/` depends on anything here.
 
-**The thirty-three scenes left the library's gate.** Their closed-form checks — scene 21's
+**The thirty-four scenes left the library's gate.** Their closed-form checks — scene 21's
 `8.3e-15`, scene 24's `1.1e-4`, scene 25's 8.4× relaxation — are among the strongest physics tests
 in the repository, and `cargo test --locked --workspace` in the root no longer runs them. They run
 here. `CLAUDE.md` says both gates, not one, and CI has a job for each.
@@ -86,7 +86,7 @@ here. `CLAUDE.md` says both gates, not one, and CI has a job for each.
 | | |
 | --- | --- |
 | `pantometry-app` | the binary. `main.rs` dispatches; `cli.rs`, `view.rs` and `edit.rs` are what used to be three `main`s |
-| `pantometry-world` | the scene format, the `World` builder, the verify battery, and the thirty-three scenes |
+| `pantometry-world` | the scene format, the `World` builder, the verify battery, and the thirty-four scenes |
 | `pantometry-gpu` | `Solid3D`'s stencil as a compute shader, with the CPU domain as the reference. Its own README |
 | `viewer-core` | reads a run **file** and turns it into something a renderer can draw. No GPU, no window |
 | `editor-core` | the GUI-free half of the editor: check, place, run, verify, and the geometry the viewport draws |

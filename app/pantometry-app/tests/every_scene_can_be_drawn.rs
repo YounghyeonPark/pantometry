@@ -130,11 +130,11 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
         blank.is_empty(),
         "these scenes rendered an empty canvas: {blank:?}"
     );
-    // **Pinned, in both directions.** Twenty-nine of the thirty-three draw; four carry no panel at
+    // **Pinned, in both directions.** Twenty-nine of the thirty-four draw; five carry no panel at
     // all, and every one of them is a graph rather than a place — a `network`, two `winding`s and
-    // a compartment model, which report readings and not positions. A fifth arriving means either
-    // a scene lost its geometry or a domain stopped reporting one, and both are worth a failure
-    // rather than a quieter list.
+    // two compartment models, which report readings and not positions. A sixth arriving means
+    // either a scene lost its geometry or a domain stopped reporting one, and both are worth a
+    // failure rather than a quieter list.
     //
     // The fourth is `32`, and it is the reason that domain has a scene at all: "a compartment is
     // an apparent volume, not a place" is why it draws nothing, and it was mistaken for a reason
@@ -145,7 +145,10 @@ fn every_shipped_scene_puts_something_on_the_canvas() {
             "11-motor-thermal-network",
             "12-winding-heats-a-motor",
             "13-winding-that-heats-itself",
-            "32-a-dose-distributing-and-leaving"
+            "32-a-dose-distributing-and-leaving",
+            // The fifth is the same domain with organs perfused by blood: the volumes have names
+            // now, and they are still not places.
+            "34-a-tablet-that-meets-the-liver-first"
         ],
         "the set of scenes with nothing to draw has changed"
     );

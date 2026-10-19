@@ -1,9 +1,9 @@
 # Scenes
 
-Thirty-three worlds described as data, covering **all fourteen** of the library's domains — `forcefield`, the last to arrive, has one now that it has energies to show: aspirin relaxing out of a clash, `33`. Before it, `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-two of them
+Thirty-four worlds described as data, covering **all fourteen** of the library's domains — `forcefield`, the last to arrive, has one now that it has energies to show: aspirin relaxing out of a clash, `33`. Before it, `pharmacokinetic` was the last one without a scene, and what kept it out was never that a compartment has nowhere to be drawn: `network` is the same shape and three scenes state it — thirty-three of them
 one question at a time, and one that is actually a world. The count above this line used to read
 "twenty-seven of them ... and one", which is twenty-eight and was never the number of files in this
-directory; **twenty** state a single kind of domain and thirteen state more, so no split of them
+directory; **twenty-one** state a single kind of domain and thirteen state more, so no split of them
 into "one physics" and "a world" was ever going to be a count of anything. Nothing here is Rust: the
 physics, the resolution, the coupling and the run length are all in the file, and the same
 binary runs all of them.
@@ -20,7 +20,7 @@ pointing at a node the scene defines. It reports a parse failure as `file:line:c
 keys that were expected, which is what an editor puts a squiggle under. CI runs it over every
 scene, because it would otherwise be the one entry point nothing exercises.
 
-Every file carries a `format` number, and **absence means 1** — which is what all thirty-three here
+Every file carries a `format` number, and **absence means 1** — which is what all thirty-four here
 are: nothing has yet changed what an existing key means. A version this build cannot read is refused
 rather than half-run: `deny_unknown_fields` catches a key that was *added*, but not one whose
 meaning changed, and that is what the number is for.
@@ -37,7 +37,7 @@ No second argument prints the numbers and checks them. A second argument writes 
 | `out.gltf` | The last frame as **surfaces** — a field's boundary, a body's sphere, with normals — for Blender, three.js or any glTF reader |
 | `out.usda` | The **whole run** as USD: geometry, colour and every domain's scalars, animated on a timeline, for usdview, Omniverse, Houdini or Maya |
 
-`.csv` is the one that reaches the domains a picture cannot. Thirteen of these thirty-three scenes have
+`.csv` is the one that reaches the domains a picture cannot. Fourteen of these thirty-four scenes have
 a domain with no field and no bodies, and for several the scalar *is* the result: `13` is about a
 winding whose resistance follows its own temperature, and it drew nothing at all. As a table it
 shows the feedback directly — 12.46 W at 25 °C rising to 16.01 W at 99 °C, with the resistance
@@ -66,8 +66,8 @@ simulation could not draw it. `pantometry_view::{html, svg, readings_csv, to_jso
 `pantometry_scene::capture` produces, and everything the table above describes is available to any
 program without going near a scene file.
 
-`.gltf` is the one that leaves this workspace. **Twenty-five** of the thirty-three scenes have geometry
-to export — bodies, ray paths, a 3D field as its cell centres — and the other **eight** are
+`.gltf` is the one that leaves this workspace. **Twenty-five** of the thirty-four scenes have geometry
+to export — bodies, ray paths, a 3D field as its cell centres — and the other **nine** are
 **refused with a reason** rather than written as an empty scene: a 1D or 2D field is a graph, not
 something to put in a 3D viewer, and the message says which panel and why.
 
@@ -76,7 +76,9 @@ nothing records when they stopped being right. The first moved again at 0.21.0, 
 alpha carbons became a thirty-first scene with bodies to export; the second did not, and moved
 when a compartment model with nothing to place became the thirty-second. The first moved again when
 aspirin's atoms became a thirty-third scene with bodies to export, measured for that scene alone on
-2026-10-02 (a glTF of its 21 atoms as spheres; the bonds are not in it, because the glTF writer draws bodies and not what joins them). Nothing counts them: `counts_in_prose.rs` guards the
+2026-10-02 (a glTF of its 21 atoms as spheres; the bonds are not in it, because the glTF writer draws bodies and not what joins them). The second moved again when a tablet became a
+thirty-fourth scene with nothing to place, refused on 2026-10-19 with the thirty-second's message.
+Nothing counts them: `counts_in_prose.rs` guards the
 *total* half of this sentence and says in its own doc why it leaves the numerator alone — a
 numerator is a different count with a different source, and this one needs every scene exported to
 establish. So it is a **release-time** count now, with the command in `RELEASING.md`, rather than a
@@ -207,7 +209,7 @@ it, or that used the wrong spacing on one axis, fails there and passes everythin
 | --- | --- |
 | `11-motor-thermal-network` | A copper winding, electrical steel around it and an aluminium housing: three materials, two joints, and the drop across each. **It starts under load** — 36 W for 300 s and 12 W after, three times the loss, which is 1.73 times the current — and that is the whole point of it. The winding peaks at **72.82 °C** and settles back to 59.64; the same scene at a constant 12 W climbed monotonically to 55.04 and reported that, which is **17.8 K low** for choosing an insulation class. A first-order network under a constant source cannot overshoot at all, so the peak being above the end is a claim `stages` is required for. The shape is the winding’s own time constant: 62 J/K across 0.9 W/K is 69 s, against 216 s for the stator, so the winding tracks the load while everything behind it is still climbing |
 
-The first of four scenes with **nothing to draw** -- `11`, `12`, `13` and `32`, which is the list
+The first of five scenes with **nothing to draw** -- `11`, `12`, `13`, `32` and `34`, which is the list
 `tests/scene.rs` holds as `NOTHING_TO_DRAW`. A network's nodes have capacities, not positions, so
 `as_field` declines to invent a continuum and the renderer has no panel to make — the numbers
 are the output. That is also the point: a `lump` would report the motor as one temperature, and
@@ -365,6 +367,57 @@ zero crossing for this pair, 2.831 Å: the ester is held planar by its conjugati
 is the compromise between that and this contact. Neither is asserted, because the minimum is the
 force field's answer and not a property of the method; the clash threshold is the claim.
 
+## A body — `pantometry-pharmacokinetic`
+
+| Scene | What it shows |
+| --- | --- |
+| `32-a-dose-distributing-and-leaving` | A 500 mg intravenous bolus into 5 L of plasma that clears 3 L/h and exchanges 8 L/h with 20 L of tissue: the classical two-compartment model. The last frame's plasma is the slow exponential alone, and `β` is the slow root of the quadratic the scene's own litres and litres per hour give, `0.09584 /h`; `a_dose_leaves_at_the_rate_the_roots_say` measures the step reaching it at first order |
+| `34-a-tablet-that-meets-the-liver-first` | A **400 mg tablet**, its gut depot emptying into the **liver**, and the liver, lean tissue and fat each perfused by blood from one 5 L pool. The liver eliminates on the blood leaving it — the well-stirred liver, extracting `E = 60/(90 + 60) = 0.4` — so only `F(1 − E)` = **0.54** of the tablet reaches the blood, measured as the ratio of two areas under the blood's curve, oral over intravenous, at **4.4e-16**. Blood peaks at 1.59 mg/L an hour in; fat, the slowest to fill and to empty, peaks at 3.79 mg/L at three hours and by twenty-four holds **13.39 times** the blood against a `K_p` of 6, which its own balance in the terminal phase predicts to 2.6e-7 |
+
+**`34`'s physiology is illustrative, and says so.** No reference table of organ volumes and blood
+flows — ICRP Publication 89, Brown et al. 1997 — has been read in this project, and a number that
+looks like it came from one would be a citation nobody made. These are round, adult-sized numbers
+chosen to be legible:
+
+| organ | volume | blood flow | `K_p` | clearance |
+| --- | --- | --- | --- | --- |
+| blood | 5 L | — | — | 6 L/h, renal |
+| liver | 1.5 L | 90 L/h | 2 | 60 L/h intrinsic, on the venous blood |
+| lean tissue | 30 L | 210 L/h | 0.7 | — |
+| fat | 15 L | 30 L/h | 6 | — |
+
+The flows add to 330 L/h, 5.5 L/min. The tablet is absorbed at `kₐ = 1/h` after a half-hour lag,
+and `F = 0.9` of it is absorbed at all: the other 40 mg are `lost before absorption`, booked when it
+is swallowed. The drug itself is nobody's — a `K_p` of 6 in fat is a lipophilic molecule, and
+nothing here is a claim about one.
+
+**What it is checked against**, in `tests/scene.rs` and `tests/a_tablet_meets_the_liver_first.rs`,
+each from the scene's own numbers and none against a second implementation:
+
+- **Hepatic first pass.** Integrating every organ's balance over all time leaves algebra in the
+  areas: `AUC_b(oral)/AUC_b(IV into the blood) = F(1 − E)` whatever the renal clearance is, every
+  tissue that does not eliminate has `AUC_t = K_p·AUC_b`, and the liver `K_p(1 − E)` times the
+  blood after the IV dose and `K_p(Q_h + CL_r)/Q_h` after the tablet. Explicit Euler satisfies the
+  same algebra **exactly**, because summing its map over every step is `h Σ xₙ = −M⁻¹(x₀ + Σ b)`, so
+  all eleven ratios are checked at the shipped 10 s and at 40 s and come out within 4.4e-16 of the
+  closed form, under a bound of `16ε` plus the area still to come — which renal clearance alone
+  bounds at `A_rem/CL_r`, and which 240 hours puts below 1e-15.
+- **The steady state an infusion implies.** Started at `C_b = R/(CL_r + Q_h E)`, each tissue at
+  `K_p` times it and the liver at `K_p(1 − E)` times it, under the infusion `R` that holds it, the
+  body does not move: one ulp in 8 640 steps, under the library's `(n + 8)ε`. Euler's fixed point
+  has no `h` in it.
+- **The gut, the books and the readings.** The depot is integrated exactly, so it holds
+  `F·D·e^{−kₐ(T − t_lag)}` at the end to 3.9e-13; `lost before absorption` is `(1 − F)·D`; and the
+  five book readings sum to the dose at every frame.
+- **Each organ's place in the terminal phase.** Once one mode is left, a tissue's balance fixes
+  `C_t/C_b = Q/((Q + CL)/K_p − V(1 − ρ)/h)` from the blood's own fall `ρ` per step. The tolerance
+  is the gut, the one input still feeding the liver at 24 h, at 3.4e-8 of its blood supply.
+
+`perfusions`, `depots` and `oral` are the three keys it needed, each optional, so every scene
+written before them builds to the same bits — measured on all thirty-three, the frames' JSON byte
+for byte against the binary built from the commit before. A depot no dose goes through is refused,
+and so is an oral dose through a depot that is not there.
+
 ## `frames` was a physics knob and is not any more
 
 A scene says `duration_s` and `frames`, and the run used to advance by `duration_s / frames`. Each
@@ -405,7 +458,7 @@ it is not an error estimate; `--deep`'s measured order is what tells the two apa
 ## Every one of them is run by CI
 
 A scene in this repository is a claim, and one that parses and then produces nonsense is worse
-than none at all. `tests/scene.rs` runs all thirty-three on every commit and asserts one number each —
+than none at all. `tests/scene.rs` runs all thirty-four on every commit and asserts one number each —
 chosen to be a property of the physics rather than of the file, so it would change if the
 library broke and not merely if the scene were edited. Adding a scene without a claim fails
 the test rather than passing quietly. CI also runs the real binary on the real files, which is

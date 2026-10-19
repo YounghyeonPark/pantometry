@@ -1007,14 +1007,19 @@ impl CompartmentModel {
                 .iter()
                 .filter(|x| x.depot == i)
                 .map(|x| x.remaining)
-                .sum(),
+                .fold(0.0, |a, x| a + x),
         )
     }
 
     /// Drug in every depot right now. Held by the model and not in the body — see the module
     /// docs for why it is counted and why it is not part of [`CompartmentModel::body_burden`].
     pub fn depot_mass(&self) -> Mass {
-        Mass::from_si(self.doses.iter().map(|x| x.remaining).sum())
+        Mass::from_si(
+            self.doses
+                .iter()
+                .map(|x| x.remaining)
+                .fold(0.0, |a, x| a + x),
+        )
     }
 
     /// Drug lost before absorption over the run: `(1 − F)·dose` for every dose taken so far.
@@ -1028,7 +1033,7 @@ impl CompartmentModel {
                 .iter()
                 .filter(|x| x.given)
                 .map(|x| x.dose - x.bioavailable)
-                .sum(),
+                .fold(0.0, |a, x| a + x),
         )
     }
 
@@ -1253,7 +1258,13 @@ impl CompartmentModel {
     }
 
     fn pending_oral(&self) -> f64 {
-        self.doses.iter().filter(|d| !d.given).map(|d| d.dose).sum()
+        // From `+0.0` and not by `sum`, which starts at `-0.0`: a filter that keeps nothing
+        // printed `still to take -0.000000000e0` in the CSV of the first scene with a tablet.
+        self.doses
+            .iter()
+            .filter(|d| !d.given)
+            .map(|d| d.dose)
+            .fold(0.0, |a, x| a + x)
     }
 
     /// Steady-state volume of distribution, `Σ K_p,i V_i` — `Σ V_i` when nothing is perfused,
@@ -3419,6 +3430,46 @@ mod tests {
             "{total} mg"
         );
         assert!((mg("lost before absorption") / (expected * 1e6) - 1.0).abs() < 1e-15);
+    }
+
+    /// **No reading is a negative zero.** `Iterator::sum` over `f64` starts at `-0.0`, so a
+    /// filter that keeps nothing — no dose taken yet, every dose taken — read `-0` and the CSV of
+    /// the first scene with a tablet printed `still to take -0.000000000e0` beside the dose it
+    /// had just swallowed. Asked before the dose, at the step it is taken, and of a depot no dose
+    /// has gone through.
+    #[test]
+    fn an_empty_part_of_the_books_reads_plus_zero() {
+        let (mut m, c) = one_compartment();
+        let gut = m
+            .depot("gut", c, Frequency::from_si(1.0 / HOUR), 0.8, Time::s(0.0))
+            .unwrap();
+        m.oral(gut, Mass::from_si(1e-4), Time::s(0.0)).unwrap();
+        let signs = |m: &CompartmentModel| -> Vec<(String, f64)> {
+            m.readings()
+                .into_iter()
+                .filter(|r| r.value == 0.0 && r.value.is_sign_negative())
+                .map(|r| (r.label, r.value))
+                .collect()
+        };
+        assert_eq!(signs(&m), [], "before the dose is taken");
+        assert!(m.presystemic_loss().to_si().is_sign_positive());
+        run(&mut m, Time::s(0.0), Time::s(60.0), 1);
+        assert_eq!(signs(&m), [], "the step it is taken");
+        assert!(m.pending_dose().to_si().is_sign_positive());
+        // And a depot no dose has gone through, which is the empty filter in `depot_amount` and
+        // the empty sum in `depot_mass`.
+        let (mut n, d) = one_compartment();
+        let unused = n
+            .depot(
+                "unused",
+                d,
+                Frequency::from_si(1.0 / HOUR),
+                1.0,
+                Time::s(0.0),
+            )
+            .unwrap();
+        assert!(n.depot_amount(unused).to_si().is_sign_positive());
+        assert!(n.depot_mass().to_si().is_sign_positive());
     }
 
     /// **Superposition: two doses are the sum of two single doses, to rounding.**

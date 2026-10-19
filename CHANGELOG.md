@@ -4135,6 +4135,91 @@ protects nothing.
     `powf` in it outside a doc comment saying none is used. No scene changes:
     `a_dose_leaves_at_the_rate_the_roots_say` and `every_scene_that_ships_runs_and_says_something_true`
     pass unchanged.
+- **Scene 34, `34-a-tablet-that-meets-the-liver-first`: an oral dose distributing through a
+  perfusion-limited body, and the scene format's `compartments` kind learns `perfusions`, `depots`
+  and `oral`.** One 5 L blood pool clearing 6 L/h renally, and three tissues perfused off it: a
+  1.5 L liver at 90 L/h, `K_p` 2, eliminating 60 L/h on its venous blood (the well-stirred liver,
+  `E` = 0.4); 30 L of lean tissue at 210 L/h, `K_p` 0.7; 15 L of fat at 30 L/h, `K_p` 6. A 400 mg
+  tablet's depot empties into the **liver** at `kₐ` = 1/h after a half-hour lag with `F` = 0.9,
+  because a one-pool model has no portal vein and that is how first pass is written. **The
+  physiology is illustrative and labelled so** in the scene's README: no ICRP 89 or Brown 1997
+  table has been read here, and nothing is cited. Blood peaks at 1.59 mg/L at one hour, fat at
+  3.79 mg/L at three, and at 24 h fat holds 13.39 times the blood against its `K_p` of 6.
+  - **The format.** `perfusions` (`blood`, `tissue`, `flow_l_per_h`, `partition`), `depots`
+    (`label`, `into`, `absorption_per_h`, `bioavailability`, `lag_h` defaulting to none) and `oral`
+    (`depot`, `dose_mg`, `at_h`), each `#[serde(default)]` under `deny_unknown_fields`, mapped to
+    `perfuse`, `depot` and `oral`. Every refusal names the field by index with the file's own
+    numbers, because the library's message carries SI: `perfusions[0], "liver" from "blood" at
+    flow_l_per_h -90 and partition 2: ... (-2.5e-5)`. A label that names no compartment says which
+    field it was in. Two depots with one label, an oral dose through a depot that is not there, and
+    **a depot no dose goes through** are refused — the last for the reason an unused `materials`
+    entry is: it runs exactly as though it were absent while the file reads as a tablet.
+  - **The guards the oral entry named.** `nothing was administered` counts oral doses, so a scene
+    dosed only by mouth builds; the note's `mg administered` sums them, and a scene with perfusions
+    or depots says how many and how much was by mouth. `no compartment eliminates` needed nothing:
+    a perfused eliminating liver is still an eliminating compartment. A scene with neither new key
+    prints the note it printed.
+  - **Every existing scene is the same bits.** All thirty-three, run by the binary built from
+    `c9720b9` in its own worktree and by this one: every frame's JSON byte for byte, and `check`'s
+    output identical. `a_dose_leaves_at_the_rate_the_roots_say` passes unchanged.
+  - **The checks**, each from the scene's own numbers and none against a second implementation:
+    - **Hepatic first pass**, `AUC_b(oral)/AUC_b(IV into the blood) = F(1 − E)` = 0.54, whatever
+      `CL_r` is, with every non-eliminating tissue's area `K_p` times the blood's, and the liver's
+      `K_p(1 − E)` after the IV dose and `K_p(Q_h + CL_r)/Q_h` after the tablet. Integrating each
+      organ's balance over all time leaves that algebra, and Euler satisfies it **exactly**:
+      `h Σ xₙ = −M⁻¹(x₀ + Σ b)`. Eleven ratios at the shipped 10 s and at 40 s, 240 h each,
+      within 4.4e-16 of the closed form under `16ε` plus the area still to come — which renal
+      clearance alone bounds at `A_rem/CL_r`, asserted below 1e-15 and measured at 3.0e-19.
+    - **The steady state an infusion implies**, started there through the format itself — each
+      organ dosed its closed-form amount as a bolus, the blood infused at the rate that holds 1
+      mg/L — moves one ulp in 8 640 steps under `(n + 8)ε`. **The first version moved 3.06e-11,
+      137 656 ε**, and that was not the fixed point: the infusion's last slice takes
+      `total − delivered`, which carries every earlier slice's rounding at once. The infusion now
+      runs past the end of the run, and the test asserts the 10 s step that makes every `now` an
+      integer, so `(now + h) − now` is exact and the clock adds nothing.
+    - **The gut, the books and the readings**, in `tests/scene.rs`: nothing taken before the first
+      step; `lost before absorption` `(1 − F)·D` to 4ε; the depot `F·D·e^{−kₐ(T − t_lag)}` at
+      24 h to 3.9e-13 under the library's `1.1nε`; the five book readings summing to the dose at
+      every frame to 1e-12; and the note counting the tablet.
+    - **Each organ in the terminal phase**: one mode left, so a tissue's balance fixes
+      `C_t/C_b = Q/((Q + CL)/K_p − V(1 − ρ)/h)` from the blood's own fall `ρ` per step. Liver,
+      lean tissue and fat depart by 1.01, 0.012 and 7.6 times the gut's remaining feed into the
+      liver (3.4e-8 of its blood supply), and by the same multiples at 30 h where the feed is 130
+      times smaller — measured once in a throwaway script — so the tolerance is 64 times the feed.
+    - The format's refusals, twelve of them, by the text each one says, and the note of a
+      perfused body with no tablet, which reads `0.0 mg of it by mouth` and not `-0.0`.
+  - **Six sabotages, each applied by script with an anchor asserted to occur once and restored by
+    `cp`, `touch` and SHA-256 from a uniquely named copy:**
+
+    | sabotage | caught by |
+    | --- | --- |
+    | the depot feeding the blood instead of the liver | the first pass: 0.900 against 0.540. **Not** by `tests/scene.rs`: the books, the gut and the terminal balances are all blind to where a depot delivers |
+    | `K_p` swapped between the liver and the fat | the steady state (blood 0.448 off), the liver's area (3.6 against 1.2) and the terminal phase (3.71 against 1.21). The first pass passed, as it should: `F(1 − E)` has no `K_p` in it |
+    | an oral dose not counted as administered | the scene refused as saying nothing, in both files |
+    | the note's sum without the oral doses | the note, in both files: it read `-0.0 mg administered` |
+    | the IV reference given by mouth | the first pass: 1.000 against 0.540 |
+    | the note's by-mouth figure summed by `sum` | a perfused body dosed by bolus: `-0.0 mg of it by mouth` |
+
+  - **Found on the way, in `pantometry-pharmacokinetic`: three readings were a negative zero.**
+    `Iterator::sum` over `f64` starts at `-0.0`, so a filter that keeps nothing — no dose taken
+    yet, every dose taken — read `-0`, and the scene's CSV printed `still to take -0.000000000e0`
+    beside the tablet it had just swallowed, and `lost before absorption` the same before it.
+    `pending_oral`, `presystemic_loss`, `depot_mass` and `depot_amount` fold from `+0.0`, which
+    changes no nonzero value; `an_empty_part_of_the_books_reads_plus_zero` holds it, and fails on
+    either sum put back. 42 tests in the crate (41 before) and its one doctest.
+  - **The viewer, the editor and the report** read it through its readings, as `32`: a line chart
+    of four concentrations in mg/L and five amounts in mg. `tools/report-check` runs the report's
+    JavaScript on it, 21 checks and none failed. `verify --deep`: determinism, mass at 2.7e-16,
+    the halved window moving fat 0.001%, every concentration converging at order 1.00. It has
+    nothing to place, so it is the fifth scene with no panel and no tile, glTF refuses it as it
+    refuses `32`, and the tile count stays **29**. `tools/presets/make.py` regenerated
+    `presets.rs` (34 presets, `34` under "A dose in a body"); every tile came out byte for byte the
+    same, and a second run reproduced both. The script prints 130 KiB of tiles, which
+    `tools/presets/README.md` had as 125 while the tiles were these.
+  - Counts moved to thirty-four in every document but `CLAUDE.md` and `.claude/agents/`, with the
+    numerators measured rather than incremented: fourteen scenes print a domain as not drawn,
+    twenty-one hold one kind of domain, thirty-three state no pose, twenty-five export glTF and
+    nine are refused, and the scene walk's pin holds 81 `(label, unit)` pairs, 70 of them answers.
 
 ### Changed
 

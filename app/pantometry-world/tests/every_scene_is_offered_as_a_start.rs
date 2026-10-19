@@ -231,9 +231,10 @@ fn every_area_is_named_and_none_is_empty() {
 /// `every_shipped_scene_puts_something_on_the_canvas` greps for the same string at test time. The
 /// tiles on disk *are* that check, frozen at generation. And the render is not where it comes
 /// from: the no-panel branch runs before an adapter is ever requested, so it reports the same
-/// three on a machine with no GPU — which is CI's case, stated in `ci.yml`.
+/// five on a machine with no GPU — which is CI's case, stated in `ci.yml`. It said three here
+/// after the first compartment model made it four.
 ///
-/// What this test is, then, is a pin: a compile-time constant against four literals. It cannot
+/// What this test is, then, is a pin: a compile-time constant against five literals. It cannot
 /// fail on its own, and it does not have to. It fails when somebody regenerates after a scene
 /// lost its geometry, which is exactly when the screen would otherwise start claiming that scene
 /// reports readings. The live check is the other file's, and it is live on any runner because of
@@ -253,7 +254,9 @@ fn a_preset_has_a_picture_unless_its_scene_has_nothing_to_draw() {
             "13-winding-that-heats-itself.json",
             // A compartment model, for the same reason the three above draw nothing: a graph of
             // volumes has readings and not positions.
-            "32-a-dose-distributing-and-leaving.json"
+            "32-a-dose-distributing-and-leaving.json",
+            // The same kind with organs in it, which are still volumes and not places.
+            "34-a-tablet-that-meets-the-liver-first.json"
         ],
         "the set of presets offered without a picture has changed"
     );

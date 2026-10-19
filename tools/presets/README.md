@@ -4,8 +4,8 @@
 
 | what | where | why it exists |
 | --- | --- | --- |
-| `presets.rs` | `app/pantometry-world/src/` | the thirty-three shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
-| 29 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 125 KiB in total and 4.3 KiB each. **Measured here rather than remembered**: this line said 282 KiB and 10.4 KiB each while the committed tiles were already this size, and regenerating them changed nothing but the count |
+| `presets.rs` | `app/pantometry-world/src/` | the thirty-four shipped scenes, grouped by what they are a simulation of, with each scene's text embedded |
+| 29 PNG tiles | `app/pantometry-world/thumbnails/` | a picture of each scene's last frame, 240×156, 130 KiB in total and 4.5 KiB each, as `make.py` prints them. **Measured here rather than remembered**: this line said 282 KiB and 10.4 KiB each while the committed tiles were already a smaller size, and then 125 KiB and 4.3 KiB while they were these — 132 884 bytes, found on 2026-10-19 by a regeneration that changed no tile |
 
 ```sh
 cargo build --release --bin pantometry --manifest-path app/Cargo.toml
@@ -15,7 +15,12 @@ python tools/presets/make.py
 It runs every scene, renders the last frame with `pantometry view --thumbnail`, sweeps away any
 tile no scene names any more, writes the Rust and runs `rustfmt` over it. Running it twice
 reproduces `presets.rs` byte for byte and rewrites the tiles identically — measured on 2026-10-02,
-two runs, every tile's SHA-256 the same.
+two runs, every tile's SHA-256 the same, and again on 2026-10-19 for scene 34. That run also
+rejoined thirteen `thumb: Some(include_bytes!(...))` lines the committed file had split across
+three. rustfmt 1.10.0 accepts both spellings — `rustfmt --check` passes the old file and the new —
+so the format check could not have said which one the script writes; the script writes one line,
+and the committed file was therefore not its output as it stands. Where the split came from is
+not recorded.
 
 **The committed tiles are the script's output again**, and for a while they were not. Adding scene
 33 rewrote five that no scene change had touched — `06`, `07`, `14`, `25` and `31` — because the
@@ -70,7 +75,7 @@ considered and each fails on something concrete:
 * **Ship without pictures.** That is what the screen was, and it is the thing the user said was
   hard to choose from twice.
 
-So the cost is 125 KiB in git, once per change to a scene, and the guard against the usual price
+So the cost is 130 KiB in git, once per change to a scene, and the guard against the usual price
 of a committed artefact — that it drifts from its source and nobody notices — is that the two
 generated things are checked against the scenes rather than against themselves — `presets.rs`
 is; a tile's pixels are not, as above:
@@ -90,8 +95,8 @@ is; a tile's pixels are not, as above:
 twice. Both it and the `pantometry-app` row trace to one `eprintln!` — `this run has no panels at
 all`, which this script greps for and which the test greps for. And it is not a GPU render either
 way: that branch runs before an adapter is requested, which is why the live half still reports the
-same four on CI — three motor scenes and the compartment model, scene 32, which this line
-said three for after it was added — where `ci.yml` says the runner has none.
+same five on CI — three motor scenes and the two compartment models, scenes 32 and 34, which this
+line said three for after the first was added — where `ci.yml` says the runner has none.
 
 ## What is a judgement here and what is not
 

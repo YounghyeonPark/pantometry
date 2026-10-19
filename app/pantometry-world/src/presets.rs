@@ -1,4 +1,4 @@
-//! The thirty-three shipped scenes, offered as starting points.
+//! The thirty-four shipped scenes, offered as starting points.
 //!
 //! **A chooser asked "what are you simulating?" and answered with `bar`, `block` and `hall`.**
 //! That is the scene format's vocabulary, which is the right vocabulary for a file and the wrong
@@ -20,7 +20,8 @@
 //! # Embedded, because a binary does not know where the repository is
 //!
 //! `include_str!`, for the reason `templates` gives: `editor-core` compiles to `wasm32`, where
-//! there is no disk to read a scene off. Twenty-seven kilobytes for all thirty-three.
+//! there is no disk to read a scene off. 28 758 bytes for all thirty-four, measured 2026-10-19;
+//! it said twenty-seven kilobytes for thirty-three, which was 27 318.
 
 /// One scene, offered as a starting point.
 pub struct Preset {
@@ -45,10 +46,10 @@ pub struct Preset {
     pub json: &'static str,
     /// A picture of its last frame, as PNG, or `None` when there is nothing to draw.
     ///
-    /// **Four have none.** A `network`, two `winding`s and a compartment model report readings
+    /// **Five have none.** A `network`, two `winding`s and two compartment models report readings
     /// rather than places, so a run of them carries no panel and there is nothing for the shell to
     /// render. They are offered with their words and no tile, which is what they are. This said
-    /// three for as long as the compartment model has been a scene.
+    /// three for as long as the first compartment model had been a scene.
     pub thumb: Option<&'static [u8]>,
 }
 
@@ -99,7 +100,7 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
     (
         "medicine",
         "A dose in a body",
-        "compartments, clearance, and the curve a dose traces",
+        "compartments, a tablet through the liver, and the curves a dose traces",
     ),
     (
         "radio",
@@ -123,7 +124,7 @@ pub const AREAS: [(&str, &str, &str); AREA_COUNT] = [
 pub const AREA_COUNT: usize = 13;
 
 /// Every shipped scene, as a starting point.
-pub const PRESETS: [Preset; 33] = [
+pub const PRESETS: [Preset; 34] = [
     Preset {
         file: "01-room-mode.json",
         area: "rooms",
@@ -293,9 +294,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["block"],
         files: &[],
         json: include_str!("../scenes/19-a-coating-stops-the-heat.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/19-a-coating-stops-the-heat.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/19-a-coating-stops-the-heat.png")),
     },
     Preset {
         file: "20-melting-a-block-of-ice.json",
@@ -304,9 +303,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["block", "heater"],
         files: &[],
         json: include_str!("../scenes/20-melting-a-block-of-ice.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/20-melting-a-block-of-ice.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/20-melting-a-block-of-ice.png")),
     },
     Preset {
         file: "21-a-wax-thermal-buffer.json",
@@ -324,9 +321,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["block", "heater"],
         files: &[],
         json: include_str!("../scenes/22-wax-in-an-aluminium-matrix.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/22-wax-in-an-aluminium-matrix.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/22-wax-in-an-aluminium-matrix.png")),
     },
     Preset {
         file: "23-a-part-radiating-to-its-lid.json",
@@ -335,9 +330,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["block"],
         files: &[],
         json: include_str!("../scenes/23-a-part-radiating-to-its-lid.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/23-a-part-radiating-to-its-lid.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/23-a-part-radiating-to-its-lid.png")),
     },
     Preset {
         file: "24-a-power-module-junction-to-ambient.json",
@@ -346,9 +339,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["block"],
         files: &[],
         json: include_str!("../scenes/24-a-power-module-junction-to-ambient.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/24-a-power-module-junction-to-ambient.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/24-a-power-module-junction-to-ambient.png")),
     },
     Preset {
         file: "25-what-140-kelvin-does-to-the-solder.json",
@@ -357,9 +348,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["block", "structure"],
         files: &[],
         json: include_str!("../scenes/25-what-140-kelvin-does-to-the-solder.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/25-what-140-kelvin-does-to-the-solder.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/25-what-140-kelvin-does-to-the-solder.png")),
     },
     Preset {
         file: "26-poiseuille-in-a-cooling-channel.json",
@@ -368,9 +357,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["channel"],
         files: &[],
         json: include_str!("../scenes/26-poiseuille-in-a-cooling-channel.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/26-poiseuille-in-a-cooling-channel.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/26-poiseuille-in-a-cooling-channel.png")),
     },
     Preset {
         file: "27-a-cavity-ringing-at-its-own-frequency.json",
@@ -379,9 +366,7 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["cavity"],
         files: &[],
         json: include_str!("../scenes/27-a-cavity-ringing-at-its-own-frequency.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/27-a-cavity-ringing-at-its-own-frequency.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/27-a-cavity-ringing-at-its-own-frequency.png")),
     },
     Preset {
         file: "28-an-eigenstate-that-does-not-move.json",
@@ -390,49 +375,34 @@ pub const PRESETS: [Preset; 33] = [
         kinds: &["well"],
         files: &[],
         json: include_str!("../scenes/28-an-eigenstate-that-does-not-move.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/28-an-eigenstate-that-does-not-move.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/28-an-eigenstate-that-does-not-move.png")),
     },
     Preset {
         file: "29-a-designed-bracket-becomes-cells.json",
         area: "heat",
         title: "a designed bracket carrying a module's heat along its own shape to its bolts",
         kinds: &["block"],
-        files: &[(
-            "parts/l-bracket.stl",
-            include_bytes!("../scenes/parts/l-bracket.stl"),
-        )],
+        files: &[("parts/l-bracket.stl", include_bytes!("../scenes/parts/l-bracket.stl"))],
         json: include_str!("../scenes/29-a-designed-bracket-becomes-cells.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/29-a-designed-bracket-becomes-cells.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/29-a-designed-bracket-becomes-cells.png")),
     },
     Preset {
         file: "30-two-phases-crossing-at-a-clearance.json",
         area: "power",
-        title:
-            "two blackened busbars crossing at a clearance, one at twice the current, in still air",
+        title: "two blackened busbars crossing at a clearance, one at twice the current, in still air",
         kinds: &["block"],
         files: &[],
         json: include_str!("../scenes/30-two-phases-crossing-at-a-clearance.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/30-two-phases-crossing-at-a-clearance.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/30-two-phases-crossing-at-a-clearance.png")),
     },
     Preset {
         file: "31-a-protein-shaking-at-body-temperature.json",
         area: "proteins",
         title: "crambin at body temperature, moving along the collective modes its own fold has",
         kinds: &["protein"],
-        files: &[(
-            "structures/1CRN.pdb",
-            include_bytes!("../scenes/structures/1CRN.pdb"),
-        )],
+        files: &[("structures/1CRN.pdb", include_bytes!("../scenes/structures/1CRN.pdb"))],
         json: include_str!("../scenes/31-a-protein-shaking-at-body-temperature.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/31-a-protein-shaking-at-body-temperature.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/31-a-protein-shaking-at-body-temperature.png")),
     },
     Preset {
         file: "32-a-dose-distributing-and-leaving.json",
@@ -446,16 +416,19 @@ pub const PRESETS: [Preset; 33] = [
     Preset {
         file: "33-aspirin-relaxing-out-of-a-clash.json",
         area: "proteins",
-        title:
-            "aspirin relaxing from the dictionary's ideal coordinates, one minimiser step a frame",
+        title: "aspirin relaxing from the dictionary's ideal coordinates, one minimiser step a frame",
         kinds: &["molecule"],
-        files: &[(
-            "structures/AIN.cif",
-            include_bytes!("../scenes/structures/AIN.cif"),
-        )],
+        files: &[("structures/AIN.cif", include_bytes!("../scenes/structures/AIN.cif"))],
         json: include_str!("../scenes/33-aspirin-relaxing-out-of-a-clash.json"),
-        thumb: Some(include_bytes!(
-            "../thumbnails/33-aspirin-relaxing-out-of-a-clash.png"
-        )),
+        thumb: Some(include_bytes!("../thumbnails/33-aspirin-relaxing-out-of-a-clash.png")),
+    },
+    Preset {
+        file: "34-a-tablet-that-meets-the-liver-first.json",
+        area: "medicine",
+        title: "a 400 mg tablet absorbed through the liver and carried by blood into lean tissue and fat, twenty-four hours of it",
+        kinds: &["compartments"],
+        files: &[],
+        json: include_str!("../scenes/34-a-tablet-that-meets-the-liver-first.json"),
+        thumb: None,
     },
 ];

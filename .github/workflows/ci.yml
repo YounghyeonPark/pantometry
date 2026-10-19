@@ -222,7 +222,7 @@ jobs:
           cargo fmt --all --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-      # The whole suite, which includes the **thirty-three** scenes and their closed-form checks.
+      # The whole suite, which includes the **thirty-four** scenes and their closed-form checks.
       # Those used to run in the library's `test` job; they moved with `pantometry-world` and this
       # is where they are held now. That count said twenty-eight, then thirty, then thirty-two, as
       # scenes arrived.

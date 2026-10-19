@@ -1,6 +1,6 @@
 //! **Every preset, opened the way a person opens one, checks without an error.**
 //!
-//! The New-project screen offers the thirty-three shipped scenes, and picking one opens it as an
+//! The New-project screen offers the thirty-four shipped scenes, and picking one opens it as an
 //! unsaved `scene.json`. Three of them name a file beside themselves — the protein's
 //! `structures/1CRN.pdb`, the bracket's `parts/l-bracket.stl` and, since scene 33, aspirin's
 //! `structures/AIN.cif` — and an unsaved scene's "beside"

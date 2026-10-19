@@ -1,0 +1,68 @@
+{
+  "title": "a 400 mg tablet absorbed through the liver and carried by blood into lean tissue and fat, twenty-four hours of it",
+  "duration_s": 86400.0,
+  "frames": 48,
+  "window_s": 10.0,
+  "domains": [
+    {
+      "kind": "compartments",
+      "name": "body",
+      "volumes": [
+        {
+          "label": "blood",
+          "volume_l": 5.0,
+          "clearance_l_per_h": 6.0
+        },
+        {
+          "label": "liver",
+          "volume_l": 1.5,
+          "clearance_l_per_h": 60.0
+        },
+        {
+          "label": "lean tissue",
+          "volume_l": 30.0
+        },
+        {
+          "label": "fat",
+          "volume_l": 15.0
+        }
+      ],
+      "perfusions": [
+        {
+          "blood": "blood",
+          "tissue": "liver",
+          "flow_l_per_h": 90.0,
+          "partition": 2.0
+        },
+        {
+          "blood": "blood",
+          "tissue": "lean tissue",
+          "flow_l_per_h": 210.0,
+          "partition": 0.7
+        },
+        {
+          "blood": "blood",
+          "tissue": "fat",
+          "flow_l_per_h": 30.0,
+          "partition": 6.0
+        }
+      ],
+      "depots": [
+        {
+          "label": "gut",
+          "into": "liver",
+          "absorption_per_h": 1.0,
+          "bioavailability": 0.9,
+          "lag_h": 0.5
+        }
+      ],
+      "oral": [
+        {
+          "depot": "gut",
+          "dose_mg": 400.0,
+          "at_h": 0.0
+        }
+      ]
+    }
+  ]
+}

@@ -1103,6 +1103,16 @@ pub enum DomainSpec {
     ///
     /// A compartment with no `clearance_l_per_h` does not eliminate; it only holds and exchanges.
     /// At least one has to, or the drug never leaves and the run has no terminal phase to measure.
+    ///
+    /// # Organs, and a dose by mouth
+    ///
+    /// `perfusions` make a compartment a **tissue** fed by blood flow from a blood pool, holding
+    /// `partition` times the blood's concentration once the two have equilibrated, and clearing
+    /// on the blood *leaving* it — so an eliminating liver that is perfused is the well-stirred
+    /// liver. `depots` are absorption routes into a compartment, and `oral` doses go through
+    /// them; a depot into the perfused liver is how hepatic first pass is written, because there
+    /// is no portal vein. Each is optional and absent means none, so every scene written before
+    /// them means what it meant.
     Compartments {
         /// Domain name.
         name: String,
@@ -1111,12 +1121,21 @@ pub enum DomainSpec {
         /// Intercompartmental clearance between two of them, by label.
         #[serde(default)]
         links: Vec<LinkSpec>,
+        /// Blood flow from a blood pool through a tissue, by label.
+        #[serde(default)]
+        perfusions: Vec<PerfusionSpec>,
         /// Doses given all at once, at `t = 0`.
         #[serde(default)]
         boluses: Vec<DoseSpec>,
         /// Doses spread evenly over a window.
         #[serde(default)]
         infusions: Vec<InfusionSpec>,
+        /// First-order absorption routes, each into one compartment.
+        #[serde(default)]
+        depots: Vec<DepotSpec>,
+        /// Doses taken through a depot, each at its own time.
+        #[serde(default)]
+        oral: Vec<OralSpec>,
     },
     /// A heat source with a finite tank, defined in this crate rather than the library.
     ///
@@ -1809,6 +1828,54 @@ pub struct InfusionSpec {
     pub to_h: f64,
 }
 
+/// Blood flow from a blood pool through a tissue, in a [`DomainSpec::Compartments`] model.
+///
+/// Carries `Q·(C_b − C_t/K_p)`: blood arrives at the pool's concentration and leaves the tissue
+/// at its venous one. **Not symmetric**, unlike a [`LinkSpec`] — which field is the blood and
+/// which the tissue is the physics.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerfusionSpec {
+    /// The blood pool it is fed from, by label.
+    pub blood: String,
+    /// The tissue it perfuses, by label. A tissue is perfused once.
+    pub tissue: String,
+    /// The blood flow through the tissue, in litres per hour.
+    pub flow_l_per_h: f64,
+    /// `K_p`: the tissue's concentration over its venous blood's, once equilibrated.
+    pub partition: f64,
+}
+
+/// A first-order absorption route into a compartment: the gut, for an oral dose.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DepotSpec {
+    /// What it is called, and the name an [`OralSpec`] gives it by.
+    pub label: String,
+    /// Which compartment it empties into, by label.
+    pub into: String,
+    /// `kₐ`, the rate constant on the amount in the depot, per hour.
+    pub absorption_per_h: f64,
+    /// `F`, the fraction of each dose that is absorbed at all, in `(0, 1]`. Stated rather than
+    /// defaulted: a silent 1 would be a claim about the drug.
+    pub bioavailability: f64,
+    /// Time from taking a dose to the start of its absorption, in hours. Absent means none.
+    #[serde(default)]
+    pub lag_h: f64,
+}
+
+/// A dose taken through a depot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OralSpec {
+    /// The depot it is taken through, by label.
+    pub depot: String,
+    /// How much, in milligrams. `F` of it is absorbed and the rest is lost before absorption.
+    pub dose_mg: f64,
+    /// When it is taken, in hours.
+    pub at_h: f64,
+}
+
 /// The average mass of an amino-acid residue, in daltons.
 fn residue_mass() -> f64 {
     110.0
@@ -2285,8 +2352,11 @@ impl DomainSpec {
                 name,
                 volumes,
                 links,
+                perfusions,
                 boluses,
                 infusions,
+                depots,
+                oral,
             } => {
                 if volumes.is_empty() {
                     return Err(format!(
@@ -2363,19 +2433,128 @@ impl DomainSpec {
                         )
                         .map_err(|e| format!("{name}: {e}"))?;
                 }
-                if boluses.is_empty() && infusions.is_empty() {
+                // Every refusal below names the field it came from and the file's own numbers,
+                // because the library's message carries the value in SI — a blood flow of
+                // 90 L/h arrives there as 2.5e-5 m³/s, which nobody wrote.
+                for (k, p) in perfusions.iter().enumerate() {
+                    let blood =
+                        find(&p.blood).map_err(|e| format!("{e}, in perfusions[{k}].blood"))?;
+                    let tissue =
+                        find(&p.tissue).map_err(|e| format!("{e}, in perfusions[{k}].tissue"))?;
+                    model
+                        .perfuse(
+                            blood,
+                            tissue,
+                            Clearance::from_si(p.flow_l_per_h * per_hour),
+                            p.partition,
+                        )
+                        .map_err(|e| {
+                            format!(
+                                "{name}: perfusions[{k}], {:?} from {:?} at flow_l_per_h {} and \
+                                 partition {}: {e}",
+                                p.tissue, p.blood, p.flow_l_per_h, p.partition
+                            )
+                        })?;
+                }
+                let mut routes: Vec<(String, Depot)> = Vec::new();
+                for (k, d) in depots.iter().enumerate() {
+                    if routes.iter().any(|(l, _)| *l == d.label) {
+                        return Err(format!(
+                            "{name}: depots[{k}]: two depots are called {:?}",
+                            d.label
+                        ));
+                    }
+                    let handle = model
+                        .depot(
+                            d.label.clone(),
+                            find(&d.into).map_err(|e| format!("{e}, in depots[{k}].into"))?,
+                            Frequency::from_si(d.absorption_per_h / 3600.0),
+                            d.bioavailability,
+                            Time::from_si(d.lag_h * 3600.0),
+                        )
+                        .map_err(|e| {
+                            format!(
+                                "{name}: depots[{k}] {:?} at absorption_per_h {}, \
+                                 bioavailability {} and lag_h {}: {e}",
+                                d.label, d.absorption_per_h, d.bioavailability, d.lag_h
+                            )
+                        })?;
+                    routes.push((d.label.clone(), handle));
+                }
+                for (k, o) in oral.iter().enumerate() {
+                    let Some((_, depot)) = routes.iter().find(|(l, _)| *l == o.depot) else {
+                        return Err(format!(
+                            "{name}: oral[{k}]: no depot called {:?}; it has {}",
+                            o.depot,
+                            if routes.is_empty() {
+                                "none, and an oral dose needs one in `depots`".to_string()
+                            } else {
+                                routes
+                                    .iter()
+                                    .map(|(l, _)| format!("{l:?}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            }
+                        ));
+                    };
+                    model
+                        .oral(
+                            *depot,
+                            Mass::from_si(o.dose_mg * 1e-6),
+                            Time::from_si(o.at_h * 3600.0),
+                        )
+                        .map_err(|e| {
+                            format!(
+                                "{name}: oral[{k}] through {:?}, dose_mg {} at_h {}: {e}",
+                                o.depot, o.dose_mg, o.at_h
+                            )
+                        })?;
+                }
+                // **A depot no dose goes through is refused**, for the reason an unused `materials`
+                // entry is: it runs, audits and draws exactly as though it were not there, and the
+                // file reads as though the drug were taken by mouth.
+                if let Some((label, _)) = routes
+                    .iter()
+                    .find(|(l, _)| !oral.iter().any(|o| o.depot == *l))
+                {
+                    return Err(format!(
+                        "{name}: the depot {label:?} has no dose in `oral`, so nothing is ever \
+                         absorbed through it"
+                    ));
+                }
+                // An oral dose is administered: a scene dosed only by mouth is not a scene that
+                // says nothing, and its milligrams belong in the note's sum.
+                if boluses.is_empty() && infusions.is_empty() && oral.is_empty() {
                     return Err(format!(
                         "{name}: nothing was administered, so every concentration stays zero and \
                          the run says nothing"
                     ));
                 }
-                log.notes.push(format!(
-                    "{name}: {} compartments, {} link(s), {:.1} mg administered",
-                    volumes.len(),
-                    links.len(),
-                    boluses.iter().map(|d| d.dose_mg).sum::<f64>()
-                        + infusions.iter().map(|i| i.dose_mg).sum::<f64>()
-                ));
+                // From `+0.0`: `sum` starts at `-0.0`, and a scene with perfusions and no tablet
+                // would have printed `-0.0 mg of it by mouth`.
+                let by_mouth = oral.iter().fold(0.0, |a, o| a + o.dose_mg);
+                let given = boluses.iter().map(|d| d.dose_mg).sum::<f64>()
+                    + infusions.iter().map(|i| i.dose_mg).sum::<f64>()
+                    + by_mouth;
+                // The note keeps its old words when there is nothing new to say, so a scene
+                // written before perfusions and depots prints what it printed.
+                if perfusions.is_empty() && depots.is_empty() {
+                    log.notes.push(format!(
+                        "{name}: {} compartments, {} link(s), {given:.1} mg administered",
+                        volumes.len(),
+                        links.len(),
+                    ));
+                } else {
+                    log.notes.push(format!(
+                        "{name}: {} compartments, {} link(s), {} perfusion(s), {} depot(s), \
+                         {given:.1} mg administered, {:.1} mg of it by mouth",
+                        volumes.len(),
+                        links.len(),
+                        perfusions.len(),
+                        depots.len(),
+                        by_mouth
+                    ));
+                }
                 Box::new(model)
             }
             DomainSpec::Molecule { name, ccd } => {

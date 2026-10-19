@@ -537,8 +537,8 @@ silence and needed three pins to hold: the labels the scenes emit, the length of
 the whole walk stayed green), and who emitted them — because keying on a label alone meant a *new*
 domain reporting `norm` as its **answer** would vanish from the sweep with nothing to say so.
 Asking the domain removes the first two problems by removing the list, and gives `(domain, label)`
-pairs, which is what the third needed. The scene walk pins the **74** `(label, unit)` pairs the
-thirty-three scenes emit — 63 answers and 11 diagnostics — and the **12** `(domain, label)` pairs, so
+pairs, which is what the third needed. The scene walk pins the **81** `(label, unit)` pairs the
+thirty-four scenes emit — 70 answers and 11 diagnostics — and the **12** `(domain, label)` pairs, so
 an arrival or a departure is a decision somebody made rather than a line nobody read.
 
 The near misses are the argument for a list rather than a heuristic: `invariant` is the energy an
