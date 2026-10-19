@@ -81,19 +81,20 @@ multiple-versions = "warn"
 wildcards = "deny"
 
 [advisories]
-# **Four entries, all reached only through `eframe`, none fixable from here.** Written out because
-# the first run of this file found them, and an ignore list without reasons is a list nobody can
-# audit later. Each was checked for reachability and for whether `cargo update` could move it; none
-# can be, and every one of them is a dependency of a dependency of the window toolkit.
+# **One entry, reached only through `eframe`, not fixable from here.** Written out because an ignore
+# list without reasons is a list nobody can audit later.
+#
+# There were four, and three more appeared on 2026-10-18 (zbus 4's zvariant, zvariant_derive and
+# zbus_names, unmaintained since they merged into zbus 6). Six of the seven came through one
+# feature, eframe's `accesskit`, which nothing here used. It is off now (`pantometry-app`'s
+# Cargo.toml), and 68 crates went with it. The one left is the font parser under egui 0.31's
+# epaint, which a newer egui replaces.
 #
 # This is what the merge's cost looks like *paid* rather than noted: `pantometry-world` left the
-# library's `deny.toml`, and what it joined is a tree with four open advisories in it. The library's
-# own twelve remain clean, and nothing in `crates/` depends on anything here.
+# library's `deny.toml`, and what it joined is a tree with open advisories in it. The library's own
+# twelve remain clean, and nothing in `crates/` depends on anything here.
 ignore = [
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.30's attribute-duplicate check is quadratic in the number of attributes on one start tag. Reached only by accesskit_unix -> atspi -> zbus_xml, which parses **D-Bus introspection XML from the local session bus** — the accessibility service's own descriptions of itself, not a document from anywhere else. Linux only. `zbus_xml 4.0` requires `^0.30` and 0.30.0 is the latest in that range, so `cargo update` moves nothing; the fix is upstream. Denial of service." },
-    { id = "RUSTSEC-2026-0195", reason = "The same crate, the same path, the same reasoning: quick-xml's `NsReader` allocates per namespace declaration before handing the event back, with no bound. Memory-exhaustion denial of service on input that here is the local accessibility bus." },
-    { id = "RUSTSEC-2024-0436", reason = "`paste` is unmaintained rather than defective — no advisory of a fault, only of an absent maintainer. It is a **proc macro**: it runs at compile time and no part of it reaches a binary. Reached by accesskit_windows -> accesskit_winit -> egui-winit -> eframe." },
-    { id = "RUSTSEC-2026-0192", reason = "`ttf-parser` is unmaintained, again with no fault reported. It parses the fonts egui embeds, which are `epaint_default_fonts`' own Hack and Ubuntu Mono — shipped in the binary, not loaded from anywhere a reader controls. Reached by ab_glyph -> epaint -> egui." },
+    { id = "RUSTSEC-2026-0192", reason = "`ttf-parser` is unmaintained, with no fault reported. It parses the fonts egui embeds, which are `epaint_default_fonts`' own Hack and Ubuntu Mono — shipped in the binary, not loaded from anywhere a reader controls. Reached by ab_glyph -> epaint -> egui." },
 ]
 
 [sources]
