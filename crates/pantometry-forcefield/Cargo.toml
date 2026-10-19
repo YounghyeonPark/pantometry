@@ -9,6 +9,12 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+# Kept in the repository and out of the published crate. `tests/amber/` holds ff14SB's
+# Lennard-Jones and residue types, read from ambermini, which is AmberTools 14 under GPL v3. The
+# values may well be facts rather than a work, but MIT OR Apache-2.0 should not rest on that.
+# `benzene_bound_in_tip3p.rs` is the one test that uses them. FreeSolv's CC BY 4.0 mol2 in
+# `tests/freesolv/` needs only its attribution, which travels with it, so it stays.
+exclude = ["tests/amber/", "tests/benzene_bound_in_tip3p.rs"]
 
 [dependencies]
 pantometry-core = { workspace = true }

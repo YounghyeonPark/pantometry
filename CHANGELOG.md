@@ -3916,6 +3916,16 @@ protects nothing.
 
 ### Changed
 
+- **`pantometry-forcefield` publishes without `tests/amber/` and `benzene_bound_in_tip3p.rs`.**
+  `tests/amber/` (2e09cea) holds ff14SB's Lennard-Jones and its residues' atom types, read from
+  ambermini at `f7c421c4`. ambermini is AmberTools 14, released under GPL v3, which an attribution
+  does not satisfy. Its numbers are arguably facts and not a work, but the crate's MIT OR
+  Apache-2.0 should not rest on that argument. Both stay in the repository, where every test still
+  runs; `cargo package --list` no longer names them. The one test file that uses them goes too,
+  and cargo says so: "ignoring test `benzene_bound_in_tip3p`". FreeSolv's mol2 in
+  `tests/freesolv/` is CC BY 4.0. Its attribution travels in the file (authors, papers, commit,
+  SHA-256, licence, unmodified), so it stays.
+
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as
   diagnostics.** They describe the minimisation rather than the molecule, and the scene walk's pin
   on the labels every scene emits is what asked: it refuses a new label until somebody decides
