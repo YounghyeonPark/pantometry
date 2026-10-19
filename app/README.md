@@ -19,7 +19,7 @@ The split existed for a reason that is still true, and the numbers are measured 
 | --- | --- |
 | the library, all twenty published crates | **12** |
 | `bindings/python`, which is split out for this | 19 |
-| `app/` — the viewer, the editor, the CLI and the accelerator, one workspace | 432 |
+| `app/` — the viewer, the editor, the CLI and the accelerator, one workspace | 381 |
 
 `deny.toml` gates every one of the library's twelve by licence, CI builds it with `--locked`, and
 the same crates compile to `wasm32` and to Rust 1.78. None of that can carry a GPU stack, a window
@@ -58,16 +58,23 @@ three lines.
 
 **`pantometry-world` left the library's `deny.toml`, so this workspace grew one.** It was a member
 there, so its dependencies were licence-gated with the library's twelve; it is here now beside
-stacks that had never been gated at all. `app/deny.toml` gates the 332 its three targets resolve, and its allow-list was built
+stacks that had never been gated at all. `app/deny.toml` gates the 277 its three targets resolve, and its allow-list was built
 by censusing what is actually here rather than by copying the library's.
 
 Its first run found **four advisories**, all reached through `eframe` and none fixable from here:
 two denial-of-service vulnerabilities in `quick-xml 0.30` (via `accesskit_unix` → `atspi` →
 `zbus_xml`, which parses D-Bus introspection XML from the *local* accessibility bus, and whose
 requirement `^0.30` has no patched release in range), and `paste` and `ttf-parser` unmaintained —
-a proc macro that never reaches a binary, and the parser for the fonts egui embeds. Each is in the
-ignore list with that argument beside it rather than as a bare id. The library's own twelve remain
-clean, and nothing in `crates/` depends on anything here.
+a proc macro that never reaches a binary, and the parser for the fonts egui embeds. Each went into
+the ignore list with that argument beside it rather than as a bare id.
+
+**The list is empty now, and none of the seven was argued away.** Three more arrived on 2026-10-18,
+and six of the seven came in through eframe's `accesskit` feature, which nothing here used; it is
+off. The seventh, `ttf-parser`, came two ways: through egui 0.31's epaint, which egui 0.34 replaced
+with skrifa, and through winit's Adwaita title bar for GNOME's Wayland, which is off as well. The
+cost of each is stated in `pantometry-app`'s Cargo.toml — no screen-reader tree, and a plain title
+bar with no title text on a Wayland compositor that will not decorate windows itself. The library's
+own twelve remain clean, and nothing in `crates/` depends on anything here.
 
 **The thirty-three scenes left the library's gate.** Their closed-form checks — scene 21's
 `8.3e-15`, scene 24's `1.1e-4`, scene 25's 8.4× relaxation — are among the strongest physics tests

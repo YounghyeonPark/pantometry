@@ -8,7 +8,7 @@
 //! anybody printed the rect.
 //!
 //! `--ui-dump` builds one frame from an `egui::Context` alone and reports every string it drew and
-//! where. `eframe::App::update`'s `Frame` argument was already unused, so nothing here ever needed
+//! where. `eframe::App::ui`'s `Frame` argument is unused, as `App::update`'s was before egui 0.34, so nothing here ever needed
 //! eframe; the shaded viewport is a `PaintCallback`, which a headless run records and never
 //! executes, so no GPU is needed either.
 //!
@@ -220,10 +220,16 @@ fn nothing_the_reader_should_see_is_cut_off_by_the_window() {
     // **And the count is one that can move.** Disabling the condition it is computed from changed
     // nothing at any width above, because nothing is cut at any of them — which is the state to be
     // in and also the shape of an assertion that cannot fail. So a width where something *must* be
-    // cut: at 40 points `watch file` is a wider string than the whole window, and wrapping a row
-    // cannot help when one item is wider than the row. If this stops being 2, `cut` has stopped
-    // measuring and the zeros above mean nothing.
-    let tiny = dump(&[&scene(), "--width", "40"]);
+    // cut: at 40 points `watching the file` is a wider string than the whole window, and wrapping
+    // a row cannot help when one item is wider than the row. If this stops being non-zero, `cut`
+    // has stopped measuring and the zeros above mean nothing.
+    //
+    // **And tall enough for that string to be on the screen at all.** Since egui 0.37 a label in a
+    // row too narrow for it wraps into a column a character wide, so at 40 points every menu title
+    // and button is a tall thin stack, the panels outgrow 950 points, and the status bar — the
+    // string this probe is for — was laid out below the window's bottom: `cut=0` with the one
+    // input that has to cut not on the screen. At 2000 it is, at x=-64.
+    let tiny = dump(&[&scene(), "--width", "40", "--height", "2000"]);
     assert!(
         count(&tiny, "cut") > 0,
         "nothing is cut in a 40-point window, so `cut` is not measuring:\n{tiny}"
@@ -374,7 +380,10 @@ fn the_chooser_offers_every_kind_the_format_defines() {
     // **One frame of a scrollable list shows what fits in the frame**, and at twenty-two kinds
     // the list is taller than a 950-point window: `molecule` pushed `well`'s description below
     // the `Back` row at y=859 and `winding` off it altogether, name and all. It was every name
-    // and all but one description at twenty-one, and every one of both at twenty. `elided=0` in
+    // and all but one description at twenty-one, and every one of both at twenty. egui 0.37's
+    // 13-point text (12.5 before) made each row taller, and `well`'s name followed its description
+    // below the edge: the window's row height changing, which is the case this pin names, read
+    // and moved rather than passed. `elided=0` in
     // the dump says nothing was truncated; it is a `ScrollArea`, and a user scrolls. So both sets
     // are pinned at this size — one more is the list outgrowing the window again, one fewer the
     // window or the row height changing — and what is *offered* is read from a frame tall enough
@@ -397,7 +406,7 @@ fn the_chooser_offers_every_kind_the_format_defines() {
         .collect();
     assert_eq!(
         (named_below, described_below),
-        (vec!["winding"], vec!["well", "winding"]),
+        (vec!["well", "winding"], vec!["well", "winding"]),
         "the set of kinds below the bottom of one frame has changed. One more is a list that has \
          outgrown the window again; one fewer is the window or the row height having changed, and \
          both are worth reading rather than passing:
@@ -431,7 +440,11 @@ fn the_kinds_that_need_a_partner_say_so_and_only_they_do() {
     // wired up — three fields have to agree, not one name — so the chooser says it and the scene
     // opens on the format's own complaint. Exactly two, because a third that stopped saying it
     // would be a row that looks complete and is not.
-    let d = dump(&["--new", "--custom"]);
+    //
+    // Read from a frame tall enough for the whole list, as the test above reads what is offered:
+    // at 950 points `structure`'s note is below the scroll area's edge since egui 0.37's taller
+    // rows, so one frame says it once — which is a list that scrolls, not a row that went quiet.
+    let d = dump(&["--new", "--custom", "--height", "1400"]);
     let said = d
         .lines()
         .filter(|l| l.contains("names another domain"))
@@ -774,7 +787,24 @@ fn the_two_command_rows_are_both_there_and_are_not_the_same_row() {
             .collect()
     };
     let menu = row(4);
-    let bar = row(26);
+    // **Where the toolbar is, read rather than written down.** It was `row(26)`, and egui 0.37's
+    // roomier buttons put the strip at 30: the test then reported an empty toolbar about a frame
+    // that had one. The row is the one `fit view` is on, and what is asserted is that it is below
+    // the menu's and that `run` shares it.
+    let top_of = |text: &str| -> Option<i32> {
+        d.lines().find_map(|l| {
+            let mut it = l.split_whitespace();
+            let (_, y) = (it.next()?, it.next()?.parse::<i32>().ok()?);
+            (said(l) == Some(text)).then_some(y)
+        })
+    };
+    let bar_top = top_of("fit view").expect("`fit view` is on the screen");
+    assert!(
+        bar_top > 4,
+        "the toolbar is not below the menu row: at y={bar_top}
+{d}"
+    );
+    let bar = row(bar_top);
     assert_eq!(
         menu,
         ["File", "Edit", "View", "Window", "Domain", "Run", "Watch"],
@@ -839,13 +869,29 @@ fn every_area_of_the_start_screen_lays_out_at_every_width() {
             //
             // *One* title rather than all of them: at 500 points the column scrolls and only the
             // first three of an area's seven are laid out, which is the screen working.
+            //
+            // **And the last area is below the fold.** Since egui 0.37's taller rows, `All of it
+            // at once` — the thirteenth, under twelve shut ones — puts its one tile's caption at
+            // y≈900 under a `Back` row at 892, and the scroll area does not lay it out. That is
+            // the column scrolling, as at 500; so a frame tall enough to reach it is asked, and
+            // only for whether something was drawn. The geometry below is still this frame's.
             let key = pantometry_world::presets::AREAS[a].0;
-            assert!(
+            let drew = |d: &str| {
                 pantometry_world::presets::PRESETS
                     .iter()
-                    .any(|p| p.area == key && d.contains(p.title)),
-                "area {a} ({key}) at {w} is open and drew no tile:
-{d}"
+                    .any(|p| p.area == key && d.contains(p.title))
+            };
+            let tall;
+            let seen = if drew(&d) {
+                &d
+            } else {
+                tall = dump(&["--new", "--open", &n, "--width", w, "--height", "1400"]);
+                &tall
+            };
+            assert!(
+                drew(seen),
+                "area {a} ({key}) at {w} is open and drew no tile, in 950 points or 1400:
+{seen}"
             );
             assert_eq!(
                 count(&d, "cut"),
@@ -893,7 +939,10 @@ fn an_open_area_shows_its_scenes_and_a_shut_one_does_not() {
 {shut}"
             );
         }
-        let open = dump(&["--new", "--open", &a.to_string()]);
+        // Tall enough for the last area's tiles, which are below a 950-point frame since egui
+        // 0.37's taller rows (see the walk above). Every check on an open area reads this frame:
+        // a taller one hides nothing a shorter one shows, so none of them is weakened by it.
+        let open = dump(&["--new", "--open", &a.to_string(), "--height", "1400"]);
         for title in &held {
             assert!(
                 open.contains(title),

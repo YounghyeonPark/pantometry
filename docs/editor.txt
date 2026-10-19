@@ -5,86 +5,86 @@ cut=0
 overlap=0
 unwritable=0
 callbacks=1
-viewport=823,52 374x870
-      12     4    19  File
-      47     4    22  Edit
-      85     4    28  View
-     128     4    46  Window
-     190     4    43  Domain
-     249     4    22  Run
-     287     4    36  Watch
-       8    24   231  29-a-designed-bracket-becomes-cells.json
-     265    26    19  run
-     300    26    32  verify
-     362    26    28  deep
-     416    26    42  fit view
-     488    26    10  |<
-     514    26     7  <
-     537    26    22  play
-     575    26     7  >
-     598    26    10  >|
-     268    46   294  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
-       8    48    47  Outliner
-     230    48    22  solo
-     603    48    35  Assets
-     767    48    36  rescan
-    1213    48    52  Inspector
-    1035    60   154  bracket peak 52.4420 C
-    1035    74   154  bracket mean 43.7455 C
-    1213    76   270  nothing selected — pick a row in the outliner, or click something in the viewport
-      54    78   157  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
-     607    78     7  +
-     626    78   133  parts/heat-sink.stl
-     222    79    30  Scene
-    1014    88   175  bracket coldest 30.5449 C
-     268    91   316  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
-      66    99    81  Placed extents
-     607    99     7  +
-     626   100   133  parts/l-bracket.stl
-     222   100    30  Group
-    1049   102   140  bracket absorbed 0 J
-    1000   116   189  bracket generated 4000.00 J
-      70   120    42  bracket
-     607   120     7  +
-     626   120    98  parts/pipe.stl
-     216   121    36  Extent
-      66   141    22  Run
-     607   141     7  +
-     626   142   105  parts/plate.stl
-     222   142    30  Group
-     272   147   308  {\n  "title": "a designed bracket carrying a module's heat along its own shape to its bolts",\n  "schedule": "multirate",\n  "duration_s": 200.0,\n  "frames": 13,\n  "conservation_tolerance": 1e-8,\n  "domains": [\n    {\n      "kind": "block",\n      "name": "bracket",\n      "cells": [26, 26, 12],\n      "cell_mm": 2.0,\n      "initial_c": 44.0,\n      "parts": [\n        { "stl": "parts/l-bracket.stl", "material": "aluminium" }\n      ],\n      "dissipation": [\n        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 12] }\n      ],\n      "cooling": [\n        { "face": "z-min", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 20000.0, "area_cm2": 0.96,\n          "from": [2, 21], "to": [8, 25] },\n        { "face": "z-max", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }\n      ]\n    }\n  ]\n}
-      70   162    42  bracket
-     607   162     7  +
-     626   162    91  parts/rod.stl
-     222   163    30  Field
-      66   183    50  Readings
-     607   183     7  +
-     626   184   105  parts/wedge.stl
-     222   184    30  Group
-      78   204    42  bracket
-     607   204     7  +
-     626   204   133  structures/1CRN.pdb
-     222   205    30  Group
-      82   225    26  peak
-     216   226    36  Scalar
-      82   246    31  mean
-     216   247    36  Scalar
-      82   267    40  coldest
-     216   268    36  Scalar
-      82   288    51  absorbed
-     216   289    36  Scalar
-      82   309    58  generated
-     216   310    36  Scalar
-     928   567    38  bracket
-     928   581   249  field: false colour — nothing here is hot enough to glow
-     831   780   180  0 triangles, 0 lines, 0 paints
+viewport=823,58 374x864
+      16     4    20  File
+      60     4    23  Edit
+     107     4    28  View
+     159     4    48  Window
+     231     4    45  Domain
+     300     4    23  Run
+     347     4    37  Watch
+       8    27   240  29-a-designed-bracket-becomes-cells.json
+     278    30    20  run
+     322    30    33  verify
+     388    30    29  deep
+     448    30    42  fit view
+     528    30    11  |<
+     563    30     7  <
+     594    30    24  play
+     642    30     7  >
+     673    30    11  >|
+     268    52   307  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
+       8    54    48  Outliner
+     227    54    24  solo
+     603    54    37  Assets
+     760    54    38  rescan
+    1214    54    54  Inspector
+    1043    66   146  bracket peak 52.4420 C
+    1043    80   146  bracket mean 43.7455 C
+    1214    84   264  nothing selected — pick a row in the outliner, or click something in the viewport
+      54    86   156  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
+     611    86     7  +
+     634    88   126  parts/heat-sink.stl
+     221    88    30  Scene
+    1023    94   166  bracket coldest 30.5449 C
+     268   100   313  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
+    1057   108   132  bracket absorbed 0 J
+      66   110    85  Placed extents
+     611   110     7  +
+     634   110   126  parts/l-bracket.stl
+     221   111    30  Group
+    1010   122   179  bracket generated 4000.00 J
+      70   132    43  bracket
+     611   132     7  +
+     634   134    93  parts/pipe.stl
+     215   134    36  Extent
+      66   156    23  Run
+     611   156     7  +
+     634   156    99  parts/plate.stl
+     221   157    30  Group
+     276   159   297  {\n  "title": "a designed bracket carrying a module's heat along its own shape to its bolts",\n  "schedule": "multirate",\n  "duration_s": 200.0,\n  "frames": 13,\n  "conservation_tolerance": 1e-8,\n  "domains": [\n    {\n      "kind": "block",\n      "name": "bracket",\n      "cells": [26, 26, 12],\n      "cell_mm": 2.0,\n      "initial_c": 44.0,\n      "parts": [\n        { "stl": "parts/l-bracket.stl", "material": "aluminium" }\n      ],\n      "dissipation": [\n        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 12] }\n      ],\n      "cooling": [\n        { "face": "z-min", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 20000.0, "area_cm2": 0.96,\n          "from": [2, 21], "to": [8, 25] },\n        { "face": "z-max", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }\n      ]\n    }\n  ]\n}
+      70   178    43  bracket
+     611   178     7  +
+     634   180    86  parts/rod.stl
+     221   180    30  Field
+      66   202    53  Readings
+     611   202     7  +
+     634   202    99  parts/wedge.stl
+     221   203    30  Group
+      78   224    43  bracket
+     611   224     7  +
+     634   226   126  structures/1CRN.pdb
+     221   226    30  Group
+      82   248    28  peak
+     215   249    36  Scalar
+      82   270    32  mean
+     215   272    36  Scalar
+      82   294    42  coldest
+     215   295    36  Scalar
+      82   316    54  absorbed
+     215   318    36  Scalar
+      82   340    60  generated
+     215   341    36  Scalar
+     927   570    40  bracket
+     927   584   248  field: false colour — nothing here is hot enough to glow
+     831   780   181  0 triangles, 0 lines, 0 paints
      987   808    66  bracket / K
     1061   821    36  303.58
     1103   821    36  314.59
     1145   821    36  325.59
      849   838    30  10 mm
-     831   879    64  t = 200.00 s
-     952   898    14  13
-     987   898    34  frame
-       8   932    80  ran: 14 frames
-    1398   932    94  watching the file
+     831   876    67  t = 200.00 s
+     952   896    15  13
+     987   896    35  frame
+       8   933    83  ran: 14 frames
+    1396   933    96  watching the file

@@ -246,7 +246,8 @@ pub fn presets(ui: &mut egui::Ui, open: &mut Option<usize>, art: &mut Art) -> Ma
                                     egui::vec2(14.0, 14.0),
                                     egui::Sense::hover(),
                                 );
-                                let icon = ui.interact(rect, ui.id().with(a), egui::Sense::hover());
+                                let icon =
+                                    ui.interact(rect, ui.scope_id().with(a), egui::Sense::hover());
                                 let openness = if showing { 1.0 } else { 0.0 };
                                 egui::collapsing_header::paint_default_icon(ui, openness, &icon);
                                 if ui
@@ -297,7 +298,9 @@ pub fn presets(ui: &mut egui::Ui, open: &mut Option<usize>, art: &mut Art) -> Ma
                                             let picture = art.of(ui.ctx(), i, preset.thumb);
                                             let hit = match picture {
                                             Tile::Ready(tex) => ui.add(
-                                                egui::ImageButton::new(
+                                                // `ImageButton` went in egui 0.35;
+                                                // a `Button` of one image is what it became.
+                                                egui::Button::image(
                                                     egui::load::SizedTexture::new(
                                                         tex.id(),
                                                         egui::vec2(240.0, 156.0),

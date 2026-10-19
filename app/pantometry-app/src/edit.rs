@@ -81,14 +81,19 @@ fn open(passed: &[String]) -> eframe::Result {
         "pantometry editor",
         eframe::NativeOptions {
             // **Big enough that the viewport exists.** Three side panels have minimum widths, and a
-            // `SidePanel` is served before the `CentralPanel` is — so on the default 533-point
+            // side `Panel` is served before the `CentralPanel` is — so on the default 533-point
             // window the outliner, the text and the inspector took all of it and the paint callback
             // was handed a rect of **zero width**. It drew nothing, correctly, and looked exactly
             // like a renderer that did not work.
             viewport: egui::ViewportBuilder::default().with_inner_size([1500.0, 950.0]),
             ..eframe::NativeOptions::default()
         },
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            // **No Ctrl+Q.** egui 0.34 began closing the window on it by default. This editor has
+            // no "save first?" prompt — its rule is that unsaved edits are never clobbered — so a
+            // key that drops the pane with nothing said would be a new way to lose them, arrived
+            // with a dependency bump. Closing the window is still the window's own control.
+            cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
             // **No file named means no file open.** It used to mean the built-in scene, which is
             // an answer to a question nobody asked: somebody who typed `pantometry edit` either
             // has a scene somewhere or wants to make one, and both of those are on the start
@@ -301,7 +306,8 @@ pub fn ui_dump(asked: Dump) -> String {
         )),
         ..Default::default()
     };
-    let _ = ctx.run(input(), |c| app.ui(c));
+    ctx.run_ui(input(), |ui| app.ui(ui))
+        .drop_without_applying_deltas();
     // **A click, when one is asked for.** A menu's items live inside a closed menu, so a frame
     // built without input can see six menu titles and nothing under them — which made "this
     // command still has a home in a menu" a claim no test could reach. A press and a release at
@@ -321,8 +327,10 @@ pub fn ui_dump(asked: Dump) -> String {
         };
         let mut with_click = input();
         with_click.events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
-        let _ = ctx.run(with_click, |c| app.ui(c));
-        let _ = ctx.run(input(), |c| app.ui(c));
+        ctx.run_ui(with_click, |ui| app.ui(ui))
+            .drop_without_applying_deltas();
+        ctx.run_ui(input(), |ui| app.ui(ui))
+            .drop_without_applying_deltas();
     }
     // **A drag, frame by frame**, after the clicks and in the order given. The press lands on the
     // source; twelve moves carry it to the target, each its own frame, which is well past egui's
@@ -338,26 +346,34 @@ pub fn ui_dump(asked: Dump) -> String {
         };
         let mut press = input();
         press.events = vec![egui::Event::PointerMoved(from), button(from, true)];
-        let _ = ctx.run(press, |c| app.ui(c));
+        ctx.run_ui(press, |ui| app.ui(ui))
+            .drop_without_applying_deltas();
         const STEPS: usize = 12;
         for step in 1..=STEPS {
             let at = from + (to - from) * (step as f32 / STEPS as f32);
             let mut moved = input();
             moved.events = vec![egui::Event::PointerMoved(at)];
-            let _ = ctx.run(moved, |c| app.ui(c));
+            ctx.run_ui(moved, |ui| app.ui(ui))
+                .drop_without_applying_deltas();
         }
         let mut release = input();
         release.events = vec![egui::Event::PointerMoved(to), button(to, false)];
-        let _ = ctx.run(release, |c| app.ui(c));
-        let _ = ctx.run(input(), |c| app.ui(c));
+        ctx.run_ui(release, |ui| app.ui(ui))
+            .drop_without_applying_deltas();
+        ctx.run_ui(input(), |ui| app.ui(ui))
+            .drop_without_applying_deltas();
     }
     if run_after {
         if let Err(e) = app.run_here() {
             return format!("the run refused: {e}\n");
         }
-        let _ = ctx.run(input(), |c| app.ui(c));
+        ctx.run_ui(input(), |ui| app.ui(ui))
+            .drop_without_applying_deltas();
     }
-    let out = ctx.run(input(), |c| app.ui(c));
+    // **No GPU to hand the font atlas to**, so every frame's texture deltas are dropped on
+    // purpose: egui 0.36 panics, in a debug build, on a `FullOutput` whose deltas nobody applied,
+    // which is the right default for a window and the wrong one for a frame that is only read.
+    let out = ctx.run_ui(input(), |ui| app.ui(ui));
 
     let mut texts: Vec<Drawn> = Vec::new();
     let mut callbacks: Vec<egui::Rect> = Vec::new();
@@ -369,6 +385,7 @@ pub fn ui_dump(asked: Dump) -> String {
             &mut callbacks,
         );
     }
+    out.drop_without_applying_deltas();
     // Reading order: down the screen, then across. A dump a person can scan and a test can index.
     texts.sort_by(|a: &Drawn, b| {
         (a.at.top() as i32)
@@ -396,7 +413,7 @@ pub fn ui_dump(asked: Dump) -> String {
         .iter()
         .filter(|d| {
             let printable: String = d.text.chars().filter(|c| !c.is_control()).collect();
-            !ctx.fonts(|f| f.has_glyphs(&d.font, &printable))
+            !ctx.fonts_mut(|f| f.has_glyphs(&d.font, &printable))
         })
         .collect();
     // **Cut off by the window rather than by a widget that scrolls.** The first form of this asked
@@ -484,6 +501,21 @@ pub fn ui_dump(asked: Dump) -> String {
         ));
     }
     s
+}
+
+/// A menu on the bar, closing the way it did before egui 0.32.
+///
+/// egui 0.32 made every click inside a menu close it, and said so as a change that compiles and
+/// behaves differently. These menus were written against the old rule — a command calls
+/// `ui.close()` and a setting does not — so the radio buttons, the checkboxes and `Show
+/// everything` leave the menu open to be read back, and with the new default each of them would
+/// shut it. Submenus inherit the config, so `Domain → Add` follows the same rule.
+fn menu<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) {
+    let config = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let _ = egui::containers::menu::MenuButton::new(title)
+        .config(config)
+        .ui(ui, add);
 }
 
 /// One string the frame drew, where it went, and what was allowed to show of it.
@@ -1323,15 +1355,52 @@ impl eframe::App for App {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.ui(ctx);
+    /// Only while the window is hidden. A shown window builds a frame next, and the frame ticks
+    /// at the point it always did — after the start screen and the chooser have had their turn,
+    /// neither of which has anything to poll.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let hidden = ctx.input(|i| i.viewport().visible()) == Some(false);
+        if hidden && self.choosing.is_none() && !self.start {
+            self.tick(ctx);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        App::ui(self, ui);
     }
 }
 
 impl App {
-    /// One frame of interface, from a context alone.
+    /// What a frame does that is not drawing: start a `--run`, drain the run thread, look at the
+    /// file on disk, and ask to be called again while either has something to say.
     ///
-    /// Split out of [`eframe::App::update`] so a frame can be built **without a window**. The
+    /// Its own method because eframe 0.34 stopped building frames for a window that is minimized
+    /// or occluded and calls `App::logic` instead. Left inside the frame, a stream would stop
+    /// draining and **Run on change** would stop answering the script that writes the file the
+    /// moment the window was covered — the live loop is the case where nobody is looking at it.
+    /// 0.31 slept a minimized window and still called the frame.
+    fn tick(&mut self, ctx: &egui::Context) {
+        if self.run_at_once {
+            self.run_at_once = false;
+            if self.checked.error.is_none() {
+                self.start_run();
+            } else {
+                self.status = format!("--run: the scene does not check out: {}", self.status);
+            }
+        }
+        self.poll_jobs();
+        self.poll_disk();
+        if self.busy.is_some() {
+            // A stream draws itself; without this, frames wait for a mouse wiggle.
+            ctx.request_repaint_after(Duration::from_millis(60));
+        } else if self.watch {
+            ctx.request_repaint_after(Duration::from_millis(400));
+        }
+    }
+
+    /// One frame of interface, from the root `Ui` alone.
+    ///
+    /// Split out of [`eframe::App::ui`] so a frame can be built **without a window**. The
     /// `eframe::Frame` argument was already unused — it is `_frame` — so nothing here ever needed
     /// eframe, and the shaded viewport is a `PaintCallback` that a headless run records and never
     /// executes, so no GL context is needed either.
@@ -1341,7 +1410,11 @@ impl App {
     /// — and this repository has already paid for that once: the viewport was handed a rect of zero
     /// width, drew nothing correctly, and cost an afternoon in the renderer before anybody printed
     /// the rect.
-    fn ui(&mut self, ctx: &egui::Context) {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        // egui 0.34 hands a frame the root `Ui` rather than a `Context`, and panels are added to
+        // that `Ui`. The context is still what input, memory and repaints are asked of; it is a
+        // cheap handle, cloned so it can be read while `ui` is lent to a panel.
+        let ctx = &ui.ctx().clone();
         // **Before anything else, and instead of it.** No menu bar, no toolbar, no panels: there is
         // nothing yet for any of them to act on, and a window of disabled controls is a worse
         // answer to "what now" than two buttons.
@@ -1354,7 +1427,7 @@ impl App {
         // which is right for a file and wrong for somebody deciding what to make.
         if self.choosing.is_some() && self.picking {
             let mut made = crate::start::Made::Nothing;
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 made = crate::start::presets(ui, &mut self.area, &mut self.art);
             });
             match made {
@@ -1387,7 +1460,7 @@ impl App {
         if let Some(ticked) = self.choosing.as_mut() {
             let mut made = crate::start::Made::Nothing;
             let mut ticked = std::mem::take(ticked);
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 made = crate::start::chooser(ui, &mut ticked);
             });
             match made {
@@ -1431,7 +1504,7 @@ impl App {
         }
         if self.start {
             let mut chose = crate::start::Chose::Nothing;
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 chose = crate::start::screen(ui, &self.recent);
             });
             match chose {
@@ -1445,49 +1518,34 @@ impl App {
             return;
         }
 
-        if self.run_at_once {
-            self.run_at_once = false;
-            if self.checked.error.is_none() {
-                self.start_run();
-            } else {
-                self.status = format!("--run: the scene does not check out: {}", self.status);
-            }
-        }
-        self.poll_jobs();
-        self.poll_disk();
-        if self.busy.is_some() {
-            // A stream draws itself; without this, frames wait for a mouse wiggle.
-            ctx.request_repaint_after(Duration::from_millis(60));
-        } else if self.watch {
-            ctx.request_repaint_after(Duration::from_millis(400));
-        }
+        self.tick(ctx);
 
         // A menu bar. What belongs in one is everything a reader needs occasionally and should
         // not have to find on a crowded strip: which panels are on screen, what the viewport
         // draws, and the two file operations.
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
+        egui::Panel::top("menu").show(ui, |ui| {
             // Wrapped for the reason the toolbar is: `menu::bar` is a plain horizontal row, and
             // below about 160 points `Domain` was laid out at x=114..157 of the window and clipped
             // by its edge. Measured through `--ui-dump`'s `cut`, which is what that column counts.
             ui.horizontal_wrapped(|ui| {
-                ui.menu_button("File", |ui| {
+                menu(ui, "File", |ui| {
                     if ui.button("Open…").clicked() {
                         if let Some(p) = crate::start::pick() {
                             self.open(p);
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     // **Named for what it does.** It re-reads the path already in the toolbar's
                     // box, which is a revert; called `Load`, it was the only thing on this menu
                     // that looked like a way to open a different file, and it was not one.
                     if ui.button("Revert").clicked() {
                         self.load_from_disk();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Save").clicked() {
                         self.save_to_disk();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Save as…").clicked() {
                         if let Some(p) = crate::start::pick_save(&self.path) {
@@ -1501,14 +1559,14 @@ impl App {
                             }
                             self.recent = crate::start::remembered();
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                ui.menu_button("Edit", |ui| {
+                menu(ui, "Edit", |ui| {
                     // **Undo is over the editor's own edits, not over typing.** The text pane
                     // is bound straight to the buffer and egui keeps a fine-grained undo for
                     // what it has focus over; taking that over would mean reimplementing
@@ -1523,14 +1581,14 @@ impl App {
                         .clicked()
                     {
                         self.take_back(true);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(can_redo, egui::Button::new("Redo	Ctrl+Shift+Z"))
                         .clicked()
                     {
                         self.take_back(false);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     // **The gizmo, in Edit rather than View**, because it changes what a drag
@@ -1554,7 +1612,7 @@ impl App {
                         self.history.steps_forward()
                     ));
                 });
-                ui.menu_button("View", |ui| {
+                menu(ui, "View", |ui| {
                     // **Two pictures, not two styles.** Shaded draws the boundary of what is
                     // present, lit and depth-tested, which is what a solid looks like. Cells draws
                     // every sample as a translucent splat composited far to near, which is what is
@@ -1595,7 +1653,7 @@ impl App {
                     ui.separator();
                     if ui.button("Fit view").clicked() {
                         self.needs_fit = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(
@@ -1605,7 +1663,7 @@ impl App {
                         .clicked()
                     {
                         self.frame_selection();
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 // Adding and removing a domain, which used to mean typing an object into the
@@ -1621,19 +1679,19 @@ impl App {
                 // wrong way and the mixing went the right way, which is the trade this makes on
                 // purpose: a menu whose name predicts its contents is worth more than one fewer
                 // name to read.
-                ui.menu_button("Window", |ui| {
+                menu(ui, "Window", |ui| {
                     ui.checkbox(&mut self.show_outliner, "Outliner");
                     ui.checkbox(&mut self.show_inspector, "Inspector");
                     ui.checkbox(&mut self.show_text, "Scene text");
                     ui.checkbox(&mut self.show_assets, "Assets");
                 });
-                ui.menu_button("Domain", |ui| {
+                menu(ui, "Domain", |ui| {
                     let mut wanted: Option<&str> = None;
                     ui.menu_button("Add", |ui| {
                         for t in editor_core::TEMPLATES {
                             if ui.button(t.kind).on_hover_text(t.about).clicked() {
                                 wanted = Some(t.kind);
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     });
@@ -1649,7 +1707,7 @@ impl App {
                             }
                             Err(why) => self.status = why,
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     // Only a row that *is* a domain. `selected` can be a reading or a group, and
@@ -1680,21 +1738,21 @@ impl App {
                             }
                             Err(why) => self.status = why,
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
-                ui.menu_button("Run", |ui| {
+                menu(ui, "Run", |ui| {
                     let runnable = self.checked.error.is_none() && self.busy.is_none();
                     if ui.add_enabled(runnable, egui::Button::new("Run")).clicked() {
                         self.start_run();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(self.busy.is_some(), egui::Button::new("Stop"))
                         .clicked()
                     {
                         self.stop.store(true, Ordering::Relaxed);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1702,18 +1760,18 @@ impl App {
                         .clicked()
                     {
                         self.start_verify();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.checkbox(&mut self.deep, "Deep");
                 });
-                ui.menu_button("Watch", |ui| {
+                menu(ui, "Watch", |ui| {
                     ui.checkbox(&mut self.watch, "Watch file");
                     ui.checkbox(&mut self.auto_run, "Run on change");
                 });
             });
         });
 
-        egui::TopBottomPanel::top("bar").show(ctx, |ui| {
+        egui::Panel::top("bar").show(ui, |ui| {
             // **Wrapped, because a row of controls that does not fit loses its end silently.**
             // Measured through `--ui-dump` at the moment it gained one: in a 700-point window
             // `fit view` was laid out at x=704..746 — outside the window, drawn, clipped by the
@@ -1906,7 +1964,7 @@ impl App {
             }
         }
 
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(ui, |ui| {
             // **Three facts, in reading order.** What is wrong with the document, what you just
             // did, and what the editor is doing on its own — the last against the right edge.
             //
@@ -1939,7 +1997,7 @@ impl App {
                 // with nothing on screen saying why. That is the shape this repository hunts: a
                 // picture filtered by a control nobody can see. Said here, in the same place and
                 // the same weight as what the editor does on its own, and only while it is true.
-                if self.solo && !self.panels_that_fit(ctx.screen_rect().width()).0.outliner {
+                if self.solo && !self.panels_that_fit(ctx.content_rect().width()).0.outliner {
                     ui.label(
                         egui::RichText::new("solo — drawing only the selection")
                             .weak()
@@ -1974,15 +2032,15 @@ impl App {
         let frame_at = self.run.as_ref().map_or(0, |v| v.frame);
         let tree = editor_core::tree(&self.checked, self.run.as_ref().map(|v| &v.run), frame_at);
 
-        // **A width range on every panel, because `default_width` is only where they start.**
-        // A `SidePanel` grows to whatever its widest child asks for, and one outliner row is a
+        // **A size range on every panel, because `default_size` is only where they start.**
+        // A side `Panel` grows to whatever its widest child asks for, and one outliner row is a
         // scene's title: "a hot spot in aluminium, meeting a wall of borosilicate halfway: 1
         // domain(s), 0.500 s in 11 frames". Measured on a 1706-pixel window, that row took the
         // outliner to **940 px** and left the viewport nothing at all — a 3D editor showing no 3D,
         // because of a caption. The rows truncate now and the panels have a ceiling.
         //
         // **And the viewport gets a floor**, which the ceiling alone does not give it. Every
-        // `SidePanel` is laid out before the `CentralPanel`, so the panels take what they ask for
+        // side `Panel` is laid out before the `CentralPanel`, so the panels take what they ask for
         // and the viewport gets the remainder — including when the remainder is **nothing**. On the
         // default window before this it was exactly that: the paint callback was handed a rect of
         // zero width and drew nothing, correctly, looking precisely like a renderer that did not
@@ -1991,7 +2049,7 @@ impl App {
         // So the panels yield, in the order they are worth least to somebody looking at a picture,
         // and the status bar says which one went. Their `show_*` flags are untouched, so widening
         // the window brings the panel back without anybody having to find the menu item again.
-        let (fits, squeezed) = self.panels_that_fit(ctx.screen_rect().width());
+        let (fits, squeezed) = self.panels_that_fit(ctx.content_rect().width());
         // **Only when it changes.** This ran every paint, so at any width where something is
         // squeezed the status bar could say nothing else: an "added parts/rod.stl" was overwritten
         // in the frame it appeared in. It was survivable while the first panel went at 950 points
@@ -2005,38 +2063,38 @@ impl App {
         // Each panel's ceiling is its minimum plus its share of what is over the floor, so the
         // three of them together can never take the viewport below `VIEWPORT_FLOOR`.
         //
-        // **The ceiling alone, because `width_range` clamps the default too.** Both were written
-        // — the ceiling and a `default_width` clamped to it — and sabotage found each of them
+        // **The ceiling alone, because `size_range` clamps the default too.** Both were written
+        // — the ceiling and a `default_size` clamped to it — and sabotage found each of them
         // sufficient on its own: removing either left the panel exactly as wide, at all fourteen
         // widths, because the other did the clamping. Two mechanisms neither of which any test
         // could show to be necessary. The ceiling is the one kept, since it also holds a width a
-        // reader has dragged, which `default_width` is not consulted about after the first frame.
-        let share = self.panel_budget(ctx.screen_rect().width(), &fits);
+        // reader has dragged, which `default_size` is not consulted about after the first frame.
+        let share = self.panel_budget(ctx.content_rect().width(), &fits);
         let cap = |min: f32, most: f32| (min + share).min(most);
         if fits.outliner {
             let most = cap(OUTLINER_MIN, 440.0);
-            egui::SidePanel::left("outliner")
+            egui::Panel::left("outliner")
                 .resizable(true)
-                .default_width(260.0)
-                .width_range(OUTLINER_MIN..=most)
-                .show(ctx, |ui| self.outliner(ui, &tree));
+                .default_size(260.0)
+                .size_range(OUTLINER_MIN..=most)
+                .show(ui, |ui| self.outliner(ui, &tree));
         }
         if fits.inspector {
             let most = cap(INSPECTOR_MIN, 460.0);
-            egui::SidePanel::right("inspector")
+            egui::Panel::right("inspector")
                 .resizable(true)
-                .default_width(320.0)
-                .width_range(INSPECTOR_MIN..=most)
-                .show(ctx, |ui| self.inspector(ui, &tree));
+                .default_size(320.0)
+                .size_range(INSPECTOR_MIN..=most)
+                .show(ui, |ui| self.inspector(ui, &tree));
         }
 
         if fits.text {
             let most = cap(TEXT_MIN, 560.0);
-            egui::SidePanel::left("text")
+            egui::Panel::left("text")
                 .resizable(true)
-                .default_width(430.0)
-                .width_range(TEXT_MIN..=most)
-                .show(ctx, |ui| {
+                .default_size(430.0)
+                .size_range(TEXT_MIN..=most)
+                .show(ui, |ui| {
                     if let Some(summary) = &self.checked.summary {
                         ui.label(summary.clone());
                         for note in &self.checked.notes {
@@ -2082,14 +2140,14 @@ impl App {
         // that adds a part crosses one boundary rather than three.
         if fits.assets {
             let most = cap(ASSETS_MIN, 300.0);
-            egui::SidePanel::left("assets")
+            egui::Panel::left("assets")
                 .resizable(true)
-                .default_width(220.0)
-                .width_range(ASSETS_MIN..=most)
-                .show(ctx, |ui| self.assets_panel(ui));
+                .default_size(220.0)
+                .size_range(ASSETS_MIN..=most)
+                .show(ui, |ui| self.assets_panel(ui));
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // The viewport is the drop target. `dnd_drop_zone` gives back whatever was released
             // over it, and the borrow of `self` inside the closure ends before it is read.
             let (_, dropped) =
@@ -2388,7 +2446,7 @@ impl App {
                             wanted = Some(name.clone());
                         }
                         ui.dnd_drag_source(
-                            egui::Id::new(("asset", name.as_str())),
+                            egui::Id::unique(("asset", name.as_str())),
                             name.clone(),
                             |ui| {
                                 ui.label(egui::RichText::new(name).monospace().size(11.0));
@@ -2487,7 +2545,7 @@ impl App {
                                 .allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                             let icon = ui.interact(
                                 rect,
-                                ui.id().with(("fold", &node.path)),
+                                ui.scope_id().with(("fold", &node.path)),
                                 egui::Sense::click(),
                             );
                             let openness = if is_collapsed { 0.0 } else { 1.0 };
@@ -2510,7 +2568,7 @@ impl App {
                             ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
                         let eye = ui.interact(
                             rect,
-                            ui.id().with(("eye", &node.path)),
+                            ui.scope_id().with(("eye", &node.path)),
                             egui::Sense::click(),
                         );
                         let ink = if shown {
@@ -3401,7 +3459,7 @@ impl App {
     /// So the budget is handed to the spenders. Every shown panel keeps its minimum and takes an
     /// equal share of what is left over the floor, which makes the sum of the maxima exactly
     /// `width - VIEWPORT_FLOOR`: the floor now holds however the panels are dragged, rather than
-    /// only while nobody drags them. `width_range` clamps a remembered width into the range each
+    /// only while nobody drags them. `size_range` clamps a remembered width into the range each
     /// frame, so narrowing the window pulls a panel in rather than eating the view.
     fn panel_budget(&self, width: f32, fits: &Panels) -> f32 {
         let mins = (if fits.outliner { OUTLINER_MIN } else { 0.0 })
@@ -3598,7 +3656,7 @@ impl App {
             self.camera.turn(d.x as f64 * 0.01, d.y as f64 * 0.01);
         }
         if response.hovered() {
-            let scroll = ui.input(|i| i.raw_scroll_delta.y) as f64;
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y) as f64;
             if scroll != 0.0 {
                 self.camera.zoom(0.999_f64.powf(scroll * 3.0));
             }
@@ -3823,14 +3881,14 @@ impl App {
         //
         // **Counted, not measured.** The transport is a `Ui` and is laid out *after* these are
         // painted, so there is nothing to ask. What it will take is a row for the frame slider
-        // and two for the isosurface level and its note, and 22 points is a widget row with its
+        // and three for the isosurface level, its name and its note, and 22 points is a widget row with its
         // spacing. A number arrived at that way is exactly the kind that goes quietly wrong, so
         // `a_frame_of_the_editor_can_be_read` asserts `overlap` is zero on a run with both.
         // One band of the viewport's bottom, and there are three of them above the transport:
         // the scale bar, the colour bar, and the count of what the shaded pass drew.
         const BAND: f32 = 26.0;
         let rows = usize::from(self.run.as_ref().is_some_and(|v| v.run.frames.len() > 1)) * 2
-            + usize::from(self.iso.is_some()) * 2;
+            + usize::from(self.iso.is_some()) * 3;
         let reserved = if rows == 0 {
             0.0
         } else {
@@ -3945,9 +4003,13 @@ impl App {
                                     );
                                 }
                             }
-                            ui.add(
-                                egui::Slider::new(level, iso_lo..=iso_hi).text("isosurface level"),
-                            );
+                            // **The name above the slider, not beside it**, for the reason the
+                            // time is above the frame slider. At egui 0.37's 13 points the row
+                            // `0.00 isosurface level` ended at x=262 of a 260-point window, and
+                            // `--ui-dump` marked it cut; a row of its own has one height at every
+                            // width, which the band reserved above can count.
+                            ui.add(egui::Slider::new(level, iso_lo..=iso_hi));
+                            ui.label("isosurface level");
                         }
                     });
                 });

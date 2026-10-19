@@ -151,7 +151,7 @@ separately have no way to touch.
 | `pantometry` | A facade over the other nineteen, and where the cross-domain integration tests live — including the three that hold two domains against each other: a Yee grid against Fresnel's algebra, a field's decay in a conductor against a lumped resistance that has no frequency in it, and a diffraction pattern against the scalar theory it converges on |
 | `bindings/python` | Python bindings, in their own cargo workspace and on PyPI as `pantometry`. SI floats at the boundary and the conservation audit as a catchable exception — the dimensional types are compile-time and cannot cross |
 | `app/pantometry-gpu` | `Solid3D`'s stencil as a compute shader — **33–67× on a 64³ grid** and a wash at 16³, measured one grid per process by a test that prints the adapter it ran on. Single precision against the domain's double, so the CPU is the reference and the difference is measured. A scene says `"device": "gpu"` and the binary honours it |
-| `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because its GPU and GUI stacks are 432 external crates against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
+| `app/` | Everything a person runs, as one binary: `pantometry run | check | verify | view | edit`. Its own workspace, because its GPU and GUI stacks are 381 external crates against the library's 12. `viewer-core` inside it depends on the run **file**, not on `pantometry`, so the wire format being sufficient is demonstrated rather than claimed |
 | `pantometry-world` | The first consumer, and not published. Worlds described as data: built, coupled over the bus, run and drawn, with thirty-three scenes across all fourteen domains that CI runs. It exists to use the SDK from outside and write down where that is awkward |
 
 The last three are the workspace's answer to the same question from three sides: what a
@@ -971,7 +971,7 @@ which the linear stencil commutes with exactly — improved the divergence 1660�
 
 The other three belong **above the layers**, in workspaces of their own, for the reason
 `bindings/python` already established. Measured: the library resolves 12 external crates, the
-python bindings 19, and everything above them **432**. They are one workspace, `app/` — the argument is about
+python bindings 19, and everything above them **381**. They are one workspace, `app/` — the argument is about
 the boundary between the library and everything above it, and one is all it supports. See
 `app/README.md`.
 
@@ -1110,7 +1110,7 @@ allowed to name them — it is the composition root, which is already true today
 ### Three rules, so the platform does not undo the library
 
 1. **Its own workspace.** Measured three times now: the library resolves 12 external crates, the
-   python bindings 19, and `app/`, which holds the viewer's wgpu stack and a GUI stack, 432.
+   python bindings 19, and `app/`, which holds the viewer's wgpu stack and a GUI stack, 381.
    The library's lockfile, licence gate, WebAssembly and MSRV promises cannot carry it. Unlike
    the viewer it links `pantometry`, because it has to run things; the rendering half is
    `viewer-core`, reused rather than rewritten.

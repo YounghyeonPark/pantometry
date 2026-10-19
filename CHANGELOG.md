@@ -3852,6 +3852,100 @@ protects nothing.
   through `torsion_parameters` directly. `ElectronegativitySign` stays, as the evidence for the
   sign. Each of the four sabotages of the new rule was caught.
 
+- **The app runs on egui and eframe 0.37, and `app/deny.toml` ignores nothing.** **What was
+  wrong**: one advisory was still ignored after accesskit came off, RUSTSEC-2026-0192 (`ttf-parser`
+  unmaintained), and the ignore said it was reached by `ab_glyph` → `epaint` → `egui` and would go
+  with a newer egui. It was reached a **second** way, which the reason did not name: `ab_glyph`
+  under winit's `sctk-adwaita`, the title bar winit draws itself on a Wayland compositor that will
+  not (GNOME's), switched on by the app's own `winit = "0.30"` keeping winit's defaults. Moving to
+  egui 0.37 — whose epaint lays text out with skrifa and vello_cpu — closed the first path and
+  `cargo deny` went on matching the ignore. Dropping winit's `wayland-csd-adwaita` feature closed
+  the second: `ab_glyph`, `ab_glyph_rasterizer`, `arrayref`, `owned_ttf_parser`, `sctk-adwaita`,
+  `strict-num`, `tiny-skia`, `tiny-skia-path` and `ttf-parser` left the lockfile, nothing came in
+  for them, and the ignore list is `[]`. **The cost**: on GNOME's Wayland the window gets
+  smithay-client-toolkit's plain frame, with no title text. X11, KDE's Wayland, Windows and macOS
+  draw their own decorations and see no difference.
+
+  **What 0.32–0.37 changed that compiled anyway, and was put back.** Three would have changed the
+  editor's behaviour with no compiler error. **Menus**: since 0.32 any click inside one closes it,
+  and these were written against the old rule — a command calls `ui.close()` and a setting does
+  not — so the View menu's radio buttons and `Show everything`, and every checkbox in Window, Run
+  and Watch, would each have shut their menu. A `menu` helper opens all seven with
+  `PopupCloseBehavior::CloseOnClickOutside`, and `Domain → Add` inherits it. **Hidden windows**:
+  since eframe 0.34 a minimized or occluded window is not given a frame, and the editor drained its
+  run thread and polled the watched file inside the frame. A covered window would have stopped
+  answering **Run on change**, and the live loop is exactly the case where nobody is looking at
+  it. That work is `App::tick` now, called from `App::logic` while the window is hidden and
+  from the frame otherwise. **Ctrl+Q**: egui 0.34 made it quit by default, and an editor with no
+  "save first?" prompt would have gained a way to lose unsaved edits from a dependency bump.
+  `quit_shortcuts` is cleared at startup. And eframe 0.37 made `clipboard` and `links` features,
+  where 0.31 always switched them on in egui-winit: without naming them, the scene pane would have
+  lost copy and paste. `accesskit` stays off, and 0.37's new `wgpu` and `system_fonts` defaults are
+  off too: `render.rs` is a glow callback, and system fonts would draw with whatever the machine
+  has rather than what the figures were taken with.
+
+  **The API ports**: `App::update(&Context)` became `App::ui(&mut Ui)`, so the editor's frame takes
+  the root `Ui` and `--ui-dump` runs `Context::run_ui`; `TopBottomPanel` and `SidePanel` became
+  `Panel::top/bottom/left/right` shown on a `Ui`, with `default_width`/`width_range` now
+  `default_size`/`size_range` (the same outer size, margins included); `CentralPanel::show` takes a
+  `Ui`; `close_menu` became `close`; `ImageButton` became `Button::image`; `screen_rect` became
+  `content_rect`, the same rect on a desktop with no safe area; `fonts` became `fonts_mut` for
+  `has_glyphs`; `Ui::id` became `Ui::scope_id`, and `Id::new` became `Id::unique`, the same hash.
+  `raw_scroll_delta` is gone, so the viewport zooms on `smooth_scroll_delta`. The total over a
+  gesture is the same and is spread across a few frames, and the zoom is a product of per-frame
+  factors, so where it ends up does not change. `glow` 0.16 → 0.17, `winit` stays 0.30.13, `wgpu` 22
+  is untouched below, and the optional, never-compiled `egui-wgpu` now locks `wgpu` 30 where it locked 24.
+
+  **What visibly changed** is the text. egui's default size went from 12.5 to 13 points (0.33), the
+  glyphs are hinted, the kerning comes from harfrust, and buttons are roomier, so the menu bar and
+  the toolbar are 6 points taller and the viewport went from 374×870 to 374×864 at 823,58. Both
+  figures were retaken with `tools/screenshot/take.ps1`. The two `--ui-dump` captions hold **the
+  same strings, as a multiset, with the same header**: 82 and 81 texts, one elided, nothing cut,
+  overlapping or unwritable, one callback. Only positions and widths moved, and with them one row's
+  place in the reading order. The window's own icon is egui's new one. A third figure in the
+  pictures, the viewport's `paints`, fell from 139 to 112 on the bracket. It counts paint callbacks
+  since launch, so it is a repaint count rather than a rendering one, and 0.37 stopped a burst of
+  extra repaints before each `request_repaint_after` deadline. The preset tiles are drawn by
+  `view --thumbnail`, the wgpu viewer, which has no egui in it, and were not regenerated.
+
+  **The counts**, by `RELEASING.md`'s commands, which give the same numbers as the method
+  `CLAUDE.md` names: packages with a source in `cargo metadata`, and for `app/deny.toml` the union
+  over its three targets. Library **12** and `bindings/python` **19**, unchanged. `app/` **381**,
+  quoted as 432 and 364 since accesskit came off. What `app/deny.toml` gates is **277**, quoted as
+  332 and 263 since accesskit came off. The two new ones are egui 0.37's own: skrifa, vello_cpu,
+  harfrust, the `accesskit` data crate (egui has depended on it unconditionally since 0.34; it is
+  the schema only, with no platform adapter and nothing of the zbus tree), and `wl-clipboard-rs`,
+  which egui-winit's `wayland` feature now asks `arboard` for. `cargo deny check`: advisories, bans, licences
+  and sources ok. It warns about one duplicate the old tree did not have, `foldhash` 0.1.5 beside
+  0.2.0: hashbrown 0.15 is held by wgpu 22's `gpu-descriptor` and by petgraph under
+  `wl-clipboard-rs`, so the duplicate goes when those move. egui 0.37 needs Rust 1.95; `app/` is
+  built on stable and holds no MSRV. Physics is untouched: nothing below the GUI changed and the
+  library's lockfile did not move.
+
+  **What the first test run found.** `--ui-dump` panicked in every debug build: egui 0.36 asserts
+  that a `FullOutput` is not dropped with texture deltas nobody applied, and the dump has no GPU to
+  apply them to, at nine call sites. Each is now `drop_without_applying_deltas`; the
+  release binary does not assert, which is why the captions were right before the tests were. One
+  layout defect was real: at 260 points the `--iso` strip's `0.00 isosurface level` ended at x=262,
+  so the level's name is a row above its slider now, as the time already was above the frame
+  slider, and the band reserved for the transport counts three rows for it rather than two. Seven
+  assertions in `a_frame_of_the_editor_can_be_read` moved with the text, each read rather than
+  re-blessed. The custom chooser's one 950-point frame now ends a row earlier (`well`'s name below
+  the edge as well as its description; the pin moves, and a 1400-point frame still offers all
+  twenty-two kinds, both partner notes included). The toolbar's row is read from where `fit view`
+  is drawn rather than written down as y=26; it is at 30. The start screen's thirteenth area puts
+  its tile below the fold, so whether an open area drew anything is asked of a frame that reaches
+  it, while the geometry checks keep 950. And the probe that proves `cut` can fire needed a taller
+  window, because at 40 points 0.37 wraps every label into a one-character column, the panels
+  outgrow 950 points, and the status bar it relies on was laid out below the bottom: at 40×2000
+  `watching the file` is at x=-64 and marked.
+
+  Verified on `rustup update`d stable 1.99.1, one step at a time, each exit code read: `cargo fmt
+  --check`, `clippy --all-targets -D warnings`, `cargo test --locked --workspace` (67 binaries, 407
+  passed, none ignored, no device skip on this machine), `cargo doc -D warnings`, `cargo deny check`,
+  `editor-wasm` for `wasm32-unknown-unknown` in debug and release, and `node
+  editor-wasm/selftest.mjs`, all claims held. The library's gate was not run here.
+
 ### Fixed
 
 - **The viewer's scale bar did not measure what its label said.** `scale_bar` assumed half the

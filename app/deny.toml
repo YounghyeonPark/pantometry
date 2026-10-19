@@ -48,7 +48,7 @@ allow = [
     # Boost, for `clipboard-win` and `error-code`. Permissive and explicitly requires no notice in
     # binary form.
     "BSL-1.0",
-    # `arrayref`, `zerocopy`, `tiny-skia`, `moxcms`, `pxfm`. Notice and no-endorsement.
+    # `zerocopy`, `moxcms`, `pxfm`. Notice and no-endorsement.
     "BSD-2-Clause",
     "BSD-3-Clause",
     # `libloading`.
@@ -74,28 +74,30 @@ unused-allowed-license = "allow"
 # every internal edge for a workspace whose members are all `publish = false`.
 allow-wildcard-paths = true
 # **Warn, not deny, and this tree has a real one.** `eframe` declares `egui-wgpu` optionally, so
-# `wgpu 24` sits in the lockfile beside the `wgpu 22` the viewer and the accelerator build with.
-# Nothing enables it — `cargo tree -e normal -i egui-wgpu` prints nothing — so only one is ever
-# compiled. That is worth seeing on every run and is not worth failing over.
+# `wgpu 30` sits in the lockfile beside the `wgpu 22` the viewer and the accelerator build with.
+# Nothing enables it — `cargo tree -e normal -i egui-wgpu --target all` prints nothing — so only one
+# is ever compiled. That is worth seeing on every run and is not worth failing over.
 multiple-versions = "warn"
 wildcards = "deny"
 
 [advisories]
-# **One entry, reached only through `eframe`, not fixable from here.** Written out because an ignore
-# list without reasons is a list nobody can audit later.
+# **No entries.** An ignore here needs a reason beside it, because a list without reasons is a list
+# nobody can audit later — and the way to an empty one was to remove what each advisory came in on,
+# not to argue each one down.
 #
 # There were four, and three more appeared on 2026-10-18 (zbus 4's zvariant, zvariant_derive and
 # zbus_names, unmaintained since they merged into zbus 6). Six of the seven came through one
-# feature, eframe's `accesskit`, which nothing here used. It is off now (`pantometry-app`'s
-# Cargo.toml), and 68 crates went with it. The one left is the font parser under egui 0.31's
-# epaint, which a newer egui replaces.
+# feature, eframe's `accesskit`, which nothing here used; it went off and 68 crates with it. The
+# seventh, `ttf-parser` (RUSTSEC-2026-0192), was reached two ways: `ab_glyph` under egui 0.31's
+# epaint, which egui 0.34 replaced with skrifa, and `ab_glyph` under winit's `sctk-adwaita`, which
+# draws a title bar on GNOME's Wayland. Moving to egui 0.37 closed the first and left the second, so
+# the advisory went on matching; dropping winit's `wayland-csd-adwaita` feature closed it, and
+# nine crates went with it. Both are in `pantometry-app`'s Cargo.toml with what they cost.
 #
 # This is what the merge's cost looks like *paid* rather than noted: `pantometry-world` left the
-# library's `deny.toml`, and what it joined is a tree with open advisories in it. The library's own
-# twelve remain clean, and nothing in `crates/` depends on anything here.
-ignore = [
-    { id = "RUSTSEC-2026-0192", reason = "`ttf-parser` is unmaintained, with no fault reported. It parses the fonts egui embeds, which are `epaint_default_fonts`' own Hack and Ubuntu Mono — shipped in the binary, not loaded from anywhere a reader controls. Reached by ab_glyph -> epaint -> egui." },
-]
+# library's `deny.toml`, and what it joined is a tree that had open advisories in it. The library's
+# own twelve remain clean, and nothing in `crates/` depends on anything here.
+ignore = []
 
 [sources]
 unknown-registry = "deny"

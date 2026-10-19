@@ -1,6 +1,6 @@
 //! **A 3D editor must always have somewhere to draw.**
 //!
-//! Every `SidePanel` is laid out before the `CentralPanel`, so the panels take what they ask for and
+//! Every side `Panel` is laid out before the `CentralPanel`, so the panels take what they ask for and
 //! the viewport gets the remainder — including when the remainder is nothing. On the default window
 //! it was exactly that: three panels with minimum widths of 170, 240 and 200 points on a 533-point
 //! window, and the paint callback was handed a rect of **zero width**. It drew nothing, correctly,
