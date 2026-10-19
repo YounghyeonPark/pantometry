@@ -4025,6 +4025,116 @@ protects nothing.
   ignored. No `powi` or `powf` in it.
   `Depot` and `bateman` are in `pantometry::prelude`. No scene changes: the format's `compartments`
   kind has no oral field yet.
+- **`pantometry-pharmacokinetic` distributes by blood flow: perfusion-limited tissues off one
+  well-stirred blood pool, and the well-stirred liver.** `CompartmentModel::perfuse(blood, tissue,
+  Q, K_p)` carries `Q·(C_b − C_t/K_p)` from the blood into the tissue: arterial blood in at the
+  pool's concentration, venous blood out at the tissue's `C_t/K_p`. It is not the symmetric
+  `link`, which carries `Q·(C_a − C_b)` and is unchanged, so it is a separate method whose
+  argument order is the physics. A compartment made with `eliminating` and then perfused clears
+  `CL·C_t/K_p`, on the venous concentration. That gives the well-stirred liver,
+  `E = CL/(Q + CL)`. New readers: `partition`, `venous_concentration`, `blood_flow` and
+  `extraction_ratio` (`None` for a compartment that is not perfused, so it is not confused with a
+  tissue that extracts nothing). `transfer`, `transfer_rate`, `elimination_rate` and
+  `volume_of_distribution` (now `Σ K_p V`) read perfusions too. Each of them computes exactly what
+  it did when a model has none. `total_clearance` is still `Σ CL_i` and says why.
+  - **The model choice.** There is one blood pool, and tissues hang off it in parallel. A tissue
+    is perfused once; a tissue cannot also be a blood pool, and a blood pool cannot be a tissue,
+    so nothing is in series. Separate arterial and venous pools with a lung and a portal vein
+    would be a one-way flow network, a different kind of link with its own closed forms. The
+    module docs say what the choice implies. There is no pulmonary first pass, and no
+    arterio-venous difference in the blood itself; the difference across an organ is kept,
+    because it is what `E` measures. There is no portal circulation: hepatic first pass is
+    written as a `Depot` into the liver, and checked.
+  - **Not modelled, and said so:** protein binding. `K_p` is a total partition coefficient. A
+    caller with an unbound fraction passes `f_u·CL_int` and gets the textbook `E`. There is also
+    no reference human: the module docs name ICRP 89 and Brown et al. 1997 as where organ volumes
+    and flows come from. The crate carries none of them, and the tests use round numbers that say
+    they are round.
+  - **The step limit**, which is also the positivity limit. A perfused tissue turns over at
+    `Σ Q_link/V + (Q + CL)/(K_p V)`. The derivation moved from concentrations to amounts with
+    Gershgorin by columns, which conservation bounds. The row form fails once `K_p ≠ 1`, in
+    either direction: through the tissue's row when `K_p > 1`, through the blood's when
+    `Σ Q/K_p > ΣQ + CL`. The disc argument now needs no claim that the eigenvalues are real.
+    They need not be: a link beside a perfusion can close a cycle, and `physics-checker` found
+    `|Im λ|` up to 16/h in random models, all stable at `h = 1/max r`.
+  - **The checks.** Every one is against a closed form or an exact identity.
+    - **Steady state under an infusion.** `C_t = K_p C_b` in each tissue that does not eliminate,
+      the liver at `K_p C_b (1 − E)`, and `C_b = R/(CL_r + Q_h E)`. Euler's fixed point
+      `MA* = −R` has no `h` in it. Started at the closed form at `h` = 60 s, not one of 16 000
+      amounts moved off its starting bits in 4 000 steps. At 0.98 of the limit they drift to
+      505 ε, which is rounding along the slow mode, within `(n + 2)ε`. From empty, the model
+      settles at the closed form to 4.0e-14 by 400 h, and `E` is 0.4 to 15 digits.
+    - **`V_ss = V_b + Σ K_p V_t`** is 122.2 L. From the state at steady state it is within
+      1.2e-14. From the moments it is exact, by an identity derived in the test:
+      `h Σ Pⁿ = −M⁻¹` and `h² Σ n Pⁿ = M⁻² + hM⁻¹`, so the stepped curve's `MRT` is the
+      continuous one **less `h`**. `CL·(MRT_d + h)` reads `V_ss` to 3.9e-14 at 60 s and 9.8e-14
+      at 30 s. Without the `+ h` it is off by `h·CL/V_ss`, 8.2e-4 and 4.1e-4, halving with the
+      step; that looks exactly like first-order error, and it is asserted as the derived number.
+    - **Blood and one tissue after a bolus: the bi-exponential, with `k21 = Q/(K_p V_t)`.** At
+      `K_p = 3`, `α = 8.38068/h` and `β = 0.11932/h`; a `K_p` on the blood's side gives
+      `k12 = 2/h` and `k21 = 1.5/h`. The stepped trajectory is the same bi-exponential with
+      `e^{−λt}` replaced by `(1 − hλ)ⁿ`, by repeated multiplication. At 72 to 9 s the model is
+      within 0.008–0.029 of `(3n + 40)ε` times the four terms' envelope. Against the continuous
+      curve it converges at orders 1.0128 and 1.0063 in both pools, under a band of
+      `0.035·(h/18 s)`.
+    - **The fast-perfusion limit.** Both flows are scaled by 1 to 16, and the result is compared
+      with the one-compartment recurrence `(D/V_ss)(1 − hk)ⁿ` at the same `h`, so the
+      measurement is about `Q` and not about the step. At 48 h the orders are 0.8950, 0.9488,
+      0.9747 and 0.9874; they match the continuous eigendecomposition to four digits, and the
+      departures halve, under a band of `0.2·(Q₀/Q)`. **The first version measured a different
+      coefficient.** It took the worst point from 24 to 72 h. That point sat at 24 h, where the
+      `1/Q²` coefficient nearly vanishes for these volumes (`b/a = 0.0045`, against −0.14 at
+      48 h), so its orders were 0.9997, 1.0005, 1.0004 and 1.0003, and no band could be earned
+      from departures that would not halve.
+    - **`K_p = 1` is `link`, to the bit.** `x/1.0` is `x`. A model with two clearances, a second
+      link, a bolus, an infusion and a depot is compared with `assert_eq` at every step:
+      amounts, ledger and readings, plus the step limit and every rate.
+    - **First pass.** `AUC_b(dose into the liver)/AUC_b(dose into the blood) = 1 − E` whatever
+      the renal clearance is, and it is exact at any step, because `h Σ xₙ = −M⁻¹U` for any
+      input: 0.6 to 6.2e-15. Elimination on `C_t` would make it 0.27.
+    - **Mass balance** with perfusion, hepatic and renal elimination, a symmetric link, a lagged
+      depot into the liver, a bolus and an infusion: 1.1e-15 of the dose over 2 880 steps, by
+      the accessors and by `ledger`.
+    - **The step limit sees the tissue.** A 0.5 L tissue at `K_p = 0.25` sets the limit at 15 s;
+      the blood alone would allow 450 s. That is inside `2/α` = 29.3 s and within a factor of two
+      of it. With a clearance and a link as well, the limit is 9.677 s exactly, with the steady
+      state held to 0.29 of `(n + 2)ε`. The step past the limit is refused naming the tissue, and
+      no pool goes negative at the limit.
+    - A link beside a perfusion on the same pair adds, in the readers and in the step. Two blood
+      pools are two models: a bolus into one leaves the other empty to the bit and matches that
+      pool alone to the bit. The same bits come out of two scheduler cuts and a `restore`. Every
+      refusal is named. Nothing refused is half-built.
+  - **Twelve sabotages, each caught.** Each was applied by script with an anchor asserted to occur
+    once, then restored by `cp`, `touch` and SHA-256 from a uniquely named copy. The first five
+    were named before any test was written. The last seven are `numerics-reviewer`'s. Six of
+    those passed every test until the review's own tests went in; the seventh still passed after
+    them, which the table's last row records.
+
+    | sabotage | caught by |
+    | --- | --- |
+    | `K_p` applied on the blood's side of the flux | five tests: the recurrence at step 1 (9.2e-5 against 8.4e-5), the steady state, `V_ss` (22.4 L), the fast-perfusion order, `F_H` 0.857 |
+    | the perfusion's return flow dropped | seven, `K_p = 1` at step 1 among them |
+    | elimination on `C_t` instead of `C_t/K_p` | the steady state, and `F_H` 0.273 |
+    | the step limit without the tissue's perfusion | the tissue's limit: 450 s against 15 s |
+    | a perfusion's drug taken from the blood and never delivered | nine, mass balance at 0.36 of the dose and the scheduler's audit among them |
+    | the limit without a perfused tissue's clearance and links | the tissue that has both: 15 s against 9.68 s |
+    | symmetric links on the venous concentration | that tissue's steady state, and the step against `transfer` |
+    | `transfer` without `/K_p` | the same two |
+    | `transfer` with `K_p` on the blood's side | the same two |
+    | `elimination_rate` without `K_p` | 30/h against 120/h |
+    | `transfer_rate` dropping a link beside a perfusion | the link-beside-a-perfusion check |
+    | every perfusion debiting the first blood pool | **passed** the two-pool steady state, where a perfusion carries nothing; caught once a bolus into each pool was added |
+
+  - **The rest of the review.** `physics-checker` verified each closed form from hand-written
+    organ balances, in 50-digit arithmetic. Three of its findings were imprecise prose, now
+    corrected. `volume_of_distribution`'s `Σ K_p V` is the prediction convention, not what
+    plasma gives: with the liver eliminating it is 122.2 L, against 119.3 L from the steady state
+    and 117.6 L from the moments. The row form fails for small `K_p` too. And an older sentence,
+    "still stable up to twice this", was true for one compartment only and is now stated as such.
+  - 41 tests in the crate (28 before) and its one doctest, none ignored. There is no `powi` or
+    `powf` in it outside a doc comment saying none is used. No scene changes:
+    `a_dose_leaves_at_the_rate_the_roots_say` and `every_scene_that_ships_runs_and_says_something_true`
+    pass unchanged.
 
 ### Changed
 

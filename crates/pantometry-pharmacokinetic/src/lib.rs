@@ -11,6 +11,9 @@
 //! V_i dC_i/dt = Σ_j Q_ij (C_j − C_i) − CL_i C_i + R_i(t)
 //! ```
 //!
+//! A tissue perfused from a blood pool is the one exception to that symmetry — it exchanges
+//! `Q·(C_b − C_t/K_p)` and clears on `C_t/K_p` — and has a section of its own below.
+//!
 //! That is the same algebra a thermal network runs — `Q·ΔC` where a joint carries `UA·ΔT` — and
 //! this crate copies its structure deliberately. Two things are new.
 //!
@@ -39,6 +42,12 @@
 //!   flip-flop terminal slope `−kₐ` when absorption is the slower process, and `AUC = F·D/CL`.
 //! - **Two compartments, oral dose.** The tri-exponential, which catches a depot feeding the
 //!   wrong compartment the way the bi-exponential catches a transposed link.
+//! - **Perfusion-limited tissues.** Under a constant infusion every tissue settles at `K_p`
+//!   times the blood and the blood at `R/(CL_r + Q_h E)`, and Euler's fixed point *is* that
+//!   point; `V_ss = V_b + Σ K_p V_t` from the state and from the moments; one tissue after a
+//!   bolus is the bi-exponential with `k21 = Q/(K_p V_t)`; as `Q → ∞` the model is one
+//!   compartment and the deviation falls as `1/Q`; and the well-stirred liver passes `1 − E`
+//!   of a dose that enters through it.
 //! - **Mass balance.** Dose = still in the compartments + cleared + still in a depot + lost
 //!   before absorption + still in the syringe or the bottle, to machine precision.
 //! - **First order.** Halving the step halves the error. Measured as a rate, so the tolerances
@@ -51,7 +60,8 @@
 //! transposed index, or a link dropped altogether passes the conservation audit at machine
 //! precision. `pantometry-thermal`'s network module found this first and the lesson transfers
 //! whole — every link check in this crate is per compartment or against a closed form, never on
-//! the total.
+//! the total. A perfusion is the same: a `K_p` on the blood's side instead of the tissue's, or a
+//! perfusion with no return flow, closes the books to the last bit and is wrong everywhere else.
 //!
 //! It decided the API the same way, too. A compartment is addressed by a [`Compartment`] handle
 //! rather than by name, because a link naming a compartment that does not exist would be exactly
@@ -140,6 +150,54 @@
 //! compartments with oral input into the central one give a tri-exponential in `α`, `β` and `kₐ`,
 //! derived in the test that checks it.
 //!
+//! # Perfusion-limited distribution, and the one blood pool it assumes
+//!
+//! A physiologically based model names its compartments after organs and fixes their volumes
+//! and blood flows from anatomy, where a classical model fits them to a curve. The organ is
+//! **perfusion-limited** when its membranes are fast compared with its blood flow, so the blood
+//! leaving it has equilibrated with it: the tissue holds `K_p` times the concentration of that
+//! venous blood, and [`CompartmentModel::perfuse`] carries
+//!
+//! ```text
+//! V_t dC_t/dt = Q (C_b − C_t/K_p) − CL_t C_t/K_p
+//! ```
+//!
+//! from a blood pool into a tissue. That is not the symmetric link — `C_t/K_p` and not `C_t` —
+//! and it is why `perfuse` is its own method rather than a link with a coefficient: the order of
+//! its arguments is the physics. At `K_p = 1` it is the symmetric link, to the bit.
+//!
+//! **One well-stirred blood pool, tissues in parallel off it.** Arterial blood is the pool's
+//! concentration and every tissue's venous return mixes back into it. The alternative —
+//! separate arterial and venous pools, a lung between them, the gut and spleen draining through
+//! the portal vein into the liver — is a flow network, and its circulation is one-way: drug
+//! moves *with* the blood around a loop. That is a different kind of link from this one, which
+//! is an exchange with a single pool, and it would need its own closed forms. What the choice
+//! implies, so nobody reads more into a result than it holds:
+//!
+//! - **No pulmonary first pass and no arterio-venous difference in the blood itself.** A blood
+//!   sample anywhere reads `C_b`. The difference across an *organ* is kept — it is the
+//!   `C_b − C_t/K_p` the flux is made of, and the liver's extraction is exactly it.
+//! - **No portal circulation.** Drug absorbed from the gut reaches the liver before the blood
+//!   only if it is put there: a [`Depot`] into the liver tissue is how hepatic first pass is
+//!   written, and it passes `1 − E` of the dose, checked. A depot into the blood skips the liver.
+//! - **No tissue is in series with another**, so `perfuse` refuses a tissue as a blood pool and a
+//!   blood pool as a tissue. Each tissue has one blood flow, and is perfused once.
+//!
+//! **Elimination from a tissue is on its venous concentration**: an [`eliminating`] compartment
+//! that is then perfused clears `CL·C_t/K_p`. That is the well-stirred liver, with an extraction
+//! `E = CL/(Q + CL)` and an organ clearance `Q·E`. **Protein binding is not modelled**: `K_p` is
+//! a total partition and `CL` acts on total venous concentration, so a caller with an unbound
+//! fraction passes `f_u·CL_int` and has the textbook `f_u·CL_int/(Q + f_u·CL_int)`. Modelling
+//! `f_u` would mean an unbound concentration that the membranes, the enzymes and `K_p` all
+//! refer to, and a check of each; a multiplier on `CL` that nothing else reads would not be that.
+//!
+//! **No reference human.** A physiological model is only as good as its organ volumes and blood
+//! flows, and those come from a published table — ICRP Publication 89, or Brown et al. 1997 —
+//! read by somebody who can cite the page. This crate has the mechanism and no data; the tests
+//! use round numbers that say so.
+//!
+//! [`eliminating`]: CompartmentModel::eliminating
+//!
 //! # What is deliberately not in it
 //!
 //! **No Michaelis–Menten elimination.** `V_max C/(K_m + C)` is the interesting case for ethanol
@@ -158,7 +216,9 @@
 //! would be a loop over a domain rather than a domain.
 //!
 //! **No protein binding, no metabolites, no AUC as a typed quantity.** The first two are more
-//! compartments a caller can build out of what is here. The third is `Σ eliminated / CL` and
+//! compartments a caller can build out of what is here — binding as an equilibrium inside a
+//! perfused tissue is folded into its `K_p`, and in the liver into `f_u·CL_int`, as above, and
+//! is not a separate mechanism. The third is `Σ eliminated / CL` and
 //! would need a `Qty` this workspace has no name for; it is one division away in a caller.
 //!
 //! # The twelfth domain, and what it had to add to the kernel
@@ -220,14 +280,29 @@ struct CompartmentState {
     volume: f64,
     /// kg of drug in it.
     amount: f64,
-    /// m³/s out of the *system*. Zero for a compartment that only distributes.
+    /// m³/s out of the *system*. Zero for a compartment that only distributes. It acts on the
+    /// concentration *leaving* the compartment, `amount/(partition·volume)`, which is the
+    /// compartment's own concentration for everything that is not a perfused tissue.
     clearance: f64,
+    /// `K_p`, the tissue:blood partition coefficient, for a tissue declared by
+    /// [`CompartmentModel::perfuse`]; exactly 1 for every other compartment, so that
+    /// `concentration / partition` is the concentration itself, to the bit.
+    partition: f64,
 }
 
 /// An intercompartmental clearance, in m³/s.
 struct Link {
     a: usize,
     b: usize,
+    q: f64,
+}
+
+/// A blood flow through a perfusion-limited tissue, in m³/s. The tissue's `K_p` is on the
+/// tissue's [`CompartmentState`], because a tissue is perfused once and its partition is a
+/// property of the tissue that elimination reads too.
+struct Perfusion {
+    blood: usize,
+    tissue: usize,
     q: f64,
 }
 
@@ -421,6 +496,7 @@ pub struct CompartmentModel {
     id: u64,
     compartments: Vec<CompartmentState>,
     links: Vec<Link>,
+    perfusions: Vec<Perfusion>,
     infusions: Vec<Infusion>,
     depots: Vec<DepotState>,
     doses: Vec<OralDose>,
@@ -474,6 +550,7 @@ impl CompartmentModel {
             id,
             compartments: Vec::new(),
             links: Vec::new(),
+            perfusions: Vec::new(),
             infusions: Vec::new(),
             depots: Vec::new(),
             doses: Vec::new(),
@@ -498,6 +575,10 @@ impl CompartmentModel {
     /// Almost always the central one. Renal and hepatic clearance both act on plasma, and a
     /// peripheral compartment with its own clearance is a modelling choice worth making
     /// explicitly rather than by default.
+    ///
+    /// In a perfusion-limited model the liver is this too, and then perfused: the clearance acts
+    /// on the concentration *leaving* the compartment, which for a tissue declared by
+    /// [`CompartmentModel::perfuse`] is its venous concentration `C_t/K_p` rather than `C_t`.
     pub fn eliminating(
         &mut self,
         label: impl Into<String>,
@@ -514,6 +595,7 @@ impl CompartmentModel {
             volume: volume.to_si(),
             amount: 0.0,
             clearance,
+            partition: 1.0,
         });
         Compartment {
             index,
@@ -532,6 +614,10 @@ impl CompartmentModel {
     /// the arguments does not change the physics. It does change nothing else either, which is
     /// worth saying because the micro rate constants it implies are *not* symmetric:
     /// `k₁₂ = Q/V₁` and `k₂₁ = Q/V₂` differ whenever the volumes do.
+    ///
+    /// A tissue whose equilibrium with the blood is not equal concentrations is
+    /// [`CompartmentModel::perfuse`], which carries `Q·(C_b − C_t/K_p)`; this is that with
+    /// `K_p = 1`, to the bit.
     pub fn link(&mut self, a: Compartment, b: Compartment, q: Clearance) -> Result<(), Violation> {
         let (i, j) = (self.resolve(a)?, self.resolve(b)?);
         if i == j {
@@ -563,6 +649,110 @@ impl CompartmentModel {
         } else {
             self.links.push(Link { a: i, b: j, q: w });
         }
+        Ok(())
+    }
+
+    /// Perfuse a tissue from a blood pool: a blood flow `Q` through the tissue, which holds drug
+    /// at `K_p` times the blood's concentration once the two have equilibrated.
+    ///
+    /// Carries `Q·(C_b − C_t/K_p)` kilograms a second from `blood` into `tissue`. Blood arrives
+    /// at the blood pool's concentration `C_b`, and leaves the tissue at its **venous**
+    /// concentration `C_t/K_p` — the perfusion-limited, well-stirred tissue, in which the blood
+    /// leaving is in equilibrium with the tissue it has just passed through. The flux vanishes
+    /// at `C_t = K_p·C_b`, which is what `K_p` means. The micro rate constants are `Q/V_b` out
+    /// of the blood and `Q/(K_p·V_t)` out of the tissue, and that second one is the one
+    /// [`Domain::max_stable_dt`] must see: a small tissue that partitions weakly empties fast.
+    ///
+    /// **Not symmetric**, which is the whole difference from [`CompartmentModel::link`]: the
+    /// order of the arguments is the physics. `K_p` belongs to the second, and swapping them
+    /// is a different model that conserves every milligram.
+    ///
+    /// **Elimination from a perfused tissue acts on its venous concentration.** A tissue made
+    /// with [`CompartmentModel::eliminating`] and then perfused clears `CL·C_t/K_p`: the
+    /// well-stirred liver, in which the enzymes see the blood leaving the organ. At steady state
+    /// that extracts `E = CL/(Q + CL)` of the drug arriving, and the organ clears
+    /// `Q·E = Q·CL/(Q + CL)` of blood — see [`CompartmentModel::extraction_ratio`]. `CL` is the
+    /// intrinsic clearance of what the enzymes can reach; protein binding is not modelled, so a
+    /// caller with an unbound fraction `f_u` and an unbound intrinsic clearance passes
+    /// `f_u·CL_int` and gets the textbook `E = f_u·CL_int/(Q + f_u·CL_int)`.
+    ///
+    /// **Tissues in parallel off one blood pool.** A tissue is perfused once, and a blood pool is
+    /// not itself a perfused tissue: so a tissue cannot also be another's blood, and nothing is
+    /// in series. That is the lumped-blood model — see the module docs for what it implies.
+    /// Symmetric links to and from a perfused tissue are allowed and act on its concentration
+    /// `C_t`, as a link always has.
+    ///
+    /// `K_p = 1` is the symmetric link of the same `Q` **to the bit**: `x/1.0` is `x` exactly,
+    /// and the flux, the elimination, the step limit and the rate constants are then computed in
+    /// the same operations in the same order.
+    ///
+    /// Refuses a blood flow that is negative or not finite, a `K_p` that is not positive and
+    /// finite, a tissue perfused from itself, a tissue already perfused, a tissue that is some
+    /// other tissue's blood, a blood pool that is itself a perfused tissue, and a handle from
+    /// another model. Nothing is changed by a refusal.
+    pub fn perfuse(
+        &mut self,
+        blood: Compartment,
+        tissue: Compartment,
+        q: Clearance,
+        partition: f64,
+    ) -> Result<(), Violation> {
+        let (b, t) = (self.resolve(blood)?, self.resolve(tissue)?);
+        let site = format!(
+            "{}/{}-{}",
+            self.name, self.compartments[b].label, self.compartments[t].label
+        );
+        if b == t {
+            return Err(Violation::at(
+                site,
+                "a tissue cannot be perfused from itself",
+                0.0,
+            ));
+        }
+        let w = q.to_si();
+        if !w.is_finite() || w < 0.0 {
+            return Err(Violation::at(
+                site,
+                "a blood flow must be finite and not negative",
+                w,
+            ));
+        }
+        // `!is_finite` first, for the reason `link` gives: NaN is refused by the branch that
+        // reads as refusing it.
+        if !partition.is_finite() || partition <= 0.0 {
+            return Err(Violation::at(
+                site,
+                "a partition coefficient must be finite and positive",
+                partition,
+            ));
+        }
+        if self.perfusions.iter().any(|p| p.tissue == t) {
+            return Err(Violation::at(
+                site,
+                "a tissue already perfused cannot be perfused again",
+                t as f64,
+            ));
+        }
+        if self.perfusions.iter().any(|p| p.blood == t) {
+            return Err(Violation::at(
+                site,
+                "a blood pool cannot be perfused as a tissue",
+                t as f64,
+            ));
+        }
+        if self.perfusions.iter().any(|p| p.tissue == b) {
+            return Err(Violation::at(
+                site,
+                "a perfused tissue cannot be a blood pool",
+                b as f64,
+            ));
+        }
+        self.compartments[t].partition = partition;
+        self.perfusions.push(Perfusion {
+            blood: b,
+            tissue: t,
+            q: w,
+        });
         Ok(())
     }
 
@@ -919,8 +1109,59 @@ impl CompartmentModel {
     }
 
     /// A compartment's own elimination clearance. Zero for one that only distributes.
+    ///
+    /// For a perfused tissue this is the *intrinsic* clearance, acting on the venous
+    /// concentration; what the organ clears of blood is `Q·E`, with `E` from
+    /// [`CompartmentModel::extraction_ratio`].
     pub fn clearance(&self, c: Compartment) -> Clearance {
         Clearance::from_si(self.compartments[c.index as usize].clearance)
+    }
+
+    /// A compartment's tissue:blood partition coefficient `K_p`. Exactly 1 for a compartment
+    /// that is not a perfused tissue.
+    pub fn partition(&self, c: Compartment) -> f64 {
+        self.compartments[c.index as usize].partition
+    }
+
+    /// The concentration *leaving* a compartment: `C_t/K_p` for a perfused tissue — the venous
+    /// blood in equilibrium with it — and the compartment's own concentration, to the bit, for
+    /// anything else. The concentration its clearance acts on.
+    pub fn venous_concentration(&self, c: Compartment) -> Concentration {
+        let i = c.index as usize;
+        Concentration::from_si(self.conc(i) / self.compartments[i].partition)
+    }
+
+    /// The blood flow through a perfused tissue. Zero for a compartment that is not perfused,
+    /// which is a real answer: no blood flows through it.
+    pub fn blood_flow(&self, tissue: Compartment) -> Clearance {
+        let t = tissue.index as usize;
+        Clearance::from_si(
+            self.perfusions
+                .iter()
+                .find(|p| p.tissue == t)
+                .map(|p| p.q)
+                .unwrap_or(0.0),
+        )
+    }
+
+    /// The well-stirred extraction ratio of a perfused tissue, `E = CL/(Q + CL)`: the fraction
+    /// of the drug arriving in its blood that it removes in one pass, at steady state.
+    ///
+    /// `None` for a compartment that is not perfused, rather than zero, because zero is the
+    /// answer for a perfused tissue that does not eliminate and the two must not be confused.
+    /// Zero, too, for one with neither flow nor clearance, where `0/0` has no better value.
+    pub fn extraction_ratio(&self, tissue: Compartment) -> Option<f64> {
+        let t = tissue.index as usize;
+        let q = self.perfusions.iter().find(|p| p.tissue == t)?.q;
+        let cl = self.compartments[t].clearance;
+        Some(if q + cl > 0.0 { cl / (q + cl) } else { 0.0 })
+    }
+
+    /// The perfusion between two compartments, either way round, if there is one.
+    fn perfusion_between(&self, i: usize, j: usize) -> Option<&Perfusion> {
+        self.perfusions
+            .iter()
+            .find(|p| (p.blood == i && p.tissue == j) || (p.blood == j && p.tissue == i))
     }
 
     /// The label a compartment was given, for a violation or a legend.
@@ -1015,14 +1256,29 @@ impl CompartmentModel {
         self.doses.iter().filter(|d| !d.given).map(|d| d.dose).sum()
     }
 
-    /// Steady-state volume of distribution, `Σ V_i`.
+    /// Steady-state volume of distribution, `Σ K_p,i V_i` — `Σ V_i` when nothing is perfused,
+    /// and `V_b + Σ K_p V_t` for blood and its tissues.
     ///
     /// The volume that relates the body burden to the plasma concentration once everything has
     /// equilibrated, which is the only time it relates them at all. Early after a bolus the
     /// central volume is the relevant one and this is an overestimate by however much has not
     /// distributed yet.
+    ///
+    /// A tissue holds `K_p` times the blood's concentration at equilibrium, so it counts `K_p`
+    /// times its volume; `1.0·V` is `V` to the bit, so a model with no perfusion reports what it
+    /// always did. **Exact when only blood pools eliminate.** A perfused tissue that eliminates
+    /// sits below equilibrium at steady state — at `K_p·C_b·(1 − E)` — and is counted here as
+    /// if it did not. That is the convention of the prediction formulas `K_p` comes from, and
+    /// **not** what plasma data would give: with the test body's liver clearing 60 L/h this
+    /// reports 122.2 L, the steady state's `body burden/C_b` is 119.3 L, and `CL·MRT` from a
+    /// bolus 117.6 L. Ask for the one that is meant.
     pub fn volume_of_distribution(&self) -> Volume {
-        Volume::from_si(self.compartments.iter().map(|c| c.volume).sum())
+        Volume::from_si(
+            self.compartments
+                .iter()
+                .map(|c| c.partition * c.volume)
+                .sum(),
+        )
     }
 
     /// Total elimination clearance, `Σ CL_i`.
@@ -1030,6 +1286,14 @@ impl CompartmentModel {
     /// At steady state under a constant infusion `Σ CL_i C_i = R`, whatever the distribution
     /// between compartments — so with elimination from one compartment only, its steady-state
     /// concentration is `R/CL` and does not depend on the intercompartmental clearances at all.
+    ///
+    /// **A sum of what each compartment's enzymes or kidneys do, not of what the blood sees.**
+    /// For a perfused tissue `CL_i` is intrinsic and acts on `C_t/K_p`; what it clears of the
+    /// blood is `Q·E = Q·CL/(Q + CL)`, from [`CompartmentModel::blood_flow`] and
+    /// [`CompartmentModel::extraction_ratio`], and with infusion into the blood the steady state
+    /// is `C_b = R/(Σ CL_blood + Σ Q·E)`. The same is true of a linked peripheral compartment that
+    /// eliminates, which is why the sentence above says one compartment; this sum is unchanged so
+    /// that a perfusion of `K_p = 1` and a link report the same number.
     pub fn total_clearance(&self) -> Clearance {
         Clearance::from_si(self.compartments.iter().map(|c| c.clearance).sum())
     }
@@ -1041,20 +1305,25 @@ impl CompartmentModel {
     /// smaller root of the characteristic polynomial, and the two are not close. This crate
     /// deliberately offers no `half_life`, because which half-life a reader means depends on how
     /// many compartments there are and a method could only pick one.
+    ///
+    /// For a perfused tissue it is `CL/(K_p V)`, because the clearance acts on `C_t/K_p`; with
+    /// `K_p = 1` that is `CL/V` to the bit.
     pub fn elimination_rate(&self, c: Compartment) -> Frequency {
         let s = &self.compartments[c.index as usize];
         Frequency::from_si(if s.volume > 0.0 {
-            s.clearance / s.volume
+            s.clearance / (s.partition * s.volume)
         } else {
             0.0
         })
     }
 
-    /// The micro rate constant `k_ij = Q/V_i` for the link out of `from` towards `to`.
+    /// The micro rate constant for drug leaving `from` towards `to`: `Q/V_from` for a link, and
+    /// for a perfusion `Q/V_b` out of the blood and `Q/(K_p V_t)` out of the tissue.
     ///
-    /// Zero if they are not linked, which is a real answer rather than a missing one. Not
+    /// Zero if they are not joined, which is a real answer rather than a missing one. Not
     /// symmetric: the same `Q` gives a different constant in each direction whenever the volumes
-    /// differ, and that asymmetry is what makes the bi-exponential bi-exponential.
+    /// differ, and that asymmetry is what makes the bi-exponential bi-exponential. A link and a
+    /// perfusion between the same pair add.
     pub fn transfer_rate(&self, from: Compartment, to: Compartment) -> Frequency {
         let (Ok(i), Ok(j)) = (self.resolve(from), self.resolve(to)) else {
             return Frequency::from_si(0.0);
@@ -1065,15 +1334,29 @@ impl CompartmentModel {
             .find(|l| (l.a == i && l.b == j) || (l.a == j && l.b == i))
             .map(|l| l.q)
             .unwrap_or(0.0);
-        let v = self.compartments[i].volume;
-        Frequency::from_si(if v > 0.0 { q / v } else { 0.0 })
+        let s = &self.compartments[i];
+        let v = s.volume;
+        let linked = if v > 0.0 { q / v } else { 0.0 };
+        // Only added when there is a perfusion, so a model without one computes exactly what it
+        // did before there were perfusions.
+        Frequency::from_si(match self.perfusion_between(i, j) {
+            None => linked,
+            Some(p) if v > 0.0 => {
+                // Out of the tissue it is the venous concentration that leaves, `A/(K_p V)`.
+                let k = if p.tissue == i { s.partition } else { 1.0 };
+                linked + p.q / (k * v)
+            }
+            Some(_) => linked,
+        })
     }
 
-    /// Mass crossing the link between two compartments right now, positive from `a` to `b`.
+    /// Mass crossing the link or perfusion between two compartments right now, positive from `a`
+    /// to `b`: `Q·(C_a − C_b)` for a link, and `Q·(C_b − C_t/K_p)` from blood to tissue for a
+    /// perfusion.
     ///
-    /// Zero if they are not linked. The per-link number the conservation audit cannot see, which
+    /// Zero if they are not joined. The per-link number the conservation audit cannot see, which
     /// is why it is public: a test asserting it is the only kind that would notice a transposed
-    /// index.
+    /// index — or a `K_p` on the wrong side.
     pub fn transfer(&self, a: Compartment, b: Compartment) -> MassFlow {
         let (Ok(i), Ok(j)) = (self.resolve(a), self.resolve(b)) else {
             return MassFlow::from_si(0.0);
@@ -1084,7 +1367,21 @@ impl CompartmentModel {
             .find(|l| (l.a == i && l.b == j) || (l.a == j && l.b == i))
             .map(|l| l.q)
             .unwrap_or(0.0);
-        MassFlow::from_si(q * (self.conc(i) - self.conc(j)))
+        let linked = q * (self.conc(i) - self.conc(j));
+        MassFlow::from_si(match self.perfusion_between(i, j) {
+            None => linked,
+            Some(p) => {
+                let into_tissue = p.q
+                    * (self.conc(p.blood)
+                        - self.conc(p.tissue) / self.compartments[p.tissue].partition);
+                linked
+                    + if p.blood == i {
+                        into_tissue
+                    } else {
+                        -into_tissue
+                    }
+            }
+        })
     }
 
     fn conc(&self, i: usize) -> f64 {
@@ -1096,11 +1393,14 @@ impl CompartmentModel {
         }
     }
 
-    /// Everything carrying drug *out* of compartment `i`, as a rate constant: `(ΣQ + CL)/V`.
+    /// Everything carrying drug *out* of compartment `i`, as a rate constant on its amount:
+    /// `(ΣQ + CL)/V` — and for a perfused tissue `Σ Q_link/V + (Q + CL)/(K_p V)`, because the
+    /// perfusion and the clearance both drain it at its venous concentration `A/(K_p V)`. A
+    /// blood pool's perfusions drain it at `Q/V_b` each, as a link would.
     ///
-    /// The magnitude of the diagonal of the compartment matrix written in concentrations, and the
-    /// only thing [`Domain::max_stable_dt`] needs. Infinite for a compartment with no volume,
-    /// which `step` refuses before this is ever divided by.
+    /// The magnitude of the diagonal of the compartment matrix written in amounts, and the only
+    /// thing [`Domain::max_stable_dt`] needs. Infinite for a compartment with no volume, which
+    /// `step` refuses before this is ever divided by.
     fn turnover_rate(&self, i: usize) -> f64 {
         let s = &self.compartments[i];
         // Written as a positive test rather than a negated one, so a NaN volume takes the
@@ -1113,7 +1413,27 @@ impl CompartmentModel {
                 .filter(|l| l.a == i || l.b == i)
                 .map(|l| l.q)
                 .sum();
-            (out + s.clearance) / s.volume
+            // Drained at the compartment's own concentration, and at its venous one. Each sum is
+            // empty, so exactly zero, for a compartment no perfusion touches — and `x + 0` is
+            // `x`, so a model with no perfusion takes the same operations it always did.
+            let as_blood: f64 = self
+                .perfusions
+                .iter()
+                .filter(|p| p.blood == i)
+                .map(|p| p.q)
+                .sum();
+            let as_tissue: f64 = self
+                .perfusions
+                .iter()
+                .filter(|p| p.tissue == i)
+                .map(|p| p.q)
+                .sum();
+            let (own, venous) = (out + as_blood, s.clearance + as_tissue);
+            if s.partition == 1.0 {
+                (own + venous) / s.volume
+            } else {
+                own / s.volume + venous / (s.partition * s.volume)
+            }
         } else {
             f64::INFINITY
         }
@@ -1151,28 +1471,46 @@ impl Domain for CompartmentModel {
         true
     }
 
-    /// `min_i V_i/(Σ_j Q_ij + CL_i)` — the reciprocal of the fastest compartment's turnover.
+    /// `min_i 1/r_i` — the reciprocal of the fastest compartment's turnover, with
+    /// `r_i = (Σ_j Q_ij + CL_i)/V_i` for a compartment and
+    /// `r_t = Σ Q_link/V_t + (Q + CL)/(K_p V_t)` for a perfused tissue.
     ///
     /// # Where that comes from
     ///
-    /// Write the system in concentrations, `dC/dt = N C`, with
-    /// `N_ii = −(Σ_j Q_ij + CL_i)/V_i = −r_i` and `N_ij = Q_ij/V_i` for `j ≠ i`. Explicit Euler
-    /// on that is stable exactly when `|1 + λ h| ≤ 1` for every eigenvalue, and since a
-    /// compartment matrix is similar to a symmetric one its eigenvalues are real and
-    /// non-positive, so the condition is `h ≤ 2/|λ|max`.
+    /// Write the system in amounts, `dA/dt = M A`. Every term draining compartment `i` is
+    /// proportional to its own amount, so `M_ii = −r_i`; and `M_ji ≥ 0` for `j ≠ i` is the rate
+    /// at which `A_i` feeds `j` — `Q/V_i` through a link, `Q/V_b` from a blood pool into a
+    /// tissue, `Q/(K_p V_t)` from a tissue back to its blood. Column `i` of `M` therefore sums
+    /// to `−CL_i/(K_p,i V_i) ≤ 0`, which is mass conservation said as a matrix.
     ///
-    /// Gershgorin bounds `|λ|max` without solving for it. Row `i` puts every eigenvalue within
-    /// `Σ_{j≠i} Q_ij/V_i` of `−r_i`, and that radius is at most `r_i` — it is `r_i` less the
-    /// clearance term. So `|λ|max ≤ 2 max_i r_i`, and `h ≤ 1/max_i r_i` implies `h ≤ 2/|λ|max`.
-    /// That is the number reported.
+    /// Explicit Euler is stable when `|1 + λ h| ≤ 1` for every eigenvalue. Gershgorin, by
+    /// columns, puts every eigenvalue in a disc centred on `−r_i` whose radius — the rest of the
+    /// column — is at most `r_i`. For `h r_i ≤ 1`, `1 + hz` over that disc lies in the disc of
+    /// centre `1 − h r_i` and radius `h r_i`, which is inside the unit circle because the two add
+    /// to 1. So `h ≤ 1/max_i r_i` is stable, and it needs no claim that the eigenvalues are
+    /// real. They are for a network of symmetric links, which is similar to a symmetric matrix,
+    /// and for blood and its tissues, which satisfy detailed balance with weights `V_b` and
+    /// `K_p V_t`; a link added beside a perfusion can make a cycle that breaks that, and the
+    /// disc argument does not care.
+    ///
+    /// The concentration form this used to be derived in does **not** survive perfusion: a
+    /// tissue's concentration row has diagonal `Q/(K_p V_t)` and off-diagonal `Q/V_t`, so its
+    /// disc is wider than its centre whenever `K_p > 1`; and the blood's row, with off-diagonals
+    /// `Q_t/(K_p V_b)`, is too whenever `Σ Q_t/K_p > Σ Q_t + CL` — a small `K_p` breaks it from
+    /// the other side. In amounts the columns are what
+    /// conservation bounds, which is why the derivation moved there. For a network of links the
+    /// two forms give the same number.
     ///
     /// # And it is the positivity limit as well, which is the reason not to loosen it
     ///
     /// The same expression falls out of a different requirement. A compartment's update is
-    /// `A_i ← A_i(1 − h r_i) + h Σ_j Q_ij C_j + dose`, and every term after the first is
+    /// `A_i ← A_i(1 − h r_i) + h Σ_{j≠i} M_ij A_j + dose`, and every term after the first is
     /// non-negative, so the amount stays non-negative exactly while `h r_i ≤ 1`. A negative mass
     /// of drug is not a large error, it is a meaningless one — and unlike a divergence it does
-    /// not announce itself, because the system is still stable at `h` up to twice this.
+    /// not announce itself, because the system can still be stable past this — up to twice
+    /// it for one compartment, `2/α` for the classical pair. Not in general: Gershgorin gives
+    /// `|λ| ≤ 2 max r`, so a doubled step can diverge, and once a cycle makes the eigenvalues
+    /// complex `2/|λ|` is not the criterion at all.
     ///
     /// # What it costs
     ///
@@ -1183,7 +1521,7 @@ impl Domain for CompartmentModel {
     /// is *tight* — `|λ|max = 2Q/V` and `2/|λ|max = V/Q = 1/r` — which is the case that shows the
     /// factor is not slack but the actual answer where the Gershgorin disc touches.
     ///
-    /// Infinite for a model with no clearances and no links: nothing is moving, so nothing limits
+    /// Infinite for a model with no clearances, no links and no perfusions: nothing is moving, so nothing limits
     /// the step. Honest rather than defensive, and the same answer a still medium gives in
     /// `pantometry-acoustic`.
     fn max_stable_dt(&self, _now: Time) -> Time {
@@ -1327,11 +1665,32 @@ impl Domain for CompartmentModel {
             delta[l.b] += q;
         }
 
-        // Elimination. Accumulated with exactly the value subtracted, so what left the body and
-        // what the books gained are the same number rather than two roundings of one.
+        // What leaves each compartment is at its venous concentration, `C/K_p`: the tissue's
+        // blood for a perfused tissue, and the concentration itself, to the bit, for everything
+        // else — `x/1.0` is `x`.
+        let venous: Vec<f64> = self
+            .compartments
+            .iter()
+            .zip(&conc)
+            .map(|(c, x)| x / c.partition)
+            .collect();
+
+        // Perfusions, once each and applied twice, for the links' reason. Arterial blood in at
+        // the blood pool's concentration, venous blood out at the tissue's `C_t/K_p`. A blood
+        // pool is never a perfused tissue — `perfuse` refuses it — so its own concentration is
+        // its arterial one.
+        for p in &self.perfusions {
+            let q = p.q * (conc[p.blood] - venous[p.tissue]) * h;
+            delta[p.blood] -= q;
+            delta[p.tissue] += q;
+        }
+
+        // Elimination, on the venous concentration. Accumulated with exactly the value
+        // subtracted, so what left the body and what the books gained are the same number rather
+        // than two roundings of one.
         let mut cleared = 0.0;
         for (i, c) in self.compartments.iter().enumerate() {
-            let out = c.clearance * conc[i] * h;
+            let out = c.clearance * venous[i] * h;
             delta[i] -= out;
             cleared += out;
         }
@@ -2027,7 +2386,7 @@ mod tests {
     /// **No compartment ever holds a negative amount of drug, right up to the limit.**
     ///
     /// The other half of what `max_stable_dt` is derived from, and the half that does not
-    /// announce itself: the scheme is *stable* to twice this step, so a model run between the two
+    /// announce itself: the scheme is *stable* to `2/α`, 1.74 times this step, so a model run between the two
     /// oscillates about the right answer with negative concentrations in it and never diverges.
     /// Run at exactly the limit, where the diagonal factor `1 − h r` is exactly zero.
     #[test]
@@ -3499,5 +3858,1110 @@ mod tests {
             "{worst_series} ulp from the forward series"
         );
         assert!(worst_expm1 <= 4.0, "{worst_expm1} ulp from -expm1(-x)/x");
+    }
+
+    // ---- Perfusion-limited distribution ----------------------------------------------------
+
+    fn l_h(x: f64) -> Clearance {
+        Clearance::l_per_h(x)
+    }
+
+    /// The four-pool model the steady-state checks use: blood with a renal clearance, a liver
+    /// that eliminates, a muscle and a fat that only distribute. **Round illustrative numbers,
+    /// not physiology data**: chosen so `E = 0.4` and the arithmetic below is checkable by hand.
+    ///
+    /// | pool | V | Q | K_p | CL |
+    /// | --- | --- | --- | --- | --- |
+    /// | blood | 5 L | | | 6 L/h |
+    /// | liver | 1.8 L | 90 L/h | 4 | 60 L/h, on `C_t/K_p` |
+    /// | muscle | 30 L | 50 L/h | 2 | |
+    /// | fat | 10 L | 10 L/h | 5 | |
+    struct Body {
+        m: CompartmentModel,
+        blood: Compartment,
+        liver: Compartment,
+        muscle: Compartment,
+        fat: Compartment,
+    }
+
+    fn body(liver_cl: f64) -> Body {
+        let mut m = CompartmentModel::new("subject");
+        let blood = m.eliminating("blood", Volume::litres(5.0), l_h(6.0));
+        let liver = m.eliminating("liver", Volume::litres(1.8), l_h(liver_cl));
+        let muscle = m.compartment("muscle", Volume::litres(30.0));
+        let fat = m.compartment("fat", Volume::litres(10.0));
+        m.perfuse(blood, liver, l_h(90.0), 4.0).unwrap();
+        m.perfuse(blood, muscle, l_h(50.0), 2.0).unwrap();
+        m.perfuse(blood, fat, l_h(10.0), 5.0).unwrap();
+        Body {
+            m,
+            blood,
+            liver,
+            muscle,
+            fat,
+        }
+    }
+
+    /// The closed-form steady state of [`body`] under an infusion `R` into the blood:
+    /// `[C_b, C_liver, C_muscle, C_fat]`, in kg/m³.
+    ///
+    /// Blood: `R = CL_r C_b + CL·C_l/K_l`. Liver: `Q_h(C_b − C_l/K_l) = CL·C_l/K_l`, so
+    /// `C_l/K_l = C_b·Q_h/(Q_h + CL) = C_b(1 − E)`. A tissue with no clearance has no net flux,
+    /// so `C_t = K_p C_b`. Substituting, `R = (CL_r + Q_h E) C_b`.
+    fn body_steady_state(rate: f64, liver_cl: f64) -> [f64; 4] {
+        let (q_h, cl, cl_r) = (l_h(90.0).to_si(), l_h(liver_cl).to_si(), l_h(6.0).to_si());
+        let e = cl / (q_h + cl);
+        let c_b = rate / (cl_r + q_h * e);
+        [c_b, 4.0 * c_b * (1.0 - e), 2.0 * c_b, 5.0 * c_b]
+    }
+
+    /// **PBPK closed form 1: the steady state under a constant infusion — `C_t = K_p C_b` in every
+    /// tissue that does not eliminate, `C_b = R/(CL_r + Q_h E)`, and the liver at
+    /// `K_p C_b (1 − E)` — reproduced by Euler exactly, at any step.**
+    ///
+    /// The proof is the one the one-compartment infusion test states. The step is
+    /// `A ← A + h(MA + R)`, linear, and its fixed point is `MA* = −R`: the continuous steady
+    /// state, with `h` nowhere in it. So the claim is not "close at small `h`" but "the same
+    /// point", and it is measured that way: the model is **started at** the closed form — each
+    /// pool bolused with its steady-state amount — and run, and must stay there to rounding at
+    /// two steps, one of them 0.98 of the stability limit. A transient has nothing to decay
+    /// from, so no tolerance is spent on one.
+    ///
+    /// Then from empty, where the transient is real: the slowest mode must die and leave the same
+    /// point at the rounding floor.
+    #[test]
+    fn under_an_infusion_every_tissue_settles_at_kp_times_the_blood() {
+        let rate = 1e-3 / (2000.0 * HOUR); // 1 g over 2000 h: 0.5 mg/h
+        let want = body_steady_state(rate, 60.0);
+        for h in [60.0, 0.98 * 3600.0 / 31.2] {
+            let mut b = body(60.0);
+            let pools = [b.blood, b.liver, b.muscle, b.fat];
+            for (c, x) in pools.iter().zip(want) {
+                let a = x * b.m.volume(*c).to_si();
+                b.m.bolus(*c, Mass::from_si(a)).unwrap();
+            }
+            b.m.infuse(b.blood, Mass::from_si(1e-3), Time::ZERO, hours(2000.0))
+                .unwrap();
+            let start: Vec<f64> = pools.iter().map(|c| b.m.amount(*c).to_si()).collect();
+            let steps = 4000;
+            let mut bus = Exchange::new();
+            let (mut worst, mut ratio, mut moved) = (0.0f64, 0.0f64, 0usize);
+            for n in 0..steps {
+                b.m.step(Time::s(n as f64 * h), Time::s(h), &mut bus)
+                    .unwrap();
+                for (i, (c, x)) in pools.iter().zip(want).enumerate() {
+                    let rel = (b.m.concentration(*c).to_si() / x - 1.0).abs();
+                    worst = worst.max(rel);
+                    ratio = ratio.max(rel / ((n as f64 + 2.0) * f64::EPSILON));
+                    moved += usize::from(b.m.amount(*c).to_si() != start[i]);
+                }
+            }
+            println!(
+                "  started at the closed form, h = {h:.2} s: worst {:.1} eps, {ratio:.3} of \
+                 (n + 2) eps, {moved} of {} amounts off their starting bits",
+                worst / f64::EPSILON,
+                4 * steps
+            );
+            assert!(ratio < 1.0, "h = {h}: the fixed point moved by {worst:e}");
+        }
+
+        // And the readers say the same closed form. `E = 60/(90 + 60) = 0.4`, and the liver's
+        // venous blood is `(1 − E)` of the arterial.
+        let b = body(60.0);
+        assert_eq!(b.m.extraction_ratio(b.liver), Some(0.4));
+        assert_eq!(b.m.extraction_ratio(b.muscle), Some(0.0));
+        assert_eq!(b.m.extraction_ratio(b.blood), None);
+        assert_eq!(b.m.partition(b.fat), 5.0);
+        assert_eq!(b.m.partition(b.blood), 1.0);
+        assert_eq!(b.m.blood_flow(b.muscle), l_h(50.0));
+        assert_eq!(b.m.blood_flow(b.blood).to_si(), 0.0);
+
+        // From empty.
+        let mut b = body(60.0);
+        b.m.infuse(b.blood, Mass::from_si(1e-3), Time::ZERO, hours(2000.0))
+            .unwrap();
+        let h = 60.0;
+        let pools = [b.blood, b.liver, b.muscle, b.fat];
+        let mut bus = Exchange::new();
+        let mut n = 0usize;
+        for until in [400.0, 600.0] {
+            while (n as f64) * h < until * HOUR {
+                b.m.step(Time::s(n as f64 * h), Time::s(h), &mut bus)
+                    .unwrap();
+                n += 1;
+            }
+            let rel: Vec<f64> = pools
+                .iter()
+                .zip(want)
+                .map(|(c, x)| b.m.concentration(*c).to_si() / x - 1.0)
+                .collect();
+            println!("  from empty at {until} h: {rel:?}");
+            for (r, c) in rel.iter().zip(pools) {
+                assert!(r.abs() < 1e-12, "{} at {until} h: {r:e}", b.m.label(c));
+            }
+        }
+        // The liver's extraction, measured off the state: arterial in, venous out.
+        let e =
+            1.0 - b.m.venous_concentration(b.liver).to_si() / b.m.concentration(b.blood).to_si();
+        println!("  measured E = {e:.15}");
+        assert!((e - 0.4).abs() < 1e-12, "E = {e}");
+    }
+
+    /// **PBPK closed form 2: `V_ss = V_b + Σ K_p V_t`, from the state and from the moments.**
+    ///
+    /// The liver's clearance is set to zero here, so only blood eliminates and `V_ss` is exact:
+    /// `5 + 4·1.8 + 2·30 + 5·10 = 122.2 L`.
+    ///
+    /// **From the state**, at steady state under an infusion: `body_burden/C_b`. Each tissue holds
+    /// `K_p C_b V_t`, so the ratio is `V_ss` exactly once the transient has gone.
+    ///
+    /// **From the moments**, after a bolus into the blood: `V_ss = CL·AUMC/AUC`, the mean
+    /// residence time times the clearance. The stepped curve has these moments **exactly**, with
+    /// one correction, and that is derived rather than measured. With `P = I + hM` and the left
+    /// sums `AUC_d = h Σ C_n`, `AUMC_d = h Σ (nh) C_n`, the geometric series of matrices give
+    ///
+    /// ```text
+    /// h Σ Pⁿ = h(I − P)⁻¹ = −M⁻¹                       (the continuous AUC, at any h)
+    /// h² Σ n Pⁿ = h² P (I − P)⁻² = M⁻² + h M⁻¹          (the continuous AUMC, less h·AUC)
+    /// ```
+    ///
+    /// so `AUMC_d/AUC_d = MRT − h` to the last digit, and `CL·(AUMC_d/AUC_d + h) = V_ss` at any
+    /// step — not first order, exact. Summed to 1 200 h, where the truncated tail is below the
+    /// AUC's own measured agreement with `D/CL`. The bound is `n·ε` for `n` steps of rounding and
+    /// an `n`-term sum, the AUC test's bound; measured at 0.002 to 0.003 of it, 3.9e-14 and
+    /// 9.8e-14 at `h` = 60 and 30 s, and the state's ratio at 1.2e-14.
+    ///
+    /// The `+ h` is not slack: without it the moment estimate is off by `h·CL/V_ss`, 8.2e-4 at
+    /// a 60 s step and 4.1e-4 at 30 s — first order, and so exactly what a reader who had not
+    /// derived the correction would have taken for discretisation error and loosened a tolerance
+    /// to. It is asserted as the derived number.
+    #[test]
+    fn the_steady_state_volume_is_the_blood_plus_kp_times_each_tissue() {
+        let v_ss = 5.0 + 4.0 * 1.8 + 2.0 * 30.0 + 5.0 * 10.0;
+        let b = body(0.0);
+        assert!(
+            (b.m.volume_of_distribution().in_litres() / v_ss - 1.0).abs() < 4.0 * f64::EPSILON,
+            "{} L",
+            b.m.volume_of_distribution().in_litres()
+        );
+
+        // From the state.
+        let mut b = body(0.0);
+        b.m.infuse(b.blood, Mass::from_si(1e-3), Time::ZERO, hours(3000.0))
+            .unwrap();
+        let h = 60.0;
+        let steps = (1500.0 * HOUR / h) as usize;
+        run(&mut b.m, Time::ZERO, Time::s(h), steps);
+        let ratio = b.m.body_burden().to_si() / b.m.concentration(b.blood).to_si();
+        let rel = ratio / Volume::litres(v_ss).to_si() - 1.0;
+        println!("  from the state at 1500 h: V_ss off by {rel:.2e}");
+        assert!(rel.abs() < 1e-12, "{} L", ratio * 1e3);
+
+        // From the moments.
+        let cl = l_h(6.0).to_si();
+        for h in [60.0, 30.0] {
+            let mut b = body(0.0);
+            let dose = 1e-4;
+            b.m.bolus(b.blood, Mass::from_si(dose)).unwrap();
+            let steps = (1200.0 * HOUR / h) as usize;
+            let (mut auc, mut aumc) = (0.0, 0.0);
+            let mut bus = Exchange::new();
+            for n in 0..steps {
+                let c = b.m.concentration(b.blood).to_si();
+                auc += c * h;
+                aumc += n as f64 * h * c * h;
+                b.m.step(Time::s(n as f64 * h), Time::s(h), &mut bus)
+                    .unwrap();
+            }
+            let auc_rel = auc * cl / dose - 1.0;
+            let mrt = aumc / auc;
+            let from_moments = cl * (mrt + h) / Volume::litres(v_ss).to_si() - 1.0;
+            let uncorrected = cl * mrt / Volume::litres(v_ss).to_si() - 1.0;
+            println!(
+                "  h = {h} s: AUC·CL/D off by {auc_rel:.2e}, CL·(MRT_d + h)/V_ss by \
+                 {from_moments:.2e} ({:.3} n eps), without the + h by {uncorrected:.2e}",
+                from_moments.abs() / (steps as f64 * f64::EPSILON)
+            );
+            let bound = steps as f64 * f64::EPSILON;
+            assert!(auc_rel.abs() < bound, "AUC = D/CL: {auc_rel:e}");
+            assert!(
+                from_moments.abs() < bound,
+                "V_ss from the moments: {from_moments:e}"
+            );
+            // And the correction is the derived one: `−h·CL/V_ss`, to the same bound.
+            let expected = -h * cl / Volume::litres(v_ss).to_si();
+            assert!(
+                (uncorrected - expected).abs() < bound,
+                "{uncorrected:e} against {expected:e}"
+            );
+        }
+    }
+
+    /// Blood and one tissue: `V_b = 5 L` eliminating `CL = 10 L/h`, `V_t = 20 L` at `K_p = 3`,
+    /// perfused at `Q = 30 L/h`. Micro constants `k10 = CL/V_b = 2/h`, `k12 = Q/V_b = 6/h` and
+    /// `k21 = Q/(K_p V_t) = 0.5/h`. A `K_p` on the blood's side would give `k12 = 2/h` and
+    /// `k21 = 1.5/h`, which is the point of picking `K_p ≠ 1`.
+    fn blood_and_tissue() -> (CompartmentModel, Compartment, Compartment) {
+        let mut m = CompartmentModel::new("subject");
+        let blood = m.eliminating("blood", Volume::litres(5.0), l_h(10.0));
+        let tissue = m.compartment("tissue", Volume::litres(20.0));
+        m.perfuse(blood, tissue, l_h(30.0), 3.0).unwrap();
+        (m, blood, tissue)
+    }
+
+    /// `[k10, k12, k21, α, β]` for [`blood_and_tissue`], per second, from the closed form.
+    ///
+    /// `β` as `k10 k21/α` rather than `(sum − disc)/2`: the two roots differ by a factor of 30,
+    /// and the subtraction would lose five bits of the small one.
+    fn blood_and_tissue_roots() -> [f64; 5] {
+        let (k10, k12, k21) = (2.0 / HOUR, 6.0 / HOUR, 0.5 / HOUR);
+        let sum = k10 + k12 + k21;
+        let alpha = 0.5 * (sum + (sum * sum - 4.0 * k10 * k21).sqrt());
+        [k10, k12, k21, alpha, k10 * k21 / alpha]
+    }
+
+    /// **PBPK closed form 3: blood and one tissue after a bolus — the bi-exponential, for the
+    /// asymmetric link, and the exact solution of the recurrence that steps it.**
+    ///
+    /// # The derivation
+    ///
+    /// In amounts, with the bolus `D` into the blood,
+    ///
+    /// ```text
+    /// d/dt [A_b]   [ −(Q + CL)/V_b    Q/(K_p V_t) ] [A_b]     [ −(k10 + k12)   k21 ]
+    ///      [A_t] = [    Q/V_b        −Q/(K_p V_t) ] [A_t]  =  [     k12       −k21 ]
+    /// ```
+    ///
+    /// which is the classical two-compartment matrix with `k21 = Q/(K_p V_t)`. So `α` and `β` are
+    /// the roots of `λ² − (k10 + k12 + k21)λ + k10 k21`, and
+    ///
+    /// ```text
+    /// A_b(t) = D [ (α − k21)/(α − β) e^{−αt} + (k21 − β)/(α − β) e^{−βt} ]
+    /// A_t(t) = D k12/(α − β) [ e^{−βt} − e^{−αt} ]
+    /// ```
+    ///
+    /// Here `α + β = 8.5/h` and `αβ = 1/h²`, so `α = 8.38068/h` and `β = 0.11932/h`.
+    ///
+    /// **The recurrence.** Euler steps `xₙ₊₁ = (I + hM) xₙ`. `I + hM` has the eigenvectors of `M`
+    /// and the eigenvalues `1 − hα` and `1 − hβ`, and the bolus decomposes on those eigenvectors
+    /// exactly as it does in the continuous solution, so the stepped trajectory is **the same
+    /// bi-exponential with `e^{−λt}` replaced by `(1 − hλ)ⁿ`** — computed here by repeated
+    /// multiplication, never by `powi`. That is the exact solution of the scheme the model steps,
+    /// and the model must agree with it at every point to rounding: a wrong error *constant*
+    /// still converges at first order, and this is what pins it.
+    ///
+    /// # The bound, and what it catches
+    ///
+    /// `(3n + 40)ε` times the sum of the magnitudes of the four terms, the envelope a cancelling
+    /// difference is bounded by: the model rounds about twice per step on what it carries, the
+    /// reference's powers once a step, and `α`, `β` and the coefficients a handful of ulps,
+    /// amplified by `n` through the powers — the oral recurrence's reasoning, without its depot.
+    /// Measured below at 72 to 9 s. A `K_p` on the wrong side changes `k12` and `k21` by factors
+    /// of three and is off at the first step by `≈ hQ·C_b`; a perfusion with no return flow
+    /// has no `k21` at all.
+    ///
+    /// Then convergence on the continuous bi-exponential at first order, each compartment
+    /// separately, at `h` = 18, 9 and 4.5 s, with the tri-exponential test's halving band.
+    #[test]
+    fn blood_and_one_tissue_follow_the_bi_exponential_and_its_recurrence() {
+        let [k10, k12, k21, alpha, beta] = blood_and_tissue_roots();
+        println!(
+            "  alpha = {:.5}/h, beta = {:.5}/h",
+            alpha * HOUR,
+            beta * HOUR
+        );
+        assert!((alpha + beta - (k10 + k12 + k21)).abs() < 4.0 * f64::EPSILON * alpha);
+        // The model's own rate constants are the closed form's, in both directions.
+        let (m, blood, tissue) = blood_and_tissue();
+        for (got, want, which) in [
+            (m.transfer_rate(blood, tissue).to_si(), k12, "k12"),
+            (m.transfer_rate(tissue, blood).to_si(), k21, "k21"),
+            (m.elimination_rate(blood).to_si(), k10, "k10"),
+        ] {
+            assert!(
+                (got / want - 1.0).abs() < 2.0 * f64::EPSILON,
+                "{which}: {} /h against {} /h",
+                got * HOUR,
+                want * HOUR
+            );
+        }
+
+        let dose = 1e-4;
+        let coeff_b = [
+            (alpha - k21) / (alpha - beta),
+            (k21 - beta) / (alpha - beta),
+        ];
+        let coeff_t = [-k12 / (alpha - beta), k12 / (alpha - beta)];
+        // Before any code under test: A_b(0) = D, A_t(0) = 0, A_t'(0) = k12 D.
+        assert!((coeff_b[0] + coeff_b[1] - 1.0).abs() < 2.0 * f64::EPSILON);
+        assert!((coeff_t[0] + coeff_t[1]).abs() < 1e-30);
+        assert!(((-alpha * coeff_t[0] - beta * coeff_t[1]) / k12 - 1.0).abs() < 4.0 * f64::EPSILON);
+
+        // The recurrence's exact solution, at four steps.
+        for h in [72.0, 36.0, 18.0, 9.0] {
+            let (mut m, blood, tissue) = blood_and_tissue();
+            m.bolus(blood, Mass::from_si(dose)).unwrap();
+            let (mu_a, mu_b) = (1.0 - h * alpha, 1.0 - h * beta);
+            let (mut pa, mut pb) = (1.0f64, 1.0f64); // (1 − hα)ⁿ, (1 − hβ)ⁿ
+            let mut bus = Exchange::new();
+            let mut worst = 0.0f64;
+            let steps = (12.0 * HOUR / h) as usize;
+            for n in 0..steps {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                pa *= mu_a;
+                pb *= mu_b;
+                let n = (n + 1) as f64;
+                let want_b = dose * (coeff_b[0] * pa + coeff_b[1] * pb);
+                let want_t = dose * (coeff_t[0] * pa + coeff_t[1] * pb);
+                let envelope = dose
+                    * (coeff_b[0].abs() * pa.abs()
+                        + coeff_b[1].abs() * pb
+                        + coeff_t[0].abs() * pa.abs()
+                        + coeff_t[1].abs() * pb);
+                let bound = (3.0 * n + 40.0) * f64::EPSILON * envelope;
+                for (got, want, which) in [
+                    (m.amount(blood).to_si(), want_b, "blood"),
+                    (m.amount(tissue).to_si(), want_t, "tissue"),
+                ] {
+                    let ratio = (got - want).abs() / bound;
+                    assert!(
+                        ratio < 1.0,
+                        "h = {h} s, step {n}, {which}: {got:e} against the recurrence's {want:e}"
+                    );
+                    worst = worst.max(ratio);
+                }
+            }
+            println!("  h = {h:>4} s: worst {worst:.3} of the rounding bound");
+        }
+
+        // And the continuous closed form, at first order.
+        let exact_b =
+            |t: f64| dose * (coeff_b[0] * (-alpha * t).exp() + coeff_b[1] * (-beta * t).exp());
+        let exact_t =
+            |t: f64| dose * (coeff_t[0] * (-alpha * t).exp() + coeff_t[1] * (-beta * t).exp());
+        let (mut errors_b, mut errors_t) = (Vec::new(), Vec::new());
+        for h in [18.0, 9.0, 4.5] {
+            let (mut m, blood, tissue) = blood_and_tissue();
+            m.bolus(blood, Mass::from_si(dose)).unwrap();
+            let mut bus = Exchange::new();
+            let (mut wb, mut wt) = (0.0f64, 0.0f64);
+            for n in 0..(12.0 * HOUR / h) as usize {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                let t = (n + 1) as f64 * h;
+                wb = wb.max((m.amount(blood).to_si() - exact_b(t)).abs());
+                wt = wt.max((m.amount(tissue).to_si() - exact_t(t)).abs());
+            }
+            errors_b.push(wb / dose);
+            errors_t.push(wt / dose);
+        }
+        for (which, errors) in [("blood", &errors_b), ("tissue", &errors_t)] {
+            let measured = orders(errors);
+            println!("  bi-exponential, {which}: errors {errors:?}, orders {measured:.4?}");
+            assert!(errors[0] < 0.01, "{which} near the closed form at all");
+            let mut h = 18.0;
+            for p in &measured {
+                let band = 0.035 * h / 18.0;
+                h /= 2.0;
+                assert!(
+                    (p - 1.0).abs() < band,
+                    "{which}: first order, measured {p:.4}"
+                );
+            }
+            assert!(
+                (measured[1] - 1.0).abs() < (measured[0] - 1.0).abs(),
+                "{which}: the order should approach 1 as h falls: {measured:.4?}"
+            );
+            assert!(*errors.last().unwrap() > 1e-6, "{which} is above the floor");
+        }
+    }
+
+    /// **PBPK closed form 4: as `Q → ∞` the model is one compartment of `V_b + Σ K_p V_t`, and the
+    /// deviation falls as `1/Q`.**
+    ///
+    /// Blood (5 L, `CL` 6 L/h), a muscle (30 L, `K_p` 2) and a fat (10 L, `K_p` 5), so
+    /// `V_ss = 115 L` and the limit's rate is `k = CL/V_ss = 0.0522/h`. Both blood flows are
+    /// scaled by `s` = 1, 2, 4, 8, 16 from 60 and 50 L/h, where each tissue already turns over at
+    /// 1/h — twenty times `k`.
+    ///
+    /// **What converges, and why it is first order in `1/Q`.** The distribution modes are as fast
+    /// as `Q` and are gone; what is left is the slow mode, `a(Q)·e^{−β(Q)t}`, and both its
+    /// amplitude and its rate are analytic in `1/Q` about the one-compartment `D/V_ss` and `k`.
+    /// So the deviation from one compartment is `O(1/Q)`, and its order is measured the way a step
+    /// is: `log₂` of the ratio between successive doublings of `Q`.
+    ///
+    /// **Stepped at one `h` for every `Q`, against the one-compartment recurrence at that `h`**,
+    /// `C_n = (D/V_ss)(1 − hk)ⁿ` by repeated multiplication. That is what keeps the measurement
+    /// about `Q` and not about `h`: the eigenvalues of `I + hM` are `1 + hλ` exactly, so the
+    /// stepped slow mode is `(1 − hβ(Q))ⁿ` and differs from `(1 − hk)ⁿ` only by `β(Q) − k`. Compared
+    /// with the *continuous* exponential instead, the Euler error `t k² h/2` would not fall with
+    /// `Q` and would put a floor under the order. `h = 5 s` keeps the turnover number under
+    /// 0.5 at the largest flow.
+    ///
+    /// **Sampled at one time, 48 h, and not as a maximum over a window**, relative to `D/V_ss`.
+    /// The first version took the worst point from 24 to 72 h, and its orders were 0.9997,
+    /// 1.0005, 1.0004, 1.0003 — first order, and with departures that would not halve, so no
+    /// band could be earned from them. The continuous solution, by eigendecomposition outside
+    /// this crate, said why: the worst point sat at 24 h, where the `1/Q²` coefficient of the
+    /// deviation nearly vanishes, and what was left was the `1/Q³` share and the `s = 1`
+    /// distribution mode. At 48 h the same eigendecomposition gives orders 0.8949, 0.9488,
+    /// 0.9747, 0.9874, departures halving from 0.105, and that is what is asserted: a band of
+    /// `0.2·(Q₀/Q)` on each, halving with the `1/Q²` share it bounds, and the last departure
+    /// under a quarter of the first.
+    #[test]
+    fn fast_perfusion_collapses_to_one_compartment() {
+        let dose = 1e-4;
+        let v_ss = Volume::litres(5.0 + 2.0 * 30.0 + 5.0 * 10.0).to_si();
+        let cl = l_h(6.0).to_si();
+        let h = 5.0;
+        let at = (48.0 * HOUR / h) as usize;
+        let mut deviations = Vec::new();
+        for s in [1.0, 2.0, 4.0, 8.0, 16.0] {
+            let mut m = CompartmentModel::new("subject");
+            let blood = m.eliminating("blood", Volume::litres(5.0), l_h(6.0));
+            let muscle = m.compartment("muscle", Volume::litres(30.0));
+            let fat = m.compartment("fat", Volume::litres(10.0));
+            m.perfuse(blood, muscle, l_h(60.0 * s), 2.0).unwrap();
+            m.perfuse(blood, fat, l_h(50.0 * s), 5.0).unwrap();
+            assert!(m.turnover_number(Time::s(h)) < 0.5);
+            assert!((m.volume_of_distribution().to_si() / v_ss - 1.0).abs() < 4.0 * f64::EPSILON);
+            m.bolus(blood, Mass::from_si(dose)).unwrap();
+            let r = 1.0 - h * cl / v_ss;
+            let mut one = dose / v_ss; // (D/V_ss) rⁿ
+            let mut bus = Exchange::new();
+            for n in 0..at {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                one *= r;
+            }
+            deviations.push((m.concentration(blood).to_si() - one).abs() / (dose / v_ss));
+        }
+        let measured = orders(&deviations);
+        println!("  fast perfusion: deviations {deviations:?}, orders {measured:.4?}");
+        for (i, p) in measured.iter().enumerate() {
+            let band = 0.2 / (1u32 << i) as f64;
+            assert!(
+                (p - 1.0).abs() < band,
+                "the deviation should fall as 1/Q: order {p:.4} at s = {}",
+                1u32 << i
+            );
+        }
+        assert!(
+            (measured[measured.len() - 1] - 1.0).abs() < 0.25 * (measured[0] - 1.0).abs(),
+            "the order should approach 1 as Q grows: {measured:.4?}"
+        );
+        assert!(*deviations.last().unwrap() > 1e-6, "above the floor");
+    }
+
+    /// **`K_p = 1` is the symmetric link, to the bit.**
+    ///
+    /// Not a bound: `x/1.0` is `x` in IEEE arithmetic, and the perfusion's flux, the venous
+    /// concentration elimination acts on, the turnover rate and the rate constants are written
+    /// so that with `K_p = 1` they are the link's operations in the link's order. So two models
+    /// — one linked, one perfused at `K_p = 1`, each with a second, symmetric link beside it, a
+    /// clearance from the blood *and* the tissue, a bolus, an infusion and a depot into the
+    /// tissue — must agree in every amount, the books, the ledger and the readings at every step,
+    /// and in the step limit and every rate reported, with `assert_eq`.
+    #[test]
+    fn a_partition_of_one_is_the_symmetric_link_to_the_bit() {
+        let build = |perfused: bool| {
+            let mut m = CompartmentModel::new("subject");
+            let blood = m.eliminating("blood", Volume::litres(5.0), l_h(7.0));
+            let tissue = m.eliminating("tissue", Volume::litres(13.0), l_h(3.3));
+            let other = m.compartment("other", Volume::litres(21.0));
+            if perfused {
+                m.perfuse(blood, tissue, l_h(37.0), 1.0).unwrap();
+            } else {
+                m.link(blood, tissue, l_h(37.0)).unwrap();
+            }
+            m.link(other, blood, l_h(11.0)).unwrap();
+            m.bolus(blood, Mass::from_si(1e-4)).unwrap();
+            m.infuse(other, Mass::from_si(2e-4), hours(0.3), hours(2.7))
+                .unwrap();
+            let gut = m
+                .depot("gut", tissue, per_hour(1.1), 0.7, hours(0.2))
+                .unwrap();
+            m.oral(gut, Mass::from_si(5e-5), hours(0.05)).unwrap();
+            (m, blood, tissue, other)
+        };
+        let (mut a, ab, at, ao) = build(false);
+        let (mut b, bb, bt, bo) = build(true);
+        assert_eq!(a.max_stable_dt(Time::ZERO), b.max_stable_dt(Time::ZERO));
+        assert_eq!(a.volume_of_distribution(), b.volume_of_distribution());
+        assert_eq!(a.total_clearance(), b.total_clearance());
+        for (x, y) in [(ab, at), (at, ab), (ab, ao), (at, ao)] {
+            assert_eq!(a.transfer_rate(x, y), b.transfer_rate(x, y));
+        }
+        assert_eq!(a.elimination_rate(at), b.elimination_rate(bt));
+        let h = 30.0;
+        let mut bus = Exchange::new();
+        for n in 0..(8.0 * HOUR / h) as usize {
+            let t = Time::s(n as f64 * h);
+            a.step(t, Time::s(h), &mut bus).unwrap();
+            b.step(t, Time::s(h), &mut bus).unwrap();
+            for (x, y) in [(ab, bb), (at, bt), (ao, bo)] {
+                assert_eq!(a.amount(x), b.amount(y), "step {n}, {}", a.label(x));
+                assert_eq!(a.concentration(x), b.venous_concentration(y));
+            }
+            assert_eq!(a.transfer(ab, at), b.transfer(bb, bt), "step {n}");
+            assert_eq!(a.transfer(at, ab), b.transfer(bt, bb), "step {n}");
+            assert_eq!(a.eliminated_mass(), b.eliminated_mass());
+            assert_eq!(a.ledger(), b.ledger());
+        }
+        assert_eq!(a.readings(), b.readings());
+        assert!(a.eliminated_mass().to_si() > 1e-4, "not vacuous");
+    }
+
+    /// **The well-stirred liver: first-pass extraction, `F_H = 1 − E`, exactly, at any step.**
+    ///
+    /// A dose that enters the body *through* the liver — a depot into it, as an oral dose
+    /// absorbed into the portal blood is — reaches the blood less what the liver takes on the
+    /// way. With a renal clearance on the blood as well, so the answer is not trivially the
+    /// organ's own:
+    ///
+    /// ```text
+    /// AUC_b(dose into the liver) / AUC_b(dose into the blood) = Q_h/(Q_h + CL) = 1 − E
+    /// ```
+    ///
+    /// whatever `CL_r` is. The derivation is the steady state's: `h Σ xₙ = −M⁻¹U` for a total
+    /// input `U` (the AUC test's identity, for any input schedule), and `−M⁻¹e_l` is the steady
+    /// state under a unit infusion into the liver, whose blood balance is
+    /// `Q_h(C_l/K − C_b) = CL_r C_b` and liver balance `R = CL·C_l/K + Q_h(C_l/K − C_b)`; so
+    /// `C_b = R/(CL + CL_r(Q_h + CL)/Q_h)`, against `R/(CL_r + Q_h E)` into the blood, and the
+    /// ratio is `Q_h/(Q_h + CL)`.
+    ///
+    /// So it is **exact, not first order** — the stepped AUC is the continuous one — and it is
+    /// asserted at the AUC test's `n·ε`. Both doses through a depot with the same `kₐ`, so the
+    /// timing of the input is the same and only where it lands differs. `E = 0.4` here. Taking
+    /// elimination off `C_t` instead of `C_t/K_p` makes the extraction `K CL/(Q + K CL)`, 0.73,
+    /// and `F_H` 0.27 rather than 0.6. And the blood's AUC from a dose into it is `D/(CL_r + Q_h E)`.
+    #[test]
+    fn the_liver_extracts_what_the_well_stirred_model_says_on_the_first_pass() {
+        let (q_h, cl, cl_r) = (l_h(90.0).to_si(), l_h(60.0).to_si(), l_h(6.0).to_si());
+        let e = cl / (q_h + cl);
+        let auc = |into_liver: bool| {
+            let mut b = body(60.0);
+            let target = if into_liver { b.liver } else { b.blood };
+            let gut =
+                b.m.depot("gut", target, per_hour(2.0), 1.0, Time::ZERO)
+                    .unwrap();
+            b.m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let h = 60.0;
+            let steps = (1500.0 * HOUR / h) as usize;
+            let c = trace(&mut b.m, b.blood, h, steps);
+            (c[..steps].iter().map(|x| x * h).sum::<f64>(), steps)
+        };
+        let ((via_liver, n), (direct, _)) = (auc(true), auc(false));
+        let bound = n as f64 * f64::EPSILON;
+        let f_h = via_liver / direct;
+        let systemic = direct * (cl_r + q_h * e) / ORAL;
+        println!(
+            "  F_H = {f_h:.15} against 1 - E = {}, off by {:.2e}; AUC·CL/D off by {:.2e}",
+            1.0 - e,
+            f_h / (1.0 - e) - 1.0,
+            systemic - 1.0
+        );
+        assert!((f_h / (1.0 - e) - 1.0).abs() < bound, "F_H = {f_h}");
+        assert!((systemic - 1.0).abs() < bound, "the systemic clearance");
+    }
+
+    /// **The step limit sees the tissue's own rate, `Q/(K_p V_t)`, and bounds the true one.**
+    ///
+    /// A small tissue that partitions weakly: blood 5 L with `Q` 30 L/h, a tissue of 0.5 L at
+    /// `K_p = 0.25`. The blood turns over at `(30 + 10)/5 = 8/h`; the tissue at
+    /// `30/(0.25·0.5) = 240/h`, thirty times faster, and that is the limit — 15 s. A limit taken
+    /// from the blood alone would be 450 s, at which the tissue's diagonal factor `1 − h r` is −29.
+    ///
+    /// Against the closed form, as for the classical pair: the two eigenvalues are the roots of
+    /// `λ² − (k10 + k12 + k21)λ + k10 k21`, and the limit must not exceed `2/α` and is within a
+    /// factor of two of it. The step past it is refused naming the tissue, and at the limit no
+    /// pool goes negative.
+    #[test]
+    fn the_step_limit_sees_the_tissue() {
+        let mut m = CompartmentModel::new("subject");
+        let blood = m.eliminating("blood", Volume::litres(5.0), l_h(10.0));
+        let tissue = m.compartment("tissue", Volume::litres(0.5));
+        m.perfuse(blood, tissue, l_h(30.0), 0.25).unwrap();
+        let limit = m.max_stable_dt(Time::ZERO).to_si();
+        let want = 1.0 / (l_h(30.0).to_si() / (0.25 * Volume::litres(0.5).to_si()));
+        assert!(
+            (limit / want - 1.0).abs() < 4.0 * f64::EPSILON,
+            "{limit} s against {want} s"
+        );
+        assert!((limit - 15.0).abs() < 1e-9, "{limit} s");
+
+        let (k10, k12, k21) = (2.0 / HOUR, 6.0 / HOUR, 240.0 / HOUR);
+        let sum = k10 + k12 + k21;
+        let alpha = 0.5 * (sum + (sum * sum - 4.0 * k10 * k21).sqrt());
+        println!("  limit {limit} s, 2/alpha = {} s", 2.0 / alpha);
+        assert!(limit <= 2.0 / alpha, "inside the true limit");
+        assert!(limit > 1.0 / alpha, "and within a factor of two of it");
+
+        m.bolus(blood, Mass::from_si(1e-4)).unwrap();
+        let mut bus = Exchange::new();
+        let err = m
+            .step(Time::ZERO, Time::s(limit * 1.05), &mut bus)
+            .expect_err("past the tissue's limit");
+        assert_eq!(err.quantity, "compartment turnover number");
+        assert!(err.site.contains("tissue"), "{}", err.site);
+        for n in 0..2000 {
+            m.step(Time::s(n as f64 * limit), Time::s(limit), &mut bus)
+                .unwrap();
+            for (c, label) in m.handles() {
+                assert!(m.amount(c).to_si() >= 0.0, "{label} negative at step {n}");
+            }
+        }
+        assert!(m.eliminated_mass().to_si() > 0.5e-4);
+    }
+
+    /// Run a model started at a closed-form steady state and return the worst drift of any
+    /// listed compartment's concentration, as a fraction of `(n + 2)ε` after `n` steps — the
+    /// bound [`under_an_infusion_every_tissue_settles_at_kp_times_the_blood`] derives: the fixed
+    /// point is the continuous one, so only rounding moves it, and `2ε` is writing `C·V` in and
+    /// reading `A/V` back.
+    fn drift_from(
+        m: &mut CompartmentModel,
+        pools: &[(Compartment, f64)],
+        h: f64,
+        steps: usize,
+    ) -> f64 {
+        let mut bus = Exchange::new();
+        let mut ratio = 0.0f64;
+        for n in 0..steps {
+            m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+            for (c, want) in pools {
+                let rel = (m.concentration(*c).to_si() / want - 1.0).abs();
+                ratio = ratio.max(rel / ((n as f64 + 2.0) * f64::EPSILON));
+            }
+        }
+        ratio
+    }
+
+    /// **A perfused tissue with a clearance *and* a link: it sets the step limit, and holds its
+    /// steady state** — the branches every other perfused tissue here leaves unreached.
+    ///
+    /// Blood 5 L clearing 10 L/h; a tissue of 0.5 L at `K_p = 0.25` perfused at 30 L/h, clearing
+    /// 15 L/h on `C_t/K_p`, and linked symmetrically at 6 L/h to a third pool of 2 L that only
+    /// distributes. The tissue turns over at `6/0.5 + (30 + 15)/(0.25·0.5) = 12 + 360 = 372/h`,
+    /// so the limit is `3600/372 = 9.677 s` — with the clearance left out of it 252/h and
+    /// 14.3 s, with the link left out 360/h and 10.0 s, and with the perfusion left out 132/h.
+    ///
+    /// At steady state under an infusion `R` into the blood, `E = 15/45 = 1/3`,
+    /// `C_b = R/(10 + 30·E) = R/(20 L/h)`, the tissue's venous `C_t/K_p = (1 − E) C_b`, so
+    /// `C_t = C_b/6`; and the third pool, joined by a **symmetric** link, sits at `C_t` itself —
+    /// not at `C_t/K_p`, which is what a link that read the venous concentration would give.
+    /// Started there, it must stay to `(n + 2)ε`, as the body's steady state does.
+    ///
+    /// The readers too, at that state: `k = CL/(K_p V) = 120/h` out of the tissue,
+    /// `Q/(K_p V) = 240/h` back to the blood and `Q/V_b = 6/h` into it, and a perfusion carrying
+    /// `Q(C_b − C_t/K_p) = Q E C_b` — positive into the tissue, the negation the other way.
+    #[test]
+    fn a_tissue_with_a_clearance_and_a_link_sets_the_limit_and_holds_its_steady_state() {
+        let build = || {
+            let mut m = CompartmentModel::new("subject");
+            let blood = m.eliminating("blood", Volume::litres(5.0), l_h(10.0));
+            let tissue = m.eliminating("tissue", Volume::litres(0.5), l_h(15.0));
+            let other = m.compartment("other", Volume::litres(2.0));
+            m.perfuse(blood, tissue, l_h(30.0), 0.25).unwrap();
+            m.link(tissue, other, l_h(6.0)).unwrap();
+            (m, blood, tissue, other)
+        };
+        let (mut m, blood, tissue, other) = build();
+        let limit = m.max_stable_dt(Time::ZERO).to_si();
+        let want = 3600.0 / 372.0;
+        println!("  limit {limit} s against {want} s");
+        assert!((limit / want - 1.0).abs() < 4.0 * f64::EPSILON, "{limit} s");
+
+        let rate = 1e-3 / (1000.0 * HOUR);
+        let c_b = rate / l_h(20.0).to_si();
+        let c_t = c_b / 6.0;
+        let pools = [(blood, c_b), (tissue, c_t), (other, c_t)];
+        for (c, x) in pools {
+            m.bolus(c, Mass::from_si(x * m.volume(c).to_si())).unwrap();
+        }
+        m.infuse(blood, Mass::from_si(1e-3), Time::ZERO, hours(1000.0))
+            .unwrap();
+        for (got, want, which) in [
+            (
+                m.elimination_rate(tissue).to_si(),
+                120.0 / HOUR,
+                "k out of the tissue",
+            ),
+            (
+                m.transfer_rate(tissue, blood).to_si(),
+                240.0 / HOUR,
+                "tissue to blood",
+            ),
+            (
+                m.transfer_rate(blood, tissue).to_si(),
+                6.0 / HOUR,
+                "blood to tissue",
+            ),
+            (
+                m.transfer_rate(tissue, other).to_si(),
+                12.0 / HOUR,
+                "tissue to other",
+            ),
+            (
+                m.transfer(blood, tissue).to_si(),
+                l_h(30.0).to_si() * c_b / 3.0,
+                "the perfusion's flux, Q E C_b",
+            ),
+            (
+                m.transfer(tissue, blood).to_si(),
+                -l_h(30.0).to_si() * c_b / 3.0,
+                "and its negation",
+            ),
+        ] {
+            assert!(
+                (got / want - 1.0).abs() < 8.0 * f64::EPSILON,
+                "{which}: {got:e} against {want:e}"
+            );
+        }
+        assert!(
+            m.transfer(tissue, other).to_si().abs() < 1e-30,
+            "no net flux on the link"
+        );
+        let ratio = drift_from(&mut m, &pools, 0.98 * limit, 4000);
+        println!("  started at the closed form: {ratio:.3} of (n + 2) eps");
+        assert!(
+            ratio < 1.0,
+            "the steady state moved: {ratio} of (n + 2) eps"
+        );
+
+        // Refused just past the limit, naming the tissue; never negative at it.
+        let (mut m, blood, _, _) = build();
+        m.bolus(blood, Mass::from_si(1e-4)).unwrap();
+        let mut bus = Exchange::new();
+        let err = m
+            .step(Time::ZERO, Time::s(1.05 * limit), &mut bus)
+            .expect_err("past the tissue's limit");
+        assert!(err.site.contains("tissue"), "{}", err.site);
+        for n in 0..3000 {
+            m.step(Time::s(n as f64 * limit), Time::s(limit), &mut bus)
+                .unwrap();
+            for (c, label) in m.handles() {
+                assert!(m.amount(c).to_si() >= 0.0, "{label} negative at step {n}");
+            }
+        }
+    }
+
+    /// **A link and a perfusion on the same pair add, in the readers and in the step.**
+    ///
+    /// Blood 5 L and a tissue of 4 L at `K_p = 3`, perfused at 20 L/h and also linked at 2 L/h,
+    /// each holding some drug. `transfer_rate` must be `(20 + 2)/5` out of the blood and
+    /// `2/4 + 20/(3·4)` out of the tissue, `transfer` `2(C_b − C_t) + 20(C_b − C_t/3)`, and one
+    /// step must move exactly `transfer·h` into the tissue — the reader and the step agreeing, to
+    /// the rounding of one product.
+    #[test]
+    fn a_link_beside_a_perfusion_adds_to_it() {
+        let mut m = CompartmentModel::new("subject");
+        let blood = m.compartment("blood", Volume::litres(5.0));
+        let tissue = m.compartment("tissue", Volume::litres(4.0));
+        m.perfuse(blood, tissue, l_h(20.0), 3.0).unwrap();
+        m.link(tissue, blood, l_h(2.0)).unwrap();
+        m.bolus(blood, Mass::from_si(1e-4)).unwrap();
+        m.bolus(tissue, Mass::from_si(3e-5)).unwrap();
+        let (c_b, c_t) = (1e-4 / 5e-3, 3e-5 / 4e-3);
+        let (q_p, q_l) = (l_h(20.0).to_si(), l_h(2.0).to_si());
+        let flux = q_l * (c_b - c_t) + q_p * (c_b - c_t / 3.0);
+        for (got, want, which) in [
+            (
+                m.transfer_rate(blood, tissue).to_si(),
+                22.0 / 5.0 / HOUR,
+                "blood to tissue",
+            ),
+            (
+                m.transfer_rate(tissue, blood).to_si(),
+                (2.0 / 4.0 + 20.0 / 12.0) / HOUR,
+                "tissue to blood",
+            ),
+            (m.transfer(blood, tissue).to_si(), flux, "the flux"),
+            (m.transfer(tissue, blood).to_si(), -flux, "its negation"),
+        ] {
+            assert!(
+                (got / want - 1.0).abs() < 8.0 * f64::EPSILON,
+                "{which}: {got:e} against {want:e}"
+            );
+        }
+        let h = 10.0;
+        let before = m.amount(tissue).to_si();
+        run(&mut m, Time::ZERO, Time::s(h), 1);
+        let moved = m.amount(tissue).to_si() - before;
+        assert!(
+            (moved / (flux * h) - 1.0).abs() < 1e-12,
+            "the step moved {moved:e}, the reader says {:e}",
+            flux * h
+        );
+    }
+
+    /// **Two blood pools, each with its own tissue, are two models.**
+    ///
+    /// Nothing else here has more than one blood pool, so a step that sent every perfusion's
+    /// drug to the first pool's blood would pass all of it. Pool A: 5 L clearing 6 L/h, a tissue
+    /// of 10 L at `K_p = 2` perfused at 40 L/h; pool B: 3 L clearing 3 L/h, a tissue of 7 L at
+    /// `K_p = 7` perfused at 15 L/h; infused at different rates. Each blood settles at `R/CL` of
+    /// its own and each tissue at its own `K_p` times it — started there and held to
+    /// `(n + 2)ε`. That alone passed a step that sent every perfusion to the first pool's blood,
+    /// because a perfusion carries nothing at steady state; the bolus half below is what sees it.
+    #[test]
+    fn two_blood_pools_are_two_models() {
+        let mut m = CompartmentModel::new("subject");
+        let a = m.eliminating("blood A", Volume::litres(5.0), l_h(6.0));
+        let ta = m.compartment("tissue A", Volume::litres(10.0));
+        let b = m.eliminating("blood B", Volume::litres(3.0), l_h(3.0));
+        let tb = m.compartment("tissue B", Volume::litres(7.0));
+        m.perfuse(a, ta, l_h(40.0), 2.0).unwrap();
+        m.perfuse(b, tb, l_h(15.0), 7.0).unwrap();
+        let (ra, rb) = (1e-3 / (1000.0 * HOUR), 2e-4 / (1000.0 * HOUR));
+        let (ca, cb) = (ra / l_h(6.0).to_si(), rb / l_h(3.0).to_si());
+        let pools = [(a, ca), (ta, 2.0 * ca), (b, cb), (tb, 7.0 * cb)];
+        for (c, x) in pools {
+            m.bolus(c, Mass::from_si(x * m.volume(c).to_si())).unwrap();
+        }
+        m.infuse(a, Mass::from_si(1e-3), Time::ZERO, hours(1000.0))
+            .unwrap();
+        m.infuse(b, Mass::from_si(2e-4), Time::ZERO, hours(1000.0))
+            .unwrap();
+        let h = 0.98 * m.max_stable_dt(Time::ZERO).to_si();
+        let ratio = drift_from(&mut m, &pools, h, 4000);
+        println!("  two pools, started at the closed form: {ratio:.3} of (n + 2) eps");
+        assert!(ratio < 1.0, "a pool moved: {ratio} of (n + 2) eps");
+
+        // **And away from it.** At steady state every perfusion's flux is zero, so a step that
+        // sent one pool's perfusion to the other's blood moves nothing and the check above
+        // passes it — measured: it did. So a bolus into each pool in turn: the other must stay
+        // empty **to the bit**, and the dosed one must be a model of that pool alone, to the bit,
+        // because its arithmetic is the same operations on the same numbers.
+        let pool = |which: u8, with_both: bool| {
+            let mut m = CompartmentModel::new("subject");
+            let mut handles = Vec::new();
+            for (k, (vb, cl, vt, q, kp)) in
+                [(5.0, 6.0, 10.0, 40.0, 2.0), (3.0, 3.0, 7.0, 15.0, 7.0)]
+                    .into_iter()
+                    .enumerate()
+            {
+                if !with_both && k as u8 != which {
+                    continue;
+                }
+                let b = m.eliminating(format!("blood {k}"), Volume::litres(vb), l_h(cl));
+                let t = m.compartment(format!("tissue {k}"), Volume::litres(vt));
+                m.perfuse(b, t, l_h(q), kp).unwrap();
+                handles.push((k as u8, b, t));
+            }
+            (m, handles)
+        };
+        for dosed in [0u8, 1] {
+            let (mut both, hb) = pool(dosed, true);
+            let (mut alone, ha) = pool(dosed, false);
+            let (_, db, dt) = *hb.iter().find(|x| x.0 == dosed).unwrap();
+            let (_, ob, ot) = *hb.iter().find(|x| x.0 != dosed).unwrap();
+            let (_, ab, at) = ha[0];
+            both.bolus(db, Mass::from_si(1e-4)).unwrap();
+            alone.bolus(ab, Mass::from_si(1e-4)).unwrap();
+            let h = 30.0;
+            let mut bus = Exchange::new();
+            for n in 0..(24.0 * HOUR / h) as usize {
+                let t = Time::s(n as f64 * h);
+                both.step(t, Time::s(h), &mut bus).unwrap();
+                alone.step(t, Time::s(h), &mut bus).unwrap();
+                assert_eq!(
+                    (both.amount(ob).to_si(), both.amount(ot).to_si()),
+                    (0.0, 0.0)
+                );
+                assert_eq!(both.amount(db), alone.amount(ab), "pool {dosed}, step {n}");
+                assert_eq!(both.amount(dt), alone.amount(at), "pool {dosed}, step {n}");
+            }
+            assert!(both.amount(dt).to_si() > 0.0, "not vacuous");
+        }
+    }
+
+    /// **Mass balance with perfusion, hepatic and renal elimination, a depot, a bolus and an
+    /// infusion, at every step, to machine precision** — by the accessors and by
+    /// [`Domain::ledger`].
+    ///
+    /// The ledger is blind to perfusions by construction, as it is to links: `+q` and `−q` are in
+    /// one sum. What this check sees is a perfusion that moves drug out of one pool and not into
+    /// the other, and an elimination that removes drug without booking it. A depot into the liver
+    /// with a lag, a symmetric link to a compartment that is not a tissue, a bolus and an
+    /// infusion, so every entry of the books moves. The bound is the existing `1e-12`, for the
+    /// existing reason.
+    #[test]
+    fn mass_balance_holds_with_perfusion_and_hepatic_elimination() {
+        let mut b = body(60.0);
+        let gut_wall = b.m.compartment("gut wall", Volume::litres(2.0));
+        b.m.link(gut_wall, b.blood, l_h(4.0)).unwrap();
+        let gut =
+            b.m.depot("gut", b.liver, per_hour(1.4), 0.55, hours(0.3))
+                .unwrap();
+        let (bolus, infused, oral) = (1e-4, 2e-4, 3e-4);
+        b.m.bolus(b.blood, Mass::from_si(bolus)).unwrap();
+        b.m.infuse(b.muscle, Mass::from_si(infused), hours(0.41), hours(3.3))
+            .unwrap();
+        b.m.oral(gut, Mass::from_si(oral), hours(0.77)).unwrap();
+        let committed = bolus + infused + oral;
+        let h = 60.0;
+        let steps = (48.0 * HOUR / h) as usize;
+        let mut bus = Exchange::new();
+        let (mut worst, mut worst_ledger) = (0.0f64, 0.0f64);
+        for n in 0..steps {
+            b.m.step(Time::s(n as f64 * h), Time::s(h), &mut bus)
+                .unwrap();
+            let books = b.m.body_burden().to_si()
+                + b.m.eliminated_mass().to_si()
+                + b.m.depot_mass().to_si()
+                + b.m.presystemic_loss().to_si()
+                + b.m.pending_dose().to_si();
+            worst = worst.max((books - committed).abs() / committed);
+            let ledger = b.m.ledger().get(quantity::MASS).unwrap();
+            worst_ledger = worst_ledger.max((ledger - committed).abs() / committed);
+        }
+        println!("  books {worst:.2e}, ledger {worst_ledger:.2e} over {steps} steps");
+        assert!(worst < 1e-12, "the books drifted by {worst:e}");
+        assert!(
+            worst_ledger < 1e-12,
+            "the ledger drifted by {worst_ledger:e}"
+        );
+        assert!(
+            b.m.eliminated_mass().to_si() > 0.3 * committed,
+            "not vacuous"
+        );
+        assert!(b.m.amount(b.fat).to_si() > 0.0 && b.m.amount(gut_wall).to_si() > 0.0);
+    }
+
+    /// **The same bits however a perfused run is cut**, and after a `restore`.
+    ///
+    /// A perfusion holds no state of its own — its `Q` and `K_p` are configuration — so a
+    /// checkpoint needs nothing new, and this is the check that that is true: seventy-two
+    /// scheduler windows of 100 s against thirty-six of 200, which the multirate schedule cuts
+    /// into the same 100 s substeps under a limit of 115 s (asserted, and the scheduler audits the
+    /// ledger at `1e-12` every window), and a run rewound part-way through and run again, which
+    /// must also be the scheduler's run.
+    #[test]
+    fn a_perfused_run_is_the_same_bits_however_it_is_cut() {
+        let build = || {
+            let mut b = body(60.0);
+            b.m.bolus(b.blood, Mass::from_si(5e-5)).unwrap();
+            let gut =
+                b.m.depot("gut", b.liver, per_hour(1.7), 0.75, Time::s(500.0))
+                    .unwrap();
+            b.m.oral(gut, Mass::from_si(ORAL), Time::s(130.0)).unwrap();
+            b.m.infuse(b.fat, Mass::from_si(4e-5), Time::s(700.0), Time::s(5100.0))
+                .unwrap();
+            b.m
+        };
+        let state = |m: &CompartmentModel| -> Vec<f64> {
+            let mut v: Vec<f64> = m.handles().map(|(c, _)| m.amount(c).to_si()).collect();
+            v.push(m.depot_mass().to_si());
+            v.push(m.eliminated_mass().to_si());
+            v.push(m.pending_dose().to_si());
+            v
+        };
+        let cut = |window: f64, windows: usize| {
+            let mut sim = Simulation::new(Schedule::Multirate)
+                .conservation_tolerance(1e-12)
+                .with(build());
+            let mut substeps = 0;
+            for _ in 0..windows {
+                substeps = sim.advance(Time::s(window)).unwrap().substeps[0].1;
+            }
+            let m: &CompartmentModel = sim.domain_as("subject").unwrap();
+            (state(m), substeps)
+        };
+        let limit = build().max_stable_dt(Time::ZERO).to_si();
+        // The blood binds: `(90 + 50 + 10 + 6)/5 = 31.2/h`.
+        assert!(
+            (limit / (3600.0 / 31.2) - 1.0).abs() < 4.0 * f64::EPSILON,
+            "{limit} s"
+        );
+        let (fine, n_fine) = cut(100.0, 72);
+        let (coarse, n_coarse) = cut(200.0, 36);
+        println!("  limit {limit:.1} s; substeps {n_fine} and {n_coarse}");
+        assert_eq!((n_fine, n_coarse), (1, 2), "both cuts take 100 s substeps");
+        assert_eq!(fine, coarse, "two cuts of one run");
+
+        let dt = 100.0;
+        let steps = 72;
+        let mut straight = build();
+        run(&mut straight, Time::ZERO, Time::s(dt), steps);
+        let mut rewound = build();
+        run(&mut rewound, Time::ZERO, Time::s(dt), steps / 3);
+        rewound.checkpoint();
+        let mid = state(&rewound);
+        let resume = Time::s((steps / 3) as f64 * dt);
+        run(&mut rewound, resume, Time::s(dt), steps - steps / 3);
+        rewound.restore();
+        assert_eq!(state(&rewound), mid, "restore");
+        run(&mut rewound, resume, Time::s(dt), steps - steps / 3);
+        assert_eq!(state(&rewound), state(&straight));
+        assert_eq!(
+            state(&straight),
+            fine,
+            "and the scheduler ran the same steps"
+        );
+        assert!(
+            mid[5] > 0.0 && mid[4] > 0.0,
+            "the run is not vacuous: {mid:?}"
+        );
+    }
+
+    /// **A bad perfusion is refused where it is declared, and named.** A negative, infinite or
+    /// NaN blood flow; a `K_p` that is zero, negative, infinite or NaN; a tissue perfused from
+    /// itself; a tissue perfused twice; a tissue that is another's blood; a blood pool that is a
+    /// tissue; a handle from another model. And nothing refused was half-built.
+    #[test]
+    fn a_bad_perfusion_is_refused_and_named() {
+        let mut m = CompartmentModel::new("subject");
+        let blood = m.eliminating("blood", Volume::litres(5.0), l_h(6.0));
+        let liver = m.compartment("liver", Volume::litres(1.8));
+        let fat = m.compartment("fat", Volume::litres(10.0));
+        for q in [-1.0, f64::INFINITY, f64::NAN] {
+            let err = m
+                .perfuse(blood, liver, Clearance::from_si(q), 2.0)
+                .expect_err("a bad blood flow");
+            assert!(err.quantity.contains("blood flow"), "{err}");
+            assert!(err.site.contains("blood-liver"), "{err}");
+        }
+        for k in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            let err = m
+                .perfuse(blood, liver, l_h(90.0), k)
+                .expect_err("a bad partition");
+            assert!(err.quantity.contains("partition coefficient"), "{err}");
+        }
+        let err = m
+            .perfuse(liver, liver, l_h(90.0), 2.0)
+            .expect_err("from itself");
+        assert!(err.quantity.contains("itself"), "{err}");
+        let mut other = CompartmentModel::new("another subject");
+        let elsewhere = other.compartment("liver", Volume::litres(1.8));
+        let err = m
+            .perfuse(blood, elsewhere, l_h(90.0), 2.0)
+            .expect_err("another model");
+        assert!(err.quantity.contains("different model"), "{err}");
+        // Nothing refused above was half-built.
+        assert_eq!(m.partition(liver), 1.0);
+        assert_eq!(m.blood_flow(liver).to_si(), 0.0);
+        assert_eq!(m.extraction_ratio(liver), None);
+
+        // A zero flow is allowed — a tissue cut off — and its extraction is a number, not 0/0.
+        m.perfuse(blood, liver, Clearance::ZERO, 2.0).unwrap();
+        assert_eq!(m.extraction_ratio(liver), Some(0.0));
+        let err = m
+            .perfuse(blood, liver, l_h(90.0), 3.0)
+            .expect_err("perfused twice");
+        assert!(err.quantity.contains("already perfused"), "{err}");
+        let err = m
+            .perfuse(liver, fat, l_h(10.0), 5.0)
+            .expect_err("a tissue as a blood pool");
+        assert!(err.quantity.contains("cannot be a blood pool"), "{err}");
+        let err = m
+            .perfuse(fat, blood, l_h(10.0), 5.0)
+            .expect_err("a blood pool as a tissue");
+        assert!(err.quantity.contains("perfused as a tissue"), "{err}");
+        assert_eq!(
+            m.partition(liver),
+            2.0,
+            "the refused second perfusion left K_p alone"
+        );
+        assert_eq!(m.partition(blood), 1.0);
+        assert_eq!(m.partition(fat), 1.0);
     }
 }

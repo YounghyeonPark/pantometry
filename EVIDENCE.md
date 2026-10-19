@@ -110,7 +110,7 @@ RK4 is more accurate per step and steadily *dissipates*, while the symplectic me
 is second order and holds its energy within a bound. The test module proves that on a
 harmonic oscillator against the closed-form energy.
 
-## A discretisation that is exact where it matters, and three things checking it found
+## A discretisation that is exact where it matters, and what checking it found
 
 `pantometry-pharmacokinetic` is the one domain here whose *whole* model has closed forms, so the
 interesting result is not that they matched. It is what asking for them turned up.
@@ -157,6 +157,29 @@ was a **no-op**: the concentration snapshot is taken before that loop, so the fl
 the change. Moving the snapshot as well — the real bug — is caught by two tests. Reporting the
 first result as "the tests are blind to this" would have been wrong in the direction that reads
 like diligence.
+
+**A moment of a stepped curve is exact too, less one step, and the step looks like
+discretisation error.** The perfusion-limited model's `V_ss = V_b + Σ K_p V_t` is checked from the
+moments of a bolus, `CL·AUMC/AUC`. For `P = I + hM` the geometric series of matrices give
+`h Σ Pⁿ = −M⁻¹`, the continuous AUC, and `h² Σ n Pⁿ = M⁻² + h M⁻¹`, the continuous AUMC *less*
+`h·AUC` — so the left-sum mean residence time of the stepped curve is `MRT − h`, exactly, at any
+step. Without the `+ h` the moment estimate of `V_ss` is off by `h·CL/V_ss`: 8.2e-4 at 60 s and
+4.1e-4 at 30 s, halving as the step does, which is exactly what first-order error looks like and
+what a tolerance would have been loosened to absorb. With it, 3.9e-14 and 9.8e-14. The same
+identity, `h Σ xₙ = −M⁻¹U` for any input schedule, makes hepatic first pass exact: a dose that
+enters through the liver reaches the blood with an AUC `1 − E` of one that does not, read at
+6.2e-15 with `E = 0.4`.
+
+**A maximum over a window can sit where the coefficient being measured vanishes.** The same
+model collapses to one compartment as the blood flows grow, and the deviation should fall as
+`1/Q`. Taken as the worst point from 24 to 72 hours, its orders over four doublings of `Q` were
+0.9997, 1.0005, 1.0004, 1.0003 — first order, and with departures that refused to halve, so no
+band could be earned from them. An eigendecomposition outside the crate said why: the worst point
+was at 24 h, the window's start, and at 24 h the `1/Q²` coefficient of the deviation nearly
+vanishes for these volumes and partitions, leaving the `1/Q³` share. At a fixed 48 h the orders
+are 0.8950, 0.9488, 0.9747, 0.9874, departures halving from 0.105 — matching the
+eigendecomposition to four digits — and that is what is asserted. The first measurement was not
+wrong; it was a measurement of a different, smaller, coefficient.
 
 ## What implementing the field interface found
 
