@@ -3646,7 +3646,7 @@ protects nothing.
     not read as a window, the fourteen windows were untouched, and the rerun started the window
     again after the stale lock was removed by hand. It cost about 9 h.
 
-- **The rest of W4's 3.79 kcal/mol, apportioned on saved frames: written, not run.**
+- **The rest of W4's 3.79 kcal/mol, apportioned on saved frames: written here, run since (the next entry).**
   `the_rest_of_the_binding_error_apportioned_measured` (ignored) measures, by Zwanzig's one-step
   perturbation of benzene's cross van der Waals on frames sampled at UFF's, three variants that
   5794556 left untested, with that commit's hybrid beside them:
@@ -3765,6 +3765,49 @@ protects nothing.
 
   453 tests are listed in the crate, 44 of them ignored, so 409 run by default (446, 43 and 403
   before). There is no `powi` or `powf` in either file this change touches.
+
+- **W4's 3.79 kcal/mol of overbinding is UFF's van der Waals, about half benzene's and half the
+  protein's: with GAFF's benzene and ff14SB's protein, `ΔG°_bind` comes to −5.61 against
+  experiment's −5.19.** `the_rest_of_the_binding_error_apportioned_measured` ran once at
+  `2e09cea`, release, one core, with throttling off: exit 0 on 2026-10-17 after 3 669 s, at 297–301
+  ms a step. The frames are in `frames/` beside the leg. Nothing asserts any of it.
+
+  | variant | ΔΔG_bind: first order | second cumulant | Zwanzig | σ(βΔU) bound, water | `ΔG°_bind` |
+  | --- | --- | --- | --- | --- | --- |
+  | 0: GAFF benzene, geometric | +1.732 | +1.719 | +1.711 ± 0.056 | 0.59, 0.56 | −7.26 |
+  | 1: UFF benzene, Lorentz–Berthelot | −0.045 | −0.060 | −0.059 ± 0.014 | 0.26, 0.13 | −9.03 |
+  | 2: GAFF benzene, Lorentz–Berthelot | +1.708 | +1.701 | +1.698 ± 0.047 | 0.51, 0.49 | −7.28 |
+  | 3: GAFF benzene, ff14SB protein, Lorentz–Berthelot | +3.539 | +3.399 | +3.365 ± 0.073 | 0.84, 0.49 | −5.61 |
+
+  - **The frames are 5794556's.** Variant 0 gives +1.711 again, to the digit.
+  - **In steps**, as differences of the Zwanzig estimates:
+    - Lorentz–Berthelot alone: −0.059;
+    - then GAFF's benzene: +1.758;
+    - then ff14SB's protein: +1.666.
+
+    **The mixing rule is not it.** The two force fields' benzene and protein each carry about
+    half.
+  - **The protein's half is its hydrogens.** By ff14SB type, to first order, the bound side's
+    +5.777 is:
+    - aliphatic HC +2.487, CT +0.801, H1 +0.459, CA +0.428 and C +0.374;
+    - O −0.349 and N −0.202 the other way;
+    - water +0.275.
+
+    UFF's H_ well is 0.044 kcal/mol against ff14SB's 0.0157 for HC, so the pocket's C–H lining
+    pulls on benzene almost three times as hard.
+  - **By residue it is the pocket's lining, evenly.** Leu84 +0.633, Tyr88 +0.544, Ile78 +0.542,
+    Phe153 +0.515, Leu118 +0.512, Ala99 +0.508, Val87 +0.436, Val111 +0.380, Met102 +0.367 and
+    Leu121 +0.324. No residue stands out.
+  - **What it is not.** It is not a run with GAFF and ff14SB. It is a one-step perturbation from
+    UFF's ensemble, of benzene's cross van der Waals alone; the charges are QEq's and the
+    protein's own terms UFF's. One step is adequate here: σ(βΔU) is at most 0.84, 99 of the
+    bound side's 320 frames are effective, and the halves agree to 0.07.
+  - **Hydration does not come right with it.** Variant 2's water side is +2.160, so that benzene
+    hydrates at +0.59 against −0.90. Some of variant 3's −5.61 is therefore a cancellation between
+    legs. QEq's ±0.098 e against AM1-BCC's larger charges is the likeliest carrier of the water
+    side's error, which is not measured here.
+  - **The per-frame identities held.** Against their bounds, the worst were: each ΔU against its
+    two sums, 0.001; variant 3's parts, 0.000; the field's coupling, 0.003; 5794556's sum, 0.003.
 
 ### Changed
 

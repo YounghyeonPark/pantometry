@@ -5664,11 +5664,16 @@ fn report_apportioned(kt: f64, bound: &Reparametrised, water: &Reparametrised, l
 ///   against the field's coupling — each to its summation bound, asserted after everything is
 ///   printed.
 ///
+/// **Run once**, at `2e09cea`, exit 0 on 2026-10-17 after 3 669 s. Zwanzig's ΔΔG_bind: 0
+/// +1.711 ± 0.056 (5794556's, reproduced), 1 −0.059 ± 0.014, 2 +1.698 ± 0.047 and 3
+/// +3.365 ± 0.073, which puts `ΔG°_bind` at −5.61 against experiment's −5.19. σ(βΔU) is at most
+/// 0.84. Nothing here asserts it; the CHANGELOG has the tables.
+///
 /// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
 /// benzene_bound_in_tip3p the_rest_of_the_binding_error_apportioned_measured -- --ignored
 /// --nocapture`.
 #[test]
-#[ignore = "frames of the whole complex and of W3's box, saved, about one to two and a half hours with --release the first time: run with --release -- --ignored --nocapture"]
+#[ignore = "frames of the whole complex and of W3's box, saved; about an hour with --release the first time, run once (2026-10-17)"]
 fn the_rest_of_the_binding_error_apportioned_measured() {
     let dir = results_dir();
     assert!(
