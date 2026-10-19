@@ -123,6 +123,23 @@ solution approaches the plateau and not in where the plateau is. So that asserti
 `t k² h/2`, and the difference between the two numbers is a statement about the scheme rather than
 about how much slack was needed. A single loose tolerance covering both would have hidden it.
 
+**The area under an oral curve is exact for the same kind of reason, and that is why it checks
+less than it looks.** The Bateman curve the model steps is first order — measured at orders 1.0084,
+1.0043, 1.0021 as the step halves — but the Euler step removes exactly `CL·Cₙ·h`, so `CL·Σ Cₙh`
+*is* the eliminated mass and the books make it `F·D`. The left Riemann sum reads `AUC = F·D/CL` to
+2.6e-14, and does not halve when the step does. So the AUC check is the mass-balance identity: it
+pins `F`, and that the samples are the snapshot elimination acts on, and **nothing about timing**.
+A depot absorbing at the wrong rate — integrated by Euler instead of exactly — delivers the same
+total and passed it at 4.1e-15. The review that found that also found the order bands blind to
+the same defect, because a wrong error constant still converges at order one. What pins the
+constant is the exact solution of the stepped recurrence, `Aₙ = F·D(1 − E)(Eⁿ − rⁿ)/(E − r)` with
+`E = e^{−kₐh}` and `r = 1 − kh`, written so it does not cancel at `kₐ = k`: the model matches it to
+0.05–0.18 of a derived rounding bound at every point, and the Euler depot and absorption folded
+into the snapshot miss it by 1.5e-2 and 1.0e-2 at the first step. Deriving that bound found a
+rounding term of its own: the depot's `remaining − remaining·E` is exact, but the product is not,
+so the *absorbed* amount carries `ε/(2(1 − E))` of itself — 130 ulps at `kₐh = 3.75e-3` — which
+the first bound written, `(3n + 40)ε`, did not allow for and the test failed on at 1.3e-14.
+
 **Two tolerances in one test, differing by three orders of magnitude, for a reason that is not
 slack.** After one step from a bolus, the peripheral compartment's *gain* is checked to `1e-22` and
 the central compartment's *loss* to `1e-19`. The gain is read directly; the loss is

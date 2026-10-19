@@ -152,7 +152,9 @@ pub mod prelude {
         fresnel_reflectance, fresnel_split, Hit, Material, Mtf, Psf, Pupil, Ray, Scatter,
         SpectralPower, Spectrum, SurfaceFinish, SurfaceOptics, Zernike, VISIBLE_RANGE,
     };
-    pub use pantometry_pharmacokinetic::{Clearance, Compartment, CompartmentModel};
+    pub use pantometry_pharmacokinetic::{
+        bateman, Clearance, Compartment, CompartmentModel, Depot,
+    };
     pub use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck, Shot};
     pub use pantometry_protein::{correlation, Modes, Network, Protein, Structure};
     pub use pantometry_quantum::{Wavenumber, Well, PROBABILITY};

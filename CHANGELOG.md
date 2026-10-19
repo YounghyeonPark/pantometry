@@ -3913,6 +3913,118 @@ protects nothing.
 
   459 tests are listed in the crate, 45 of them ignored, so 414 run by default (453, 44 and 409
   before). There is no `powi` or `powf` in either file this change touches.
+- **`pantometry-pharmacokinetic` takes oral doses: a first-order absorption depot, with
+  bioavailability and a lag, on the books and checked against the Bateman function.** The module
+  docs had said why there was none — absorption is a rate constant on an *amount*, a clearance acts
+  on a *concentration*, and a depot faked as a large compartment would be a fiction the closed forms
+  could not check — and the design keeps that argument rather than overruling it: a route is its own
+  thing. `CompartmentModel::depot(label, into, kₐ, F, t_lag)` returns a `Depot` handle, which
+  carries the model's identity as `Compartment` does; `oral(depot, dose, at)` schedules a dose on
+  the simulation clock, as `infuse` does. At the step that reaches `at`, `F·D` enters the depot and
+  `(1 − F)·D` is booked as `presystemic_loss`; from `at + t_lag` the depot empties at `kₐA_d`,
+  exactly from there even part-way through a step. Doses are separate records, so they superpose.
+  `bateman` is the one-compartment closed form, public, with no division by `kₐ − k`.
+  - **The depot is integrated exactly, not by Euler.** It is a linear pool fed by nothing between
+    doses, so each step multiplies it by `e^{−kₐs}` — the kernel's `exp`, so the bits are the same
+    on every platform — and hands the difference to the compartment beside the
+    snapshot, as an infusion slice arrives. It adds nothing to `max_stable_dt`. What stays first
+    order is the compartment the drug arrives in.
+  - **The books.** `bolused + infused + oral = in compartments + eliminated + in depots + lost
+    pre-systemically + pending`. The depot counts as **held**, for the syringe's reason: without
+    it the books drop by `F·D` when a dose is swallowed and recover it as it is absorbed. It is not
+    in `body_burden`, because the gut lumen is outside the systemic circulation. The loss is a
+    running total beside `eliminated`, and for the same reason nothing is published.
+    `pending_dose` now includes oral doses not yet taken; `administered_mass` counts a taken dose
+    whole. `readings` gains `still to take`, `in the depot` and `lost before absorption` when there
+    is an oral dose, and no scene has one, so no existing table changes.
+  - **The checks**, each against a closed form and none against a second implementation:
+    - **The stepped recurrence, exactly.** The scheme's own map is
+      `Aₙ₊₁ = rAₙ + F·D(1 − E)Eⁿ`, `E = e^{−kₐh}`, `r = 1 − kh`, solved in closed form as
+      `F·D(1 − E)(Eⁿ − rⁿ)/(E − r)` and written as `r^{n−1}·expm1(nL)/expm1(L)` with `L = ln(E/r)`
+      from its series, so `kₐ = k`, where `E − r` is only `(kh)²/2`, does not cancel; powers by
+      repeated multiplication. At `kₐ` = 1.5, 0.5 (`= k`) and 0.1 per hour and `h` = 72 to 9 s
+      the model is within 0.05–0.18 of the bound `(3n + 40)ε·Cₙ + 2ε(F·D/V)Σ_{j<n}Eʲ` at every
+      point, 5.6e-16 to 5.4e-14 of `C_max`. The second term is the depot's: `remaining·E` rounds
+      and `remaining − kept` is exact, so the absorbed amount carries `ε/(2(1 − E))` of itself.
+      The first bound written omitted it and failed at step 2 by 1.3e-14.
+    - **The Bateman function**, which that solution converges on. `kₐ = 1.5/h`, `k = 0.5/h`,
+      `F = 0.8`, at `h` = 72 s down to 2.25 s: the curve's worst error 3.76e-3 to 1.16e-4 of
+      `C_max` at orders 1.0084, 1.0043, 1.0021, 1.0011, 1.0005; `C_max` at 1.0091 to 1.0006;
+      `t_max`, the discrete peak refined by a parabola, at 0.9586, 0.9779, 0.9961, 0.9977,
+      0.9974, reaching 1.09854 h against `ln 3 = 1.09861`. Each pair's band is `slack·(h/72 s)`,
+      halving as the `O(h²)` share it bounds does: 0.02 for the curve and `C_max` (departures at
+      0.40–0.46 of it), 0.08 for `t_max` (0.19–0.55).
+    - **The depot alone**: `F·D·e^{−kₐt}` within 0.28 to 0.50 `n·ε` after `n` steps, at 72, 9 and
+      1 800 s, against a bound of `1.1 n ε`. An Euler depot would be 24% low at twelve hours.
+    - **`kₐ = k`.** `bateman` at equality is `F·D·k·t·e^{−kt}/V` within 8 ε at five values of
+      `kt`; at `kₐ = k(1 ± 10⁻⁸)` its change matches the second-order expansion to
+      `(8 + kt) ε`, off it by 1.4e-16 where the textbook spelling is off by 2.1e-9 and 1.0e-8. The
+      model, which divides by nothing, is its recurrence's exact solution at 0.06–0.15 of the
+      bound and converges on the limit at orders 1.0053 and 1.0027.
+    - **`φ(x) = (1 − e^{−x})/x`**, under `bateman`: at the last double below ½ (the Taylor branch)
+      and at ½ (the exponential one) within 0.00 ulp of `2(1 − e^{−½})` from mpmath, and across
+      `[0, ½]` within 2.51 ulp of the series summed forwards to forty terms and 1.24 ulp of the
+      platform's `−expm1(−x)/x`.
+    - **Flip-flop**, `kₐ = 0.1/h < k`: the terminal slope from 80 to 120 h is `−kₐ` to 3.4e-14,
+      against a rounding bound of 2.2e-13 — exact rather than first order, because the
+      depot is. The ordinary case's slope is Euler's `ln(1 − kh)/h` to 7.8e-16.
+    - **`AUC = F·D/CL`**, by the left Riemann sum to 240 h at `kₐ` = 0.2, 1.5, 6 per hour: within
+      2.6e-14, and **not** halving with the step, because Euler's `CL·Cₙh` is exactly what it
+      eliminates. That makes it the mass-balance identity: it pins `F` and the snapshot ordering,
+      and **not timing** — an Euler depot passes it at 4.1e-15.
+    - **A lag** of 50 steps shifts the run by 50 steps **to the bit**, concentrations, depot and
+      cleared mass. Off the grid, at 1 813 s, the depot is still exact (3.4e-14) and the curve
+      against the shifted Bateman function is first order, at 0.9997. A dose *taken* at 1 813 s
+      with no lag is that run to the bit in the body and the books, its depot
+      `F·D·e^{−kₐ(t−1813)}` to 1.6e-14, and pending until the step that reaches it.
+    - **Mass balance** with a bolus, an infusion, two depots and three doses, by the accessors and
+      by `ledger`: 1.05e-14 of the dose over 14 400 steps, against 1e-12. The loss is
+      `(1 − F)·D` per dose exactly, and the readings sum to the dose on their own.
+    - **Superposition**: two doses against one plus one, 2.7e-15 of a dose over 2 400 steps.
+    - **Two compartments, oral input: the tri-exponential**, derived in the test by Laplace
+      transform and residues and checked on its own moments, each made dimensionless, before any
+      code is run. Each compartment on its own at `h` = 18, 9, 4.5 s: central 8.18e-4 to 2.01e-4
+      of the dose at orders 1.0153 and 1.0078, peripheral 5.81e-4 to 1.42e-4 at 1.0178 and
+      1.0088, under a band of `0.035·(h/18 s)`.
+    - **The same bits** for 18 scheduler windows of 400 s and 9 of 800 (both 400 s substeps,
+      asserted), and after a `restore` part-way through absorption.
+    - **Every refusal**: `kₐ`, `F`, the lag, the compartment, the depot, the dose and the time, by
+      name.
+  - **A review found sabotages that passed, and they were fixed before this was committed.**
+    `numerics-reviewer` showed four defects every test let through; the coordinator reproduced the
+    first. Each row is the same sabotage, applied by script before and after the fix:
+
+    | sabotage | before the review | after |
+    | --- | --- | --- |
+    | a dose taken one step late (`d.at <= now`) | all 26 passed: every closed form dosed at `t = 0` | the dose-taken-mid-step run, at step 50 |
+    | the depot by Euler, `1 − kₐs` | caught by the depot, flip-flop and off-grid-lag checks and, by margin, `t_max`'s band; the curve's and `C_max`'s order bands, the `kₐ = k` model and AUC (4.1e-15) passed | five tests, the recurrence at 1.5e-2 of the first step's value and the `kₐ = k` model among them |
+    | absorbed drug in the elimination snapshot | caught by AUC and two infusion tests, and by no oral curve | the recurrence at 1.0e-2, and the `kₐ = k` model check |
+    | `φ`'s series cut to twelve terms, through `x¹¹` | passed: nothing tested the branch beyond about 1e-13 (eleven terms were caught, by `bateman` against the textbook) | `φ` at ½⁻ against mpmath's value, 3.8e-14 off |
+    | a moment of the tri-exponential's derivation off by 2.7e-10 | passed: three of the moment checks were an hour's factor off, effectively 3.6e-9 | `A₁(0) = 0` at 2.7e-10 against 1e-12 |
+    | the depot feeding the next compartment | the tri-exponential's single maximum | the central curve at 8.2e-2 of the dose, and the peripheral one alone at 0.133 |
+
+    The moment row is a perturbation of two coefficients that keeps `A₁′(0)` exact, so only the
+    zero-moment check can see it; with the old scaling restored it passes, which is the point.
+    Also from the review: the depot readers now **panic** on a handle from another model, where
+    `depot_amount` returned 0 and the others another model's depot (the compartment readers are
+    documented as they were); `restore` is documented as not unscheduling a dose or an infusion
+    scheduled after the checkpoint; and `bateman` documents the domain it does not check.
+  - **The first six sabotages, rerun after the review**, each applied by script with an anchor
+    that occurred once and restored by `cp`, `touch` and SHA-256:
+
+    | sabotage | caught by |
+    | --- | --- |
+    | the depot feeding the next compartment | the tri-exponential, by each compartment separately; nothing with one compartment can see it |
+    | `F` applied twice, books still closed | eight tests, the recurrence and the AUC (20% low) among them |
+    | the lag one step late | the lag's bit-for-bit shift, at step 51 |
+    | the depot left out of `ledger` | the mass balance (0.198 of the dose) and the scheduler's own audit |
+    | `bateman` dividing by `kₐ − k` | `NaN` at equality |
+    | the same with `kₐ = k` special-cased | the expansion at `δ = 10⁻⁸`: 4.1e-7 against 1.0e-8 |
+
+  28 tests in the crate (15 before this change, 26 before the review) and its one doctest, none
+  ignored. No `powi` or `powf` in it.
+  `Depot` and `bateman` are in `pantometry::prelude`. No scene changes: the format's `compartments`
+  kind has no oral field yet.
 
 ### Changed
 

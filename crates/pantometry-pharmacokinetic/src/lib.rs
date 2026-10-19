@@ -35,8 +35,12 @@
 //! - **Two compartments, IV bolus.** The bi-exponential, with `α` and `β` the roots of
 //!   `λ² − (k10 + k12 + k21)λ + k10 k21 = 0`. This is the one that catches a transposed index in
 //!   a link, which the conservation audit structurally cannot — see below.
-//! - **Mass balance.** Dose = still in the compartments + cleared + still in the syringe, to
-//!   machine precision.
+//! - **One compartment, oral dose.** The Bateman function, its peak, its `kₐ = k` limit, the
+//!   flip-flop terminal slope `−kₐ` when absorption is the slower process, and `AUC = F·D/CL`.
+//! - **Two compartments, oral dose.** The tri-exponential, which catches a depot feeding the
+//!   wrong compartment the way the bi-exponential catches a transposed link.
+//! - **Mass balance.** Dose = still in the compartments + cleared + still in a depot + lost
+//!   before absorption + still in the syringe or the bottle, to machine precision.
 //! - **First order.** Halving the step halves the error. Measured as a rate, so the tolerances
 //!   above are consequences rather than choices.
 //!
@@ -78,13 +82,65 @@
 //! with 400 mg still in it is 400 mg the model is holding, and counting it is what makes mass
 //! balance checkable *during* an infusion rather than only after one.
 //!
-//! # What is deliberately not in it
+//! # Oral doses, and why a depot is not a compartment
 //!
-//! **No absorption compartment and no oral dosing.** First-order absorption is `dA/dt = −kₐA`, a
-//! rate constant acting on an *amount*, and everything here is a clearance acting on a
-//! *concentration*. They are different mechanisms, not one mechanism with a different number, and
-//! a depot faked as a compartment with a large volume would be a fiction the closed forms would
-//! not check.
+//! First-order absorption is `dA_d/dt = −kₐA_d`, a rate constant acting on an *amount*, and
+//! everything above is a clearance acting on a *concentration*. They are different mechanisms,
+//! not one mechanism with a different number: a depot faked as a compartment with a large volume
+//! and a link would be a fiction with a volume nobody can name, and the closed forms would not
+//! check it. So an absorption route is its own thing, a [`Depot`], declared with
+//! [`CompartmentModel::depot`] — a rate constant `kₐ`, a bioavailability `F` and a lag `t_lag` —
+//! and dosed with [`CompartmentModel::oral`]. Any first-order extravascular route is the same
+//! shape: an intramuscular or subcutaneous injection is a depot with its own `kₐ` and `F`.
+//!
+//! **What happens to a dose.** At its scheduled time the bioavailable part `F·D` enters the
+//! depot and the rest, `(1 − F)·D`, is booked at once as
+//! [lost pre-systemically](CompartmentModel::presystemic_loss). From `t + t_lag` the depot empties
+//! into its compartment at `kₐ·A_d`. Booking the loss at the moment of dosing rather than as the
+//! dose is absorbed is the convention every closed form here is written in — they see only `F·D`
+//! — and it makes the loss a fixed number per dose rather than a time course nobody measures.
+//!
+//! **Integrated exactly, not by Euler.** The depot is a linear pool fed by nothing between doses,
+//! so over any interval `s` it keeps exactly `e^{−kₐs}` of what it held. Each step multiplies by
+//! that factor, evaluated with the kernel's [`exp`](pantometry_core::math::exp) so the bits are
+//! the same on every platform, and hands the difference to the compartment. The depot therefore
+//! has no truncation error at all — only `exp`'s half-ulp and one product per step — and adds
+//! nothing to [`Domain::max_stable_dt`]: a `kₐ` of a hundred per hour does not shorten the step.
+//! What *is* first order is the compartment the absorbed drug arrives in, which is the Euler step
+//! it always was; the absorbed amount enters it the way an infusion's slice does, beside the
+//! snapshot every flux is taken from.
+//!
+//! **On the books.** A dose not yet taken is [pending](CompartmentModel::pending_dose), exactly
+//! as an infusion's syringe is. Drug in the depot is **held**, for the syringe's reason: it is in
+//! the model and not yet in the body, and without it a correct model would report the dose
+//! vanishing at the moment it is swallowed and reappearing as it is absorbed. It is not part of
+//! the [body burden](CompartmentModel::body_burden), because the gut lumen is outside the
+//! systemic circulation and a blood sample cannot see it. The pre-systemic loss is a running
+//! total beside `eliminated`, for `eliminated`'s reason — it has left the model, there is nobody
+//! on the bus to hand it to, and so nothing is published. The sum is the dose:
+//!
+//! ```text
+//! bolused + infused + oral = in compartments + eliminated + in depots + lost pre-systemically + pending
+//! ```
+//!
+//! The ledger is blind to *where* a depot delivers, for the reason it is blind to links: the
+//! amount leaves one entry and joins another in the same sum. A depot feeding the wrong
+//! compartment, or `F` applied twice, closes the books to the last bit. What sees them is the
+//! closed forms below, and that is what they are for.
+//!
+//! **The closed forms for oral input.** One compartment gives the Bateman function,
+//!
+//! ```text
+//! C(t) = F·D·kₐ / (V (kₐ − k)) · (e^{−kt} − e^{−kₐt}),   k = CL/V
+//! ```
+//!
+//! with its peak at `t_max = ln(kₐ/k)/(kₐ − k)`, its singular limit `F·D·k·t·e^{−kt}/V` at
+//! `kₐ = k`, and an area `AUC₀^∞ = F·D/CL` that does not depend on `kₐ` at all. [`bateman`] is
+//! that function, written so the singular limit is a value rather than a division by zero. Two
+//! compartments with oral input into the central one give a tri-exponential in `α`, `β` and `kₐ`,
+//! derived in the test that checks it.
+//!
+//! # What is deliberately not in it
 //!
 //! **No Michaelis–Menten elimination.** `V_max C/(K_m + C)` is the interesting case for ethanol
 //! and phenytoin, and it is exactly where the exact solutions stop: there is no closed form for a
@@ -189,6 +245,134 @@ struct Infusion {
     delivered: f64,
 }
 
+/// An absorption depot in one particular model: the route an oral, or any first-order
+/// extravascular, dose takes into a compartment.
+///
+/// A handle for the reason [`Compartment`] is one — it can only come from
+/// [`CompartmentModel::depot`], so a dose into a depot that does not exist is not representable,
+/// and it carries the model's identity, so one from another model is refused rather than
+/// silently dosing whatever sits at that position. The same limit applies: two models with one
+/// name share an identity.
+///
+/// **The readers are stricter than [`Compartment`]'s.** [`CompartmentModel::amount`] and its
+/// siblings index by position and do not check the model, so a handle from another model reads
+/// whatever compartment sits there. Every depot reader — [`CompartmentModel::depot_amount`],
+/// [`absorption_rate`](CompartmentModel::absorption_rate) and the rest — instead **panics** on a
+/// handle from another model or a later state, and [`CompartmentModel::oral`] refuses it with a
+/// [`Violation`]. Stricter because it was new and could be; changing the compartment readers
+/// to match is a change to an existing API and is not made here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Depot {
+    index: u32,
+    model: u64,
+}
+
+/// A first-order absorption route: where it delivers, how fast, how much of a dose, how late.
+struct DepotState {
+    label: String,
+    /// The compartment it empties into.
+    into: usize,
+    /// kₐ, per second.
+    rate: f64,
+    /// F, in (0, 1].
+    bioavailability: f64,
+    /// Seconds from a dose to the start of its absorption.
+    lag: f64,
+}
+
+/// One dose given by a depot's route at a time on the simulation clock.
+///
+/// Each dose is its own record rather than all of a depot's doses pooled, because each has its
+/// own clock: two doses an hour apart start absorbing an hour apart, and a pool with one lag
+/// could not say so. The model is linear, so the records superpose.
+struct OralDose {
+    depot: usize,
+    /// Seconds on the simulation clock.
+    at: f64,
+    /// kg, the whole dose.
+    dose: f64,
+    /// kg, `F·dose`. Held rather than recomputed so the bioavailable and the lost parts are
+    /// computed once each and always the same two numbers.
+    bioavailable: f64,
+    /// Whether the clock has reached `at` and the dose has been taken.
+    given: bool,
+    /// kg still in the depot from this dose. Zero until it is given.
+    remaining: f64,
+}
+
+/// `(1 − e^{−x})/x` for `x ≥ 0`, with its limit of 1 at `x = 0` and no cancellation near it.
+///
+/// For `x ≥ ½` the subtraction loses nothing that matters: `e^{−x} ≤ 0.61`, so `1 − e^{−x}` is
+/// at least 0.39 and its relative error is under three ulps. Below that it is the Taylor series
+/// `Σ (−x)ⁿ/(n+1)!`, nested, through `n = 18`: at `x = ½` the first term left out is
+/// `0.5¹⁹/20! ≈ 8e-25`, far under an ulp of a value near 1. Nothing is divided by `x` on that
+/// branch, which is the point.
+fn one_minus_exp_over(x: f64) -> f64 {
+    if x < 0.5 {
+        let mut sum = 1.0;
+        for n in (2..=19).rev() {
+            sum = 1.0 - x / n as f64 * sum;
+        }
+        sum
+    } else {
+        (1.0 - pantometry_core::math::exp(-x)) / x
+    }
+}
+
+/// The Bateman function: the concentration a single first-order oral dose produces in one
+/// compartment,
+///
+/// ```text
+/// C(t) = F·D·kₐ / (V (kₐ − k)) · (e^{−kt} − e^{−kₐt})
+/// ```
+///
+/// with `F` the bioavailability, `kₐ` the absorption rate constant, `k = CL/V` the elimination
+/// rate constant and `t` the time since absorption began (subtract a lag before calling). Zero
+/// for `t ≤ 0`.
+///
+/// # Written so the singular limit is a number
+///
+/// The textbook spelling divides by `kₐ − k`, which is zero when the two rates are equal and
+/// catastrophically cancelling when they are close: at `kₐ = k(1 + 10⁻⁸)` the difference of
+/// exponentials keeps about eight good digits. This is the same function rearranged with no
+/// division by the difference,
+///
+/// ```text
+/// (e^{−kt} − e^{−kₐt}) / (kₐ − k) = t · e^{−s t} · φ(|kₐ − k| t),   s = min(k, kₐ),
+/// φ(x) = (1 − e^{−x}) / x,   φ(0) = 1,
+/// ```
+///
+/// with `φ` from its Taylor series near zero. It is symmetric in `k` and `kₐ`, as the function
+/// is, and at `kₐ = k` it is `F·D·k·t·e^{−kt}/V` exactly — the limit, rather than a branch
+/// written to imitate it. Factoring the *slower* exponential out also keeps a flip-flop curve
+/// (`kₐ < k`) from underflowing to zero while its true value is still representable.
+///
+/// The exponentials are the kernel's, so the bits are the same on every platform.
+///
+/// # Its domain, which it does not check
+///
+/// It is the closed form for `kₐ > 0`, `k > 0`, `V > 0` and `F` in `(0, 1]` — the inputs
+/// [`CompartmentModel::depot`] accepts — and it validates none of them, because it is a formula
+/// rather than a model and has no `Result` to refuse in. Outside that domain it returns whatever
+/// the algebra gives: a negative rate grows instead of decaying, and a zero volume divides by
+/// zero.
+pub fn bateman(
+    dose: Mass,
+    bioavailability: f64,
+    absorption: Frequency,
+    elimination: Frequency,
+    volume: Volume,
+    t: Time,
+) -> Concentration {
+    let (ka, k, t) = (absorption.to_si(), elimination.to_si(), t.to_si());
+    if t <= 0.0 {
+        return Concentration::from_si(0.0);
+    }
+    let slow = ka.min(k);
+    let shape = t * pantometry_core::math::exp(-slow * t) * one_minus_exp_over((ka - k).abs() * t);
+    Concentration::from_si(bioavailability * dose.to_si() * ka / volume.to_si() * shape)
+}
+
 /// *n* compartments, intercompartmental clearances between them, elimination out of some of them.
 ///
 /// # Why one domain and not one domain per compartment
@@ -238,6 +422,8 @@ pub struct CompartmentModel {
     compartments: Vec<CompartmentState>,
     links: Vec<Link>,
     infusions: Vec<Infusion>,
+    depots: Vec<DepotState>,
+    doses: Vec<OralDose>,
     /// kg removed from the body by clearance over the run.
     eliminated: f64,
     /// kg put into the body over the run by **bolus**. The infused half is not accumulated
@@ -254,8 +440,17 @@ pub struct CompartmentModel {
 /// All of it, because saving the state and not the running totals is how a rewound sweep comes to
 /// report drug it never cleared. `LumpedMass` did exactly that with its `lost` until an iterative
 /// coupling finally reached the branch, and an infusion's `delivered` is the same hazard wearing
-/// different clothes: restore without it and the syringe refills.
-type Saved = (Vec<f64>, Vec<f64>, f64, f64);
+/// different clothes: restore without it and the syringe refills. An oral dose's `given` and
+/// `remaining` are the same hazard again — restore the compartments without them and a dose is
+/// absorbed twice.
+#[derive(Clone)]
+struct Saved {
+    amounts: Vec<f64>,
+    delivered: Vec<f64>,
+    doses: Vec<(bool, f64)>,
+    eliminated: f64,
+    bolused: f64,
+}
 
 /// A deterministic identity for a model, from its name.
 fn identity(name: &str) -> u64 {
@@ -280,6 +475,8 @@ impl CompartmentModel {
             compartments: Vec::new(),
             links: Vec::new(),
             infusions: Vec::new(),
+            depots: Vec::new(),
+            doses: Vec::new(),
             eliminated: 0.0,
             bolused: 0.0,
             saved: None,
@@ -464,6 +661,223 @@ impl CompartmentModel {
         self.infuse(into, Mass::from_si(rate.to_si() * span), start, end)
     }
 
+    /// A first-order absorption route into a compartment: the gut for an oral dose, or the
+    /// injection site for an intramuscular or subcutaneous one.
+    ///
+    /// `absorption` is `kₐ`, a rate constant on the *amount* in the depot — not a clearance,
+    /// which is why it is a [`Frequency`] where everything else here is a [`Clearance`].
+    /// `bioavailability` is `F`, the fraction of each dose that reaches the compartment at all;
+    /// the rest is lost before absorption, to first-pass metabolism or to the gut. `lag` is the
+    /// time from taking a dose to the start of its absorption, the stomach's emptying time for a
+    /// tablet. Dose it with [`CompartmentModel::oral`].
+    ///
+    /// Refuses a `kₐ` that is not positive and finite — zero would be a depot that never empties,
+    /// whose dose the books would hold forever while every curve stayed flat — an `F` outside
+    /// `(0, 1]` or not a number, a negative or non-finite lag, and a compartment from another
+    /// model. Several depots may feed one compartment, which is how a regimen of two
+    /// formulations is written.
+    pub fn depot(
+        &mut self,
+        label: impl Into<String>,
+        into: Compartment,
+        absorption: Frequency,
+        bioavailability: f64,
+        lag: Time,
+    ) -> Result<Depot, Violation> {
+        let label = label.into();
+        let i = self.resolve(into)?;
+        let site = format!("{}/{}", self.name, label);
+        let ka = absorption.to_si();
+        if !ka.is_finite() || ka <= 0.0 {
+            return Err(Violation::at(
+                site,
+                "an absorption rate constant must be finite and positive",
+                ka,
+            ));
+        }
+        // NaN named first, so it is refused by the branch that reads as refusing it rather than
+        // by two comparisons that both happen to be false.
+        let f = bioavailability;
+        if f.is_nan() || f <= 0.0 || f > 1.0 {
+            return Err(Violation::at(
+                site,
+                "a bioavailability must be in (0, 1]",
+                f,
+            ));
+        }
+        let lag = lag.to_si();
+        if !lag.is_finite() || lag < 0.0 {
+            return Err(Violation::at(
+                site,
+                "an absorption lag must be finite and not negative",
+                lag,
+            ));
+        }
+        let index = self.depots.len() as u32;
+        self.depots.push(DepotState {
+            label,
+            into: i,
+            rate: ka,
+            bioavailability: f,
+            lag,
+        });
+        Ok(Depot {
+            index,
+            model: self.id,
+        })
+    }
+
+    /// An oral dose — or any dose by a depot's route — taken at `at` on the simulation clock.
+    ///
+    /// Scheduled rather than given now, the way [`CompartmentModel::infuse`] is, because a lag
+    /// has to be measured from somewhere and the model's only clock is the one `step` is handed.
+    /// From the moment it is scheduled the whole dose is on the books as
+    /// [`pending_dose`](CompartmentModel::pending_dose). At the first step whose interval reaches
+    /// `at` it is taken: `F·dose` enters the depot, `(1 − F)·dose` is booked as
+    /// [lost](CompartmentModel::presystemic_loss), and absorption begins at `at + lag`, exactly
+    /// there even part-way through a step. A dose scheduled before the clock a model is next
+    /// stepped from is taken at that step and starts absorbing from its start; nothing that
+    /// would have been absorbed earlier arrives all at once.
+    ///
+    /// Any number of doses may be scheduled, at any times and in any order. The model is linear,
+    /// so they superpose: two doses give the sum of the two curves each would give alone.
+    ///
+    /// Refuses a negative or non-finite dose, a non-finite time, and a depot from another model.
+    /// A zero dose is allowed and does nothing, as for [`CompartmentModel::bolus`].
+    pub fn oral(&mut self, depot: Depot, dose: Mass, at: Time) -> Result<(), Violation> {
+        let d = self.resolve_depot(depot)?;
+        let site = format!("{}/{}", self.name, self.depots[d].label);
+        let m = dose.to_si();
+        if !m.is_finite() || m < 0.0 {
+            return Err(Violation::at(
+                site,
+                "a dose must be finite and not negative",
+                m,
+            ));
+        }
+        let at = at.to_si();
+        if !at.is_finite() {
+            return Err(Violation::at(
+                site,
+                "a dose must be taken at a finite time",
+                at,
+            ));
+        }
+        self.doses.push(OralDose {
+            depot: d,
+            at,
+            dose: m,
+            bioavailable: self.depots[d].bioavailability * m,
+            given: false,
+            remaining: 0.0,
+        });
+        Ok(())
+    }
+
+    fn resolve_depot(&self, d: Depot) -> Result<usize, Violation> {
+        if d.model != self.id {
+            return Err(Violation::at(
+                self.name.clone(),
+                "a depot handle from a different model",
+                d.index as f64,
+            ));
+        }
+        let i = d.index as usize;
+        if i >= self.depots.len() {
+            return Err(Violation::at(
+                self.name.clone(),
+                "a depot handle from a later state of this model",
+                d.index as f64,
+            ));
+        }
+        Ok(i)
+    }
+
+    /// A depot by label, for a caller holding names off a file — the counterpart of
+    /// [`CompartmentModel::compartment_named`].
+    pub fn depot_named(&self, label: &str) -> Option<Depot> {
+        self.depots
+            .iter()
+            .position(|d| d.label == label)
+            .map(|i| Depot {
+                index: i as u32,
+                model: self.id,
+            })
+    }
+
+    /// Drug in one depot right now, from every dose given into it: absorbed by nobody yet.
+    ///
+    /// Like every depot accessor, this **panics** on a handle from another model, rather than
+    /// returning zero or reading whichever depot sits at that position here — see
+    /// [`Depot`].
+    pub fn depot_amount(&self, d: Depot) -> Mass {
+        let i = self.depot_index(d);
+        Mass::from_si(
+            self.doses
+                .iter()
+                .filter(|x| x.depot == i)
+                .map(|x| x.remaining)
+                .sum(),
+        )
+    }
+
+    /// Drug in every depot right now. Held by the model and not in the body — see the module
+    /// docs for why it is counted and why it is not part of [`CompartmentModel::body_burden`].
+    pub fn depot_mass(&self) -> Mass {
+        Mass::from_si(self.doses.iter().map(|x| x.remaining).sum())
+    }
+
+    /// Drug lost before absorption over the run: `(1 − F)·dose` for every dose taken so far.
+    ///
+    /// Summed from the doses rather than tallied as it goes, for the reason
+    /// [`administered_mass`](CompartmentModel::administered_mass) is: then it is always the same
+    /// number each dose's own subtraction gave.
+    pub fn presystemic_loss(&self) -> Mass {
+        Mass::from_si(
+            self.doses
+                .iter()
+                .filter(|x| x.given)
+                .map(|x| x.dose - x.bioavailable)
+                .sum(),
+        )
+    }
+
+    /// A depot's absorption rate constant, `kₐ`.
+    pub fn absorption_rate(&self, d: Depot) -> Frequency {
+        Frequency::from_si(self.depots[self.depot_index(d)].rate)
+    }
+
+    /// A depot's bioavailability, `F`.
+    pub fn bioavailability(&self, d: Depot) -> f64 {
+        self.depots[self.depot_index(d)].bioavailability
+    }
+
+    /// A depot's absorption lag.
+    pub fn absorption_lag(&self, d: Depot) -> Time {
+        Time::from_si(self.depots[self.depot_index(d)].lag)
+    }
+
+    /// The compartment a depot empties into.
+    pub fn absorbed_into(&self, d: Depot) -> Compartment {
+        Compartment {
+            index: self.depots[self.depot_index(d)].into as u32,
+            model: self.id,
+        }
+    }
+
+    /// A depot's position, or a panic naming why there is none.
+    ///
+    /// The readers panic where the methods that change the model return a [`Violation`], and
+    /// the difference is deliberate: a reader has no `Result` to put a refusal in, and the two
+    /// other answers it could give — zero, or another model's depot at the same position — are
+    /// both a number that looks like a measurement.
+    fn depot_index(&self, d: Depot) -> usize {
+        match self.resolve_depot(d) {
+            Ok(i) => i,
+            Err(e) => panic!("{e}"),
+        }
+    }
+
     fn resolve(&self, c: Compartment) -> Result<usize, Violation> {
         if c.model != self.id {
             return Err(Violation::at(
@@ -550,6 +964,9 @@ impl CompartmentModel {
     }
 
     /// Drug in the body right now, summed over the compartments.
+    ///
+    /// Not including what is still in a depot: drug in the gut lumen has not reached the
+    /// systemic circulation, and that is what a body burden is the burden of.
     pub fn body_burden(&self) -> Mass {
         Mass::from_si(self.compartments.iter().map(|c| c.amount).sum())
     }
@@ -557,27 +974,45 @@ impl CompartmentModel {
     /// Drug removed from the body by clearance over the run.
     ///
     /// Still on this domain's books — see the module docs. `body_burden + eliminated_mass +
-    /// pending_dose` is the dose, exactly.
+    /// depot_mass + presystemic_loss + pending_dose` is the dose, exactly.
     pub fn eliminated_mass(&self) -> Mass {
         Mass::from_si(self.eliminated)
     }
 
-    /// Drug given over the run, by bolus and by delivered infusion.
+    /// Drug given over the run, by bolus, by delivered infusion, and by oral doses taken.
     ///
-    /// Summed from the infusions rather than tallied as it goes, so it agrees exactly with
-    /// `scheduled − pending` instead of to within an accumulation of roundings.
+    /// Summed from the infusions and the doses rather than tallied as it goes, so it agrees
+    /// exactly with `scheduled − pending` instead of to within an accumulation of roundings. An
+    /// oral dose counts whole, the part that will be lost before absorption included: it was
+    /// administered, and bioavailability is a property of the route rather than of the dose.
     pub fn administered_mass(&self) -> Mass {
-        Mass::from_si(self.bolused + self.infusions.iter().map(|i| i.delivered).sum::<f64>())
+        Mass::from_si(
+            self.bolused
+                + self.infusions.iter().map(|i| i.delivered).sum::<f64>()
+                + self
+                    .doses
+                    .iter()
+                    .filter(|d| d.given)
+                    .map(|d| d.dose)
+                    .sum::<f64>(),
+        )
     }
 
-    /// Scheduled infusion that has not been delivered yet — what is still in the syringe.
+    /// Scheduled drug not given yet — what is still in the syringe, and the oral doses whose time
+    /// has not come.
     pub fn pending_dose(&self) -> Mass {
-        Mass::from_si(
-            self.infusions
-                .iter()
-                .map(|i| (i.total - i.delivered).max(0.0))
-                .sum(),
-        )
+        Mass::from_si(self.pending_infusion() + self.pending_oral())
+    }
+
+    fn pending_infusion(&self) -> f64 {
+        self.infusions
+            .iter()
+            .map(|i| (i.total - i.delivered).max(0.0))
+            .sum()
+    }
+
+    fn pending_oral(&self) -> f64 {
+        self.doses.iter().filter(|d| !d.given).map(|d| d.dose).sum()
     }
 
     /// Steady-state volume of distribution, `Σ V_i`.
@@ -708,7 +1143,7 @@ impl Domain for CompartmentModel {
     /// are checked on their own rather than only in the whole-simulation sum.
     ///
     /// The claim is exact and it is easy to say why: drug enters by a declared dose and leaves
-    /// only into `eliminated`, which the ledger reports. There is no bus channel, so there is
+    /// only into `eliminated` or the pre-systemic loss, both of which the ledger reports. There is no bus channel, so there is
     /// nothing for the difference to be attributed to and the audit is comparing the books
     /// against themselves one step apart. That is the strictest form the check has and this
     /// domain is the cheapest possible case of it.
@@ -854,6 +1289,34 @@ impl Domain for CompartmentModel {
             }
         }
 
+        // Oral doses: taken when the clock reaches them, absorbed **exactly** — see the module
+        // docs. A depot is fed by nothing between doses, so over the part of this step after its
+        // lag it keeps `e^{−kₐs}` of what it held, and the difference arrives in the compartment
+        // through `delta`, beside the snapshot, as an infusion's slice does.
+        //
+        // `s` is `h` itself whenever absorption was already under way when the step began,
+        // rather than `until − start`: the two differ in the last bit whenever `now` is not
+        // round, and then two runs that should be one shifted by a lag would not be the same
+        // bits. Only the step in which absorption *starts* takes the partial span.
+        //
+        // `remaining − kept` rather than `remaining·(1 − e)`: when `e ≥ ½` Sterbenz makes the
+        // subtraction exact, so the depot and the compartment exchange one number rather than
+        // two roundings of it.
+        for d in self.doses.iter_mut() {
+            let route = &self.depots[d.depot];
+            if !d.given && d.at < until {
+                d.given = true;
+                d.remaining = d.bioavailable;
+            }
+            let start = d.at + route.lag;
+            if d.given && d.remaining > 0.0 && until > start {
+                let span = if start <= now { h } else { until - start };
+                let kept = d.remaining * pantometry_core::math::exp(-route.rate * span);
+                delta[route.into] += d.remaining - kept;
+                d.remaining = kept;
+            }
+        }
+
         // Each link's flux computed **once** and applied twice with opposite signs. Computing it
         // from each side separately gives two values differing in the last bit, and the model then
         // leaks about 1e-16 per link per step — invisible per step and not invisible over a run
@@ -880,7 +1343,8 @@ impl Domain for CompartmentModel {
         Ok(())
     }
 
-    /// Every compartment's holding, plus what has been cleared and what is still in the syringe.
+    /// Every compartment's holding, plus what has been cleared, what is still in the syringe or
+    /// the bottle, what is still in a depot, and what was lost before absorption.
     ///
     /// One `add` per compartment rather than one for the sum, so [`Ledger`]'s scale is the largest
     /// single holding instead of a near-zero net — which is what the scale exists for, and the
@@ -897,34 +1361,52 @@ impl Domain for CompartmentModel {
         }
         ledger.add(quantity::MASS, self.eliminated);
         ledger.add(quantity::MASS, self.pending_dose().to_si());
+        // One entry per oral dose still absorbing, for the scale's reason above, and the loss as
+        // one total, for `eliminated`'s. Without the depot the books would drop by `F·D` the
+        // moment a dose is taken and recover it as it is absorbed — a correct model reported as
+        // leaking and then as inventing drug, which is what the depot is held for.
+        for d in &self.doses {
+            ledger.add(quantity::MASS, d.remaining);
+        }
+        ledger.add(quantity::MASS, self.presystemic_loss().to_si());
         ledger
     }
 
-    /// Every amount, every infusion's progress, and both running totals.
+    /// Every amount, every infusion's progress, every oral dose's, and both running totals.
     ///
     /// All of it, because `ledger` reads all of it. An infusion's `delivered` is the one easiest
     /// to forget and the one whose loss is silent: restore without it and the syringe refills,
     /// the books gain a dose, and the sweep that was meant to be re-run from the same state is
     /// re-run from a richer one.
+    ///
+    /// **What it does not rewind is the schedule.** An infusion or an oral dose *scheduled* after
+    /// the checkpoint is not removed by [`restore`](Domain::restore), and keeps whatever progress
+    /// it has made: it was not in the saved state, so there is nothing to put back. Schedule a
+    /// regimen before checkpointing it, which is what an iterative coupling does anyway.
     fn checkpoint(&mut self) {
-        self.saved = Some((
-            self.compartments.iter().map(|c| c.amount).collect(),
-            self.infusions.iter().map(|i| i.delivered).collect(),
-            self.eliminated,
-            self.bolused,
-        ));
+        self.saved = Some(Saved {
+            amounts: self.compartments.iter().map(|c| c.amount).collect(),
+            delivered: self.infusions.iter().map(|i| i.delivered).collect(),
+            doses: self.doses.iter().map(|d| (d.given, d.remaining)).collect(),
+            eliminated: self.eliminated,
+            bolused: self.bolused,
+        });
     }
 
     fn restore(&mut self) {
-        if let Some((amounts, delivered, eliminated, bolused)) = self.saved.clone() {
-            for (c, a) in self.compartments.iter_mut().zip(amounts) {
+        if let Some(saved) = self.saved.clone() {
+            for (c, a) in self.compartments.iter_mut().zip(saved.amounts) {
                 c.amount = a;
             }
-            for (inf, d) in self.infusions.iter_mut().zip(delivered) {
+            for (inf, d) in self.infusions.iter_mut().zip(saved.delivered) {
                 inf.delivered = d;
             }
-            self.eliminated = eliminated;
-            self.bolused = bolused;
+            for (dose, (given, remaining)) in self.doses.iter_mut().zip(saved.doses) {
+                dose.given = given;
+                dose.remaining = remaining;
+            }
+            self.eliminated = saved.eliminated;
+            self.bolused = saved.bolused;
         }
     }
 
@@ -969,7 +1451,29 @@ impl Domain for CompartmentModel {
             out.push(Reading::new(
                 &self.name,
                 "still to infuse",
-                self.pending_dose().to_si() * 1e6,
+                self.pending_infusion() * 1e6,
+                "mg",
+            ));
+        }
+        // The oral half of the books, present when there is an oral dose and absent otherwise,
+        // the rule the syringe follows. All three, so the table sums to the dose by itself.
+        if !self.doses.is_empty() {
+            out.push(Reading::new(
+                &self.name,
+                "still to take",
+                self.pending_oral() * 1e6,
+                "mg",
+            ));
+            out.push(Reading::new(
+                &self.name,
+                "in the depot",
+                self.depot_mass().to_si() * 1e6,
+                "mg",
+            ));
+            out.push(Reading::new(
+                &self.name,
+                "lost before absorption",
+                self.presystemic_loss().to_si() * 1e6,
                 "mg",
             ));
         }
@@ -1770,5 +2274,1230 @@ mod tests {
         }
         // A hundredfold change in Q moves the plateau by nothing.
         assert!((settled[0] / settled[1] - 1.0).abs() < 1e-6);
+    }
+
+    // ---- Oral doses ------------------------------------------------------------------------
+
+    /// 100 mg, the oral dose every check below gives unless it says otherwise.
+    const ORAL: f64 = 1e-4;
+
+    fn per_hour(x: f64) -> Frequency {
+        Frequency::from_si(x / HOUR)
+    }
+
+    /// The one-compartment model above — 10 L, 5 L/h, `k = 0.5/h` — with a depot into it.
+    fn oral_one(ka_per_h: f64, f: f64, lag_s: f64) -> (CompartmentModel, Compartment, Depot) {
+        let (mut m, plasma) = one_compartment();
+        let gut = m
+            .depot("gut", plasma, per_hour(ka_per_h), f, Time::s(lag_s))
+            .unwrap();
+        (m, plasma, gut)
+    }
+
+    /// The Bateman function as every textbook writes it, in SI, for a dose of [`ORAL`].
+    ///
+    /// The reference the stepped curves are held to, and deliberately *not* [`bateman`], which is
+    /// code under test and is checked against this separately where the two rates are far apart
+    /// enough for the division to be harmless.
+    fn bateman_textbook(f: f64, ka: f64, k: f64, v: f64, t: f64) -> f64 {
+        if t <= 0.0 {
+            return 0.0;
+        }
+        f * ORAL * ka / (v * (ka - k)) * ((-k * t).exp() - (-ka * t).exp())
+    }
+
+    /// The concentration at every point of the grid `t = n h`, `n = 0..=steps`.
+    ///
+    /// The clock is `n·h` rather than a running sum, and every step size below is a whole number
+    /// of seconds, so every time is an exact integer and two runs meant to agree are handed the
+    /// same clock.
+    fn trace(m: &mut CompartmentModel, c: Compartment, h: f64, steps: usize) -> Vec<f64> {
+        let mut bus = Exchange::new();
+        let mut out = vec![m.concentration(c).to_si()];
+        for n in 0..steps {
+            m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+            out.push(m.concentration(c).to_si());
+        }
+        out
+    }
+
+    /// The order of convergence between successive halvings: `log₂(e_h / e_{h/2})`.
+    fn orders(errors: &[f64]) -> Vec<f64> {
+        errors
+            .windows(2)
+            .map(|w| (w[0] / w[1]).ln() / 2.0f64.ln())
+            .collect()
+    }
+
+    /// **The exact solution of the recurrence the model steps**, one compartment, one dose of
+    /// [`ORAL`] at `t = 0`, on the grid of [`trace`]: element `n` is the concentration after `n`
+    /// steps.
+    ///
+    /// # The derivation
+    ///
+    /// Step `n` runs from `t = nh`. The depot holds `F·D·Eⁿ` at its start, `E = e^{−kₐh}`, and
+    /// hands the compartment `F·D·Eⁿ(1 − E)`; the compartment loses `CL·Cₙ·h = kh·Aₙ` from the
+    /// snapshot taken before anything arrives. So with `r = 1 − kh`,
+    ///
+    /// ```text
+    /// A₀ = 0,   Aₙ₊₁ = r Aₙ + F·D(1 − E)Eⁿ
+    /// Aₙ = F·D(1 − E) Σ_{j<n} Eʲ r^{n−1−j} = F·D(1 − E)(Eⁿ − rⁿ)/(E − r)
+    /// ```
+    ///
+    /// and `F·D(1 − E)·n·r^{n−1}` in the limit `E = r`. The first two terms check the indexing
+    /// against the trace by hand: `A₁ = F·D(1 − E)`, `A₂ = F·D(1 − E)(r + E)`.
+    ///
+    /// # Written so `kₐ = k` does not cancel
+    ///
+    /// At `kₐ = k`, `E` and `r` are *not* equal — `E − r = (kh)²/2 + …`, 3e-6 at `h = 18 s` — so
+    /// `(Eⁿ − rⁿ)/(E − r)` would keep only ten digits. Instead, with `q = E/r`,
+    /// `Σ qʲ = expm1(nL)/expm1(L)` and `L = ln q = (k − kₐ)h + Σ_{m≥2}(kh)ᵐ/m`, the series being
+    /// `−kh − ln(1 − kh)` without the subtraction. `r^{n−1}` is built by repeated multiplication.
+    /// `E` is the kernel's `exp`, the one the model uses, because a reference built on a different
+    /// rounding of `E` would differ from the model by `ε/(1 − E)` of itself for a reason that is
+    /// not a defect. `expm1` is the platform's; its error is an ulp and is inside the bound.
+    fn stepped_exact(f: f64, ka: f64, k: f64, v: f64, h: f64, steps: usize) -> Vec<f64> {
+        let e = pantometry_core::math::exp(-ka * h);
+        let (kh, r) = (k * h, 1.0 - k * h);
+        let (mut series, mut power) = (0.0, kh);
+        for m in 2..=40 {
+            power *= kh;
+            series += power / m as f64;
+        }
+        let l = (k - ka) * h + series;
+        let amplitude = f * ORAL * (1.0 - e) / v;
+        let mut out = vec![0.0];
+        let mut r_power = 1.0; // r^{n−1}
+        for n in 1..=steps {
+            let geometric = if l == 0.0 {
+                n as f64
+            } else {
+                (n as f64 * l).exp_m1() / l.exp_m1()
+            };
+            out.push(amplitude * r_power * geometric);
+            r_power *= r;
+        }
+        out
+    }
+
+    /// The worst disagreement between a stepped curve and [`stepped_exact`], in units of a
+    /// rounding bound, asserted to be under one. The bound at step `n` is
+    ///
+    /// ```text
+    /// (3n + 40) ε Cₙ  +  2ε (F·D/V) Σ_{j<n} Eʲ
+    /// ```
+    ///
+    /// The second term is the depot's, and is the larger one at small `n` and small `kₐh`. The
+    /// step computes `kept = remaining·E` and hands over `remaining − kept`: the product rounds by
+    /// up to `ε·remaining/2`, and the subtraction is exact, so the *absorbed* amount carries that
+    /// whole error — `ε/(2(1 − E))` of itself, some 130 ulps at `kₐh = 3.75e-3`. Step `j` injects
+    /// at most that much, `ε·F·D·Eʲ/(2V)` in concentration, propagated by powers of `r ≤ 1`,
+    /// which sums to under the term as written; the factor of four over that covers the rounding
+    /// of `E` itself. The depot does not leak by it — what one side lost the other gained, to the
+    /// bit. Found by this test, which failed at step 2 for `h = 9 s` at 1.3e-14 of the value
+    /// before the term was derived.
+    ///
+    /// The first term, term by term: the model's step rounds about twice per step relative to the
+    /// amount it carries (the clearance product, the addition), `2nε`; the reference's `r^{n−1}`
+    /// is `n` multiplications at half an ulp each, `nε/2`, rounded up to `nε`; `expm1(nL)` carries
+    /// `|nL| ≤ 12` times `L`'s rounding, and `L` itself inherits `E`'s half-ulp, which with the
+    /// remaining handful of products is the `40ε`.
+    fn on_the_recurrence(c: &[f64], f: f64, ka: f64, k: f64, v: f64, h: f64) -> f64 {
+        let exact = stepped_exact(f, ka, k, v, h, c.len() - 1);
+        let e = pantometry_core::math::exp(-ka * h);
+        // Σ_{j<n} Eʲ, kept beside the loop: see the second term of the bound.
+        let (mut absorbed_sum, mut e_power) = (1.0, e);
+        let (mut worst, mut worst_absolute, mut peak) = (0.0f64, 0.0f64, 0.0f64);
+        for (n, (&got, &want)) in c.iter().zip(&exact).enumerate() {
+            if n == 0 {
+                assert_eq!(got, 0.0);
+                continue;
+            }
+            let bound = (3.0 * n as f64 + 40.0) * f64::EPSILON * want
+                + 2.0 * f64::EPSILON * f * ORAL / v * absorbed_sum;
+            absorbed_sum += e_power;
+            e_power *= e;
+            let ratio = (got - want).abs() / bound;
+            assert!(
+                ratio < 1.0,
+                "kₐ = {}/h, h = {h} s, step {n}: {got:e} against the recurrence's {want:e}, {:.2e} of the value",
+                ka * HOUR,
+                (got / want - 1.0).abs()
+            );
+            worst = worst.max(ratio);
+            worst_absolute = worst_absolute.max((got - want).abs());
+            peak = peak.max(want);
+        }
+        println!(
+            "    worst {:.2e} of the peak concentration",
+            worst_absolute / peak
+        );
+        worst
+    }
+
+    /// **The model steps exactly the recurrence its scheme defines, to rounding.**
+    ///
+    /// The convergence tests below say the stepped curve approaches the Bateman function at first
+    /// order, and an order band cannot see a wrong error *constant*: an Euler depot, or absorbed
+    /// drug eliminated in the step it arrives, still converges at order one. This pins the
+    /// constant. [`stepped_exact`] is the closed-form solution of the discrete map — derived
+    /// there — and the model must agree with it at every point to `(3n + 40)ε`, at four steps
+    /// and three absorption rates: faster than elimination, equal to it, and slower (flip-flop).
+    /// Measured: the worst point of each of the twelve runs is 0.05 to 0.18 of that bound, and
+    /// the worst disagreement anywhere is printed as a fraction of `C_max` too. An Euler depot
+    /// is off by about `kₐh/2` relative, and absorption folded into the snapshot by about `kh`,
+    /// each ten orders of magnitude over it.
+    #[test]
+    fn the_stepped_curve_is_the_recurrences_exact_solution() {
+        let (f, k, v) = (0.8, 0.5 / HOUR, 0.01);
+        for ka_h in [1.5, 0.5, 0.1] {
+            for h in [72.0, 36.0, 18.0, 9.0] {
+                let (mut m, plasma, gut) = oral_one(ka_h, f, 0.0);
+                m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+                let c = trace(&mut m, plasma, h, (12.0 * HOUR / h) as usize);
+                let worst = on_the_recurrence(&c, f, ka_h / HOUR, k, v, h);
+                println!("  ka = {ka_h}/h, h = {h:>4} s: worst {worst:.3} of the rounding bound");
+            }
+        }
+    }
+
+    /// **Oral closed form 1: the Bateman function, and its peak, at a measured first order.**
+    ///
+    /// `C(t) = F·D·kₐ/(V(kₐ − k))·(e^{−kt} − e^{−kₐt})`, with `kₐ = 1.5/h`, `k = 0.5/h` and
+    /// `F = 0.8`, so `t_max = ln(kₐ/k)/(kₐ − k) = ln 3` hours.
+    ///
+    /// What the stepped curve *is* is pinned by the recurrence test above, to rounding; this one
+    /// says what it converges *on*. Three things converge and each is asserted as a **rate**, at
+    /// six steps each half the last, 72 s to 2.25 s: the whole curve's worst error over twelve
+    /// hours, relative to `C_max`; the peak time, located as the discrete maximum and refined by
+    /// the parabola through it and its two neighbours; and the peak height.
+    ///
+    /// Measured, at `h` = 72 s down to 2.25 s: the curve's worst error 3.76e-3 down to 1.16e-4
+    /// of `C_max`, orders 1.0084, 1.0043, 1.0021, 1.0011, 1.0005; `C_max` orders 1.0091, 1.0046,
+    /// 1.0023, 1.0012, 1.0006; `t_max` orders 0.9586, 0.9779, 0.9961, 0.9977, 0.9974, its
+    /// discrete peak at 1.09854 h against `ln 3 = 1.09861` at the finest step.
+    ///
+    /// **The bands are earned per pair, not once.** The departure of a measured order from 1 is
+    /// the `O(h²)` term's share of the error, which is proportional to `h`, so the band for the
+    /// pair starting at `h` is `slack·(h/72 s)` — it halves as the step does. For the curve and
+    /// the peak height `slack = 0.02`, and their departures (0.0084 halving to 0.0005) sit at
+    /// 0.40 to 0.46 of it at every pair. `t_max` is located on a grid and refined by a parabola,
+    /// so its departures halve only while the `O(h²)` share dominates — 0.041, 0.022 — and then
+    /// settle at a floor near 0.003 from the location itself; `slack = 0.08` puts its five
+    /// departures at 0.52, 0.55, 0.19, 0.23 and 0.52 of their bands. The single band of 0.05 this
+    /// replaced was only 1.2 times the coarsest departure, which is the margin the review flagged.
+    /// Each is also required to *shrink* from the coarsest pair to the finest, which a constant
+    /// bias in the order would not, and the error is required to be real at the finest step,
+    /// which a convergence test that has stopped measuring would fail.
+    #[test]
+    fn an_oral_dose_follows_the_bateman_function_at_first_order() {
+        let (ka_h, f) = (1.5, 0.8);
+        let (ka, k, v) = (ka_h / HOUR, 0.5 / HOUR, 0.01);
+        let t_max = (ka / k).ln() / (ka - k);
+        let c_max = bateman_textbook(f, ka, k, v, t_max);
+        assert!(
+            (t_max / HOUR - 3.0f64.ln()).abs() < 1e-12,
+            "{}",
+            t_max / HOUR
+        );
+        // The closed form's own peak, independent of any code under test: its derivative
+        // vanishes there, `k e^{−k t} = kₐ e^{−kₐ t}`.
+        assert!(((-k * t_max).exp() * k / ((-ka * t_max).exp() * ka) - 1.0).abs() < 1e-12);
+
+        let (mut curve, mut peak_t, mut peak_c) = (Vec::new(), Vec::new(), Vec::new());
+        for h in [72.0, 36.0, 18.0, 9.0, 4.5, 2.25] {
+            let (mut m, plasma, gut) = oral_one(ka_h, f, 0.0);
+            m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let c = trace(&mut m, plasma, h, (12.0 * HOUR / h) as usize);
+            let worst = c
+                .iter()
+                .enumerate()
+                .map(|(n, &got)| (got - bateman_textbook(f, ka, k, v, n as f64 * h)).abs())
+                .fold(0.0, f64::max);
+            curve.push(worst / c_max);
+
+            let n = (1..c.len() - 1)
+                .max_by(|&a, &b| c[a].total_cmp(&c[b]))
+                .unwrap();
+            let (y0, y1, y2) = (c[n - 1], c[n], c[n + 1]);
+            let off = 0.5 * (y0 - y2) / (y0 - 2.0 * y1 + y2);
+            assert!(
+                off.abs() <= 0.5,
+                "the parabola's vertex lies between the neighbours"
+            );
+            let (t_peak, c_peak) = ((n as f64 + off) * h, y1 - 0.25 * (y0 - y2) * off);
+            peak_t.push((t_peak - t_max).abs() / t_max);
+            peak_c.push((c_peak - c_max).abs() / c_max);
+            println!(
+                "  h = {h:>4} s: curve {:.3e}, t_max {:.5} h ({:.3e}), C_max {:.6e} ({:.3e})",
+                worst / c_max,
+                t_peak / HOUR,
+                (t_peak - t_max).abs() / t_max,
+                c_peak,
+                (c_peak - c_max).abs() / c_max
+            );
+        }
+        for (what, errors, slack) in [
+            ("curve", &curve, 0.02),
+            ("C_max", &peak_c, 0.02),
+            ("t_max", &peak_t, 0.08),
+        ] {
+            let measured = orders(errors);
+            println!("  {what}: orders {measured:.4?}");
+            // The band shrinks with the step, because the departure it bounds is the `O(h²)`
+            // share and is proportional to `h`: `slack·(h/72 s)` for the pair starting at `h`.
+            let mut h = 72.0;
+            for p in &measured {
+                let band = slack * h / 72.0;
+                h /= 2.0;
+                assert!(
+                    (p - 1.0).abs() < band,
+                    "{what} should converge at first order and measured {p:.4}: {errors:?}"
+                );
+            }
+            // The departure from 1 is the `O(h²)` term's share, so it must itself shrink as the
+            // step does — the finest pair closer to 1 than the coarsest, by at least half.
+            let (first, last) = (measured[0] - 1.0, measured[measured.len() - 1] - 1.0);
+            assert!(
+                last.abs() < 0.5 * first.abs(),
+                "{what}: the order should approach 1 as h falls, and went {measured:.4?}"
+            );
+            assert!(*errors.last().unwrap() > 1e-5, "{what} is above the floor");
+        }
+    }
+
+    /// **The depot is integrated exactly, to rounding — not to first order.**
+    ///
+    /// `A_d(t) = F·D·e^{−kₐt}`, and each step multiplies by `e^{−kₐh}` from the kernel's `exp`,
+    /// whose error is under 0.52 ulp. Over `n` steps that one rounding repeats `n` times and the
+    /// products add half an ulp each, so the bound is `n·1.02ε` plus the reference's own
+    /// half-ulp; asserted at `1.1·n·ε`, and measured at 0.28 to 0.50 `n·ε`. Explicit Euler on the
+    /// depot would be `(1 − kₐh)ⁿ`, low by a factor `e^{−t kₐ² h/2}` — 24% at twelve hours and
+    /// `h = 72 s` — and the test is shaped to tell the two apart by twelve orders of magnitude.
+    /// The error is also the same at every step size, so it is not a convergence at all: halving
+    /// `h` doubles `n` and so doubles the bound, and the measurement stays under it.
+    #[test]
+    fn the_depot_is_exact_to_rounding_at_any_step() {
+        let (ka_h, f) = (1.5, 0.8);
+        let ka = ka_h / HOUR;
+        for h in [72.0, 9.0, 1800.0] {
+            let (mut m, _, gut) = oral_one(ka_h, f, 0.0);
+            m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let mut bus = Exchange::new();
+            let mut worst: f64 = 0.0;
+            let steps = (12.0 * HOUR / h) as usize;
+            for n in 0..steps {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                let t = (n + 1) as f64 * h;
+                let exact = f * ORAL * (-ka * t).exp();
+                let rel = (m.depot_amount(gut).to_si() / exact - 1.0).abs();
+                let bound = 1.1 * (n + 1) as f64 * f64::EPSILON;
+                assert!(
+                    rel <= bound,
+                    "h = {h}: after {} steps the depot is off by {rel:e}, over {bound:e}",
+                    n + 1
+                );
+                worst = worst.max(rel / ((n + 1) as f64 * f64::EPSILON));
+            }
+            println!("  h = {h:>6} s: worst depot error {worst:.3} n eps");
+        }
+        // And a step as long as twelve absorption half-lives is still exact, and still stable:
+        // the depot adds nothing to the step limit, which stays the compartment's own `1/k`.
+        let (m, plasma, _) = oral_one(100.0, f, 0.0);
+        assert_eq!(
+            m.max_stable_dt(Time::ZERO).to_si(),
+            1.0 / m.elimination_rate(plasma).to_si()
+        );
+    }
+
+    /// **Oral closed form 2: `kₐ = k`, the singular limit, in the helper and in the model.**
+    ///
+    /// The textbook Bateman function is `0/0` at `kₐ = k`; its limit is `F·D·k·t·e^{−kt}/V`.
+    ///
+    /// **The helper.** [`bateman`] at equality must be that limit to rounding, and near it the
+    /// relative change must be what the expansion says: at `kₐ = k(1 + δ)`,
+    /// `ln C − ln C₀ = δ(1 − kt/2) + O(δ²)`. At `δ = ±1e-8` the `O(δ²)` is `1e-16`, so the
+    /// assertion is that the helper is within `8ε` of the first-order expansion — where the
+    /// textbook spelling, measured here too, is off by around `1e-8`, because its difference of
+    /// two exponentials has kept eight digits. At `kt = 2` the linear term vanishes and the
+    /// helper must not move at all beyond rounding. Far from equality it must agree with the
+    /// textbook form, which is accurate there, to the textbook's own rounding.
+    ///
+    /// **The model.** It divides by nothing — the depot is an exponential and the compartment is
+    /// Euler — so `kₐ = k` is an ordinary case for it. It must be the exact solution of its own
+    /// recurrence at every point, to rounding, and converge on the limit at first order like any
+    /// other case: measured at orders 1.0053 and 1.0027.
+    #[test]
+    fn equal_absorption_and_elimination_is_the_limit_not_a_division_by_zero() {
+        let (f, v) = (0.8, Volume::litres(10.0));
+        let k = 0.5 / HOUR;
+        let dose = Mass::from_si(ORAL);
+        let limit = |t: f64| f * ORAL * k * t * (-k * t).exp() / v.to_si();
+        let near_rel = |ka: Frequency, t: Time, at: f64| {
+            bateman(dose, f, ka, Frequency::from_si(k), v, t).to_si() / at - 1.0
+        };
+        for kt in [1e-3, 0.5, 2.0, 5.0, 40.0] {
+            let t = Time::s(kt / k);
+            let at = bateman(dose, f, Frequency::from_si(k), Frequency::from_si(k), v, t).to_si();
+            let want = limit(t.to_si());
+            assert!(
+                (at / want - 1.0).abs() < 8.0 * f64::EPSILON,
+                "at kt = {kt}: {at:e} against the limit {want:e}"
+            );
+            for asked in [1e-8, -1e-8] {
+                let ka = Frequency::from_si(k * (1.0 + asked));
+                // The separation actually realised, which is not the one asked for: `k(1 + δ)`
+                // rounds to an ulp of `k`, so `kₐ − k` is `kδ` only to `ε/δ ≈ 2e-8` of itself.
+                // The subtraction is exact (Sterbenz), so this is the δ the helper is handed.
+                let delta = (ka.to_si() - k) / k;
+                // ln(C/C₀) = ln(1 + δ) + ln φ(δkt) = δ − δ²/2 − δkt/2 + δ²(kt)²/24 + O(δ³), the
+                // same for either sign; and e^L − 1 = L + L²/2. At kt = 40 the second-order
+                // terms are 2.5e-14, a hundred ulps of the answer, so they are kept.
+                let a = delta * (1.0 - kt / 2.0);
+                let expected = a + a * a / 2.0 + delta * delta * (kt * kt / 24.0 - 0.5);
+                let rel = near_rel(ka, t, at);
+                // Rounding: a few ulps for the products, and `kt·ε` because an exponential of
+                // an argument of size `kt` inherits that argument's rounding times `kt`.
+                assert!(
+                    (rel - expected).abs() < (8.0 + kt) * f64::EPSILON,
+                    "kt = {kt}, delta = {delta:e}: moved {rel:e}, the expansion says {expected:e}"
+                );
+                let textbook = bateman_textbook(f, ka.to_si(), k, v.to_si(), t.to_si());
+                if kt == 0.5 {
+                    println!(
+                        "  kt = 0.5, delta = {delta:e}: helper off the expansion by {:.1e}, \
+                         textbook by {:.1e}",
+                        (rel - expected).abs(),
+                        (textbook / at - 1.0 - expected).abs()
+                    );
+                }
+            }
+        }
+        // Far from equality the textbook form is the closed form to rounding, and the helper is
+        // it — both orderings, flip-flop included.
+        for ka_h in [0.05, 0.2, 1.5, 6.0] {
+            for t_h in [0.1, 1.0, 3.0, 10.0] {
+                let got = bateman(
+                    dose,
+                    f,
+                    per_hour(ka_h),
+                    Frequency::from_si(k),
+                    v,
+                    hours(t_h),
+                )
+                .to_si();
+                let want = bateman_textbook(f, ka_h / HOUR, k, v.to_si(), t_h * HOUR);
+                assert!(
+                    (got / want - 1.0).abs() < 1e-13,
+                    "ka = {ka_h}/h at {t_h} h: {got:e} against {want:e}"
+                );
+            }
+        }
+        assert_eq!(
+            bateman(dose, f, per_hour(1.0), per_hour(0.5), v, Time::ZERO).to_si(),
+            0.0
+        );
+
+        // The model at kₐ = k, converging on the limit at first order.
+        let c_peak = limit(1.0 / k);
+        let mut errors = Vec::new();
+        for h in [72.0, 36.0, 18.0] {
+            let (mut m, plasma, gut) = oral_one(0.5, f, 0.0);
+            m.oral(gut, dose, Time::ZERO).unwrap();
+            let c = trace(&mut m, plasma, h, (12.0 * HOUR / h) as usize);
+            let worst = c
+                .iter()
+                .enumerate()
+                .map(|(n, &got)| (got - limit(n as f64 * h)).abs())
+                .fold(0.0, f64::max);
+            assert!(c.iter().all(|x| x.is_finite()));
+            // Not only an order: the curve is the discrete map's own solution at kₐ = k, where
+            // `E ≠ r` by `(kh)²/2` and the reference must not cancel — see `stepped_exact`.
+            let pinned = on_the_recurrence(&c, f, k, k, v.to_si(), h);
+            println!("  ka = k, h = {h} s: {pinned:.3} of the rounding bound");
+            errors.push(worst / c_peak);
+        }
+        let measured = orders(&errors);
+        println!("  ka = k: errors {errors:?}, orders {measured:.4?}");
+        for p in measured {
+            assert!((p - 1.0).abs() < 0.02, "first order at ka = k: {p:.4}");
+        }
+    }
+
+    /// **Oral closed form 3: flip-flop. When absorption is slower, the terminal slope is `−kₐ`.**
+    ///
+    /// With `kₐ = 0.1/h < k = 0.5/h` the curve's tail is absorption-limited: `C ∝ e^{−kₐt}` once
+    /// `e^{−(k − kₐ)t}` has gone. Measured as `Δln C/Δt` between 80 and 120 hours (below).
+    ///
+    /// **And it is exact, not first order**, which is a consequence worth stating. The depot is
+    /// integrated exactly, so the compartment is a discrete linear map driven by `E = e^{−kₐh}`;
+    /// its particular solution decays by exactly `E` a step and its homogeneous one by `1 − kh`,
+    /// which is gone. So the measured slope is `ln E/h = −kₐ` to rounding — where an Euler depot
+    /// would read `ln(1 − kₐh)/h`, off by `kₐh/2 = 5e-4`. The ordinary case, `kₐ = 1.5/h`, is the
+    /// contrast: its terminal slope is the compartment's `−k`, and that *is* Euler's,
+    /// `ln(1 − kh)/h`, high in magnitude by `kh/2 = 2.5e-3`.
+    ///
+    /// The window is 80 to 120 hours, where the faster exponential is `e^{−32}` of the slower.
+    /// The bound is rounding: the 4 000 steps between the two samples each carry about `ε` of
+    /// relative error into `C`, which a difference of logarithms over `Δt` turns into
+    /// `4000ε/(kₐΔt) = 2.2e-13` of the slope. Measured: 3.4e-14.
+    #[test]
+    fn a_slow_absorption_sets_the_terminal_slope() {
+        let h = 36.0;
+        let slope = |ka_h: f64| {
+            let (mut m, plasma, gut) = oral_one(ka_h, 0.8, 0.0);
+            m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let c = trace(&mut m, plasma, h, (120.0 * HOUR / h) as usize);
+            let (n1, n2) = ((80.0 * HOUR / h) as usize, (120.0 * HOUR / h) as usize);
+            (c[n2].ln() - c[n1].ln()) / ((n2 - n1) as f64 * h)
+        };
+        let ka = 0.1 / HOUR;
+        let k = 0.5 / HOUR;
+        let bound = 4000.0 * f64::EPSILON / (ka * 40.0 * HOUR);
+        let flip = slope(0.1);
+        println!("  flip-flop slope / -ka - 1 = {:.3e}", flip / -ka - 1.0);
+        assert!(
+            (flip / -ka - 1.0).abs() < bound,
+            "the terminal slope should be -ka = {:e}/s, got {flip:e}",
+            -ka
+        );
+        assert!((flip / -k - 1.0).abs() > 0.5, "and it is not -k");
+
+        let ordinary = slope(1.5);
+        let euler = (1.0 - k * h).ln() / h;
+        println!(
+            "  ordinary slope / -k - 1 = {:.3e}, Euler's own {:.3e}, the two {:.2e} apart",
+            ordinary / -k - 1.0,
+            euler / -k - 1.0,
+            ordinary / euler - 1.0
+        );
+        // The same rounding bound, now relative to `k` rather than `kₐ`, which is smaller.
+        assert!(
+            (ordinary / euler - 1.0).abs() < bound,
+            "{ordinary:e} against {euler:e}"
+        );
+        assert!((ordinary / -k - 1.0).abs() < 1.1 * k * h / 2.0);
+    }
+
+    /// **Oral closed form 4: `AUC₀^∞ = F·D/CL`, whatever `kₐ` is — and what that pins.**
+    ///
+    /// Integrated numerically: the left Riemann sum `Σ Cₙh` of the stepped curve out to 240 hours,
+    /// where the slowest tail here (`kₐ = 0.2/h`) is `e^{−48}` of its start. Three absorption
+    /// rates, flip-flop included, at two step sizes.
+    ///
+    /// **This is the mass-balance identity, and it is asserted as one.** The Euler step removes
+    /// exactly `CL·Cₙ·h` each step, so `CL·Σ Cₙh` *is* the eliminated mass, and the books make
+    /// that `F·D` less what is still in the body and the depot. So the area is asserted at `n·ε`
+    /// with `n` the step count, and does **not** halve with the step: it was never a truncation
+    /// error. What it pins is therefore what the identity contains — `F`, and that the samples
+    /// `Cₙ` are the snapshot elimination acts on (absorbed drug folded into the snapshot first
+    /// breaks it). It says **nothing about timing**: an Euler depot, which absorbs at the wrong
+    /// rate, delivers the same total and passes it at 4.1e-15. Timing is what the recurrence and
+    /// convergence tests are for. Measured: 2.7e-15 to 1.1e-14 at `h = 72 s` and
+    /// 1.0e-14 to 2.6e-14 at 36 s — growing with the step count, as rounding does, and two orders
+    /// under `n·ε`. `F` applied twice reads `F²D/CL`, 20% low.
+    #[test]
+    fn the_area_under_the_curve_is_the_bioavailable_dose_over_the_clearance() {
+        let f = 0.8;
+        let cl = Clearance::l_per_h(5.0).to_si();
+        let want = f * ORAL / cl;
+        for h in [72.0, 36.0] {
+            let steps = (240.0 * HOUR / h) as usize;
+            for ka_h in [0.2, 1.5, 6.0] {
+                let (mut m, plasma, gut) = oral_one(ka_h, f, 0.0);
+                m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+                let c = trace(&mut m, plasma, h, steps);
+                let auc: f64 = c[..steps].iter().map(|x| x * h).sum();
+                let rel = (auc / want - 1.0).abs();
+                println!(
+                    "  h = {h} s, ka = {ka_h}/h: AUC off by {rel:.2e} ({:.2} n eps)",
+                    rel / (steps as f64 * f64::EPSILON)
+                );
+                assert!(
+                    rel < steps as f64 * f64::EPSILON,
+                    "h = {h}, ka = {ka_h}/h: AUC {auc:e} against F D/CL = {want:e}"
+                );
+            }
+        }
+    }
+
+    /// **A lag shifts the curve by exactly `t_lag` — to the bit when the grid allows it.**
+    ///
+    /// On the grid: a lag of 1800 s at `h = 36 s` is fifty steps, and every time involved is a
+    /// whole number of seconds, so the lagged run must be the unlagged one shifted by fifty steps
+    /// **bit for bit** — every concentration, the depot and the cleared mass — and exactly zero
+    /// before. The step that starts the absorption takes `h` itself as its span, not
+    /// `until − start`, which is what lets this be an `assert_eq`.
+    ///
+    /// Off the grid: a lag of 1813 s starts absorption half-way through a step, and **the depot
+    /// does not care** — it is `F·D·e^{−kₐ(t − t_lag)}` at every grid point after the lag, to
+    /// rounding, because the first span is `until − start` exactly. Where the grid *does* matter is
+    /// the compartment: its Euler step sees the onset as a slice inside one step, and the curve
+    /// against the shifted Bateman function is first order, measured at a ratio near 2 between
+    /// `h = 36` and `18 s` — the same order the unlagged curve converges at.
+    ///
+    /// And a dose *taken* off the grid, with no lag, is the same run as a lag ending there: see
+    /// the last block, which is what notices a dose taken one step late.
+    #[test]
+    fn a_lag_shifts_the_curve_and_nothing_else() {
+        let (ka_h, f, h) = (1.5, 0.8, 36.0);
+        let steps = (12.0 * HOUR / h) as usize;
+        let lagged_steps = 50usize;
+        let lag = lagged_steps as f64 * h;
+        let run_with = |lag: f64| {
+            let (mut m, plasma, gut) = oral_one(ka_h, f, lag);
+            m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let mut bus = Exchange::new();
+            let mut out = vec![(0.0, m.depot_mass().to_si(), 0.0)];
+            for n in 0..steps {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                out.push((
+                    m.amount(plasma).to_si(),
+                    m.depot_mass().to_si(),
+                    m.eliminated_mass().to_si(),
+                ));
+            }
+            out
+        };
+        let (plain, late) = (run_with(0.0), run_with(lag));
+        // Index 0 is before the first step, when the dose has not been taken: the depot is empty
+        // and the dose is pending. From the first step it is in the depot, untouched, until the
+        // lag is over.
+        for (n, row) in late.iter().enumerate().take(lagged_steps + 1).skip(1) {
+            assert_eq!(row.0, 0.0, "nothing absorbed before the lag, step {n}");
+            assert_eq!(row.1, f * ORAL, "the depot is full until the lag, step {n}");
+        }
+        for n in lagged_steps + 1..=steps {
+            assert_eq!(
+                late[n],
+                plain[n - lagged_steps],
+                "step {n}: the lagged run is the plain one {lagged_steps} steps later"
+            );
+        }
+
+        // Off the grid.
+        let ka = ka_h / HOUR;
+        let (k, v) = (0.5 / HOUR, 0.01);
+        let odd = lag + 13.0;
+        let mut errors = Vec::new();
+        for h in [36.0, 18.0] {
+            let (mut m, plasma, gut) = oral_one(ka_h, f, odd);
+            m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let mut bus = Exchange::new();
+            let (mut worst, mut depot_worst) = (0.0f64, 0.0f64);
+            let steps = (12.0 * HOUR / h) as usize;
+            for n in 0..steps {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                let t = (n + 1) as f64 * h;
+                let exact = bateman_textbook(f, ka, k, v, t - odd);
+                worst = worst.max((m.concentration(plasma).to_si() - exact).abs());
+                let depot_exact = if t > odd {
+                    f * ORAL * (-ka * (t - odd)).exp()
+                } else {
+                    f * ORAL
+                };
+                depot_worst =
+                    depot_worst.max((m.depot_amount(gut).to_si() / depot_exact - 1.0).abs());
+            }
+            println!("  lag {odd} s, h = {h} s: curve {worst:.3e}, depot {depot_worst:.2e}");
+            assert!(
+                depot_worst < 1.1 * steps as f64 * f64::EPSILON,
+                "the depot is exact across a lag that is not on the grid: {depot_worst:e}"
+            );
+            errors.push(worst);
+        }
+        // **A dose taken part-way through a step**, rather than a lag ending there: no lag, and
+        // the dose at 1 813 s. The step from 1 800 s takes it and absorbs from 1 813 s on, so the
+        // depot must be `F·D·e^{−kₐ(t − 1813)}` at every grid point after, and the whole run must
+        // be the `lag = 1813, at = 0` run **to the bit** in everything that is not the schedule:
+        // the two have the same absorption start, `at + lag`, and that is all the step reads.
+        // Before 1 800 s the late dose is pending rather than in the depot, which is the one
+        // difference, and is asserted rather than skipped.
+        let h = 36.0;
+        let steps = (12.0 * HOUR / h) as usize;
+        let observe = |lag: f64, at: f64| {
+            let (mut m, plasma, gut) = oral_one(ka_h, f, lag);
+            m.oral(gut, Mass::from_si(ORAL), Time::s(at)).unwrap();
+            let mut bus = Exchange::new();
+            let mut out = Vec::new();
+            for n in 0..steps {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                out.push((
+                    m.amount(plasma).to_si(),
+                    m.eliminated_mass().to_si(),
+                    m.depot_amount(gut).to_si(),
+                    m.pending_dose().to_si(),
+                ));
+            }
+            out
+        };
+        let (lagged, taken_late) = (observe(odd, 0.0), observe(0.0, odd));
+        let mut depot_worst: f64 = 0.0;
+        for n in 0..steps {
+            let t = (n + 1) as f64 * h;
+            let (a, b) = (lagged[n], taken_late[n]);
+            assert_eq!((a.0, a.1), (b.0, b.1), "step {n}: the body and the books");
+            if t <= 1800.0 {
+                assert_eq!((b.2, b.3), (0.0, ORAL), "step {n}: not taken yet");
+            } else {
+                assert_eq!(a.2, b.2, "step {n}: the depot");
+                let exact = f * ORAL * (-ka * (t - odd)).exp();
+                depot_worst = depot_worst.max((b.2 / exact - 1.0).abs());
+            }
+        }
+        println!("  dose taken at {odd} s: depot {depot_worst:.2e}");
+        assert!(depot_worst < 1.1 * steps as f64 * f64::EPSILON);
+
+        let p = orders(&errors)[0];
+        println!("  off-grid lag: order {p:.4}");
+        // Measured 0.9997: 8.59e-6 then 4.30e-6 mg/L. The bound is the unlagged curve's 0.02.
+        assert!(
+            (p - 1.0).abs() < 0.02,
+            "first order with the lag off the grid: {p:.4}"
+        );
+    }
+
+    /// **Mass balance with every route at once, at every step, to machine precision.**
+    ///
+    /// Two eliminating compartments and a link; a bolus; an infusion on neither a step boundary
+    /// nor an hour; two depots — one into each compartment, one with a lag and `F = 0.62`, the
+    /// other with `F = 1` — and three oral doses, one at zero, one exactly on a step boundary and
+    /// one between two. At every step,
+    ///
+    /// ```text
+    /// committed = in compartments + eliminated + in depots + lost + pending
+    /// ```
+    ///
+    /// read twice: from the accessors, and from [`Domain::ledger`] — which is the one the
+    /// scheduler's audit reads, so a depot left out of it is caught here and not only by a
+    /// scheduler. The bound is the existing test's `1e-12`, and its reasoning carries over: about
+    /// `ε` relative per step, 14 400 steps, errors of both signs.
+    ///
+    /// Then the loss is checked by dose rather than by total: exactly `(1 − F)·D` per dose, and
+    /// zero for the route with `F = 1`. And the readings sum to the dose on their own.
+    #[test]
+    fn mass_balance_holds_through_the_depot_and_the_loss() {
+        let mut m = CompartmentModel::new("subject");
+        let central = m.eliminating("central", Volume::litres(5.0), Clearance::l_per_h(10.0));
+        let peripheral = m.eliminating("peripheral", Volume::litres(20.0), Clearance::l_per_h(1.0));
+        m.link(central, peripheral, Clearance::l_per_h(30.0))
+            .unwrap();
+        let gut = m
+            .depot("gut", central, per_hour(1.3), 0.62, hours(0.21))
+            .unwrap();
+        let muscle = m
+            .depot("muscle", peripheral, per_hour(0.4), 1.0, Time::ZERO)
+            .unwrap();
+
+        let (bolus, infused) = (1e-4, 2.5e-4);
+        m.bolus(central, Mass::from_si(bolus)).unwrap();
+        m.infuse(peripheral, Mass::from_si(infused), hours(0.37), hours(2.81))
+            .unwrap();
+        let oral = [(gut, 1e-4, 0.0), (gut, 2e-4, 4.0), (muscle, 3e-5, 1.234567)];
+        for (route, d, at) in oral {
+            m.oral(route, Mass::from_si(d), hours(at)).unwrap();
+        }
+        let committed = bolus + infused + oral.iter().map(|x| x.1).sum::<f64>();
+        // Before anything has run, the whole oral regimen is pending.
+        assert_eq!(m.pending_dose().to_si(), infused + 1e-4 + 2e-4 + 3e-5);
+
+        let h = 6.0;
+        let steps = (24.0 * HOUR / h) as usize;
+        let mut bus = Exchange::new();
+        let (mut worst, mut worst_ledger) = (0.0f64, 0.0f64);
+        for n in 0..steps {
+            m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+            let books = m.body_burden().to_si()
+                + m.eliminated_mass().to_si()
+                + m.depot_mass().to_si()
+                + m.presystemic_loss().to_si()
+                + m.pending_dose().to_si();
+            worst = worst.max((books - committed).abs() / committed);
+            let ledger = m.ledger().get(quantity::MASS).unwrap();
+            worst_ledger = worst_ledger.max((ledger - committed).abs() / committed);
+            // The 4-hour dose is pending until the step that reaches it, and taken by it.
+            let t_end = (n + 1) as f64 * h;
+            if t_end <= 4.0 * HOUR {
+                assert!(m.pending_dose().to_si() >= 2e-4, "step {n}");
+            } else {
+                assert_eq!(m.pending_oral(), 0.0, "step {n}");
+            }
+        }
+        println!("  books {worst:.2e}, ledger {worst_ledger:.2e} over {steps} steps");
+        assert!(worst < 1e-12, "the books drifted by {worst:e} of the dose");
+        assert!(
+            worst_ledger < 1e-12,
+            "the ledger drifted by {worst_ledger:e} of the dose"
+        );
+
+        // The loss, dose by dose: (1 − 0.62)·(1e-4 + 2e-4) through the gut, nothing through
+        // the muscle.
+        let lost = m.presystemic_loss().to_si();
+        let expected = (1e-4 - 0.62 * 1e-4) + (2e-4 - 0.62 * 2e-4);
+        assert_eq!(lost, expected);
+        assert!((m.administered_mass().to_si() / committed - 1.0).abs() < 1e-15);
+        // Not vacuous: drug went through both depots and most of it has been cleared.
+        assert!(m.eliminated_mass().to_si() > 0.5 * committed);
+        assert!(m.depot_amount(muscle).to_si() > 0.0);
+        assert!(m.depot_amount(gut).to_si() < 1e-3 * 2e-4);
+
+        // The readings carry the oral half of the books and sum to the dose by themselves.
+        let r = m.readings();
+        let mg = |label: &str| {
+            r.iter()
+                .find(|x| x.label == label)
+                .unwrap_or_else(|| panic!("no {label} reading"))
+                .value
+        };
+        let total = mg("in the body")
+            + mg("cleared")
+            + mg("still to infuse")
+            + mg("still to take")
+            + mg("in the depot")
+            + mg("lost before absorption");
+        assert!(
+            (total / (committed * 1e6) - 1.0).abs() < 1e-12,
+            "{total} mg"
+        );
+        assert!((mg("lost before absorption") / (expected * 1e6) - 1.0).abs() < 1e-15);
+    }
+
+    /// **Superposition: two doses are the sum of two single doses, to rounding.**
+    ///
+    /// The model is linear and the steps are the same, so the run with both doses and the sum of
+    /// the two runs with one each differ only in the order roundings happen. Two compartments, a
+    /// depot into the central one, 100 mg at zero and 37 mg at 5.3 hours — off the grid, and
+    /// while the first is still absorbing.
+    ///
+    /// Measured against the largest amount of the run, the difference stays near `ε` per step
+    /// and is asserted at `n·ε` for the step count `n`: a bound on independent roundings
+    /// accumulating, of which `5.3e-13` at 2 400 steps is the worst case and `2.7e-15` is what
+    /// is measured. A model that was not linear — a depot whose rate depended on its content, a
+    /// second dose that reset the first — would be off at the size of a dose.
+    #[test]
+    fn two_oral_doses_superpose() {
+        let h = 18.0;
+        let steps = (12.0 * HOUR / h) as usize;
+        let second_at = hours(5.3);
+        let build = |first: bool, second: bool| {
+            let (mut m, central, peripheral) = two_compartment();
+            let gut = m
+                .depot("gut", central, per_hour(1.2), 0.9, hours(0.1))
+                .unwrap();
+            if first {
+                m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            }
+            if second {
+                m.oral(gut, Mass::from_si(3.7e-5), second_at).unwrap();
+            }
+            (m, central, peripheral)
+        };
+        let state = |m: &CompartmentModel, a: Compartment, b: Compartment| {
+            [
+                m.amount(a).to_si(),
+                m.amount(b).to_si(),
+                m.depot_mass().to_si(),
+                m.eliminated_mass().to_si(),
+            ]
+        };
+        let (mut one, c1, p1) = build(true, false);
+        let (mut two, c2, p2) = build(false, true);
+        let (mut both, c, p) = build(true, true);
+        let mut bus = Exchange::new();
+        let mut worst: f64 = 0.0;
+        for n in 0..steps {
+            let (t, dt) = (Time::s(n as f64 * h), Time::s(h));
+            one.step(t, dt, &mut bus).unwrap();
+            two.step(t, dt, &mut bus).unwrap();
+            both.step(t, dt, &mut bus).unwrap();
+            let (a, b, s) = (state(&one, c1, p1), state(&two, c2, p2), state(&both, c, p));
+            for i in 0..4 {
+                worst = worst.max((s[i] - (a[i] + b[i])).abs() / ORAL);
+            }
+        }
+        println!("  superposition: worst {worst:.2e} of the dose over {steps} steps");
+        assert!(
+            worst < steps as f64 * f64::EPSILON,
+            "two doses differ from the sum of one and one by {worst:e} of a dose"
+        );
+        // And the second dose did something: the depot was refilled part-way through.
+        assert!(two.eliminated_mass().to_si() > 0.5 * 0.9 * 3.7e-5);
+    }
+
+    /// **Oral closed form 5: two compartments, oral input into the central one — the
+    /// tri-exponential.**
+    ///
+    /// # The derivation
+    ///
+    /// With `A_d = F·D·e^{−kₐt}` feeding the central compartment,
+    ///
+    /// ```text
+    /// A₁' = −(k10 + k12) A₁ + k21 A₂ + kₐ A_d
+    /// A₂' =  k12 A₁ − k21 A₂
+    /// ```
+    ///
+    /// Laplace-transformed from rest, the second gives `Ā₂ = k12 Ā₁/(s + k21)`, and substituting
+    /// into the first, `Ā₁ [(s + k10 + k12)(s + k21) − k12 k21] = kₐ F D (s + k21)/(s + kₐ)`. The
+    /// bracket is `s² + (k10 + k12 + k21)s + k10 k21 = (s + α)(s + β)`, the bolus case's
+    /// characteristic polynomial, so
+    ///
+    /// ```text
+    /// Ā₁ = F D kₐ (s + k21) / ((s + kₐ)(s + α)(s + β)),    Ā₂ = F D kₐ k12 / ((s + kₐ)(s + α)(s + β))
+    /// ```
+    ///
+    /// and the residues at `−α`, `−β`, `−kₐ` give the three terms:
+    ///
+    /// ```text
+    /// A₁(t) = F D kₐ [ (k21 − α)/((kₐ − α)(β − α)) e^{−αt} + (k21 − β)/((kₐ − β)(α − β)) e^{−βt}
+    ///                 + (k21 − kₐ)/((α − kₐ)(β − kₐ)) e^{−kₐt} ]
+    /// A₂(t) = F D kₐ k12 [ e^{−αt}/((kₐ − α)(β − α)) + e^{−βt}/((kₐ − β)(α − β))
+    ///                    + e^{−kₐt}/((α − kₐ)(β − kₐ)) ]
+    /// ```
+    ///
+    /// Checked before any code is: each set of coefficients must give `A(0) = 0`, `A₁'(0) = kₐFD`,
+    /// `A₂'(0) = 0` and `A₂''(0) = k12 kₐ F D`, which the equations above say at `t = 0` and which
+    /// a sign or an index wrong in a residue would break.
+    ///
+    /// # What it catches
+    ///
+    /// A depot feeding the peripheral compartment conserves every milligram and is wrong in both
+    /// curves; a single-compartment test cannot see it because there is only one place to feed.
+    /// The tolerance is a rate again: the worst error over twelve hours, relative to the dose,
+    /// must halve with the step, for each compartment separately, at `h` = 18, 9 and 4.5 s.
+    ///
+    /// Measured: central 8.18e-4, 4.05e-4, 2.01e-4 of the dose, orders 1.0153 and 1.0078;
+    /// peripheral 5.81e-4, 2.87e-4, 1.42e-4, orders 1.0178 and 1.0088 — a larger `O(h²)` share
+    /// than one compartment's because the fast root `α = 9.17/h` makes `αh = 4.6e-2` at the
+    /// coarse step. The band is `0.035·(h/18 s)`, halving with the pair as in the one-compartment
+    /// test; the four departures sit at 0.44 to 0.51 of their bands.
+    #[test]
+    fn two_compartments_with_oral_input_follow_the_tri_exponential() {
+        let (k10, k12, k21) = (2.0 / HOUR, 6.0 / HOUR, 1.5 / HOUR);
+        let (ka, f) = (1.2 / HOUR, 0.9);
+        let sum = k10 + k12 + k21;
+        let disc = (sum * sum - 4.0 * k10 * k21).sqrt();
+        let (alpha, beta) = (0.5 * (sum + disc), 0.5 * (sum - disc));
+        let fd = f * ORAL;
+        let rates = [alpha, beta, ka];
+        let central = [
+            (k21 - alpha) / ((ka - alpha) * (beta - alpha)),
+            (k21 - beta) / ((ka - beta) * (alpha - beta)),
+            (k21 - ka) / ((alpha - ka) * (beta - ka)),
+        ];
+        let peripheral = [
+            1.0 / ((ka - alpha) * (beta - alpha)),
+            1.0 / ((ka - beta) * (alpha - beta)),
+            1.0 / ((alpha - ka) * (beta - ka)),
+        ];
+        // The derivation's own checks, in units that make each one a pure number.
+        let moment = |c: &[f64; 3], p: i32| -> f64 {
+            let mut s = 0.0;
+            for i in 0..3 {
+                let mut lam = 1.0;
+                for _ in 0..p {
+                    lam *= -rates[i];
+                }
+                s += c[i] * lam;
+            }
+            s
+        };
+        // Made dimensionless before comparing to 1e-12: a central coefficient is a time and a
+        // peripheral one a time squared, so the `p`-th moment of the central set is in
+        // `s^{1−p}` and of the peripheral set in `s^{2−p}`, and each is divided by the matching
+        // power of an hour — the scale the rates are O(1) in. Each moment is then a sum of terms
+        // of order one and 1e-12 is about 5 000 ulps of them.
+        let central_moment = |p: i32| moment(&central, p) / [HOUR, 1.0][p as usize];
+        let peripheral_moment =
+            |p: i32| moment(&peripheral, p) / [HOUR * HOUR, HOUR, 1.0][p as usize];
+        assert!(
+            central_moment(0).abs() < 1e-12,
+            "A1(0) = 0: {:e}",
+            central_moment(0)
+        );
+        assert!((central_moment(1) - 1.0).abs() < 1e-12, "A1'(0) = ka F D");
+        assert!(
+            peripheral_moment(0).abs() < 1e-12,
+            "A2(0) = 0: {:e}",
+            peripheral_moment(0)
+        );
+        assert!(
+            peripheral_moment(1).abs() < 1e-12,
+            "A2'(0) = 0: {:e}",
+            peripheral_moment(1)
+        );
+        assert!(
+            (peripheral_moment(2) - 1.0).abs() < 1e-12,
+            "A2''(0) = k12 ka F D"
+        );
+
+        let exact = |c: &[f64; 3], gain: f64, t: f64| {
+            fd * ka * gain * (0..3).map(|i| c[i] * (-rates[i] * t).exp()).sum::<f64>()
+        };
+        let (mut errors_1, mut errors_2) = (Vec::new(), Vec::new());
+        for h in [18.0, 9.0, 4.5] {
+            let (mut m, c1, c2) = two_compartment();
+            let gut = m
+                .depot("gut", c1, Frequency::from_si(ka), f, Time::ZERO)
+                .unwrap();
+            m.oral(gut, Mass::from_si(ORAL), Time::ZERO).unwrap();
+            let mut bus = Exchange::new();
+            let (mut worst_1, mut worst_2) = (0.0f64, 0.0f64);
+            for n in 0..(12.0 * HOUR / h) as usize {
+                m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+                let t = (n + 1) as f64 * h;
+                worst_1 = worst_1.max((m.amount(c1).to_si() - exact(&central, 1.0, t)).abs());
+                worst_2 = worst_2.max((m.amount(c2).to_si() - exact(&peripheral, k12, t)).abs());
+            }
+            errors_1.push(worst_1 / ORAL);
+            errors_2.push(worst_2 / ORAL);
+        }
+        // Each compartment on its own, because a depot feeding the wrong one is wrong in both and
+        // a single maximum would let the larger hide which. Three resolutions, so each order is
+        // two ratios and the band rests on more than one; and the departures must shrink.
+        for (which, errors) in [("central", &errors_1), ("peripheral", &errors_2)] {
+            let measured = orders(errors);
+            println!("  tri-exponential, {which}: errors {errors:?}, orders {measured:.4?}");
+            assert!(
+                errors[0] < 0.01,
+                "{which} near the closed form at all: {:e}",
+                errors[0]
+            );
+            // `0.035·(h/18 s)` for the pair starting at `h`, the band shrinking with the
+            // `O(h²)` share it bounds, as in the one-compartment test.
+            let mut h = 18.0;
+            for p in &measured {
+                let band = 0.035 * h / 18.0;
+                h /= 2.0;
+                assert!(
+                    (p - 1.0).abs() < band,
+                    "{which}: first order, measured {p:.4}"
+                );
+            }
+            assert!(
+                (measured[1] - 1.0).abs() < (measured[0] - 1.0).abs(),
+                "{which}: the order should approach 1 as h falls: {measured:.4?}"
+            );
+        }
+    }
+
+    /// **The same bits however the run is cut into calls.**
+    ///
+    /// Three cuts of one regimen — two compartments, a bolus, a lagged depot with two doses — and
+    /// all must agree to the bit: eighteen scheduler windows of 400 s against nine of 800, which
+    /// the multirate schedule splits into the same 400 s substeps (asserted, or the comparison is
+    /// of two different runs and means nothing); and a run rewound by `restore` part-way through
+    /// absorption and run again, which must land where the uninterrupted one did. The scheduler
+    /// also audits the ledger every window at `1e-12`, so a depot missing from the books fails
+    /// here as well as in the mass-balance test.
+    #[test]
+    fn an_oral_run_is_the_same_bits_however_it_is_cut() {
+        let build = || {
+            let (mut m, central, _) = two_compartment();
+            m.bolus(central, Mass::from_si(5e-5)).unwrap();
+            let gut = m
+                .depot("gut", central, per_hour(1.7), 0.75, Time::s(500.0))
+                .unwrap();
+            m.oral(gut, Mass::from_si(ORAL), Time::s(130.0)).unwrap();
+            m.oral(gut, Mass::from_si(6e-5), Time::s(3333.0)).unwrap();
+            m
+        };
+        let state = |m: &CompartmentModel| -> Vec<f64> {
+            let mut v: Vec<f64> = m.handles().map(|(c, _)| m.amount(c).to_si()).collect();
+            v.push(m.depot_mass().to_si());
+            v.push(m.eliminated_mass().to_si());
+            v.push(m.presystemic_loss().to_si());
+            v.push(m.pending_dose().to_si());
+            v
+        };
+        let cut = |window: f64, windows: usize| {
+            let mut sim = Simulation::new(Schedule::Multirate)
+                .conservation_tolerance(1e-12)
+                .with(build());
+            let mut substeps = 0;
+            for _ in 0..windows {
+                let report = sim.advance(Time::s(window)).unwrap();
+                substeps = report.substeps[0].1;
+            }
+            let m: &CompartmentModel = sim.domain_as("subject").unwrap();
+            (state(m), substeps)
+        };
+        let (fine, n_fine) = cut(400.0, 18);
+        let (coarse, n_coarse) = cut(800.0, 9);
+        assert_eq!((n_fine, n_coarse), (1, 2), "both cuts take 400 s substeps");
+        assert_eq!(fine, coarse, "two cuts of one run");
+        assert!(
+            fine[2] > 0.0 && fine[4] > 0.0,
+            "the run is not vacuous: {fine:?}"
+        );
+
+        // Rewound part-way through absorption and run again.
+        let mut straight = build();
+        run(&mut straight, Time::ZERO, Time::s(400.0), 18);
+        let mut rewound = build();
+        run(&mut rewound, Time::ZERO, Time::s(400.0), 5);
+        rewound.checkpoint();
+        let mid = state(&rewound);
+        assert!(
+            mid[2] > 0.0,
+            "the checkpoint is taken while the depot holds drug"
+        );
+        run(&mut rewound, Time::s(2000.0), Time::s(400.0), 13);
+        rewound.restore();
+        assert_eq!(state(&rewound), mid, "restore puts the depot back too");
+        run(&mut rewound, Time::s(2000.0), Time::s(400.0), 13);
+        assert_eq!(state(&rewound), state(&straight));
+        assert_eq!(
+            state(&straight),
+            fine,
+            "and the scheduler ran the same steps"
+        );
+    }
+
+    /// **A bad route or a bad dose is refused where it is declared, and named.**
+    ///
+    /// Every `Violation` the oral half can raise: a `kₐ` that is zero, negative, infinite or NaN;
+    /// an `F` of zero, below it, above one or NaN; a lag that is negative, infinite or NaN; a
+    /// compartment or a depot from another model; a dose that is negative or NaN; a time that is
+    /// not finite. And the edges that are allowed: `F = 1`, a lag of zero, and a zero dose that
+    /// does nothing.
+    #[test]
+    fn a_bad_route_or_dose_is_refused_and_named() {
+        let (mut m, plasma) = one_compartment();
+        let ok = |m: &mut CompartmentModel, ka: f64, f: f64, lag: f64| {
+            m.depot("gut", plasma, per_hour(ka), f, Time::s(lag))
+        };
+        for ka in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            let err = ok(&mut m, ka, 0.5, 0.0).expect_err("a bad absorption rate");
+            assert!(err.quantity.contains("absorption rate"), "{err}");
+            assert!(err.site.contains("gut"), "{err}");
+        }
+        for f in [0.0, -0.1, 1.000_000_1, f64::NAN] {
+            let err = ok(&mut m, 1.0, f, 0.0).expect_err("a bad bioavailability");
+            assert!(err.quantity.contains("bioavailability"), "{err}");
+        }
+        for lag in [-1.0, f64::INFINITY, f64::NAN] {
+            let err = ok(&mut m, 1.0, 0.5, lag).expect_err("a bad lag");
+            assert!(err.quantity.contains("lag"), "{err}");
+        }
+        let mut other = CompartmentModel::new("another subject");
+        let elsewhere = other.eliminating("plasma", Volume::litres(10.0), Clearance::l_per_h(5.0));
+        let err = m
+            .depot("gut", elsewhere, per_hour(1.0), 0.5, Time::ZERO)
+            .expect_err("a compartment from another model");
+        assert!(err.quantity.contains("different model"), "{err}");
+        let foreign = other
+            .depot("gut", elsewhere, per_hour(1.0), 0.5, Time::ZERO)
+            .unwrap();
+        let err = m
+            .oral(foreign, Mass::from_si(1e-4), Time::ZERO)
+            .expect_err("a depot from another model");
+        assert!(err.quantity.contains("different model"), "{err}");
+        // Nothing refused above was half-built.
+        assert!(m.depot_named("gut").is_none());
+
+        let gut = ok(&mut m, 1.0, 1.0, 0.0).expect("F = 1 and no lag are allowed");
+        assert_eq!(m.depot_named("gut"), Some(gut));
+        assert_eq!(m.absorbed_into(gut), plasma);
+        assert_eq!(m.bioavailability(gut), 1.0);
+        assert_eq!(m.absorption_lag(gut).to_si(), 0.0);
+        assert!((m.absorption_rate(gut).to_si() * HOUR - 1.0).abs() < 1e-15);
+        for dose in [-1e-6, f64::NAN, f64::INFINITY] {
+            let err = m
+                .oral(gut, Mass::from_si(dose), Time::ZERO)
+                .expect_err("a bad dose");
+            assert!(err.quantity.contains("dose"), "{err}");
+        }
+        for at in [f64::INFINITY, f64::NAN] {
+            let err = m
+                .oral(gut, Mass::from_si(1e-4), Time::from_si(at))
+                .expect_err("a dose at no time");
+            assert!(err.quantity.contains("finite time"), "{err}");
+        }
+        assert_eq!(
+            m.pending_dose().to_si(),
+            0.0,
+            "nothing refused was scheduled"
+        );
+        m.oral(gut, Mass::ZERO, Time::ZERO).unwrap();
+        run(&mut m, Time::ZERO, Time::s(60.0), 10);
+        assert_eq!(m.amount(plasma).to_si(), 0.0);
+        assert_eq!(m.presystemic_loss().to_si(), 0.0);
+    }
+
+    /// **`φ(x) = (1 − e^{−x})/x`, the function [`bateman`] rests on, to a few ulps on both sides
+    /// of its switch.**
+    ///
+    /// The Taylor branch is the one the singular-limit test only reaches near `x = 0`, where its
+    /// first two terms are already the answer; cut to twelve terms, through `x¹¹`, instead of
+    /// nineteen, every other test passes, and it is wrong at `x = ½` by `½¹²/13! ≈ 4e-14` —
+    /// measured, 3.8e-14. So it is checked where its
+    /// truncation is largest:
+    ///
+    /// - at the last double below ½, against `φ(½) = 2(1 − e^{−½}) = 0.786938680574733152792…`,
+    ///   hard-coded from mpmath at 40 digits; and the exponential branch at ½ against the same
+    ///   number. `φ′(½) ≈ −0.36`, so the half-ulp step between the two arguments moves `φ` by
+    ///   `2e-17`, under a tenth of an ulp;
+    /// - across `[0, ½]` against the series summed **forwards**, term by term, to forty terms —
+    ///   the same mathematics as the nested form but a different evaluation, and with a
+    ///   truncation of `½⁴⁰/41!`, nothing; the terms alternate and shrink, so the forward sum's
+    ///   rounding is under two ulps of the result;
+    /// - and against `−expm1(−x)/x` from the standard library, the platform's `expm1`, whose
+    ///   error is an ulp — an independent function, which is why its bound is the loosest here.
+    #[test]
+    fn phi_is_accurate_on_both_sides_of_its_switch() {
+        // The nearest double to 0.78693868057473315279…, 1.3e-18 below it.
+        const PHI_HALF: f64 = 0.786_938_680_574_733_2;
+        let below = f64::from_bits(0.5f64.to_bits() - 1);
+        assert!(below < 0.5);
+        let taylor = one_minus_exp_over(below);
+        let exponential = one_minus_exp_over(0.5);
+        let ulp = f64::EPSILON * PHI_HALF;
+        println!(
+            "  phi(1/2-) off by {:.2} ulp, phi(1/2) by {:.2} ulp, apart by {:.2} ulp",
+            (taylor - PHI_HALF).abs() / ulp,
+            (exponential - PHI_HALF).abs() / ulp,
+            (taylor - exponential).abs() / ulp
+        );
+        assert!(
+            (taylor - PHI_HALF).abs() <= 2.0 * ulp,
+            "the Taylor branch at 1/2-: {taylor:e}"
+        );
+        assert!(
+            (exponential - PHI_HALF).abs() <= 3.0 * ulp,
+            "the exponential branch at 1/2: {exponential:e}"
+        );
+        assert!(
+            (taylor - exponential).abs() <= 3.0 * ulp,
+            "continuous across the switch: {taylor:e} and {exponential:e}"
+        );
+        assert_eq!(one_minus_exp_over(0.0), 1.0);
+
+        let forward = |x: f64| {
+            let (mut sum, mut term) = (0.0, 1.0);
+            for n in 0..40 {
+                // term = (−x)ⁿ/(n+1)!
+                sum += term;
+                term *= -x / (n + 2) as f64;
+            }
+            sum
+        };
+        let (mut worst_series, mut worst_expm1) = (0.0f64, 0.0f64);
+        for i in 0..=4096 {
+            let x = 0.5 * i as f64 / 4096.0;
+            let x = if i == 4096 { below } else { x };
+            let got = one_minus_exp_over(x);
+            let series = (got - forward(x)).abs() / (got * f64::EPSILON);
+            worst_series = worst_series.max(series);
+            if x > 0.0 {
+                let reference = -(-x).exp_m1() / x;
+                worst_expm1 = worst_expm1.max((got - reference).abs() / (got * f64::EPSILON));
+            }
+        }
+        println!("  [0, 1/2): against the forward series {worst_series:.2} ulp, against expm1 {worst_expm1:.2} ulp");
+        assert!(
+            worst_series <= 3.0,
+            "{worst_series} ulp from the forward series"
+        );
+        assert!(worst_expm1 <= 4.0, "{worst_expm1} ulp from -expm1(-x)/x");
     }
 }
