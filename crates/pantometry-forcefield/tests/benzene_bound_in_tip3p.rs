@@ -36,17 +36,23 @@
 //!   the templates' for a handful of residues, each variant's `ΔU` two whole sums apart, frames
 //!   round-tripping to the bit through their file, and the apportioning resuming to the same
 //!   bits.
+//! - **benzene's charges swapped**, QEq's for FreeSolv's AM1-BCC: a `.mol2` read with its charge
+//!   column, FreeSolv's charges mapped by bonding and not by file order, a swap to benzene's own
+//!   charges changing nothing to the bit, and a swap two whole evaluations apart through the mesh
+//!   and through the classical sum.
 //!
 //! Ignored, in release: the leg (`the_complex_leg_measured`, run once), its window at λ_r 0.25
 //! (`the_restraint_interval_refined`), where its 3.85 kcal/mol comes from
 //! (`where_the_binding_error_comes_from_measured`), and where the rest of it does, by Lorentz–
 //! Berthelot, GAFF's benzene and ff14SB's protein on saved frames
-//! (`the_rest_of_the_binding_error_apportioned_measured`).
+//! (`the_rest_of_the_binding_error_apportioned_measured`), and what AM1-BCC's charges change on
+//! the same frames (`benzenes_charges_perturbed_measured`).
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
 
 mod amber;
+mod freesolv;
 mod hydration;
 mod protein;
 
@@ -6699,4 +6705,1016 @@ fn the_restraint_interval_refined() {
             t.elapsed().as_secs_f64()
         ),
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// QEq's benzene charges against FreeSolv's AM1-BCC, perturbed on the saved frames
+
+/// The ligand of `b` as a graph for [`freesolv::charges_onto`]: its elements, and its bonds among
+/// themselves in ligand indices. No bond leaves it.
+fn ligand_graph(b: &Binding) -> (Vec<Element>, Vec<[usize; 2]>) {
+    let ligand = b.ligand_range();
+    let bonds = b.component().bonds();
+    assert!(
+        bonds
+            .iter()
+            .all(|bond| ligand.contains(&bond.atoms[0]) == ligand.contains(&bond.atoms[1])),
+        "a bond leaves the ligand"
+    );
+    (
+        b.elements()[ligand.clone()].to_vec(),
+        bonds
+            .iter()
+            .filter(|bond| ligand.contains(&bond.atoms[0]))
+            .map(|bond| bond.atoms.map(|i| i - ligand.start))
+            .collect(),
+    )
+}
+
+/// **FreeSolv's AM1-BCC charges on a benzene whose atoms are `graph`'s**, by element and bonding
+/// ([`freesolv::charges_onto`]).
+fn am1bcc(graph: &(Vec<Element>, Vec<[usize; 2]>)) -> freesolv::Mapped {
+    freesolv::charges_onto(&freesolv::benzene(), &graph.0, &graph.1)
+        .expect("FreeSolv's benzene is this one")
+}
+
+/// **The same charges neutral and equal by symmetry**: every carbon −0.1301 and every hydrogen
+/// +0.1301, FreeSolv's C1's extra −0.0001 left out. A sensitivity, not FreeSolv's.
+fn am1bcc_neutral(elements: &[Element]) -> Vec<f64> {
+    elements
+        .iter()
+        .map(|e| match e {
+            Element::C => -0.1301,
+            Element::H => 0.1301,
+            other => panic!("benzene has no {other:?}"),
+        })
+        .collect()
+}
+
+/// Benzene's cross Coulomb energy with everything else at `at`, joules: the field's own, the
+/// couplings' `∂U/∂λ_e` at full coupling — its real-space pairs across, the reciprocal sum's cross
+/// terms and the background's.
+fn cross_coulomb(d: &PeriodicDecoupling, at: &[[f64; 3]]) -> f64 {
+    d.couplings(at, &[Lambda::COUPLED])[0].gradient[1]
+}
+
+/// **Benzene's charges swapped in a box**: the decoupling as given, and the same field with
+/// benzene's charges — the decoupled group's, in its order — replaced, every other atom's charge,
+/// every van der Waals term, the mesh and the exclusions untouched.
+struct ChargeSwap {
+    from: PeriodicDecoupling,
+    to: PeriodicDecoupling,
+}
+
+impl ChargeSwap {
+    fn new(d: &PeriodicDecoupling, charges: &[f64]) -> ChargeSwap {
+        let group = d.group();
+        let members: Vec<usize> = (0..group.len()).filter(|&i| group[i]).collect();
+        assert_eq!(members.len(), charges.len(), "one charge per benzene atom");
+        let mut q = d.field().charges().to_vec();
+        for (k, &i) in members.iter().enumerate() {
+            q[i] = charges[k];
+        }
+        ChargeSwap {
+            from: d.clone(),
+            to: PeriodicDecoupling::new(&d.field().clone().with_charges(q), group)
+                .expect("benzene decouples"),
+        }
+    }
+
+    /// **`ΔU_elec` at `at`**, joules: benzene's cross Coulomb energy under the new charges less
+    /// under the old ([`cross_coulomb`]). Benzene's own Coulomb pairs are not in it: the field
+    /// computes them in vacuum at every λ, so they stay QEq's in the perturbed Hamiltonian, whose
+    /// decoupled end state is then the same as the run's in both legs.
+    fn delta(&self, at: &[[f64; 3]]) -> f64 {
+        cross_coulomb(&self.to, at) - cross_coulomb(&self.from, at)
+    }
+}
+
+/// **Benzene's own Coulomb energy, by hand**: every pair of its atoms the field does not exclude
+/// (not 1-2, not 1-3), in vacuum, `k_e q_i q_j / r` on `at` as given — benzene is whole in every box
+/// here; with the number of pairs and `Σ |term|`.
+fn own_coulomb(d: &PeriodicDecoupling, at: &[[f64; 3]]) -> (f64, usize, f64) {
+    let g = d.group();
+    let q = d.field().charges();
+    let members: Vec<usize> = (0..g.len()).filter(|&i| g[i]).collect();
+    let excluded: std::collections::BTreeSet<[usize; 2]> = d
+        .field()
+        .excluded_pairs()
+        .iter()
+        .filter(|p| g[p[0]] && g[p[1]])
+        .map(|&[i, j]| [i.min(j), i.max(j)])
+        .collect();
+    let (mut e, mut n, mut m) = (0.0, 0, 0.0);
+    for (p, &i) in members.iter().enumerate() {
+        for &j in &members[p + 1..] {
+            if excluded.contains(&[i, j]) {
+                continue;
+            }
+            let u = COULOMB * q[i] * q[j] / len(sub(at[i], at[j]));
+            e += u;
+            n += 1;
+            m += u.abs();
+        }
+    }
+    (e, n, m)
+}
+
+/// One frame's swap held to the field.
+#[derive(Clone, Copy, Debug)]
+struct Held {
+    /// `ΔU_elec`, the couplings'.
+    du: f64,
+    /// Benzene's own Coulomb energy's change, by hand ([`own_coulomb`]).
+    own: f64,
+    own_pairs: usize,
+    /// `|ΔU_elec − [(E_to − E_from) − ΔU_own]|` over `64 ε` of both evaluations' parts and the own
+    /// pairs' — W1's and W3's bound for the cross terms through the mesh.
+    ratio: f64,
+    /// That bound's scale: both evaluations' parts and the own pairs', joules.
+    scale: f64,
+}
+
+/// **The swap held to two whole evaluations** at `at`: each decoupling's electrostatic energy at
+/// full coupling — the rest's Ewald sum, benzene's cross terms through the evaluation's own pair
+/// search and mesh, and benzene's own pairs in vacuum — differenced, benzene's own pairs' change
+/// by hand taken off, against [`ChargeSwap::delta`].
+fn held(swap: &ChargeSwap, at: &[[f64; 3]]) -> Held {
+    let du = swap.delta(at);
+    let to = swap.to.energy(at, Lambda::COUPLED);
+    let from = swap.from.energy(at, Lambda::COUPLED);
+    let (own_to, own_pairs, m_to) = own_coulomb(&swap.to, at);
+    let (own_from, _, m_from) = own_coulomb(&swap.from, at);
+    let whole = (to.electrostatic - from.electrostatic) - (own_to - own_from);
+    let scale = magnitude(&to) + magnitude(&from) + m_to + m_from;
+    Held {
+        du,
+        own: own_to - own_from,
+        own_pairs,
+        ratio: (du - whole).abs() / (64.0 * EPS * scale),
+        scale,
+    }
+}
+
+/// A box the swap is checked on: its name, the box taken apart, benzene's graph ([`ligand_graph`])
+/// and the positions.
+type SwapBox = (
+    &'static str,
+    Surroundings,
+    (Vec<Element>, Vec<[usize; 2]>),
+    Vec<[f64; 3]>,
+);
+
+/// The boxes the swap is checked on, taken apart ([`Surroundings`]) with benzene's graph and the
+/// positions as built: the 3 Å pocket in water, whose reciprocal sum is the mesh's, and W3's small
+/// box, classical Ewald.
+fn swap_boxes() -> Vec<SwapBox> {
+    let s = small3(0x5EC5);
+    let pocket = complex_surroundings(&s);
+    assert!(
+        pocket.whole.field().ewald().mesh().is_some(),
+        "the pocket's mesh"
+    );
+    let b = hydration::Benzene::new(None);
+    let w = hydration::Solvated::new(&b, 3, 0x5EC6, 2.3 * ANGSTROM, 4.6 * ANGSTROM, 1e-5);
+    let free = water_surroundings(&b, &w);
+    assert!(
+        free.whole.field().ewald().mesh().is_none(),
+        "W3's classical sum"
+    );
+    vec![
+        (
+            "3 Å pocket, mesh",
+            pocket,
+            ligand_graph(s.binding()),
+            s.positions().to_vec(),
+        ),
+        (
+            "W3's small box, Ewald",
+            free,
+            freesolv::component_graph(&b.component),
+            w.at.clone(),
+        ),
+    ]
+}
+
+/// **A `.mol2` is read with its charge column**: a literal water, no disk — its name, every atom's
+/// name, element, type, position and charge to the bit, and its bonds as indices — and each thing
+/// the reader refuses, refused by name; then FreeSolv's benzene as kept ([`freesolv`]), twelve
+/// atoms of GAFF's `ca` and `ha` and twelve bonds.
+#[test]
+fn a_mol2_is_read_with_its_charges() {
+    let water =
+        "@<TRIPOS>MOLECULE\nwater\n    3     2     1     0     0\nSMALL\nUSER_CHARGES\n\n\n\
+                 @<TRIPOS>ATOM\n\
+                 \x20     1 O1          0.0000    0.0000    0.0000 ow        1 WAT     -0.834000\n\
+                 \x20     2 H1          0.9572    0.0000    0.0000 hw        1 WAT      0.417000\n\
+                 \x20     3 H2         -0.2400    0.9266    0.0000 hw        1 WAT      0.417000\n\
+                 @<TRIPOS>BOND\n\
+                 \x20    1    1    2 1\n\
+                 \x20    2    3    1 1\n\
+                 @<TRIPOS>SUBSTRUCTURE\n\
+                 \x20    1 WAT         1 TEMP              0 ****  ****    0 ROOT\n";
+    let m = freesolv::parse(water).expect("a water");
+    assert_eq!(m.name, "water");
+    let names: Vec<&str> = m.atoms.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["O1", "H1", "H2"]);
+    let elements: Vec<Element> = m.atoms.iter().map(|a| a.element).collect();
+    assert_eq!(elements, [Element::O, Element::H, Element::H]);
+    let kinds: Vec<&str> = m.atoms.iter().map(|a| a.kind.as_str()).collect();
+    assert_eq!(kinds, ["ow", "hw", "hw"]);
+    let charges: Vec<u64> = m.atoms.iter().map(|a| a.charge.to_bits()).collect();
+    assert_eq!(
+        charges,
+        [-0.834f64, 0.417, 0.417].map(f64::to_bits),
+        "the charge column"
+    );
+    assert_eq!(
+        m.atoms[2].at.map(f64::to_bits),
+        [-0.24f64, 0.9266, 0.0].map(f64::to_bits)
+    );
+    assert_eq!(m.bonds, [[0, 1], [2, 0]]);
+
+    let refused = |text: String, why: &str| {
+        let e = freesolv::parse(&text).expect_err(why);
+        assert!(e.contains(why), "{e:?} does not say {why:?}");
+    };
+    refused(
+        water.replace("WAT      0.417000\n      3", "\n      3"),
+        "columns",
+    );
+    refused(water.replace("-0.834000", "-0.83x"), "O1's charge");
+    refused(
+        water.replace("    3     2  ", "    4     2  "),
+        "3 atoms where",
+    );
+    refused(
+        water.replace("    3     2  ", "    3     3  "),
+        "2 bonds where",
+    );
+    refused(
+        water.replace("    2    3    1 1", "    2    4    1 1"),
+        "not there",
+    );
+    refused(
+        water.replace("    2    3    1 1", "    2    2    1 1"),
+        "repeats",
+    );
+    refused(
+        water.replace("    2    3    1 1", "    2    1    1 1"),
+        "itself",
+    );
+    refused(water.replace("      2 H1", "      7 H1"), "numbered 7");
+    refused(water.replace("O1  ", "Xx1 "), "not an element");
+    refused(water.replace("0.9572", "inf"), "finite");
+    refused(format!("{water}{water}"), "a second molecule");
+
+    let b = freesolv::benzene();
+    assert_eq!(b.name, "benzene");
+    assert_eq!((b.atoms.len(), b.bonds.len()), (12, 12));
+    for a in &b.atoms {
+        let want = if a.element == Element::C { "ca" } else { "ha" };
+        assert_eq!(a.kind, want, "{}", a.name);
+    }
+}
+
+/// A benzene written out of order: carbons and hydrogens interleaved, the bonds shuffled, each
+/// carbon's charge its own (−0.1301 to −0.1306 by its name) and each hydrogen's minus its
+/// carbon's. Mapped by file order, the crate's C1 would take a hydrogen's charge.
+const SHUFFLED_BENZENE: &str =
+    "@<TRIPOS>MOLECULE\nshuffled\n   12    12     1     0     0\nSMALL\n\
+     USER_CHARGES\n\n\n@<TRIPOS>ATOM\n\
+     \x20 1 H4  0 0 0 ha 1 MOL  0.1304\n\
+     \x20 2 C2  0 0 0 ca 1 MOL -0.1302\n\
+     \x20 3 H1  0 0 0 ha 1 MOL  0.1301\n\
+     \x20 4 C5  0 0 0 ca 1 MOL -0.1305\n\
+     \x20 5 C1  0 0 0 ca 1 MOL -0.1301\n\
+     \x20 6 H6  0 0 0 ha 1 MOL  0.1306\n\
+     \x20 7 C4  0 0 0 ca 1 MOL -0.1304\n\
+     \x20 8 H3  0 0 0 ha 1 MOL  0.1303\n\
+     \x20 9 C6  0 0 0 ca 1 MOL -0.1306\n\
+     \x2010 H2  0 0 0 ha 1 MOL  0.1302\n\
+     \x2011 C3  0 0 0 ca 1 MOL -0.1303\n\
+     \x2012 H5  0 0 0 ha 1 MOL  0.1305\n\
+     @<TRIPOS>BOND\n\
+     \x20 1  7  1 1\n\x20 2  2 11 ar\n\x20 3  9  5 ar\n\x20 4  5  3 1\n\
+     \x20 5 11  7 ar\n\x20 6  4 12 1\n\x20 7  5  2 ar\n\x20 8  9  6 1\n\
+     \x20 9  2 10 1\n\x2010  4  9 ar\n\x2011 11  8 1\n\x2012  7  4 ar\n";
+
+/// **FreeSolv's charges map by bonding, not by file order.** [`SHUFFLED_BENZENE`] onto the
+/// dictionary's `BNZ`: twelve automorphisms; every carbon takes a carbon's charge and every
+/// hydrogen minus its own carbon's; every bond of `BNZ` is a bond of the file. Then FreeSolv's own
+/// file, onto `BNZ` and onto the 3 Å pocket's benzene: every carbon −0.1302 or −0.1301 and one
+/// of them −0.1302, every hydrogen +0.1301, a spread of 0.0001 over the automorphisms, and a sum
+/// of −0.0001 e to its rounding.
+#[test]
+fn freesolvs_charges_map_by_bonding_not_by_file_order() {
+    let bnz = Component::from_ccd(hydration::BNZ).expect("BNZ");
+    let graph = freesolv::component_graph(&bnz);
+    let shuffled = freesolv::parse(SHUFFLED_BENZENE).expect("the shuffled benzene");
+    let m = freesolv::charges_onto(&shuffled, &graph.0, &graph.1).expect("benzene onto benzene");
+    assert_eq!(m.automorphisms, 12);
+    let carbons = [-0.1301, -0.1302, -0.1303, -0.1304, -0.1305, -0.1306];
+    for (i, a) in bnz.atoms().iter().enumerate() {
+        let q = m.charges[i];
+        match a.element {
+            Element::C => assert!(carbons.contains(&q), "{}: {q}", a.name),
+            Element::H => {
+                let (c, _) = bnz.neighbours(i).next().expect("a hydrogen's carbon");
+                assert_eq!(q, -m.charges[c], "{}", a.name);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    for b in bnz.bonds() {
+        let [x, y] = b.atoms.map(|i| m.map[i]);
+        assert!(
+            shuffled.bonds.contains(&[x, y]) || shuffled.bonds.contains(&[y, x]),
+            "{:?}",
+            b.atoms
+        );
+    }
+
+    for (name, graph) in [
+        ("BNZ", graph.clone()),
+        ("the 3 Å pocket's", ligand_graph(pocket3())),
+    ] {
+        let real = am1bcc(&graph);
+        let (mut c1, mut sum, mut size) = (0, 0.0, 0.0);
+        for (e, &q) in graph.0.iter().zip(&real.charges) {
+            match e {
+                Element::C => {
+                    assert!(q == -0.1301 || q == -0.1302, "{name}: {q}");
+                    c1 += usize::from(q == -0.1302);
+                }
+                Element::H => assert_eq!(q, 0.1301, "{name}"),
+                other => panic!("{other:?}"),
+            }
+            sum += q;
+            size += q.abs();
+        }
+        assert_eq!(c1, 1, "{name}: one carbon at −0.1302");
+        assert_eq!(real.automorphisms, 12, "{name}");
+        assert!(
+            (real.spread - 1e-4).abs() <= 4.0 * EPS * 0.1302,
+            "{name}: {}",
+            real.spread
+        );
+        assert!(
+            (sum + 1e-4).abs() <= 16.0 * EPS * size,
+            "{name}: Σq = {sum:e}"
+        );
+        println!(
+            "{name}: {:?}, Σq {sum:+.3e}, spread {:.1e} over {} automorphisms",
+            real.charges, real.spread, real.automorphisms
+        );
+    }
+}
+
+/// **Benzene's charges swapped for its own change nothing, to the bit**: on the 3 Å pocket in
+/// water and on W3's small box, the swap ([`ChargeSwap`]) to benzene's own QEq charges gives
+/// `ΔU_elec` = 0 exactly, whole and in every class ([`CLASSES`]) with an atom; and the cross Coulomb
+/// energy it differences is not zero.
+#[test]
+fn benzenes_charges_swapped_for_its_own_change_nothing() {
+    for (name, sur, _, at) in swap_boxes() {
+        let own: Vec<f64> = sur
+            .ligand
+            .clone()
+            .map(|i| sur.whole.field().charges()[i])
+            .collect();
+        let mut swaps = vec![ChargeSwap::new(&sur.whole, &own)];
+        swaps.extend(
+            sur.classes
+                .iter()
+                .flatten()
+                .map(|d| ChargeSwap::new(d, &own)),
+        );
+        assert!(swaps.len() >= 2, "{name}: a class");
+        let du: Vec<f64> = swaps.iter().map(|s| s.delta(&at)).collect();
+        println!("{name}: ΔU_elec {du:?} J, whole and by class");
+        for (k, u) in du.iter().enumerate() {
+            assert_eq!(u.to_bits(), 0, "{name}: swap {k}");
+        }
+        assert!(
+            cross_coulomb(&sur.whole, &at).abs() > 1e-3 * KCAL_PER_MOL,
+            "{name}: a cross Coulomb energy"
+        );
+    }
+}
+
+/// **Benzene's charges swapped are two whole evaluations apart**: on the 3 Å pocket in water through
+/// the mesh and on W3's small box through the classical sum, FreeSolv's charges for QEq's,
+/// `ΔU_elec` against the two decouplings' whole electrostatic energies at full coupling less benzene's
+/// own 36 pairs' change by hand, within 64 ε of their parts ([`held`]); the classes' swaps summing to
+/// the whole's within the same; and neither `ΔU_elec` nor the own pairs' change zero. Both boxes
+/// are printed before either is asserted.
+#[test]
+fn benzenes_charges_swapped_are_two_whole_evaluations_apart() {
+    let mut results = Vec::new();
+    for (name, sur, graph, at) in swap_boxes() {
+        let q = am1bcc(&graph).charges;
+        let swap = ChargeSwap::new(&sur.whole, &q);
+        let h = held(&swap, &at);
+        let classes: f64 = sur
+            .classes
+            .iter()
+            .flatten()
+            .map(|d| ChargeSwap::new(d, &q).delta(&at))
+            .sum();
+        let by_class = (classes - h.du).abs() / (64.0 * EPS * h.scale);
+        println!(
+            "{name}: ΔU_elec {:+.5} kcal/mol, {:.2e} of the bound from the evaluations; the \
+             classes' {:.2e}; benzene's own {} pairs {:+.5}",
+            kcal(h.du),
+            h.ratio,
+            by_class,
+            h.own_pairs,
+            kcal(h.own)
+        );
+        results.push((name, h, by_class));
+    }
+    for (name, h, by_class) in results {
+        assert_eq!(
+            h.own_pairs, 36,
+            "{name}: 66 pairs less 12 bonds and 18 angles"
+        );
+        assert!(h.ratio <= 1.0, "{name}: {h:?}");
+        assert!(by_class <= 1.0, "{name}: {by_class}");
+        assert!(h.du.abs() > 1e-3 * KCAL_PER_MOL, "{name}: {h:?}");
+        assert!(h.own.abs() > 1e-3 * KCAL_PER_MOL, "{name}: {h:?}");
+    }
+}
+
+/// [`Phase`]'s frames **read back, never run**: `NAME.frames` in `dir` under the header the phase
+/// would have written ([`phase_header`]), refused by name when it is absent, not whole, or was run
+/// differently. Nothing is written.
+fn saved_frames(dir: &std::path::Path, phase: &Phase, p: Protocol) -> Frames {
+    let path = dir.join(format!("{}.frames", phase.name));
+    let want = frames_line(&phase_header(phase, p), p.samples, phase.sur.kinds.len());
+    let f = read_frames(&path)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} is not there: this measurement runs no dynamics",
+                path.display()
+            )
+        })
+        .unwrap_or_else(|why| panic!("{} is not whole: {why}", path.display()));
+    assert_eq!(f.line, want, "{} was run differently", path.display());
+    assert!(f.steps.windows(2).all(|s| s[0] < s[1]), "steps that rise");
+    f
+}
+
+/// The leg's prepared start **read back, never prepared**: `prepared.txt` in `dir` under
+/// [`prepared_header`]'s header, refused by name when it is absent, not whole, or prepared
+/// differently.
+fn saved_start(s: &SolvatedComplex, dir: &std::path::Path) -> Vec<[f64; 3]> {
+    let path = dir.join("prepared.txt");
+    let want = prepared_header(
+        s,
+        &SolvatedComplex::preparation(LEG_FLEXIBILITY),
+        PREPARATION_SEED,
+        KELVIN,
+    );
+    let (head, at) = read_positions(&path)
+        .unwrap_or_else(|| panic!("{} is not there", path.display()))
+        .unwrap_or_else(|why| panic!("{} is not whole: {why}", path.display()));
+    assert_eq!(head, want, "{} was prepared differently", path.display());
+    assert_eq!(at.len(), s.positions().len());
+    at
+}
+
+/// A phase's frames with benzene's charges swapped: per frame `ΔU_elec` for FreeSolv's charges and
+/// for the neutral set ([`am1bcc_neutral`]), and FreeSolv's by class; every `every`th frame benzene's
+/// own Coulomb change and the swap held to two whole evaluations ([`held`]); and the worst of each
+/// identity, over its bound.
+struct SwapFrames {
+    elec: Vec<f64>,
+    neutral: Vec<f64>,
+    classes: Vec<[f64; 3]>,
+    own: Vec<f64>,
+    against_classes: f64,
+    against_evaluations: f64,
+}
+
+// Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
+// builds on 1.78.
+#[allow(clippy::manual_is_multiple_of)]
+fn swap_frames(
+    sur: &Surroundings,
+    frames: &Frames,
+    charges: [&[f64]; 2],
+    every: usize,
+    name: &str,
+    dir: &std::path::Path,
+) -> SwapFrames {
+    let swap = ChargeSwap::new(&sur.whole, charges[0]);
+    let neutral = ChargeSwap::new(&sur.whole, charges[1]);
+    let classes: Vec<Option<ChargeSwap>> = sur
+        .classes
+        .iter()
+        .map(|d| d.as_ref().map(|d| ChargeSwap::new(d, charges[0])))
+        .collect();
+    let mut out = SwapFrames {
+        elec: Vec::new(),
+        neutral: Vec::new(),
+        classes: Vec::new(),
+        own: Vec::new(),
+        against_classes: 0.0,
+        against_evaluations: 0.0,
+    };
+    let t = std::time::Instant::now();
+    let mut scale = 0.0;
+    for (k, at) in frames.at.iter().enumerate() {
+        if k % every == 0 {
+            let h = held(&swap, at);
+            assert_eq!(h.own_pairs, 36, "{name}: benzene's own pairs");
+            scale = h.scale;
+            out.own.push(h.own);
+            out.against_evaluations = out.against_evaluations.max(h.ratio);
+        }
+        let du = swap.delta(at);
+        let mut c = [0.0; 3];
+        for (j, s) in classes.iter().enumerate() {
+            if let Some(s) = s {
+                c[j] = s.delta(at);
+            }
+        }
+        let sum: f64 = c.iter().sum();
+        out.against_classes = out
+            .against_classes
+            .max((sum - du).abs() / (64.0 * EPS * scale));
+        out.elec.push(du);
+        out.neutral.push(neutral.delta(at));
+        out.classes.push(c);
+        if (k + 1) % 80 == 0 {
+            log(
+                dir,
+                "charges",
+                &format!(
+                    "{name}: {} frames swapped, {:.0} s",
+                    k + 1,
+                    t.elapsed().as_secs_f64()
+                ),
+            );
+        }
+    }
+    out
+}
+
+/// The free energy of `ΔU` along `U₀ + s ΔU` at `stages + 1` evenly spaced `s` **from the same
+/// frames**, a one-sided chain: each stage's `−kT ln(⟨e^(−β s_(k+1) ΔU)⟩ / ⟨e^(−β s_k ΔU)⟩)`, kcal/mol,
+/// with the effective samples of the frames reweighted to `s_(k+1)`. **It telescopes**: the stages sum
+/// to the one-step estimate, and nothing in it reaches configurations the frames do not have. For
+/// the charges, `ΔU` is linear in `s` exactly — benzene's cross Coulomb energy is linear in its
+/// charges — so these are the states a staged run would sample.
+fn staged(du: &[f64], kt: f64, stages: usize) -> Vec<(f64, f64, f64)> {
+    let at = |s: f64| -> (f64, f64) {
+        let b: Vec<f64> = du.iter().map(|u| s * u / kt).collect();
+        let m = b.iter().copied().fold(f64::INFINITY, f64::min);
+        let w: Vec<f64> = b.iter().map(|y| (-(y - m)).exp()).collect();
+        let sum: f64 = w.iter().sum();
+        let ess = sum * sum / w.iter().map(|v| v * v).sum::<f64>();
+        (kcal(kt * (m - (sum / du.len() as f64).ln())), ess)
+    };
+    let mut out = Vec::new();
+    let mut last = 0.0;
+    for k in 1..=stages {
+        let s = k as f64 / stages as f64;
+        let (g, ess) = at(s);
+        out.push((s, g - last, ess));
+        last = g;
+    }
+    out
+}
+
+/// **The staged chain telescopes to the one step**: on 320 made-up `ΔU` spread over ±2.4 kT,
+/// [`staged`]'s five stages sum to [`zwanzig`]'s one-step estimate within 64 ε of their parts, the
+/// last state is `s` = 1 with Zwanzig's effective samples, and the first stage is not the whole.
+#[test]
+fn the_staged_chain_telescopes_to_one_step() {
+    let kt = BOLTZMANN.to_si() * KELVIN;
+    let du: Vec<f64> = (0..320usize)
+        .map(|k| kt * 0.4 * ((k * 37 % 13) as f64 - 6.0))
+        .collect();
+    let z = zwanzig(&du, kt);
+    let st = staged(&du, kt, 5);
+    let sum: f64 = st.iter().map(|x| x.1).sum();
+    let scale = st.iter().map(|x| x.1.abs()).sum::<f64>() + z.exp.abs();
+    println!(
+        "stages {st:?}, sum {sum:+.6} against one step {:+.6}",
+        z.exp
+    );
+    assert_eq!(st.len(), 5);
+    assert_eq!(st[4].0, 1.0);
+    assert!(
+        (sum - z.exp).abs() <= 64.0 * EPS * scale,
+        "{sum} against {}",
+        z.exp
+    );
+    assert!((st[4].2 - z.ess).abs() <= 64.0 * EPS * z.ess, "{st:?}");
+    assert!((st[0].1 - z.exp).abs() > 1e-3, "{st:?}");
+}
+
+/// W3's hydration free energy, kcal/mol: minus its decoupling ([`SOLVENT_LEG`]).
+fn w3_hydration() -> (f64, f64) {
+    (-SOLVENT_LEG.0, SOLVENT_LEG.1)
+}
+
+/// `ΔG°_bind` of benzene in L99A by Mobley et al. 2007 (*J. Mol. Biol.* **371**, 1118, Table 3,
+/// read in PMC2104542) with GAFF and AM1-BCC charges on the ligand and AMBER96 on the protein,
+/// kcal/mol, and its error: −3.95 ± 0.20, 1.24 short of experiment's −5.19 (their AM1-CM2 Table 1
+/// gives −4.56 ± 0.20).
+const MOBLEY_2007: (f64, f64) = (-3.95, 0.20);
+
+/// One perturbation's summary: `ΔΔG_bind` to first order, by the second cumulant and by Zwanzig
+/// with its error and halves; σ(βΔU) and the effective samples bound and in water; the water side's
+/// Zwanzig with its error.
+struct SwapSummary {
+    name: &'static str,
+    first: f64,
+    cumulant: f64,
+    exp: f64,
+    error: f64,
+    halves: [f64; 2],
+    spread: [f64; 2],
+    ess: [f64; 2],
+    water: (f64, f64),
+}
+
+/// The table for one perturbation, bound and in water — `⟨ΔU⟩`, σ(βΔU), the second cumulant,
+/// Zwanzig ± its error, its halves and the effective samples — then `ΔΔG_bind`, the implied
+/// `ΔG_hyd` and `ΔG°_bind`; and, when σ(βΔU) is above [`ONE_STEP_SPREAD`] on either side, the
+/// staged chain ([`staged`]) with four intermediate states.
+fn report_swap(name: &'static str, kt: f64, bound: &[f64], water: &[f64]) -> SwapSummary {
+    let n = bound.len();
+    let (zb, zw) = (zwanzig(bound, kt), zwanzig(water, kt));
+    println!("\n**{name}**\n\n| | bound | in water |\n| --- | --- | --- |");
+    println!("| ⟨ΔU⟩ | {} | {} |", pm(&zb.mean), pm(&zw.mean));
+    println!("| σ(βΔU) | {:.3} | {:.3} |", zb.spread, zw.spread);
+    println!(
+        "| ⟨ΔU⟩ − βσ²/2 | {:+.3} | {:+.3} |",
+        zb.cumulant, zw.cumulant
+    );
+    println!(
+        "| Zwanzig −kT ln⟨e^(−βΔU)⟩ | {:+.3} ± {:.3} | {:+.3} ± {:.3} |",
+        zb.exp, zb.exp_error, zw.exp, zw.exp_error
+    );
+    println!(
+        "| Zwanzig, halves | {:+.3}, {:+.3} | {:+.3}, {:+.3} |",
+        zb.halves[0], zb.halves[1], zw.halves[0], zw.halves[1]
+    );
+    println!(
+        "| effective samples | {:.1} of {n} | {:.1} of {} |",
+        zb.ess,
+        zw.ess,
+        water.len()
+    );
+    let exp = zb.exp - zw.exp;
+    let error = (zb.exp_error * zb.exp_error + zw.exp_error * zw.exp_error).sqrt();
+    let (hyd, hyd_error) = w3_hydration();
+    let hydration = hyd + zw.exp;
+    let bind = W4_BINDING.0 + exp;
+    println!(
+        "\nΔΔG_bind: first order {:+.3}, second cumulant {:+.3}, Zwanzig {exp:+.3} ± {error:.3} \
+         (halves {:+.3}, {:+.3}). Implied ΔG_hyd {hyd:+.2} + ({:+.3}) = {hydration:+.3} ± {:.3}; \
+         ΔG°_bind {:+.3} + ({exp:+.3}) = {bind:+.3} ± {:.3} kcal/mol.",
+        zb.mean.mean - zw.mean.mean,
+        zb.cumulant - zw.cumulant,
+        zb.halves[0] - zw.halves[0],
+        zb.halves[1] - zw.halves[1],
+        zw.exp,
+        (hyd_error * hyd_error + zw.exp_error * zw.exp_error).sqrt(),
+        W4_BINDING.0,
+        (W4_BINDING.1 * W4_BINDING.1 + error * error).sqrt()
+    );
+    for (side, z, du) in [("bound", &zb, bound), ("in water", &zw, water)] {
+        if z.spread > ONE_STEP_SPREAD {
+            println!(
+                "\n**σ(βΔU) {:.3} {side}, above {ONE_STEP_SPREAD}: one step is not to be trusted.** \
+                 The chain through U₀ + s ΔU from the same frames, four intermediate states — it \
+                 telescopes to the one step and adds no coverage:\n\n| s | stage (kcal/mol) | \
+                 effective samples at s |\n| --- | --- | --- |",
+                z.spread
+            );
+            let mut sum = 0.0;
+            for (s, g, ess) in staged(du, kt, 5) {
+                sum += g;
+                println!("| {s:.1} | {g:+.3} | {ess:.1} of {} |", du.len());
+            }
+            println!("| sum | {sum:+.3} (one step {:+.3}) | |", z.exp);
+        }
+    }
+    SwapSummary {
+        name,
+        first: zb.mean.mean - zw.mean.mean,
+        cumulant: zb.cumulant - zw.cumulant,
+        exp,
+        error,
+        halves: [zb.halves[0] - zw.halves[0], zb.halves[1] - zw.halves[1]],
+        spread: [zb.spread, zw.spread],
+        ess: [zb.ess, zw.ess],
+        water: (zw.exp, zw.exp_error),
+    }
+}
+
+/// **QEq's benzene charges against FreeSolv's AM1-BCC, on the saved frames** (release, one core,
+/// minutes: the whole complex is built and the frames read, and no dynamics is run). Zwanzig's
+/// one-step perturbation from UFF/QEq's ensemble, bound and in water, of:
+///
+/// - **e**: benzene's cross Coulomb energy with everything else, QEq's ±0.098 e for FreeSolv's
+///   AM1-BCC charges ([`freesolv`], mapped by element and bonding), through the field's own Ewald
+///   and mesh: `ΔU_elec` ([`ChargeSwap::delta`]), its reciprocal-space and background terms
+///   included. Benzene's own Coulomb pairs are left QEq's ([`ChargeSwap::delta`] says why), and
+///   their change is printed;
+/// - **e′**: the same with the neutral, symmetric set ([`am1bcc_neutral`]), a sensitivity;
+/// - **3**: 0ff5194's variant 3, GAFF's benzene and ff14SB's protein van der Waals by
+///   Lorentz–Berthelot, again on the same frames, for reference;
+/// - **4**: variant 3's van der Waals and FreeSolv's charges together, `ΔU = ΔU_vdW(3) + ΔU_elec`
+///   per frame: GAFF/AM1-BCC benzene against an ff14SB-van-der-Waals protein with UFF's bonded
+///   terms and QEq's charges.
+///
+/// Each with `⟨ΔU⟩`, σ(βΔU), the second cumulant, Zwanzig with its error and halves, and the
+/// effective samples ([`report_swap`]); `ΔΔG_bind`, the implied `ΔG_hyd` (W3's −1.57 plus the
+/// water side) and `ΔG°_bind` (W4's −8.975 plus `ΔΔG_bind`); and **e** by class bound. Every
+/// frame's class sum and every twentieth frame's two whole evaluations held to their bounds, and
+/// [`reparametrise`]'s identities, asserted after everything is printed.
+///
+/// **Nothing is written beside the leg**: `prepared.txt` and the frames are read back through their
+/// headers and refused if absent ([`saved_start`], [`saved_frames`]); the progress goes to
+/// `frames/charges.log`.
+///
+/// **Run once**, on `3b5aeb7`'s tree with this change, exit 0 on 2026-10-19 after 346 s, the
+/// frames' SHA-256 the same after as before. Zwanzig's `ΔΔG_bind`: 3 +3.365 ± 0.073 (0ff5194's,
+/// reproduced), e +0.569 ± 0.104, e′ +0.570 ± 0.103, and 4 +3.953 ± 0.113, which puts `ΔG°_bind`
+/// at −5.02 against experiment's −5.19 and the implied `ΔG_hyd` at −0.62 against −0.90. σ(βΔU) is
+/// at most 1.12, so no variant is flagged. Nothing here asserts it; the CHANGELOG has the tables.
+///
+/// `PANTOMETRY_W4_DIR=… cargo test --release -p pantometry-forcefield --test
+/// benzene_bound_in_tip3p benzenes_charges_perturbed_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "W4's saved frames, read only; about six minutes with --release, run once (2026-10-19)"]
+fn benzenes_charges_perturbed_measured() {
+    let dir = results_dir();
+    let frames_dir = dir.join("frames");
+    for f in ["complex.frames", "water.frames"] {
+        assert!(
+            frames_dir.join(f).exists(),
+            "{} is not there: this measurement runs no dynamics",
+            frames_dir.join(f).display()
+        );
+    }
+    let t = std::time::Instant::now();
+    let kt = BOLTZMANN.to_si() * KELVIN;
+    let s = whole_complex();
+    let leg = production_leg(&s, saved_start(&s, &dir));
+    log(
+        &frames_dir,
+        "charges",
+        &format!(
+            "the leg's box and start read back in {:.0} s",
+            t.elapsed().as_secs_f64()
+        ),
+    );
+    let g = grid();
+    assert_eq!(g[0], Lambda::new(0.0, 1.0, 1.0));
+    let no_dynamics = || -> Vec<[f64; 3]> { panic!("this measurement runs no dynamics") };
+    let bound = complex_surroundings(&s);
+    let bound_labels = complex_labels(&s, the_system(), &bound);
+    let complex = Phase {
+        name: "complex",
+        sur: &bound,
+        labels: &bound_labels,
+        decoupling: &leg.decoupling,
+        template: &leg.template,
+        lambda: g[0],
+        identity: format!(
+            "start {:016x} restraint {:016x} flexibility {:?}",
+            positions_digest(&leg.start),
+            restraint_digest(&leg.restraint),
+            leg.flexibility
+        ),
+        start: &no_dynamics,
+    };
+    let benzene = hydration::Benzene::new(Some(pocket3().ligand_force_field().charges().to_vec()));
+    let w3 = hydration::w3_solvated(&benzene);
+    let w3_decoupling = w3.decoupling();
+    let w3_template = w3.dynamics(&benzene);
+    let free = water_surroundings(&benzene, &w3);
+    let free_labels = water_labels(&free);
+    let water = Phase {
+        name: "water",
+        sur: &free,
+        labels: &free_labels,
+        decoupling: &w3_decoupling,
+        template: &w3_template,
+        lambda: Lambda::COUPLED,
+        identity: format!(
+            "built {:016x} melted w3_melt {}",
+            positions_digest(&w3.at),
+            exact(KELVIN)
+        ),
+        start: &no_dynamics,
+    };
+    let complex_frames = saved_frames(&frames_dir, &complex, FRAMES);
+    let water_frames = saved_frames(&frames_dir, &water, FRAMES);
+    log(
+        &frames_dir,
+        "charges",
+        &format!(
+            "{} and {} frames read back, {:.0} s",
+            complex_frames.at.len(),
+            water_frames.at.len(),
+            t.elapsed().as_secs_f64()
+        ),
+    );
+
+    // The charges, each benzene's in its own order.
+    let graph_b = ligand_graph(s.binding());
+    let graph_w = freesolv::component_graph(&benzene.component);
+    let (qb, qw) = (am1bcc(&graph_b), am1bcc(&graph_w));
+    let (nb, nw) = (am1bcc_neutral(&graph_b.0), am1bcc_neutral(&graph_w.0));
+    let qeq_b: Vec<f64> = bound
+        .ligand
+        .clone()
+        .map(|i| bound.whole.field().charges()[i])
+        .collect();
+    let qeq_w: Vec<f64> = free
+        .ligand
+        .clone()
+        .map(|i| free.whole.field().charges()[i])
+        .collect();
+    println!(
+        "\nFreeSolv's benzene: {}, SHA-256 {}\n\n| | bound: element | QEq | AM1-BCC | in water: \
+         element | QEq | AM1-BCC |\n| --- | --- | --- | --- | --- | --- | --- |",
+        freesolv::SOURCE,
+        freesolv::SHA256
+    );
+    for k in 0..qb.charges.len() {
+        println!(
+            "| {k} | {:?} | {:+.4} | {:+.4} | {:?} | {:+.4} | {:+.4} |",
+            graph_b.0[k], qeq_b[k], qb.charges[k], graph_w.0[k], qeq_w[k], qw.charges[k]
+        );
+    }
+    let sum = |q: &[f64]| q.iter().sum::<f64>();
+    println!(
+        "\nΣq: QEq {:+.2e}, {:+.2e}; AM1-BCC {:+.2e}, {:+.2e}; spread over {} automorphisms {:.1e}",
+        sum(&qeq_b),
+        sum(&qeq_w),
+        sum(&qb.charges),
+        sum(&qw.charges),
+        qb.automorphisms,
+        qb.spread
+    );
+
+    let rb = reparametrise(&complex, &complex_frames, 20);
+    let rw = reparametrise(&water, &water_frames, 20);
+    let sb = swap_frames(
+        &bound,
+        &complex_frames,
+        [&qb.charges, &nb],
+        20,
+        "complex",
+        &frames_dir,
+    );
+    let sw = swap_frames(
+        &free,
+        &water_frames,
+        [&qw.charges, &nw],
+        20,
+        "water",
+        &frames_dir,
+    );
+    log(
+        &frames_dir,
+        "charges",
+        &format!("swapped, {:.0} s", t.elapsed().as_secs_f64()),
+    );
+
+    let v3 = |r: &Reparametrised| -> Vec<f64> { r.du.iter().map(|d| d[3]).collect() };
+    let joint =
+        |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x + y).collect() };
+    let (v3b, v3w) = (v3(&rb), v3(&rw));
+    let summaries = [
+        report_swap(
+            "3: GAFF benzene, ff14SB protein, Lorentz–Berthelot (van der Waals only, 0ff5194's)",
+            kt,
+            &v3b,
+            &v3w,
+        ),
+        report_swap(
+            "e: QEq → FreeSolv's AM1-BCC charges, UFF's van der Waals",
+            kt,
+            &sb.elec,
+            &sw.elec,
+        ),
+        report_swap(
+            "e′: QEq → AM1-BCC neutral and symmetric (±0.1301)",
+            kt,
+            &sb.neutral,
+            &sw.neutral,
+        ),
+        report_swap(
+            "4: variant 3's van der Waals and FreeSolv's AM1-BCC charges, jointly",
+            kt,
+            &joint(&v3b, &sb.elec),
+            &joint(&v3w, &sw.elec),
+        ),
+    ];
+
+    println!(
+        "\n**e by class, bound**, first order:\n\n| class | ⟨ΔU_elec,c⟩ (kcal/mol) |\n| --- | --- |"
+    );
+    for (c, class) in CLASSES.iter().enumerate() {
+        if bound.classes[c].is_some() {
+            println!(
+                "| {class} | {} |",
+                pm(&estimate_kcal(sb.classes.iter().map(|x| x[c])))
+            );
+        }
+    }
+    println!(
+        "| in water, all water | {} |",
+        pm(&estimate_kcal(sw.elec.iter().copied()))
+    );
+    println!(
+        "\nbenzene's own Coulomb energy's change, QEq → AM1-BCC, left out of every ΔU: bound {}, \
+         in water {} kcal/mol, every twentieth frame",
+        pm(&estimate_kcal(sb.own.iter().copied())),
+        pm(&estimate_kcal(sw.own.iter().copied()))
+    );
+
+    let (hyd, _) = w3_hydration();
+    println!(
+        "\n| perturbation | ΔΔG_bind: first order | second cumulant | Zwanzig | halves | σ(βΔU) \
+         bound, water | effective samples bound, water | implied ΔG_hyd | ΔG°_bind | σ ≤ \
+         {ONE_STEP_SPREAD} |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
+    for x in &summaries {
+        println!(
+            "| {} | {:+.3} | {:+.3} | {:+.3} ± {:.3} | {:+.3}, {:+.3} | {:.2}, {:.2} | {:.0}, {:.0} \
+             | {:+.2} | {:+.2} | {} |",
+            x.name,
+            x.first,
+            x.cumulant,
+            x.exp,
+            x.error,
+            x.halves[0],
+            x.halves[1],
+            x.spread[0],
+            x.spread[1],
+            x.ess[0],
+            x.ess[1],
+            hyd + x.water.0,
+            W4_BINDING.0 + x.exp,
+            if x.spread[0] <= ONE_STEP_SPREAD && x.spread[1] <= ONE_STEP_SPREAD {
+                "yes"
+            } else {
+                "**no**"
+            }
+        );
+    }
+    println!(
+        "\nagainst: ΔG_hyd experiment {:+.2} ± {:.2}, FreeSolv's GAFF/AM1-BCC {:+.2} ± {:.2}, W3 \
+         {hyd:+.2}; ΔG°_bind experiment {:+.2} ± {:.2}, Mobley et al. 2007 {:+.2} ± {:.2}, W4 \
+         {:+.3}",
+        freesolv::EXPERIMENT.0,
+        freesolv::EXPERIMENT.1,
+        freesolv::CALCULATED.0,
+        freesolv::CALCULATED.1,
+        EXPERIMENT.0,
+        EXPERIMENT.1,
+        MOBLEY_2007.0,
+        MOBLEY_2007.1,
+        W4_BINDING.0
+    );
+    println!(
+        "\nthe identities, worst over the frames (1 is the bound): the classes' sum {:.3} bound, \
+         {:.3} in water; two whole evaluations {:.3}, {:.3}; variant 3's ΔU against its sums {:.3}, \
+         {:.3}; the field's coupling {:.3}, {:.3}. {:.0} s in all",
+        sb.against_classes,
+        sw.against_classes,
+        sb.against_evaluations,
+        sw.against_evaluations,
+        rb.against_sums,
+        rw.against_sums,
+        rb.against_field,
+        rw.against_field,
+        t.elapsed().as_secs_f64()
+    );
+    log(
+        &frames_dir,
+        "charges",
+        &format!("done in {:.0} s", t.elapsed().as_secs_f64()),
+    );
+    for x in [&sb, &sw] {
+        assert!(x.against_classes <= 1.0, "{}", x.against_classes);
+        assert!(x.against_evaluations <= 1.0, "{}", x.against_evaluations);
+    }
+    for r in [&rb, &rw] {
+        assert!(r.against_sums <= 1.0, "{}", r.against_sums);
+        assert!(r.parts <= 1.0, "{}", r.parts);
+        assert!(r.against_field <= 1.0, "{}", r.against_field);
+        assert!(r.against_hybrid <= 1.0, "{}", r.against_hybrid);
+    }
 }

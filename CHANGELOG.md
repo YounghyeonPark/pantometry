@@ -3809,6 +3809,111 @@ protects nothing.
   - **The per-frame identities held.** Against their bounds, the worst were: each ΔU against its
     two sums, 0.001; variant 3's parts, 0.000; the field's coupling, 0.003; 5794556's sum, 0.003.
 
+- **AM1-BCC's charges on benzene, perturbed on W4's saved frames: QEq's ±0.098 e do carry the water
+  side's error.** GAFF/AM1-BCC benzene against an ff14SB-van-der-Waals protein gives `ΔG°_bind` −5.02
+  ± 0.30 against experiment's −5.19 ± 0.16, and hydration −0.62 ± 0.17 against −0.90 ± 0.20.
+  `benzenes_charges_perturbed_measured` ran once on `3b5aeb7`'s tree with this change, release, one
+  core: exit 0 on 2026-10-19 after 346 s. It read the frames only, and their SHA-256 was the same
+  after the run as before. Nothing asserts any of it.
+
+  - **The charges are FreeSolv's, as data.** They come from `mobley_3053621.mol2` in FreeSolv v0.52
+    (commit `9d8a8097`, `mol2files_gaff.tar.gz`, file SHA-256 `42a6f4ac…cc56a41a`, CC BY 4.0), and
+    the module `tests/freesolv` keeps the file byte for byte. C1 is −0.1302, the other five carbons
+    −0.1301 and every hydrogen +0.1301. The same commit's GROMACS topology has the same twelve.
+    **They sum to −0.0001 e, not zero**, and C1 is 0.0001 off its ring: AM1-BCC rounded to four
+    places, as FreeSolv ran it. A neutral, symmetric ±0.1301 changes `ΔΔG_bind` by 0.001.
+  - **The atoms are mapped by element and bonding**, a graph isomorphism, and never by file order.
+    All 12 automorphisms are enumerated, so the 0.0001 shows as a spread. QEq's charges are the
+    same in both legs: −0.0963 to −0.0997 on the carbons and +0.0977 to +0.0980 on the hydrogens.
+  - **What is perturbed.** `ΔU_elec` is benzene's cross Coulomb energy with everything else under
+    the new charges less the old. It is the field's own couplings at `λ_e` = 1: real-space pairs,
+    the reciprocal cross terms through the mesh (bound) or the classical sum (water), and the
+    background. **Benzene's own Coulomb pairs stay QEq's.** The field computes them in vacuum at
+    every λ, so the decoupled end state stays the run's own in both legs. Their change would be
+    +1.021 bound and +1.027 in water, so it would nearly cancel between the legs anyway. Variant 4
+    is variant 3's `ΔU_vdW` plus `ΔU_elec`, frame by frame.
+
+  | perturbation | ΔΔG_bind: first order | second cumulant | Zwanzig (halves) | σ(βΔU) bound, water | effective samples of 320 | implied ΔG_hyd | `ΔG°_bind` |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 3: GAFF benzene, ff14SB protein vdW (0ff5194's) | +3.539 | +3.399 | +3.365 ± 0.073 (+3.400, +3.331) | 0.84, 0.49 | 99, 238 | +0.59 | −5.61 |
+  | e: QEq → AM1-BCC, UFF's vdW | +0.331 | +0.554 | +0.569 ± 0.104 (+0.726, +0.355) | 0.36, 0.94 | 280, 120 | −2.74 | −8.41 |
+  | e′: the same, neutral and symmetric | +0.333 | +0.555 | +0.570 ± 0.103 | 0.36, 0.94 | 280, 120 | −2.74 | −8.40 |
+  | **4: variant 3's vdW and AM1-BCC, jointly** | +3.870 | +3.992 | **+3.953 ± 0.113** (+4.150, +3.703) | 0.92, 1.12 | 85, 79 | **−0.62** | **−5.02** |
+
+  The implied `ΔG_hyd` is W3's −1.57 plus the water side. `ΔG°_bind` is W4's −8.975 plus
+  `ΔΔG_bind`. For comparison:
+
+  | | `ΔG_hyd` | `ΔG°_bind` |
+  | --- | --- | --- |
+  | experiment | −0.90 ± 0.20 (FreeSolv) | −5.19 ± 0.16 |
+  | FreeSolv's GAFF/AM1-BCC | −0.81 ± 0.02 | |
+  | Mobley et al. 2007, GAFF/AM1-BCC with AMBER96 (Table 3, read in PMC2104542) | | −3.95 ± 0.20 |
+
+  - **The charges alone, by side.** In water, `ΔG_swap` is −1.171 ± 0.101 (`⟨ΔU⟩` −0.893); bound it
+    is −0.601 ± 0.025. The bound side by class, to first order, is protein −0.387, water −0.156 and
+    the ions −0.020. QEq's charges are three quarters of AM1-BCC's, so the water side's
+    electrostatics are short by about W3's own charge segment (+1.227) times 0.77, about 0.94, to
+    linear response. The −1.17 measured is of that size.
+  - **What the evidence supports.**
+    - The water side's error after the van der Waals is the charges. Hydration goes from +0.59 to
+      −0.62, within 1.1σ of FreeSolv's calculated −0.81 and of experiment.
+    - The binding's improvement is mostly the van der Waals: +3.365 of the +3.953.
+    - Variant 3's −5.61 was partly a cancellation between legs. Variant 4 gets both legs close at
+      once.
+    - Charges and van der Waals add almost exactly: +0.569 and +3.365 against +3.953 jointly.
+  - **What it does not support.**
+    - It is not a run of GAFF/AM1-BCC. It is a one-step perturbation from UFF/QEq's ensemble, so
+      configurations those frames do not visit are not in it.
+    - The protein keeps QEq's charges and UFF's bonded terms. Benzene keeps UFF's bonded terms and
+      its own QEq Coulomb pairs.
+    - The water side rests on 16 ps. Its halves are 0.37 apart in both e and 4, against quoted
+      errors of 0.10 and 0.09 on the whole, so those errors are probably optimistic.
+    - The binding's agreement, 0.5σ from experiment, is that of a hybrid model, and nothing here
+      shows it is not partly another cancellation.
+    - It does not explain Mobley et al.'s −3.95 with the same ligand model. Their protein is
+      AMBER96 with its own charges, and here the protein is a hybrid.
+  - **No variant is flagged.** σ(βΔU) is at most 1.12 against the threshold of 1.5. So no staged
+    estimate was needed, and none was printed. `staged` is there for when one is flagged: a
+    one-sided chain through `U₀ + s ΔU` from the same frames. It telescopes to the one step and adds
+    no coverage, and `the_staged_chain_telescopes_to_one_step` holds that. Checking the one step
+    properly takes a run at intermediate charge scalings, which costs about 50 minutes of the
+    complex per state (2 991 s for 10 000 steps) and 4 of water: about 4 h for 0.25, 0.5, 0.75 and
+    1, then BAR between them. A real leg of variant 4 costs what W4's did, about six days on one
+    core for the complex and a W3 leg for the water.
+  - **The identities held**, worst over the frames against their bounds:
+    - the classes' sum against the whole `ΔU_elec`: 0.000 and 0.000;
+    - every twentieth frame's two whole evaluations: 0.002 and 0.007;
+    - variant 3's `ΔU` against its two sums: 0.001 and 0.000;
+    - the field's coupling: 0.003 and 0.000.
+
+    Variant 3 reproduces 0ff5194's +3.365 to the digit.
+  - **The checks**, default and seconds in debug:
+    - `a_mol2_is_read_with_its_charges`: a literal water, no disk, its charge column to the bit,
+      and eleven refusals by name.
+    - `freesolvs_charges_map_by_bonding_not_by_file_order`: a shuffled literal benzene, every carbon
+      a carbon's charge and every hydrogen minus its own carbon's. Then FreeSolv's file onto `BNZ`
+      and onto the 3 Å pocket's benzene: the charges, a spread of 0.0001 over 12 automorphisms and
+      a sum of −0.0001.
+    - `benzenes_charges_swapped_for_its_own_change_nothing`: 0 to the bit, whole and by class.
+    - `benzenes_charges_swapped_are_two_whole_evaluations_apart`: on the 3 Å pocket through the
+      mesh and W3's small box through Ewald, against two whole electrostatic evaluations less
+      benzene's 36 own pairs by hand: 1.6e-4 and 2.2e-3 of 64 ε of their parts.
+    - `the_staged_chain_telescopes_to_one_step`.
+  - **Six sabotages, each caught.** Each was applied by script with an anchor that occurred once,
+    then restored by `cp`, `touch` and SHA-256.
+
+    | sabotage | caught by |
+    | --- | --- |
+    | charges mapped in file order | the shuffled benzene: C1 took +0.1304 |
+    | the reciprocal term dropped from the field's cross Coulomb | two whole evaluations: 5.0e8 of the bound through the mesh, 3.4e9 through Ewald |
+    | `ΔU`'s sign flipped | two whole evaluations: 8.3e8 and 6.3e9 |
+    | the charge read from the substructure column | the literal water and the map |
+    | benzene's charges written at the box's first atoms | the swap to its own charges, not zero, and the evaluations |
+    | the staged chain not telescoping | its check: −1.290 against −0.559 |
+
+  459 tests are listed in the crate, 45 of them ignored, so 414 run by default (453, 44 and 409
+  before). There is no `powi` or `powf` in either file this change touches.
+
 ### Changed
 
 - **`Molecule` declares `max force`, `rms force`, `converged` and `minimiser steps` as
