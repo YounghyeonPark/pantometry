@@ -4273,7 +4273,9 @@ protects nothing.
   because a one-pool model has no portal vein and that is how first pass is written. **The
   physiology is illustrative and labelled so** in the scene's README: no ICRP 89 or Brown 1997
   table has been read here, and nothing is cited. Blood peaks at 1.59 mg/L at one hour, fat at
-  3.79 mg/L at three, and at 24 h fat holds 13.39 times the blood against its `K_p` of 6.
+  3.79 mg/L at three, and at 24 h fat holds 13.39 times the blood against its `K_p` of 6. **The
+  body has since been replaced by a reference adult read from a table**, under *Changed*; the
+  figures in this entry are the illustrative body's.
   - **The format.** `perfusions` (`blood`, `tissue`, `flow_l_per_h`, `partition`), `depots`
     (`label`, `into`, `absorption_per_h`, `bioavailability`, `lag_h` defaulting to none) and `oral`
     (`depot`, `dose_mg`, `at_h`), each `#[serde(default)]` under `deny_unknown_fields`, mapped to
@@ -4382,6 +4384,60 @@ protects nothing.
     is written and not run.
 
 ### Changed
+
+- **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
+  numbers; its drug stays illustrative.** The scene had said its physiology was illustrative
+  because no ICRP 89 or Brown 1997 table had been read. One has now been: Table 1 of Noorlander et
+  al., *Toxicol. Sci.* 187, 127 (2022), doi:10.1093/toxsci/kfac022, PMC9041554, CC BY 4.0, read in
+  PMC's full-text XML, whose human column is footnoted to Brown et al., *Toxicol. Ind. Health* 13,
+  407 (1997). Brown 1997 itself was not read, and the README says so. ICRP Publication 89 was
+  looked for and could not be read: its publisher's PDF answered 403. Two PMC articles citing it
+  were read and not used: PMC8776883 lists six tissues whose volume fractions sum to 0.758 and
+  flow fractions to 0.678, with no remainder, so it is not a body; PMC8360980 gives the liver its
+  arterial flow alone and states neither a cardiac output nor a total blood volume.
+  - **The table is a closed body**: tissue fractions of body weight and flow fractions of a
+    cardiac output of `15·BW^0.74` L/h each sum to exactly 1. Mapped by lumping so it stays
+    closed: blood 0.079 of 70 kg, 5.53 L; liver 0.026, 1.82 L, at 0.227 of 347.9075 L/h, 78.98 L/h,
+    portal and arterial as one; fat 0.214, 14.98 L, at 0.052, 18.09 L/h; lean tissue the remainder
+    — kidney, rapidly and slowly perfused — 0.681, 47.67 L, at 0.721, 250.84 L/h. Kilograms are
+    litres at 1 kg/L, stated as an assumption because the article gives no densities. The flows add
+    to 347.91 L/h, the cardiac output to the file's rounding, and the volumes to 70.00 L. The
+    illustrative body was 5, 1.5, 30 and 15 L at 90, 210 and 30 L/h: 330 L/h, 5.5 L/min.
+  - **Not modelled, and said so in the README**: the kidney as an organ (renal clearance acts on
+    the blood), a portal circulation, the lung, and any distinction inside "lean tissue", which is
+    a remainder sharing one `K_p` and not muscle.
+  - **The drug is unchanged and labelled illustrative**: `K_p` 2, 0.7 and 6; intrinsic clearance
+    60 L/h, kept rather than re-chosen to hold `E` at 0.4, so `E = 60/(78.98 + 60)` = 0.4317 and
+    `F(1 − E)` = 0.5115 where it was 0.54; renal 6 L/h; `kₐ` 1/h after 0.5 h; `F` 0.9. The scene
+    format has no notes key and `deny_unknown_fields` refuses one, so the label is the README's.
+  - **What moved, each recomputed rather than re-read.** A recurrence of the same model in a
+    throwaway Python script, written beside the library and not from it, reproduced every old
+    figure (1.5948 mg/L at 1 h, 3.7883 at 3 h, 13.389, `R` = 42, multiples 1.012, 0.012 and 7.605)
+    before it was trusted with the new ones, which the run then matched to the printed digits: blood
+    peaks at 1.454 mg/L at 1.5 h, fat at 2.819 mg/L at 4 h, and at 24 h fat holds 17.514 times the
+    blood. The closed forms are `K_p(1 − E)` = 1.13657, `K_p(Q_h + CL_r)/Q_h` = 2.15194 and
+    `D/(CL_r + Q_h E)` = 9.97581 mg·h/L, and the infusion that holds 1 mg/L is 40.097 mg/h.
+  - **The area's tail outgrew its horizon, and the bound said so.** The first pass ran 240 h and
+    asserted the area still to come below 1e-15; the reference adult's slowest mode is 0.132/h
+    against 0.184/h, a half-life of 5.24 h against 3.77, and 240 h left 5.0e-14. The horizon is
+    360 h, where it is 6.3e-21. All eleven ratios stay inside `16ε`, the worst 2.0e-15, fat after
+    the tablet at 10 s, 9ε. The step limit moved the right way: by the column bound the library's
+    limit is derived from, computed in the script, the blood turns over at 64.0/h against 67.2,
+    `1/r` = 56.3 s against 53.6, and the 40 s run, the larger of the two steps, builds and steps.
+  - **The terminal phase's margin is thinner, and kept.** Fat departs from its balance by 44.0
+    times the gut's remaining feed, against 7.6 before: it turns over at 0.20/h, nearer the
+    slowest mode, so it is six times as sensitive to the feed. 64 times the feed is now 1.45 times
+    the worst, where it was eight. The multiple came out 43.98 at 24 h and 44.02 at 30 h, where
+    the feed is 180 times smaller — a property of the body and not a scatter — so the tolerance
+    was not loosened.
+  - **A new check, `the_body_is_the_reference_adult_it_cites`**: each of the seven volumes and
+    flows is its rows' fractions of 70 kg and of `15·BW^0.74` L/h to the file's half-hundredth, the
+    tissues' flows close on the cardiac output to three of those, and the organs on the body
+    weight to four. The cardiac output is the kernel's `exp` and `ln`, not `powf`. The balance is
+    asserted before the rows, so one flow edited alone is refused by the balance it breaks and two
+    edited to compensate pass it and are refused by the rows; both sabotages were run.
+  - `presets.rs` embeds the scene with `include_str!` and its title did not change, so
+    `tools/presets/make.py` was not run, and the scene has no panel and no tile.
 
 - **`pantometry-forcefield` publishes without `tests/amber/` and `benzene_bound_in_tip3p.rs`.**
   `tests/amber/` (2e09cea) holds ff14SB's Lennard-Jones and its residues' atom types, read from

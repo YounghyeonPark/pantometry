@@ -32,7 +32,9 @@
 //! the gut, and renal clearance alone removes `CL_r·C_b` of it each hour, so the blood's area still
 //! to come is at most `A_rem/CL_r` — exactly, since the step eliminates `CL_r·C_b·h` and nothing
 //! eliminates more than is there. The test asserts that bound is below 1e-15 of the area, rather
-//! than assuming 240 hours is long enough.
+//! than assuming the horizon is long enough — and it was not, once: 240 hours sufficed for the
+//! illustrative body and left 5.0e-14 of the area to come in the reference adult, whose slowest
+//! mode is 0.132/h against 0.184/h, a half-life of 5.24 h against 3.77. The horizon is 360 hours.
 //!
 //! # Not under `wasm32`
 //!
@@ -213,26 +215,28 @@ fn areas(scene: Scene, window_s: f64, hours: f64) -> ([f64; 4], usize, f64) {
 /// **The hepatic first pass: `AUC_b(oral)/AUC_b(IV) = F·(1 − E)`, at the shipped step and at four
 /// times it, and every tissue's area is `K_p` times the blood's.**
 ///
-/// Measured, as departures from the closed form, 240 hours at each step:
+/// Measured, as departures from the closed form, 360 hours at each step, with `E = 60/(78.98 +
+/// 60)` = 0.43172:
 ///
-/// | ratio | closed form | 10 s, 86 400 steps | 40 s, 21 600 steps |
+/// | ratio | closed form | 10 s, 129 600 steps | 40 s, 32 400 steps |
 /// | --- | --- | --- | --- |
-/// | `AUC_b` oral / IV | `F(1 − E)` = 0.54 | 4.4e-16 | 0 |
-/// | liver / blood, IV | `K_p(1 − E)` = 1.2 | 0 | 0 |
-/// | liver / blood, oral | `K_p(Q_h + CL_r)/Q_h` = 2.1333 | 2.2e-16 | 0 |
-/// | lean / blood, both | `K_p` = 0.7 | 0, 0 | 0, 0 |
-/// | fat / blood, IV and oral | `K_p` = 6 | 4.4e-16, 2.2e-16 | 1.1e-16, 2.2e-16 |
-/// | `AUC_b` after IV | `D/(CL_r + Q_h E)` = 9.5238 mg·h/L | 2.2e-16 | 2.2e-16 |
+/// | `AUC_b` oral / IV | `F(1 − E)` = 0.51145 | 2.2e-16 | 0 |
+/// | liver / blood, IV | `K_p(1 − E)` = 1.13657 | 0 | 2.2e-16 |
+/// | liver / blood, oral | `K_p(Q_h + CL_r)/Q_h` = 2.15194 | 6.7e-16 | 2.2e-16 |
+/// | lean / blood, IV and oral | `K_p` = 0.7 | 0, 1.1e-16 | 0, 2.2e-16 |
+/// | fat / blood, IV and oral | `K_p` = 6 | 4.4e-16, 2.0e-15 | 2.2e-16, 6.7e-16 |
+/// | `AUC_b` after IV | `D/(CL_r + Q_h E)` = 9.97581 mg·h/L | 6.7e-16 | 2.2e-16 |
 ///
 /// The bound is `16ε` plus the tail. Not `n·ε`: a rounding made at one step is a perturbation the
 /// stable map carries into the area once, as a relative error of its own size, so the roundings
 /// of every step together are a few ε of the area and not `n` of them — eight operations at most
 /// enter one amount's update, and the compensated sum and the ratio add two more. The tail is
-/// bounded above, and is 3.0e-19 of the area at 240 hours.
+/// bounded above, and is 6.3e-21 of the area at 360 hours. The worst departure, fat after the
+/// tablet at 10 s, is 9ε of the 16.
 ///
 /// What it would catch: the depot feeding the blood instead of the liver (the ratio is then `F`,
 /// 0.9), the liver eliminating on `C_t` rather than on its venous `C_t/K_p` (an effective 120 L/h,
-/// `E` = 0.571 and a ratio of 0.386), a perfusion's `K_p` swapped between two tissues or put on the
+/// `E` = 0.603 and a ratio of 0.357), a perfusion's `K_p` swapped between two tissues or put on the
 /// blood's side (the `K_p` ratios), and an IV reference that was not intravenous (1).
 #[test]
 fn the_liver_takes_its_share_before_the_blood_sees_the_tablet() {
@@ -246,7 +250,7 @@ fn the_liver_takes_its_share_before_the_blood_sees_the_tablet() {
     );
 
     for window in [10.0, 40.0] {
-        let hours = 240.0;
+        let hours = 360.0;
         let (oral, n, oral_left) = areas(shipped(), window, hours);
         let (iv, _, iv_left) = areas(intravenous(shipped(), body.dose), window, hours);
 
@@ -420,6 +424,99 @@ fn an_infusion_holds_every_organ_at_its_partition() {
             w < bound,
             "{organ} left the steady state its partition implies by {w:.2e}, against a rounding \
              bound of {bound:.2e}"
+        );
+    }
+}
+
+/// **The body is the reference adult it cites, and its flows close on the cardiac output.**
+///
+/// Table 1 of Noorlander et al., *Toxicol. Sci.* 187, 127 (2022), doi:10.1093/toxsci/kfac022,
+/// PMC9041554, CC BY 4.0 — whose human column is footnoted to Brown et al., *Toxicol. Ind.
+/// Health* 13, 407 (1997). That article was read; Brown 1997 was not. A 70 kg adult, tissue
+/// volumes as fractions of body weight and flows as fractions of a cardiac output of
+/// `15·BW^0.74` L/h. The scene's four organs are those rows lumped:
+///
+/// | scene | rows | of body weight | of cardiac output |
+/// | --- | --- | --- | --- |
+/// | blood | blood | 0.079 | — |
+/// | liver | liver | 0.026 | 0.227 |
+/// | fat | fat | 0.214 | 0.052 |
+/// | lean tissue | kidney, rapidly and slowly perfused | 0.004 + 0.064 + 0.613 | 0.175 + 0.195 + 0.351 |
+///
+/// The table's volume fractions sum to 1 and so do its flow fractions, so the lumped body has
+/// every kilogram and every litre per hour the source has. Kilograms become litres at 1 kg/L, an
+/// assumption: the article gives no densities. The tolerance is the file's: volumes and flows are
+/// written to 0.01, so each is within half of that of the table, and a sum of `n` of them within
+/// `n` halves. The cardiac output is 347.9075 L/h, by the kernel's own `exp` and `ln` so that it
+/// is the same number on every platform.
+///
+/// What it would catch: a flow that no longer closes on the cardiac output — a tissue's flow
+/// edited without the others — a volume that no longer sums to the body, and any one number that
+/// drifted from the row it claims.
+#[test]
+fn the_body_is_the_reference_adult_it_cites() {
+    use pantometry::core::math::{exp, ln};
+    const BODY_WEIGHT_KG: f64 = 70.0;
+    // Fractions of body weight: fat, liver, blood, kidney, rapidly and slowly perfused.
+    const VOLUME: [f64; 6] = [0.214, 0.026, 0.079, 0.004, 0.064, 0.613];
+    // Fractions of cardiac output: fat, liver, kidney, rapidly and slowly perfused.
+    const FLOW: [f64; 5] = [0.052, 0.227, 0.175, 0.195, 0.351];
+    // kg to L, assumed: the source states none.
+    const LITRES_PER_KG: f64 = 1.0;
+    let half = 0.005;
+
+    let volumes: f64 = VOLUME.iter().sum();
+    let flows: f64 = FLOW.iter().sum();
+    assert!(
+        (volumes - 1.0).abs() < 1e-12 && (flows - 1.0).abs() < 1e-12,
+        "the source's own fractions do not close: volumes {volumes}, flows {flows}"
+    );
+
+    let body = Body::of(&shipped());
+    let cardiac_output = 15.0 * exp(0.74 * ln(BODY_WEIGHT_KG));
+    let litres = |fraction: f64| fraction * BODY_WEIGHT_KG * LITRES_PER_KG;
+    let per_hour = |fraction: f64| fraction * cardiac_output;
+    // A perfusion-limited body with parallel tissues returns to the blood exactly what it is sent,
+    // so the tissues' flows are the cardiac output, and the organs are the body. This is the
+    // physics, and it stands whatever the source; the rows below are the citation. With the
+    // source's fractions closing, the rows imply it — asserted first so a single flow edited
+    // alone is refused by the balance it breaks, while two edited to compensate pass it and are
+    // refused only by the rows.
+    let sent = body.liver.flow + body.lean.flow + body.fat.flow;
+    println!("  the tissues are sent {sent:.2} L/h of {cardiac_output:.4}");
+    assert!(
+        (sent - cardiac_output).abs() <= 3.0 * half,
+        "the tissues are sent {sent} L/h and the cardiac output is {cardiac_output:.4}"
+    );
+    let held = body.blood_volume + body.liver.volume + body.lean.volume + body.fat.volume;
+    assert!(
+        (held - litres(1.0)).abs() <= 4.0 * half,
+        "the organs hold {held} L of a {BODY_WEIGHT_KG} kg body"
+    );
+
+    let rows = [
+        ("blood volume", body.blood_volume, litres(VOLUME[2])),
+        ("liver volume", body.liver.volume, litres(VOLUME[1])),
+        ("fat volume", body.fat.volume, litres(VOLUME[0])),
+        (
+            "lean tissue volume",
+            body.lean.volume,
+            litres(VOLUME[3] + VOLUME[4] + VOLUME[5]),
+        ),
+        ("liver flow", body.liver.flow, per_hour(FLOW[1])),
+        ("fat flow", body.fat.flow, per_hour(FLOW[0])),
+        (
+            "lean tissue flow",
+            body.lean.flow,
+            per_hour(FLOW[2] + FLOW[3] + FLOW[4]),
+        ),
+    ];
+    println!("  cardiac output 15 x 70^0.74 = {cardiac_output:.6} L/h");
+    for (what, file, table) in rows {
+        println!("  {what:20} {file:8.2} in the file, {table:10.6} from the table");
+        assert!(
+            (file - table).abs() <= half,
+            "the {what} is {file} in the file and {table:.6} from the row it cites"
         );
     }
 }

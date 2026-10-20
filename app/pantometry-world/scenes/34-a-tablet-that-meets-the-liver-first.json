@@ -10,40 +10,40 @@
       "volumes": [
         {
           "label": "blood",
-          "volume_l": 5.0,
+          "volume_l": 5.53,
           "clearance_l_per_h": 6.0
         },
         {
           "label": "liver",
-          "volume_l": 1.5,
+          "volume_l": 1.82,
           "clearance_l_per_h": 60.0
         },
         {
           "label": "lean tissue",
-          "volume_l": 30.0
+          "volume_l": 47.67
         },
         {
           "label": "fat",
-          "volume_l": 15.0
+          "volume_l": 14.98
         }
       ],
       "perfusions": [
         {
           "blood": "blood",
           "tissue": "liver",
-          "flow_l_per_h": 90.0,
+          "flow_l_per_h": 78.98,
           "partition": 2.0
         },
         {
           "blood": "blood",
           "tissue": "lean tissue",
-          "flow_l_per_h": 210.0,
+          "flow_l_per_h": 250.84,
           "partition": 0.7
         },
         {
           "blood": "blood",
           "tissue": "fat",
-          "flow_l_per_h": 30.0,
+          "flow_l_per_h": 18.09,
           "partition": 6.0
         }
       ],

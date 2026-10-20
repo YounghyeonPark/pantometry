@@ -1437,13 +1437,18 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             //   factor `ρ` a step. A tissue's balance `V_t(ρ − 1)C_t/h = Q(C_b − C_t/K_p)` then
             //   fixes `C_t/C_b = Q/(Q/K_p − V_t(1 − ρ)/h)`, and the liver's, with its clearance on
             //   the venous blood, `Q/((Q + CL)/K_p − V(1 − ρ)/h)`. `ρ` comes from the blood's own
-            //   last two frames. Fat reads 13.4 times the blood against a `K_p` of 6: it is the
+            //   last two frames. Fat reads 17.5 times the blood against a `K_p` of 6: it is the
             //   slowest to empty, so it lags. What the tolerance is earned against is the gut, the
-            //   one input still feeding the liver: 3.4e-8 of the liver's blood supply at 24 h, and
-            //   the three organs depart from their balance by 1.01, 0.012 and 7.6 times that. The
-            //   same three multiples came out at 30 h, where the feed is 130 times smaller —
-            //   measured once, in a throwaway script of the same recurrence — so the departure is
-            //   the gut and not rounding, and 64 times the feed is eight times the worst of them.
+            //   one input still feeding the liver: 2.2e-8 of the liver's blood supply at 24 h, and
+            //   the three organs depart from their balance by 1.008, 0.037 and 44.0 times that. The
+            //   same three multiples came out at 30 h, where the feed is 180 times smaller —
+            //   measured in a throwaway script of the same recurrence, which also gives the 24 h
+            //   figures the run prints — so the departure is the gut and not rounding. 64 times the
+            //   feed is 1.45 times the worst of them. It was eight times the worst in the
+            //   illustrative body (1.01, 0.012, 7.6), and the reference adult's fat, turning over
+            //   at 0.20/h against a slowest mode of 0.13/h, is six times as sensitive to the feed;
+            //   the margin is thin and stays, because the multiple is a property of the body that
+            //   moved by 0.1% between 24 h and 30 h, not a scatter.
             // - **The note counts the tablet**, which is what `nothing was administered` and the
             //   note's sum were changed to do.
             "34-a-tablet-that-meets-the-liver-first.json" => {
