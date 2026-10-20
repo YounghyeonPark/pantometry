@@ -8783,8 +8783,14 @@ fn variant_4_staged_measured() {
 /// (`staged/*_short_K.txt`, `staged/short.log`). `PANTOMETRY_W4_DIR=… cargo test --release -p
 /// pantometry-forcefield --test benzene_bound_in_tip3p variant_4_staged_short_measured --
 /// --ignored --nocapture`.
+///
+/// **Run once**, at `a464806`, exit 0 on 2026-10-20 after 17 565 s. ΔΔG_bind is +4.370 ± 0.063 by
+/// BAR along the chain, against the one step's +3.953. ΔG°_bind is −4.61 ± 0.29 against −5.19,
+/// and ΔG_hyd −0.82 ± 0.15 against −0.90 (FreeSolv's GAFF/AM1-BCC calculation: −0.81). Every
+/// interval overlapped at 0.485 or more, and s = 0 was the saved frames to the bit. Nothing here
+/// asserts it.
 #[test]
-#[ignore = "five states of the complex and of W3's box, 10 000 steps each: about five hours with --release, not run"]
+#[ignore = "five states of the complex and of W3's box, 10 000 steps each: about five hours with --release, run once (2026-10-20)"]
 fn variant_4_staged_short_measured() {
     staged_measured("short", FRAMES);
 }

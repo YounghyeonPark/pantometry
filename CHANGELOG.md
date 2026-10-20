@@ -3914,7 +3914,7 @@ protects nothing.
   459 tests are listed in the crate, 45 of them ignored, so 414 run by default (453, 44 and 409
   before). There is no `powi` or `powf` in either file this change touches.
 
-- **Variant 4's one step, checked by sampling the states between: written, costed, not run.**
+- **Variant 4's one step, checked by sampling the states between: written and costed here, the short protocol run since (the next entry).**
   `variant_4_staged_measured` (ignored) samples `H(s) = H_UFF + s ΔU₄` at `s` = 0, 0.25, 0.5,
   0.75 and 1, bound and in W3's water. Each state is a fresh run, `s` = 0 included, so all five
   share one protocol. It then chains BAR between neighbours (`bennett_chain`, the delta method's
@@ -4349,6 +4349,37 @@ protects nothing.
     numerators measured rather than incremented: fourteen scenes print a domain as not drawn,
     twenty-one hold one kind of domain, thirty-three state no pose, twenty-five export glTF and
     nine are refused, and the scene walk's pin holds 81 `(label, unit)` pairs, 70 of them answers.
+
+- **Variant 4 sampled through its states: benzene binds at −4.61 ± 0.29 against −5.19, and
+  hydrates at −0.82 ± 0.15, where FreeSolv's own GAFF/AM1-BCC calculation gives −0.81.**
+  `variant_4_staged_short_measured` ran once at `a464806`, release, one core, with throttling off
+  for the process: exit 0 on 2026-10-20 after 17 565 s. Five states each, 4 ps + 16 ps, 320
+  samples. Nothing asserts any of it.
+
+  | | staged, BAR | its halves | TI | the one step (91398b6) | experiment |
+  | --- | --- | --- | --- | --- | --- |
+  | ΔG_swap, bound | +5.122 ± 0.033 | +5.140, +5.104 | +5.117 | +4.908 | |
+  | ΔG_swap, water | +0.752 ± 0.054 | +0.707, +0.796 | +0.751 | +0.955 | |
+  | ΔΔG_bind | +4.370 ± 0.063 | +4.432, +4.308 | +4.367 | +3.953 ± 0.113 | |
+  | ΔG°_bind = W4's −8.975 + ΔΔG_bind | **−4.61 ± 0.29** | | −4.61 | −5.02 | −5.19 ± 0.16 |
+  | ΔG_hyd = W3's −1.570 + ΔG_swap(water) | **−0.82 ± 0.15** | | −0.82 | −0.62 | −0.90 ± 0.20 |
+
+  - **The one step was off by 0.42, 3.2 of the two errors together.** It ran from UFF's end alone,
+    with σ(βΔU) at 0.92 bound and 1.12 in water. Run back from s = 1, the one step gives +4.599.
+    The two ends bracket the staged value, which is what a one-sided estimate's bias looks like.
+    Every staged interval overlaps at 0.485 or more, BAR and TI agree to 0.003, and the halves to
+    0.12.
+  - **The water leg reproduces FreeSolv's calculation.** −0.82 ± 0.15 against its −0.81 ± 0.02,
+    for the same benzene model in TIP3P. It reaches it by another route: W3's UFF leg, then a
+    staged swap to GAFF's Lennard-Jones and AM1-BCC's charges.
+  - **The binding is now 0.58 too weak.** Mobley et al. 2007's GAFF/AM1-BCC with AMBER96 was
+    −3.95, also too weak. What remains of the protein is UFF's bonded terms and QEq's charges,
+    and each state had 16 ps.
+  - **s = 0 is the saved frames to the bit**, positions at all 320 samples in both legs, from the
+    same seeds by another code path. The ΔU₄ identity's worst was 0.004 of its bound.
+  - **The complex's electrostatic part at s = 0.25 had τ = 35 samples** against 1.5–3.2 elsewhere:
+    a slow mode that 16 ps samples a few times only. The long protocol, 51 h, would reach it. It
+    is written and not run.
 
 ### Changed
 
