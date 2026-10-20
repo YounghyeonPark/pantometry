@@ -40,13 +40,19 @@
 //!   column, FreeSolv's charges mapped by bonding and not by file order, a swap to benzene's own
 //!   charges changing nothing to the bit, and a swap two whole evaluations apart through the mesh
 //!   and through the classical sum.
+//! - **variant 4's Hamiltonian staged**, `H(s) = H_UFF + s ΔU₄`: its forces the gradient of the
+//!   frames' `ΔU₄`, the reciprocal sum's on an atom past the cutoff included; at `s` = 0 the field
+//!   to the bit, its dynamics too; `H(s) − H(0)` the frames' `s ΔU₄` at every state; each state
+//!   what its header says; and a staged run resuming to the same bits.
 //!
 //! Ignored, in release: the leg (`the_complex_leg_measured`, run once), its window at λ_r 0.25
 //! (`the_restraint_interval_refined`), where its 3.85 kcal/mol comes from
 //! (`where_the_binding_error_comes_from_measured`), and where the rest of it does, by Lorentz–
 //! Berthelot, GAFF's benzene and ff14SB's protein on saved frames
-//! (`the_rest_of_the_binding_error_apportioned_measured`), and what AM1-BCC's charges change on
-//! the same frames (`benzenes_charges_perturbed_measured`).
+//! (`the_rest_of_the_binding_error_apportioned_measured`), what AM1-BCC's charges change on
+//! the same frames (`benzenes_charges_perturbed_measured`), and that one step checked by sampling
+//! the states between (`variant_4_staged_measured`, `variant_4_staged_short_measured`, costed by
+//! `the_staged_step_costed`).
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
@@ -3041,6 +3047,25 @@ fn sample_frames(
     p: Protocol,
     index: usize,
     lambda: Lambda,
+    on: impl FnMut(u64, &[[f64; 3]]),
+) -> Vec<[f64; 3]> {
+    let potential = AtLambda {
+        hamiltonian: h,
+        lambda,
+    };
+    sample_on(&potential, start, template, p, index, on)
+}
+
+/// [`sample_frames`] on any `potential`: the template's dynamics in the protocol's bath,
+/// thermalised from `window_seed(protocol.seed, index)`, from `start`; after the equilibration,
+/// every `stride` steps, `on` is given the step and the positions. What the staged states of
+/// variant 4 run on ([`Staged`]), so that a state at `s` = 0 is a window's dynamics to the bit.
+fn sample_on(
+    potential: &dyn pantometry_forcefield::Potential,
+    start: &[[f64; 3]],
+    template: &MolecularDynamics,
+    p: Protocol,
+    index: usize,
     mut on: impl FnMut(u64, &[[f64; 3]]),
 ) -> Vec<[f64; 3]> {
     let seed = window_seed(p.seed, index);
@@ -3052,18 +3077,14 @@ fn sample_frames(
             seed,
         })
         .thermalised(start, p.temperature, seed);
-    let potential = AtLambda {
-        hamiltonian: h,
-        lambda,
-    };
     let mut at = start.to_vec();
-    md.prepare(&potential, &at);
+    md.prepare(potential, &at);
     let mut taken = 0;
     // Clippy on current stable suggests `u64::is_multiple_of`, stabilised in 1.87; this crate
     // builds on 1.78.
     #[allow(clippy::manual_is_multiple_of)]
     while taken < p.samples {
-        md.step(&potential, &mut at, p.time_step);
+        md.step(potential, &mut at, p.time_step);
         let s = md.steps();
         if s > p.equilibration && (s - p.equilibration) % p.stride == 0 {
             on(s, &at);
@@ -7716,5 +7737,1707 @@ fn benzenes_charges_perturbed_measured() {
         assert!(r.parts <= 1.0, "{}", r.parts);
         assert!(r.against_field <= 1.0, "{}", r.against_field);
         assert!(r.against_hybrid <= 1.0, "{}", r.against_hybrid);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Variant 4's one step, checked by staged sampling: H(s) = H_UFF + s ΔU₄
+
+/// The states of `H(s) = H_UFF + s ΔU₄` the staged check samples, in path order.
+const STAGES: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+
+/// Each state's index for [`window_seed`]. **`s` = 0 is index 0**: under [`PROTOCOL`] that is the
+/// leg's window 0 — the same box, start, state, dynamics and seed — and under [`FRAMES`] the saved
+/// frames', so that state's trajectory is theirs to the bit if nothing it runs on has changed
+/// since. The others are past [`grid`]'s 33 candidates, seeded apart from every window the leg has
+/// run or could insert.
+const STAGE_INDEX: [usize; 5] = [0, 33, 34, 35, 36];
+
+/// How often a staged state holds its dynamics' `H(s) − H(0)` to the frames' `s ΔU₄`, in samples:
+/// the first sample and every 200th after it.
+const STAGE_CHECK_EVERY: usize = 200;
+
+/// Variant 4's one-step Zwanzig `ΔΔG_bind` on the saved frames and its error, kcal/mol
+/// (`benzenes_charges_perturbed_measured`, run once on 2026-10-19).
+const VARIANT_4_ONE_STEP: (f64, f64) = (3.953, 0.113);
+
+/// What that one step implied, kcal/mol: `ΔG°_bind` and `ΔG_hyd`.
+const VARIANT_4_IMPLIED: [f64; 2] = [-5.02, -0.62];
+
+/// A Lennard-Jones pair's `dE/dr` at `r` for `[x, D]`, as the crate's `Pair` writes it:
+/// `12 D (s⁶ − s¹²)/r` with `s = x/r`.
+fn lj_slope(p: [f64; 2], r: f64) -> f64 {
+    let s = p[0] / r;
+    let s6 = (s * s) * (s * s) * (s * s);
+    let s12 = s6 * s6;
+    12.0 * p[1] * (s6 - s12) / r
+}
+
+/// **The van der Waals half of `ΔU₄`, with its forces**: benzene's cross van der Waals from the
+/// current model to variant 3 ([`variants`]' fourth: GAFF's benzene, ff14SB's protein,
+/// Lorentz–Berthelot). Every pair of a benzene atom with an atom of the rest inside the cutoff,
+/// found by the same wrapped minimum image as [`cross_deltas`], gives `u₃(r) − u(r)` and its
+/// derivative; an atom with no well in either model gives exactly zero and is left out. **The
+/// long-range corrections' difference** is a constant: it depends on the box's volume and the
+/// parameters and on no position, so at a fixed volume it has no force, and none is applied.
+struct VdwSwap<'a> {
+    sur: &'a Surroundings,
+    from: CrossModel,
+    to: CrossModel,
+    /// The atoms of the rest with a well in either model.
+    partners: Vec<usize>,
+    /// The long-range corrections' difference, class by class as [`cross_deltas`] takes it, with
+    /// its `Σ|term|` and terms.
+    tail: CrossSum,
+}
+
+impl<'a> VdwSwap<'a> {
+    fn new(sur: &'a Surroundings, labels: &Labels) -> VdwSwap<'a> {
+        let from = current_model(sur);
+        let to = variants(sur, labels).swap_remove(3);
+        let partners = (0..sur.kinds.len())
+            .filter(|&j| sur.kinds[j].is_some() && (from.vdw[j][1] != 0.0 || to.vdw[j][1] != 0.0))
+            .collect();
+        let (a, b) = (
+            class_tails(sur, labels, &from),
+            class_tails(sur, labels, &to),
+        );
+        let mut tail = CrossSum::default();
+        for c in 0..a.len() {
+            tail.tail += b[c].tail - a[c].tail;
+            tail.magnitude += a[c].magnitude + b[c].magnitude;
+            tail.terms += b[c].terms;
+        }
+        VdwSwap {
+            sur,
+            from,
+            to,
+            partners,
+            tail,
+        }
+    }
+
+    /// `ΔU_vdW` at `at`, its pairs and its long-range term apart; with `forces`, `scale` times
+    /// its force added into them.
+    fn evaluate(
+        &self,
+        at: &[[f64; 3]],
+        scale: f64,
+        mut forces: Option<&mut [[f64; 3]]>,
+    ) -> CrossSum {
+        let sur = self.sur;
+        let w: Vec<[f64; 3]> = at.iter().map(|p| sur.cell.wrap(*p)).collect();
+        let rc2 = sur.cutoff * sur.cutoff;
+        let mut sum = CrossSum::default();
+        for g in sur.ligand.clone() {
+            for &j in &self.partners {
+                let (a, b) = (g.min(j), g.max(j));
+                let (d, r2) = sur.separation(&w, a, b);
+                if r2 >= rc2 {
+                    continue;
+                }
+                let r = r2.sqrt();
+                let p0 = self.from.mixing.pair(self.from.vdw[a], self.from.vdw[b]);
+                let p1 = self.to.mixing.pair(self.to.vdw[a], self.to.vdw[b]);
+                let energy = |p: [f64; 2]| {
+                    Pair {
+                        atoms: [a, b],
+                        distance: p[0],
+                        well: p[1],
+                    }
+                    .energy(r)
+                };
+                let (u0, u1) = (energy(p0), energy(p1));
+                sum.pairs += u1 - u0;
+                sum.magnitude += u0.abs() + u1.abs();
+                sum.terms += 1;
+                if let Some(f) = forces.as_deref_mut() {
+                    // −(dΔu/dr)/r along d = r_a − r_b, on a; the opposite on b.
+                    let pull = -scale * (lj_slope(p1, r) - lj_slope(p0, r)) / r;
+                    for x in 0..3 {
+                        f[a][x] += pull * d[x];
+                        f[b][x] -= pull * d[x];
+                    }
+                }
+            }
+        }
+        sum.tail = self.tail.tail;
+        sum.magnitude += self.tail.magnitude;
+        sum.terms += self.tail.terms;
+        sum
+    }
+}
+
+/// **Benzene's own Coulomb pairs taken back to `old`'s charges.** The field computes them in
+/// vacuum, on whole molecules, with its own charges at every λ; `H(s)` keeps them QEq's, as the
+/// one step did. So each own pair's `k_e q_i q_j / r` under `charged`'s charges less under `old`'s
+/// is returned, to be subtracted, and with `forces` its force is subtracted from them. With the
+/// pairs' `Σ|term|`.
+fn own_back(
+    charged: &PeriodicDecoupling,
+    old: &[f64],
+    at: &[[f64; 3]],
+    mut forces: Option<&mut [[f64; 3]]>,
+) -> (f64, f64) {
+    let q = charged.field().charges();
+    let whole = charged.field().whole(at);
+    let (mut back, mut size) = (0.0, 0.0);
+    for p in charged.own_pairs() {
+        let [i, j] = p.atoms;
+        let d = sub(whole[i], whole[j]);
+        let r = len(d);
+        let (now, then) = (
+            pantometry_forcefield::energy::coulomb(q[i], q[j], r),
+            pantometry_forcefield::energy::coulomb(old[i], old[j], r),
+        );
+        let delta = now - then;
+        back += delta;
+        size += now.abs() + then.abs();
+        if let Some(f) = forces.as_deref_mut() {
+            // The field put k_e q_i q_j d/r³ on i and its opposite on j.
+            let push = delta / (r * r);
+            for x in 0..3 {
+                f[i][x] -= push * d[x];
+                f[j][x] += push * d[x];
+            }
+        }
+    }
+    (back, size)
+}
+
+/// **`H(s) = H_UFF + s ΔU₄`**, the Hamiltonian a staged state samples, with `ΔU₄` variant 4's:
+/// benzene's cross van der Waals made variant 3's and its cross charges FreeSolv's AM1-BCC, its
+/// own pairs left as they are.
+///
+/// **One whole evaluation a step, the base's cost.** Benzene's cross Coulomb energy `C(q)` — its
+/// real-space pairs across, the reciprocal sum's cross terms and the background's — is linear in
+/// benzene's charges, so `C((1 − s) q_old + s q_new) = C(q_old) + s [C(q_new) − C(q_old)]`
+/// exactly, real space, mesh or classical sum and background alike, and the rest's own terms do
+/// not see benzene's charges. So the field is evaluated once with benzene's charges
+/// `(1 − s) q_old + s q_new` — every force of `s ΔU_elec`, the reciprocal ones on atoms far from
+/// benzene included, comes out of the field's own evaluation — and two things that are not
+/// linear, or not the field's, are put right by hand: **benzene's own Coulomb pairs**, quadratic
+/// in its charges, taken back to QEq's ([`own_back`], 36 pairs), and **`s ΔU_vdW`**, added
+/// ([`VdwSwap`], 12 × N pairs). At `s` = 0 the charges are QEq's to the bit, so `H(0)` is the
+/// field's energy and forces to the bit; at `s` = 1 they are FreeSolv's to the bit.
+struct Staged<'a> {
+    s: f64,
+    lambda: Lambda,
+    /// The field `H(s)` is a change of, at `s` = 0.
+    base: &'a PeriodicDecoupling,
+    /// The same with benzene's charges `(1 − s) q_old + s q_new`.
+    charged: PeriodicDecoupling,
+    vdw: &'a VdwSwap<'a>,
+}
+
+impl<'a> Staged<'a> {
+    /// `H(s)` on `base`, whose restraint is `restraint` (`base` gives no way to read it back, so
+    /// it is given again; [`the_staged_hamiltonian_at_zero_is_the_field`] holds the two equal),
+    /// with benzene's new charges `to` in the decoupled group's order, at `lambda`.
+    fn new(
+        base: &'a PeriodicDecoupling,
+        restraint: Option<Boresch>,
+        to: &[f64],
+        vdw: &'a VdwSwap<'a>,
+        lambda: Lambda,
+        s: f64,
+    ) -> Staged<'a> {
+        let group = base.group();
+        let members: Vec<usize> = (0..group.len()).filter(|&i| group[i]).collect();
+        assert_eq!(members.len(), to.len(), "one charge per benzene atom");
+        let mut q = base.field().charges().to_vec();
+        for (k, &i) in members.iter().enumerate() {
+            q[i] = (1.0 - s) * q[i] + s * to[k];
+        }
+        let mut charged = PeriodicDecoupling::new(&base.field().clone().with_charges(q), group)
+            .expect("benzene decouples");
+        if let Some(r) = restraint {
+            charged = charged.with_restraint(r);
+        }
+        Staged {
+            s,
+            lambda,
+            base,
+            charged,
+            vdw,
+        }
+    }
+
+    /// `H(s)` at `at`, joules, its forces into `forces`.
+    fn evaluate(&self, at: &[[f64; 3]], forces: &mut [[f64; 3]]) -> f64 {
+        let e = Alchemical::energy_and_forces(&self.charged, at, self.lambda, forces);
+        let (own, _) = own_back(
+            &self.charged,
+            self.base.field().charges(),
+            at,
+            Some(&mut *forces),
+        );
+        let v = self.vdw.evaluate(at, self.s, Some(&mut *forces));
+        e - own + self.s * v.total()
+    }
+}
+
+impl pantometry_forcefield::Potential for Staged<'_> {
+    fn energy_and_forces(&self, at: &[[f64; 3]], forces: &mut [[f64; 3]]) -> f64 {
+        self.evaluate(at, forces)
+    }
+}
+
+/// One configuration's `ΔU₄` **as the frames compute it**, joules: variant 3's `ΔU_vdW` pair by
+/// pair and `ΔU_elec` through the couplings, with the van der Waals sum's `Σ|term|` and terms.
+#[derive(Clone, Copy, Debug)]
+struct FrameChange {
+    vdw: f64,
+    elec: f64,
+    magnitude: f64,
+    terms: usize,
+}
+
+impl FrameChange {
+    /// `ΔU₄`, as `benzenes_charges_perturbed_measured` adds it: the van der Waals first.
+    fn total(&self) -> f64 {
+        self.vdw + self.elec
+    }
+}
+
+/// **`ΔU₄` by the frames' own computation**, not the dynamics': [`cross_deltas`] from the current
+/// model to variant 3 with [`class_tails`]' corrections, which is [`reparametrise`]'s fourth `ΔU`
+/// to the bit, and [`ChargeSwap::delta`] for FreeSolv's charges, `C(q_new) − C(q_old)` from two
+/// passes of the couplings. What each staged state records and what BAR is run on.
+struct FramesDelta<'a> {
+    sur: &'a Surroundings,
+    labels: &'a Labels,
+    from: CrossModel,
+    to: CrossModel,
+    from_tails: Vec<CrossSum>,
+    to_tails: Vec<CrossSum>,
+    swap: ChargeSwap,
+}
+
+impl<'a> FramesDelta<'a> {
+    fn new(sur: &'a Surroundings, labels: &'a Labels, charges: &[f64]) -> FramesDelta<'a> {
+        let from = current_model(sur);
+        let to = variants(sur, labels).swap_remove(3);
+        FramesDelta {
+            from_tails: class_tails(sur, labels, &from),
+            to_tails: class_tails(sur, labels, &to),
+            from,
+            to,
+            swap: ChargeSwap::new(&sur.whole, charges),
+            sur,
+            labels,
+        }
+    }
+
+    fn at(&self, at: &[[f64; 3]]) -> FrameChange {
+        let d = cross_deltas(
+            self.sur,
+            self.labels,
+            at,
+            (&self.from, &self.from_tails),
+            &[(&self.to, &self.to_tails)],
+        )
+        .swap_remove(0);
+        FrameChange {
+            vdw: d.total(),
+            elec: self.swap.delta(at),
+            magnitude: d.magnitude,
+            terms: d.terms,
+        }
+    }
+}
+
+/// **The dynamics' `ΔU₄` held to the frames'**: `|H(s) − H(0) − s ΔU₄|` at `at`, `H(0)` the base
+/// field's own evaluation and `ΔU₄` `change`, over `64 ε` of both evaluations' parts and the own
+/// pairs' — W1's and W3's bound for the cross terms through the mesh — plus the summation bound of
+/// the two van der Waals sums. A ratio above 1 is a failure; `NaN` is one too.
+fn staged_held(st: &Staged, at: &[[f64; 3]], change: &FrameChange) -> f64 {
+    let mut f = vec![[0.0; 3]; at.len()];
+    let hs = st.evaluate(at, &mut f);
+    let h0 = Alchemical::energy_and_forces(st.base, at, st.lambda, &mut f);
+    let (_, own) = own_back(&st.charged, st.base.field().charges(), at, None);
+    let v = st.vdw.evaluate(at, 0.0, None);
+    let parts = magnitude(&st.charged.energy(at, st.lambda))
+        + magnitude(&st.base.energy(at, st.lambda))
+        + own;
+    let bound = 64.0 * EPS * parts
+        + summation_bound(v.terms + change.terms, v.magnitude + change.magnitude);
+    ((hs - h0) - st.s * change.total()).abs() / bound
+}
+
+/// One leg of the staged check: the field `H(s)` changes and its restraint, FreeSolv's charges in
+/// benzene's order, `ΔU_vdW` with forces and `ΔU₄` as the frames compute it, the dynamics and the
+/// state, what says what `start` is (in the header), the start — called only when a state has to
+/// run — and the log's name.
+struct StagedPhase<'a> {
+    name: &'static str,
+    base: &'a PeriodicDecoupling,
+    restraint: Option<Boresch>,
+    charges: &'a [f64],
+    vdw: &'a VdwSwap<'a>,
+    frames: &'a FramesDelta<'a>,
+    template: &'a MolecularDynamics,
+    lambda: Lambda,
+    identity: String,
+    start: &'a dyn Fn() -> Vec<[f64; 3]>,
+    log: &'static str,
+}
+
+/// **The potential state `k` runs on**: `H(STAGES[k])` on the phase. The one place a state's `s`
+/// is turned into a Hamiltonian; [`the_staged_states_are_what_their_headers_say`] holds it to the
+/// header's `s`.
+fn stage_potential<'a>(phase: &StagedPhase<'a>, k: usize) -> Staged<'a> {
+    Staged::new(
+        phase.base,
+        phase.restraint,
+        phase.charges,
+        phase.vdw,
+        phase.lambda,
+        STAGES[k],
+    )
+}
+
+/// State `k`'s header: the phase, the state and its `s` among all of them, its seed's index and
+/// the seed, the protocol literally, the phase's λ, the atom count, the phase's identity, and
+/// digests of benzene's two sets of charges and of both van der Waals models, so that a state run
+/// differently is refused rather than mixed with these.
+fn staged_header(phase: &StagedPhase, p: Protocol, k: usize) -> String {
+    let l = phase.lambda;
+    let group = phase.base.group();
+    let qeq = (0..group.len())
+        .filter(|&i| group[i])
+        .map(|i| phase.base.field().charges()[i]);
+    let rule = |m: Mixing| f64::from(u8::from(m == Mixing::LorentzBerthelot));
+    let models = digest(
+        phase
+            .vdw
+            .from
+            .vdw
+            .iter()
+            .chain(&phase.vdw.to.vdw)
+            .flatten()
+            .copied()
+            .chain([rule(phase.vdw.from.mixing), rule(phase.vdw.to.mixing)]),
+    );
+    format!(
+        "# staged {} state {k} s {} of {} index {} seed {:016x} protocol {} {} {} {} {} {} {:#x} \
+         lambda {} {} {} atoms {} {} charges {:016x} {:016x} vdw {models:016x}",
+        phase.name,
+        exact(STAGES[k]),
+        STAGES.map(exact).join(","),
+        STAGE_INDEX[k],
+        window_seed(p.seed, STAGE_INDEX[k]),
+        exact(p.time_step),
+        exact(p.temperature),
+        exact(p.friction),
+        p.equilibration,
+        p.stride,
+        p.samples,
+        p.seed,
+        exact(l.restraint),
+        exact(l.electrostatics),
+        exact(l.van_der_waals),
+        group.len(),
+        phase.identity,
+        digest(qeq),
+        digest(phase.charges.iter().copied())
+    )
+}
+
+/// The state, `s`, seed index and seed a staged header says; `None` for a line that does not say
+/// them.
+fn staged_state_of(header: &str) -> Option<(usize, f64, usize, u64)> {
+    let w: Vec<&str> = header.split_whitespace().collect();
+    let field = |name: &str| w.get(w.iter().position(|&x| x == name)? + 1).copied();
+    let state: usize = field("state")?.parse().ok()?;
+    (state < STAGES.len()).then_some(())?;
+    Some((
+        state,
+        field("s")?.parse().ok()?,
+        field("index")?.parse().ok()?,
+        u64::from_str_radix(field("seed")?, 16).ok()?,
+    ))
+}
+
+/// One staged state, read back from its file: per sample its step, `ΔU₄` and its two halves
+/// ([`FramesDelta`]), the coupling at the phase's state — the number the leg's window 0 recorded
+/// at its own state — and a digest of the positions; the worst [`staged_held`] over the checked
+/// samples, and the seconds it took.
+#[derive(Clone, Debug)]
+struct StagedRecord {
+    state: usize,
+    s: f64,
+    steps: Vec<u64>,
+    du: Vec<f64>,
+    vdw: Vec<f64>,
+    elec: Vec<f64>,
+    coupling: Vec<f64>,
+    digests: Vec<u64>,
+    held: f64,
+    seconds: f64,
+}
+
+impl StagedRecord {
+    fn empty(state: usize) -> StagedRecord {
+        StagedRecord {
+            state,
+            s: STAGES[state],
+            steps: Vec::new(),
+            du: Vec::new(),
+            vdw: Vec::new(),
+            elec: Vec::new(),
+            coupling: Vec::new(),
+            digests: Vec::new(),
+            held: 0.0,
+            seconds: f64::NAN,
+        }
+    }
+
+    /// Every number it holds, as floats: what its trailer's digest is of.
+    fn numbers(&self) -> Vec<f64> {
+        let mut v: Vec<f64> = self.steps.iter().map(|&s| s as f64).collect();
+        for xs in [&self.du, &self.vdw, &self.elec, &self.coupling] {
+            v.extend_from_slice(xs);
+        }
+        v.extend(self.digests.iter().map(|&d| f64::from_bits(d)));
+        v.push(self.held);
+        v.push(self.seconds);
+        v
+    }
+
+    /// The same record with only the samples in `range`.
+    fn slice(&self, range: std::ops::Range<usize>) -> StagedRecord {
+        StagedRecord {
+            steps: self.steps[range.clone()].to_vec(),
+            du: self.du[range.clone()].to_vec(),
+            vdw: self.vdw[range.clone()].to_vec(),
+            elec: self.elec[range.clone()].to_vec(),
+            coupling: self.coupling[range.clone()].to_vec(),
+            digests: self.digests[range].to_vec(),
+            ..self.clone()
+        }
+    }
+}
+
+/// A staged file's last line: the sample count, the seconds, the worst identity and a digest of
+/// every number in the file, the digest last and sixteen digits wide, so that a file cut anywhere
+/// is refused.
+fn staged_trailer(r: &StagedRecord) -> String {
+    format!(
+        "# done {} seconds {} held {} digest {:016x}",
+        r.du.len(),
+        exact(r.seconds),
+        exact(r.held),
+        digest(r.numbers())
+    )
+}
+
+/// A staged file's reading: its header line's state, then each sample line — the step, `ΔU₄`,
+/// `ΔU_vdW`, `ΔU_elec`, the coupling, the positions' digest — then the trailer, which must hold
+/// the count and the digest of what was read. Refused, and why, when it is not whole.
+fn parse_staged(text: &str) -> Result<StagedRecord, String> {
+    let mut lines = text.lines();
+    let head = lines.next().ok_or_else(|| "an empty file".to_string())?;
+    let (state, _, _, _) =
+        staged_state_of(head).ok_or_else(|| format!("a header without its state: {head:?}"))?;
+    let mut r = StagedRecord::empty(state);
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("# done ") {
+            let w: Vec<&str> = rest.split_whitespace().collect();
+            let [count, "seconds", secs, "held", held, "digest", d] = w[..] else {
+                return Err(format!("a trailer cut short: {line:?}"));
+            };
+            r.seconds = secs.parse().map_err(|_| "the seconds".to_string())?;
+            r.held = held.parse().map_err(|_| "the identity".to_string())?;
+            if count.parse::<usize>().ok() != Some(r.du.len()) {
+                return Err(format!(
+                    "{} samples where the trailer says {count}",
+                    r.du.len()
+                ));
+            }
+            if d.len() != 16 || u64::from_str_radix(d, 16).ok() != Some(digest(r.numbers())) {
+                return Err("the samples' digest is not the trailer's".into());
+            }
+            return Ok(r);
+        }
+        let w: Vec<&str> = line.split_whitespace().collect();
+        let sample = || -> Option<(u64, [f64; 4], u64)> {
+            let [step, du, vdw, elec, coupling, d] = w[..] else {
+                return None;
+            };
+            Some((
+                step.parse().ok()?,
+                [
+                    du.parse().ok()?,
+                    vdw.parse().ok()?,
+                    elec.parse().ok()?,
+                    coupling.parse().ok()?,
+                ],
+                u64::from_str_radix(d, 16).ok()?,
+            ))
+        };
+        let (step, x, d) = sample().ok_or_else(|| format!("not a sample: {line:?}"))?;
+        r.steps.push(step);
+        r.du.push(x[0]);
+        r.vdw.push(x[1]);
+        r.elec.push(x[2]);
+        r.coupling.push(x[3]);
+        r.digests.push(d);
+    }
+    Err("no trailer: the file is not whole".into())
+}
+
+/// **State `k` of a phase: read back from `NAME_TAG_K.txt` in `dir` when a run completed it under
+/// the same header** ([`staged_header`]), refused by name when it was run differently or is not
+/// whole; or run now — [`sample_on`] with [`stage_potential`]'s `H(s)` from the phase's start at
+/// [`STAGE_INDEX`]`[k]`'s seed, every sample's `ΔU₄` by [`FramesDelta`], streamed to
+/// `NAME_TAG_K.partial`, which is begun afresh, and renamed once whole, then read back from the
+/// file. Every [`STAGE_CHECK_EVERY`]th sample is held to the frames' `s ΔU₄` ([`staged_held`]) on
+/// a second `H(s)`, so that the check's evaluations leave the dynamics' own field untouched.
+// Clippy on current stable suggests `usize::is_multiple_of`, stabilised in 1.87; this crate
+// builds on 1.78.
+#[allow(clippy::manual_is_multiple_of)]
+fn staged_state(
+    dir: &std::path::Path,
+    tag: &str,
+    phase: &StagedPhase,
+    p: Protocol,
+    k: usize,
+) -> StagedRecord {
+    use std::io::Write;
+    let path = dir.join(format!("{}_{tag}_{k}.txt", phase.name));
+    let want = staged_header(phase, p, k);
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        assert_eq!(
+            text.lines().next().unwrap_or(""),
+            want,
+            "{} was run differently: remove it to run the state again",
+            path.display()
+        );
+        let r = parse_staged(&text).unwrap_or_else(|why| {
+            panic!(
+                "{} is not whole ({why}): remove it to run the state again",
+                path.display()
+            )
+        });
+        assert_eq!(r.du.len(), p.samples, "{}", path.display());
+        log(
+            dir,
+            phase.log,
+            &format!("{} state {k}: {} samples read back", phase.name, p.samples),
+        );
+        return r;
+    }
+    let start = (phase.start)();
+    assert_eq!(start.len(), phase.base.group().len());
+    let potential = stage_potential(phase, k);
+    let checker = stage_potential(phase, k);
+    let t = std::time::Instant::now();
+    let partial = path.with_extension("partial");
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&partial).expect("partial"));
+    writeln!(file, "{want}").unwrap();
+    log(
+        dir,
+        phase.log,
+        &format!(
+            "{} state {k} at s = {} begins: {} steps",
+            phase.name,
+            STAGES[k],
+            p.steps_per_window()
+        ),
+    );
+    let mut r = StagedRecord::empty(k);
+    let mut last = (0u64, 0.0f64);
+    sample_on(
+        &potential,
+        &start,
+        phase.template,
+        p,
+        STAGE_INDEX[k],
+        |step, at| {
+            let change = phase.frames.at(at);
+            let coupling = phase.base.couplings(at, &[phase.lambda])[0].energy;
+            let d = positions_digest(at);
+            if r.du.len() % STAGE_CHECK_EVERY == 0 {
+                let held = staged_held(&checker, at, &change);
+                if held.is_nan() || held > r.held {
+                    r.held = held;
+                }
+            }
+            writeln!(
+                file,
+                "{step} {} {} {} {} {d:016x}",
+                exact(change.total()),
+                exact(change.vdw),
+                exact(change.elec),
+                exact(coupling)
+            )
+            .unwrap();
+            r.steps.push(step);
+            r.du.push(change.total());
+            r.vdw.push(change.vdw);
+            r.elec.push(change.elec);
+            r.coupling.push(coupling);
+            r.digests.push(d);
+            if r.du.len() % 100 == 0 {
+                file.flush().unwrap();
+                let secs = t.elapsed().as_secs_f64();
+                log(
+                    dir,
+                    phase.log,
+                    &format!(
+                        "{} state {k}: {} of {} samples, step {step}, {secs:.0} s, {:.1} ms a step \
+                         since the last report",
+                        phase.name,
+                        r.du.len(),
+                        p.samples,
+                        (secs - last.1) * 1e3 / (step - last.0) as f64
+                    ),
+                );
+                last = (step, secs);
+            }
+        },
+    );
+    r.seconds = t.elapsed().as_secs_f64();
+    writeln!(file, "{}", staged_trailer(&r)).unwrap();
+    file.flush().unwrap();
+    drop(file);
+    std::fs::rename(&partial, &path).expect("rename");
+    log(
+        dir,
+        phase.log,
+        &format!(
+            "{} state {k} done in {:.0} s, the identity's worst {:.3} of its bound",
+            phase.name, r.seconds, r.held
+        ),
+    );
+    parse_staged(&std::fs::read_to_string(&path).unwrap()).expect("just written")
+}
+
+/// Every state of a phase, in path order ([`staged_state`]).
+fn staged_states(
+    dir: &std::path::Path,
+    tag: &str,
+    phase: &StagedPhase,
+    p: Protocol,
+) -> Vec<StagedRecord> {
+    (0..STAGES.len())
+        .map(|k| staged_state(dir, tag, phase, p, k))
+        .collect()
+}
+
+/// BAR between two neighbouring staged states, reduced: `u_b − u_a = (s_b − s_a) βΔU₄` on both
+/// states' samples, the delta method's variance from each side's autocorrelation.
+fn staged_interval(a: &StagedRecord, b: &StagedRecord, kt: f64) -> pantometry_forcefield::Bar {
+    let ds = b.s - a.s;
+    let f: Vec<f64> = a.du.iter().map(|u| ds * u / kt).collect();
+    let r: Vec<f64> = b.du.iter().map(|u| ds * u / kt).collect();
+    pantometry_forcefield::free_energy::bar_correlated(&f, &r)
+}
+
+/// BAR along the states, kcal/mol, with its error: [`bennett_chain`], window by window, as the leg
+/// is chained.
+fn staged_chain(records: &[StagedRecord], kt: f64) -> (f64, f64) {
+    let n = records.len();
+    let windows: Vec<(Vec<f64>, Vec<f64>)> = (0..n)
+        .map(|k| {
+            let towards = |j: usize| -> Vec<f64> {
+                let ds = records[j].s - records[k].s;
+                records[k].du.iter().map(|u| ds * u / kt).collect()
+            };
+            (
+                if k > 0 { towards(k - 1) } else { Vec::new() },
+                if k + 1 < n {
+                    towards(k + 1)
+                } else {
+                    Vec::new()
+                },
+            )
+        })
+        .collect();
+    let fe = bennett_chain(&windows);
+    (kcal(fe.value * kt), kcal(fe.error * kt))
+}
+
+/// TI on the trapezoid, kcal/mol: `∫₀¹ ⟨ΔU₄⟩_s ds`, `dH/ds` being `ΔU₄` exactly, with
+/// [`Estimate`]'s errors.
+fn staged_ti(records: &[StagedRecord]) -> (f64, f64) {
+    let n = records.len();
+    let (mut value, mut variance) = (0.0, 0.0);
+    for k in 0..n {
+        let lo = records[k.saturating_sub(1)].s;
+        let hi = records[(k + 1).min(n - 1)].s;
+        let w = 0.5 * (hi - lo);
+        let e = estimate_kcal(records[k].du.iter().copied());
+        value += w * e.mean;
+        variance += w * w * e.error * e.error;
+    }
+    (value, variance.sqrt())
+}
+
+/// What one phase's staged states give, kcal/mol.
+struct StagedSummary {
+    /// BAR along the chain and its error.
+    bar: (f64, f64),
+    /// The same on each half of every state's samples.
+    halves: [f64; 2],
+    ti: (f64, f64),
+    /// Zwanzig's one step from the fresh `s` = 0 state forward, and from `s` = 1 backward.
+    one_step: [f64; 2],
+    /// The lowest overlap of the four intervals.
+    overlap: f64,
+}
+
+/// The tables for one phase: each state's `⟨ΔU₄⟩` and its halves, σ(βΔU₄) and the seconds; each
+/// interval's BAR and overlap; and the chain, its halves, TI, and the one step from either end.
+fn report_staged(name: &str, records: &[StagedRecord], kt: f64) -> StagedSummary {
+    println!(
+        "\n**{name}: the states**\n\n| s | samples | ⟨ΔU₄⟩ | ⟨ΔU_vdW⟩ | ⟨ΔU_elec⟩ | σ(βΔU₄) | \
+         identity (of its bound) | seconds |\n| --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
+    for r in records {
+        println!(
+            "| {:.2} | {} | {} | {} | {} | {:.3} | {:.3} | {:.0} |",
+            r.s,
+            r.du.len(),
+            pm(&estimate_kcal(r.du.iter().copied())),
+            pm(&estimate_kcal(r.vdw.iter().copied())),
+            pm(&estimate_kcal(r.elec.iter().copied())),
+            zwanzig(&r.du, kt).spread,
+            r.held,
+            r.seconds
+        );
+    }
+    println!("\n| interval | BAR (kcal/mol) | overlap |\n| --- | --- | --- |");
+    let mut overlap = f64::INFINITY;
+    for k in 0..records.len() - 1 {
+        let b = staged_interval(&records[k], &records[k + 1], kt);
+        overlap = overlap.min(b.overlap);
+        println!(
+            "| {:.2} → {:.2} | {:+.3} ± {:.3} | {:.3} |",
+            records[k].s,
+            records[k + 1].s,
+            kcal(b.delta * kt),
+            kcal(b.error() * kt),
+            b.overlap
+        );
+    }
+    let bar = staged_chain(records, kt);
+    let half = records[0].du.len() / 2;
+    let first: Vec<StagedRecord> = records.iter().map(|r| r.slice(0..half)).collect();
+    let second: Vec<StagedRecord> = records.iter().map(|r| r.slice(half..r.du.len())).collect();
+    let halves = [staged_chain(&first, kt).0, staged_chain(&second, kt).0];
+    let ti = staged_ti(records);
+    let last = records.last().expect("a state");
+    let back: Vec<f64> = last.du.iter().map(|u| -u).collect();
+    let one_step = [zwanzig(&records[0].du, kt).exp, -zwanzig(&back, kt).exp];
+    println!(
+        "\n{name}: ΔG_swap by BAR along the chain {:+.3} ± {:.3} kcal/mol (halves {:+.3}, {:+.3}); \
+         TI {:+.3} ± {:.3}; Zwanzig's one step from s = 0 {:+.3}, from s = 1 back {:+.3}; the lowest \
+         overlap {overlap:.3}",
+        bar.0, bar.1, halves[0], halves[1], ti.0, ti.1, one_step[0], one_step[1]
+    );
+    StagedSummary {
+        bar,
+        halves,
+        ti,
+        one_step,
+        overlap,
+    }
+}
+
+/// **How many of a state's numbers are another run's to the bit**: equal, and compared.
+fn to_the_bit(a: &[u64], b: &[u64]) -> (usize, usize) {
+    let n = a.len().min(b.len());
+    ((0..n).filter(|&i| a[i] == b[i]).count(), n)
+}
+
+/// **The staged check of variant 4, at protocol `p`, in `staged/` under the results directory.**
+/// The water first, W3's box melted as W3 melts it, and then the complex, the leg's box and start;
+/// each through [`staged_states`], every state resumable on its own, under the lock and the log
+/// `TAG`. Then BAR along each chain, `ΔΔG_bind = ΔG_swap(bound) − ΔG_swap(water)`, and what it
+/// implies, against the one step on the saved frames and against experiment. And `s` = 0 against
+/// what it reproduces if nothing it runs on has changed: under [`PROTOCOL`] the leg's window 0
+/// (the coupling at its state, sample by sample), under [`FRAMES`] the saved frames (the
+/// positions' digests); reported, not asserted. Every state's identity is asserted after
+/// everything is printed. **Nothing outside `staged/` is written**: `prepared.txt` is read back
+/// through its header ([`saved_start`]).
+fn staged_measured(tag: &'static str, p: Protocol) {
+    let dir = results_dir();
+    assert!(
+        dir.join("prepared.txt").exists(),
+        "{} is not there: this measurement reads the leg's preparation and writes nothing beside \
+         it",
+        dir.join("prepared.txt").display()
+    );
+    let staged = dir.join("staged");
+    std::fs::create_dir_all(&staged).expect("the staged directory");
+    let _lock = Lock::take(&staged, tag);
+    let t = std::time::Instant::now();
+    let kt = p.kt();
+
+    let benzene = hydration::Benzene::new(Some(pocket3().ligand_force_field().charges().to_vec()));
+    assert_eq!(
+        &benzene.types[..],
+        &pocket3().types()[pocket3().ligand_range()]
+    );
+    let w3 = hydration::w3_solvated(&benzene);
+    let w3_decoupling = w3.decoupling();
+    let w3_template = w3.dynamics(&benzene);
+    let free = water_surroundings(&benzene, &w3);
+    let free_labels = water_labels(&free);
+    let qw = am1bcc(&freesolv::component_graph(&benzene.component)).charges;
+    let free_vdw = VdwSwap::new(&free, &free_labels);
+    let free_frames = FramesDelta::new(&free, &free_labels, &qw);
+    let melted: std::cell::OnceCell<Vec<[f64; 3]>> = std::cell::OnceCell::new();
+    let water_start = || {
+        melted
+            .get_or_init(|| {
+                let mut at = w3.at.clone();
+                let tm = std::time::Instant::now();
+                hydration::w3_melt(&w3_decoupling, &w3_template, KELVIN, &mut at);
+                log(
+                    &staged,
+                    tag,
+                    &format!(
+                        "W3's box, {} waters, melted in {:.0} s",
+                        w3.waters,
+                        tm.elapsed().as_secs_f64()
+                    ),
+                );
+                at
+            })
+            .clone()
+    };
+    let water = StagedPhase {
+        name: "water",
+        base: &w3_decoupling,
+        restraint: None,
+        charges: &qw,
+        vdw: &free_vdw,
+        frames: &free_frames,
+        template: &w3_template,
+        lambda: Lambda::COUPLED,
+        identity: format!(
+            "built {:016x} melted w3_melt {}",
+            positions_digest(&w3.at),
+            exact(KELVIN)
+        ),
+        start: &water_start,
+        log: tag,
+    };
+    let records_w = staged_states(&staged, tag, &water, p);
+
+    let s = whole_complex();
+    let leg = production_leg(&s, saved_start(&s, &dir));
+    log(
+        &staged,
+        tag,
+        &format!(
+            "the leg's box and start read back in {:.0} s",
+            t.elapsed().as_secs_f64()
+        ),
+    );
+    let g = grid();
+    assert_eq!(g[0], Lambda::new(0.0, 1.0, 1.0));
+    let bound = complex_surroundings(&s);
+    let bound_labels = complex_labels(&s, the_system(), &bound);
+    let qb = am1bcc(&ligand_graph(s.binding())).charges;
+    let bound_vdw = VdwSwap::new(&bound, &bound_labels);
+    let bound_frames = FramesDelta::new(&bound, &bound_labels, &qb);
+    let complex_start = || leg.start.clone();
+    let complex = StagedPhase {
+        name: "complex",
+        base: &leg.decoupling,
+        restraint: Some(leg.restraint),
+        charges: &qb,
+        vdw: &bound_vdw,
+        frames: &bound_frames,
+        template: &leg.template,
+        lambda: g[0],
+        identity: format!(
+            "start {:016x} restraint {:016x} flexibility {:?}",
+            positions_digest(&leg.start),
+            restraint_digest(&leg.restraint),
+            leg.flexibility
+        ),
+        start: &complex_start,
+        log: tag,
+    };
+    let records_b = staged_states(&staged, tag, &complex, p);
+
+    println!(
+        "\n**Variant 4 staged**, H(s) = H_UFF + s ΔU₄ at s = {STAGES:?}, protocol {p:?}: {:.0} s \
+         in all",
+        t.elapsed().as_secs_f64()
+    );
+    let b = report_staged("bound", &records_b, kt);
+    let w = report_staged("in water", &records_w, kt);
+    let ddg = b.bar.0 - w.bar.0;
+    let ddg_error = (b.bar.1 * b.bar.1 + w.bar.1 * w.bar.1).sqrt();
+    let (hyd, hyd_error) = w3_hydration();
+    let hydration = hyd + w.bar.0;
+    let bind = W4_BINDING.0 + ddg;
+    println!(
+        "\n| | staged (BAR) | its halves | TI | Zwanzig from s = 0, from s = 1 | the one step on the \
+         saved frames | experiment |\n| --- | --- | --- | --- | --- | --- | --- |"
+    );
+    println!(
+        "| ΔΔG_bind | {ddg:+.3} ± {ddg_error:.3} | {:+.3}, {:+.3} | {:+.3} | {:+.3}, {:+.3} | {:+.3} \
+         ± {:.3} | |",
+        b.halves[0] - w.halves[0],
+        b.halves[1] - w.halves[1],
+        b.ti.0 - w.ti.0,
+        b.one_step[0] - w.one_step[0],
+        b.one_step[1] - w.one_step[1],
+        VARIANT_4_ONE_STEP.0,
+        VARIANT_4_ONE_STEP.1
+    );
+    println!(
+        "| ΔG°_bind = W4's {:+.3} + ΔΔG_bind | {bind:+.3} ± {:.3} | | {:+.3} | | {:+.2} | {:+.2} ± \
+         {:.2} |",
+        W4_BINDING.0,
+        (W4_BINDING.1 * W4_BINDING.1 + ddg_error * ddg_error).sqrt(),
+        W4_BINDING.0 + b.ti.0 - w.ti.0,
+        VARIANT_4_IMPLIED[0],
+        EXPERIMENT.0,
+        EXPERIMENT.1
+    );
+    println!(
+        "| ΔG_hyd = W3's {hyd:+.3} + ΔG_swap(water) | {hydration:+.3} ± {:.3} | | {:+.3} | | {:+.2} \
+         | {:+.2} ± {:.2} |",
+        (hyd_error * hyd_error + w.bar.1 * w.bar.1).sqrt(),
+        hyd + w.ti.0,
+        VARIANT_4_IMPLIED[1],
+        freesolv::EXPERIMENT.0,
+        freesolv::EXPERIMENT.1
+    );
+    println!(
+        "\nstaged − one step: ΔΔG_bind {:+.3} ({:.1} of their errors combined); the lowest overlap \
+         {:.3} bound, {:.3} in water",
+        ddg - VARIANT_4_ONE_STEP.0,
+        (ddg - VARIANT_4_ONE_STEP.0).abs()
+            / (ddg_error * ddg_error + VARIANT_4_ONE_STEP.1 * VARIANT_4_ONE_STEP.1).sqrt(),
+        b.overlap,
+        w.overlap
+    );
+
+    // s = 0 against what it should reproduce, if nothing it runs on has changed since.
+    let bits = |v: &[f64]| -> Vec<u64> { v.iter().map(|x| x.to_bits()).collect() };
+    if p == PROTOCOL {
+        if let Ok(text) = std::fs::read_to_string(dir.join("window_00.txt")) {
+            let w0 = parse(&text);
+            let theirs: Vec<f64> = w0.energies.iter().map(|e| e[0]).collect();
+            let (same, of) = to_the_bit(&bits(&records_b[0].coupling), &bits(&theirs));
+            println!(
+                "\ns = 0, bound, against the leg's window 0: the coupling at its state the same to \
+                 the bit at {same} of {of} samples"
+            );
+        }
+    }
+    if p == FRAMES {
+        for (name, records) in [("complex", &records_b), ("water", &records_w)] {
+            let path = dir.join("frames").join(format!("{name}.frames"));
+            if let Some(Ok(f)) = read_frames(&path) {
+                let theirs: Vec<u64> = f.at.iter().map(|at| positions_digest(at)).collect();
+                let (same, of) = to_the_bit(&records[0].digests, &theirs);
+                println!(
+                    "\ns = 0, {name}, against the saved frames: the positions the same to the bit \
+                     at {same} of {of} samples; the steps {}",
+                    if records[0].steps == f.steps {
+                        "the same"
+                    } else {
+                        "**not the same**"
+                    }
+                );
+            }
+        }
+    }
+    log(
+        &staged,
+        tag,
+        &format!("done in {:.0} s", t.elapsed().as_secs_f64()),
+    );
+    for r in records_b.iter().chain(&records_w) {
+        assert_eq!(r.du.len(), p.samples);
+        assert!(r.held <= 1.0, "state {}: {}", r.state, r.held);
+    }
+}
+
+/// **Variant 4's one step checked by staged sampling, at W3's and the leg's protocol** (release,
+/// one core; not run). `H(s) = H_UFF + s ΔU₄` ([`Staged`]) sampled at `s` = 0, 0.25, 0.5, 0.75
+/// and 1 in W3's water and in the complex, each state 20 ps discarded and 200 ps sampled every
+/// 100 fs ([`PROTOCOL`]), and BAR along each chain ([`staged_measured`]). Written to
+/// `staged/water_long_K.txt` and `staged/complex_long_K.txt` under `PANTOMETRY_W4_DIR`, each state
+/// read back if a run completed it; progress in `staged/long.log`. `PANTOMETRY_W4_DIR=… cargo test
+/// --release -p pantometry-forcefield --test benzene_bound_in_tip3p
+/// variant_4_staged_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "five states of the complex and of W3's box, 110 000 steps each: about two days with --release, not run"]
+fn variant_4_staged_measured() {
+    staged_measured("long", PROTOCOL);
+}
+
+/// **The same at the frames' protocol**, 4 ps discarded and 16 ps sampled every 50 fs per state
+/// ([`FRAMES`]), its `s` = 0 the saved frames' own run: a fifth of a day rather than two
+/// (`staged/*_short_K.txt`, `staged/short.log`). `PANTOMETRY_W4_DIR=… cargo test --release -p
+/// pantometry-forcefield --test benzene_bound_in_tip3p variant_4_staged_short_measured --
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "five states of the complex and of W3's box, 10 000 steps each: about five hours with --release, not run"]
+fn variant_4_staged_short_measured() {
+    staged_measured("short", FRAMES);
+}
+
+/// Milliseconds a step of `potential` from `start` under `template` at 2 fs in a 1 ps⁻¹ bath, over
+/// `steps` steps after ten that are not timed.
+fn ms_per_step(
+    potential: &dyn pantometry_forcefield::Potential,
+    start: &[[f64; 3]],
+    template: &MolecularDynamics,
+    steps: u64,
+) -> f64 {
+    let seed = 0x5_7A6E;
+    let mut md = template
+        .clone()
+        .with_bath(Bath::Langevin {
+            temperature: KELVIN,
+            friction: 1e12,
+            seed,
+        })
+        .thermalised(start, KELVIN, seed);
+    let mut at = start.to_vec();
+    md.prepare(potential, &at);
+    for _ in 0..10 {
+        md.step(potential, &mut at, 2.0 * FS);
+    }
+    let t = std::time::Instant::now();
+    for _ in 0..steps {
+        md.step(potential, &mut at, 2.0 * FS);
+    }
+    t.elapsed().as_secs_f64() * 1e3 / steps as f64
+}
+
+/// One phase's costs, milliseconds: a step of the field, a step of `H(0.5)`, a sample's records
+/// and a check's.
+struct StagedCost {
+    field: f64,
+    staged: f64,
+    sample: f64,
+    check: f64,
+}
+
+/// [`StagedCost`] for a phase from `start`: `steps` of the field and of `H(0.5)`, then five
+/// samples' records and two checks, timed.
+fn staged_cost(phase: &StagedPhase, start: &[[f64; 3]], steps: u64) -> StagedCost {
+    let field = ms_per_step(
+        &AtLambda {
+            hamiltonian: phase.base,
+            lambda: phase.lambda,
+        },
+        start,
+        phase.template,
+        steps,
+    );
+    let half = stage_potential(phase, 2);
+    assert_eq!(half.s, 0.5);
+    let staged = ms_per_step(&half, start, phase.template, steps);
+    let t = std::time::Instant::now();
+    for _ in 0..5 {
+        let change = phase.frames.at(start);
+        let coupling = phase.base.couplings(start, &[phase.lambda])[0].energy;
+        assert!(change.total().is_finite() && coupling.is_finite());
+        let _ = positions_digest(start);
+    }
+    let sample = t.elapsed().as_secs_f64() * 1e3 / 5.0;
+    let change = phase.frames.at(start);
+    let t = std::time::Instant::now();
+    for _ in 0..2 {
+        let held = staged_held(&half, start, &change);
+        assert!(held <= 1.0, "{}: {held}", phase.name);
+    }
+    StagedCost {
+        field,
+        staged,
+        sample,
+        check: t.elapsed().as_secs_f64() * 1e3 / 2.0,
+    }
+}
+
+/// Hours for one phase's five states at `p` at `cost`.
+fn staged_hours(cost: &StagedCost, p: Protocol) -> f64 {
+    let checks = (p.samples - 1) / STAGE_CHECK_EVERY + 1;
+    let ms = p.steps_per_window() as f64 * cost.staged
+        + p.samples as f64 * cost.sample
+        + checks as f64 * cost.check;
+    STAGES.len() as f64 * ms / 3.6e6
+}
+
+/// **What the staged check costs** (release, one core, about fifteen minutes; writes nothing):
+/// the leg's box built and its start read back, W3's box built and melted, then on each a few
+/// hundred steps of the field and of `H(0.5)` ([`Staged`]), a sample's records and a check's, and
+/// from them the whole run at [`PROTOCOL`] and at [`FRAMES`]. `PANTOMETRY_W4_DIR=… cargo test
+/// --release -p pantometry-forcefield --test benzene_bound_in_tip3p the_staged_step_costed --
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "the whole complex built and W3's box melted, a few hundred steps of each: about fifteen minutes with --release"]
+fn the_staged_step_costed() {
+    let dir = results_dir();
+    let t = std::time::Instant::now();
+    let s = whole_complex();
+    let leg = production_leg(&s, saved_start(&s, &dir));
+    let built = t.elapsed().as_secs_f64();
+    let bound = complex_surroundings(&s);
+    let bound_labels = complex_labels(&s, the_system(), &bound);
+    let qb = am1bcc(&ligand_graph(s.binding())).charges;
+    let bound_vdw = VdwSwap::new(&bound, &bound_labels);
+    let bound_frames = FramesDelta::new(&bound, &bound_labels, &qb);
+    let no_start = || -> Vec<[f64; 3]> { panic!("costing runs no state") };
+    let complex = StagedPhase {
+        name: "complex",
+        base: &leg.decoupling,
+        restraint: Some(leg.restraint),
+        charges: &qb,
+        vdw: &bound_vdw,
+        frames: &bound_frames,
+        template: &leg.template,
+        lambda: grid()[0],
+        identity: String::new(),
+        start: &no_start,
+        log: "cost",
+    };
+    let set_up = t.elapsed().as_secs_f64();
+    let c = staged_cost(&complex, &leg.start, 200);
+    println!(
+        "complex: {} atoms, built and read back in {built:.0} s, taken apart in {:.0} s; {} \
+         partners of benzene's van der Waals",
+        leg.start.len(),
+        set_up - built,
+        bound_vdw.partners.len()
+    );
+
+    let benzene = hydration::Benzene::new(Some(pocket3().ligand_force_field().charges().to_vec()));
+    let w3 = hydration::w3_solvated(&benzene);
+    let w3_decoupling = w3.decoupling();
+    let w3_template = w3.dynamics(&benzene);
+    let free = water_surroundings(&benzene, &w3);
+    let free_labels = water_labels(&free);
+    let qw = am1bcc(&freesolv::component_graph(&benzene.component)).charges;
+    let free_vdw = VdwSwap::new(&free, &free_labels);
+    let free_frames = FramesDelta::new(&free, &free_labels, &qw);
+    let water = StagedPhase {
+        name: "water",
+        base: &w3_decoupling,
+        restraint: None,
+        charges: &qw,
+        vdw: &free_vdw,
+        frames: &free_frames,
+        template: &w3_template,
+        lambda: Lambda::COUPLED,
+        identity: String::new(),
+        start: &no_start,
+        log: "cost",
+    };
+    let tm = std::time::Instant::now();
+    let mut at = w3.at.clone();
+    hydration::w3_melt(&w3_decoupling, &w3_template, KELVIN, &mut at);
+    let melt = tm.elapsed().as_secs_f64();
+    let w = staged_cost(&water, &at, 500);
+    println!(
+        "water: {} atoms, melted in {melt:.0} s\n\n| | the field (ms a step) | H(0.5) (ms a step) | \
+         over the field | a sample's records (ms) | a check (ms) |\n| --- | --- | --- | --- | --- | \
+         --- |",
+        at.len()
+    );
+    for (name, x) in [("complex", &c), ("water", &w)] {
+        println!(
+            "| {name} | {:.1} | {:.1} | {:+.1}% | {:.1} | {:.1} |",
+            x.field,
+            x.staged,
+            100.0 * (x.staged / x.field - 1.0),
+            x.sample,
+            x.check
+        );
+    }
+    println!(
+        "\n| protocol | steps a state | complex (h) | water (h) | both, with the builds and the \
+         melt (h) |\n| --- | --- | --- | --- | --- |"
+    );
+    for (name, p) in [
+        ("PROTOCOL, 20 + 200 ps", PROTOCOL),
+        ("FRAMES, 4 + 16 ps", FRAMES),
+    ] {
+        let (hc, hw) = (staged_hours(&c, p), staged_hours(&w, p));
+        println!(
+            "| {name} | {} | {hc:.1} | {hw:.1} | {:.1} |",
+            p.steps_per_window(),
+            hc + hw + (set_up + melt) / 3600.0
+        );
+    }
+}
+
+/// A small box for the staged checks: the box taken apart, its labels, the decoupling `H(s)` is a
+/// change of and its restraint, FreeSolv's charges in benzene's order, the dynamics, the state the
+/// production samples it at, and the positions as built.
+struct SmallStaged {
+    name: &'static str,
+    sur: Surroundings,
+    labels: Labels,
+    base: PeriodicDecoupling,
+    restraint: Option<Boresch>,
+    charges: Vec<f64>,
+    template: MolecularDynamics,
+    lambda: Lambda,
+    at: Vec<[f64; 3]>,
+}
+
+impl SmallStaged {
+    /// The box as a [`StagedPhase`], started from `start`.
+    fn phase<'a>(
+        &'a self,
+        vdw: &'a VdwSwap<'a>,
+        frames: &'a FramesDelta<'a>,
+        start: &'a dyn Fn() -> Vec<[f64; 3]>,
+    ) -> StagedPhase<'a> {
+        StagedPhase {
+            name: "small",
+            base: &self.base,
+            restraint: self.restraint,
+            charges: &self.charges,
+            vdw,
+            frames,
+            template: &self.template,
+            lambda: self.lambda,
+            identity: format!("built {:016x}", positions_digest(&self.at)),
+            start,
+            log: "staged",
+        }
+    }
+}
+
+/// The 3 Å pocket in water through the mesh, the leg's flexibility, the restraint on and the
+/// leg's state, `λ_r` = 0; and W3's small box through the classical sum, coupled.
+fn small_staged() -> Vec<SmallStaged> {
+    let s = small3(0x5EC7);
+    let sur = complex_surroundings(&s);
+    let labels = complex_labels(&s, the_system(), &sur);
+    let restraint = anchors(s.binding(), &s.positions()[..s.complex_atoms()]);
+    let pocket = SmallStaged {
+        name: "3 Å pocket, mesh",
+        base: s.decoupling().with_restraint(restraint),
+        restraint: Some(restraint),
+        charges: am1bcc(&ligand_graph(s.binding())).charges,
+        template: s.dynamics(LEG_FLEXIBILITY),
+        lambda: grid()[0],
+        at: s.positions().to_vec(),
+        sur,
+        labels,
+    };
+    assert!(pocket.sur.whole.field().ewald().mesh().is_some());
+    let b = hydration::Benzene::new(None);
+    let w = hydration::Solvated::new(&b, 3, 0x5EC8, 2.3 * ANGSTROM, 4.6 * ANGSTROM, 1e-5);
+    let free = water_surroundings(&b, &w);
+    let free_labels = water_labels(&free);
+    let water = SmallStaged {
+        name: "W3's small box, Ewald",
+        base: w.decoupling(),
+        restraint: None,
+        charges: am1bcc(&freesolv::component_graph(&b.component)).charges,
+        template: w.dynamics(&b),
+        lambda: Lambda::COUPLED,
+        at: w.at.clone(),
+        sur: free,
+        labels: free_labels,
+    };
+    assert!(water.sur.whole.field().ewald().mesh().is_none());
+    vec![pocket, water]
+}
+
+/// The positions' bits, atom by atom.
+fn position_bits(at: &[[f64; 3]]) -> Vec<[u64; 3]> {
+    at.iter().map(|p| p.map(f64::to_bits)).collect()
+}
+
+/// **The forces of `ΔU₄` are its gradient**: on the 3 Å pocket through the mesh and W3's small box
+/// through the classical sum, `F_H(1) − F_H(0)` from the dynamics' own [`Staged`] against central
+/// differences of `ΔU₄` **as the frames compute it** ([`FramesDelta`], the couplings' pass and the
+/// van der Waals sums: another path, with no force in it), within [`finite_difference`]'s
+/// tolerance at h = 10⁻⁵ Å plus `64 ε` of the larger forces for the two evaluations' rounding.
+/// Every axis of every benzene atom — its own Coulomb pairs taken back, the van der Waals swapped,
+/// the cross Coulomb — and of the protein or water atom nearest it; and on the pocket **an atom
+/// beyond the cutoff of every benzene atom**, whose force from `ΔU₄` is the reciprocal sum's alone
+/// and must be ten times the tolerance or more, so that a run without it would fail. No pair a moved atom is in lies within 8 h of the cutoff.
+/// Both boxes are printed before either is asserted.
+#[test]
+fn the_staged_forces_are_the_gradient_of_its_change() {
+    let h = 1e-5 * ANGSTROM;
+    let mut results = Vec::new();
+    for b in small_staged() {
+        let vdw = VdwSwap::new(&b.sur, &b.labels);
+        let frames = FramesDelta::new(&b.sur, &b.labels, &b.charges);
+        let one = Staged::new(&b.base, b.restraint, &b.charges, &vdw, b.lambda, 1.0);
+        let zero = Staged::new(&b.base, b.restraint, &b.charges, &vdw, b.lambda, 0.0);
+        let n = b.at.len();
+        let (mut f1, mut f0) = (vec![[0.0; 3]; n], vec![[0.0; 3]; n]);
+        one.evaluate(&b.at, &mut f1);
+        zero.evaluate(&b.at, &mut f0);
+        let rounding = 64.0 * EPS * (largest_force(&f1) + largest_force(&f0));
+        let change = frames.at(&b.at);
+        let scale = b.sur.scale(&b.at) + change.magnitude;
+        let w: Vec<[f64; 3]> = b.at.iter().map(|p| b.sur.cell.wrap(*p)).collect();
+        let ligand = b.sur.ligand.clone();
+        let distance = |i: usize, j: usize| b.sur.separation(&w, i.min(j), i.max(j)).1.sqrt();
+        let to_benzene = |j: usize| {
+            ligand
+                .clone()
+                .map(|g| distance(g, j))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let rest: Vec<usize> = (0..n).filter(|&j| !ligand.contains(&j)).collect();
+        let near = *rest
+            .iter()
+            .filter(|&&j| b.sur.vdw[j][1] != 0.0)
+            .min_by(|&&x, &&y| to_benzene(x).total_cmp(&to_benzene(y)))
+            .expect("an atom near benzene");
+        let far = rest.iter().copied().find(|&j| {
+            b.sur.whole.field().charges()[j] != 0.0 && to_benzene(j) > b.sur.cutoff + ANGSTROM
+        });
+        let mut atoms: Vec<usize> = ligand.clone().collect();
+        atoms.push(near);
+        atoms.extend(far);
+        for &i in &atoms {
+            let partners: Vec<usize> = if ligand.contains(&i) {
+                rest.clone()
+            } else {
+                ligand.clone().collect()
+            };
+            for j in partners {
+                let r = distance(i, j);
+                assert!(
+                    (r - b.sur.cutoff).abs() > 8.0 * h,
+                    "{}: atoms {i} and {j} at the cutoff",
+                    b.name
+                );
+            }
+        }
+        let (mut worst, mut far_force, mut largest) = (0.0f64, 0.0f64, 0.0f64);
+        for &i in &atoms {
+            for x in 0..3 {
+                let energy = |dx: f64| {
+                    let mut p = b.at.clone();
+                    p[i][x] += dx;
+                    (frames.at(&p).total(), scale)
+                };
+                let (d, tol) = finite_difference(energy, h);
+                let f = f1[i][x] - f0[i][x];
+                let ratio = (f + d).abs() / (tol + rounding);
+                if ratio.is_nan() || ratio > worst {
+                    worst = ratio;
+                }
+                largest = largest.max(f.abs() / (tol + rounding));
+                if Some(i) == far {
+                    far_force = far_force.max(f.abs() / (tol + rounding));
+                }
+            }
+        }
+        println!(
+            "{}: {} atoms by three axes, the worst {worst:.2e} of the tolerance, the largest force \
+             {largest:.1e} times it; atom {near} nearest benzene at {:.2} Å; the far atom {far:?} \
+             at {:.2} Å, its force {far_force:.1e} times the tolerance",
+            b.name,
+            atoms.len(),
+            to_benzene(near) / ANGSTROM,
+            far.map_or(f64::NAN, |j| to_benzene(j) / ANGSTROM)
+        );
+        results.push((b.name, worst, far, far_force));
+    }
+    for (name, worst, _, _) in &results {
+        assert!(*worst <= 1.0, "{name}: {worst}");
+    }
+    let (name, _, far, far_force) = &results[0];
+    assert!(
+        far.is_some(),
+        "{name}: an atom beyond the cutoff of every benzene atom"
+    );
+    assert!(
+        *far_force > 10.0,
+        "{name}: the far atom's force is the reciprocal sum's, far above the tolerance: \
+         {far_force}"
+    );
+}
+
+/// **At `s` = 0, `H(s)` is the field, to the bit**: on both small boxes, [`Staged`] at `s` = 0
+/// holds a decoupling equal to the field's — charges, restraint, soft core, group, pairs — and
+/// gives its energy and every force with the same bits, at the production's state and at
+/// `λ = (1, 0.5, 0.7)`, where the pocket's restraint, the charges and the soft core all count; and
+/// three samples of the dynamics under it, through [`sample_on`], are the field's own
+/// ([`sample_frames`]) to the bit, while under `H(0.5)` they are not.
+#[test]
+fn the_staged_hamiltonian_at_zero_is_the_field() {
+    for b in small_staged() {
+        let vdw = VdwSwap::new(&b.sur, &b.labels);
+        let n = b.at.len();
+        for lambda in [b.lambda, Lambda::new(1.0, 0.5, 0.7)] {
+            let zero = Staged::new(&b.base, b.restraint, &b.charges, &vdw, lambda, 0.0);
+            assert!(
+                zero.charged == b.base,
+                "{}: the decoupling at s = 0 is the field's",
+                b.name
+            );
+            let (mut f, mut g) = (vec![[0.0; 3]; n], vec![[0.0; 3]; n]);
+            let e = zero.evaluate(&b.at, &mut f);
+            let e0 = Alchemical::energy_and_forces(&b.base, &b.at, lambda, &mut g);
+            assert_eq!(e.to_bits(), e0.to_bits(), "{}: {lambda:?}", b.name);
+            assert!(
+                position_bits(&f) == position_bits(&g),
+                "{}: every force, {lambda:?}",
+                b.name
+            );
+        }
+        let p = Protocol {
+            time_step: 0.5e-15,
+            temperature: KELVIN,
+            friction: 50e12,
+            equilibration: 2,
+            stride: 2,
+            samples: 3,
+            seed: 0x5A60,
+        };
+        let mut field = Vec::new();
+        sample_frames(&b.base, &b.at, &b.template, p, 0, b.lambda, |s, at| {
+            field.push((s, position_bits(at)))
+        });
+        let run = |s: f64| {
+            let st = Staged::new(&b.base, b.restraint, &b.charges, &vdw, b.lambda, s);
+            let mut v = Vec::new();
+            sample_on(&st, &b.at, &b.template, p, 0, |s, at| {
+                v.push((s, position_bits(at)))
+            });
+            v
+        };
+        assert_eq!(field.len(), 3);
+        assert!(run(0.0) == field, "{}: the dynamics at s = 0", b.name);
+        assert!(run(0.5) != field, "{}: and at s = 0.5 not", b.name);
+        println!(
+            "{}: H(0) is the field to the bit, energy, forces and three samples",
+            b.name
+        );
+    }
+}
+
+/// **`ΔU₄` in the dynamics is the frames' `ΔU₄`**: on both small boxes, as built and after four
+/// steps at `s` = 1, `H(s) − H(0)` from [`Staged`] is `s ΔU₄` from [`FramesDelta`] at `s` = 0.25,
+/// 0.5, 0.75 and 1, within [`staged_held`]'s bound — so `H` is linear in `s` and its states are
+/// the ones BAR is told they are — and the van der Waals half of [`Staged`]'s own sum
+/// ([`VdwSwap`]) is the frames' within the summation bound. Neither half of `ΔU₄` is zero.
+#[test]
+fn the_staged_change_is_the_frames_change() {
+    let mut results = Vec::new();
+    for b in small_staged() {
+        let vdw = VdwSwap::new(&b.sur, &b.labels);
+        let frames = FramesDelta::new(&b.sur, &b.labels, &b.charges);
+        let one = Staged::new(&b.base, b.restraint, &b.charges, &vdw, b.lambda, 1.0);
+        let p = Protocol {
+            time_step: 0.5e-15,
+            temperature: KELVIN,
+            friction: 50e12,
+            equilibration: 0,
+            stride: 4,
+            samples: 1,
+            seed: 0x5A61,
+        };
+        let mut moved = Vec::new();
+        sample_on(&one, &b.at, &b.template, p, 0, |_, at| moved = at.to_vec());
+        for (where_, at) in [("as built", &b.at), ("after four steps", &moved)] {
+            let change = frames.at(at);
+            let v = vdw.evaluate(at, 0.0, None);
+            let vdw_ratio = (v.total() - change.vdw).abs()
+                / summation_bound(v.terms + change.terms, v.magnitude + change.magnitude);
+            let mut worst = 0.0f64;
+            for &s in &STAGES[1..] {
+                let st = Staged::new(&b.base, b.restraint, &b.charges, &vdw, b.lambda, s);
+                let held = staged_held(&st, at, &change);
+                if held.is_nan() || held > worst {
+                    worst = held;
+                }
+            }
+            println!(
+                "{} {where_}: ΔU₄ {:+.5} kcal/mol (van der Waals {:+.5}, electrostatics {:+.5}); \
+                 H(s) − H(0) − s ΔU₄ at worst {worst:.1e} of its bound, the van der Waals sums \
+                 {vdw_ratio:.1e}",
+                b.name,
+                kcal(change.total()),
+                kcal(change.vdw),
+                kcal(change.elec)
+            );
+            results.push((b.name, where_, change, worst, vdw_ratio));
+        }
+    }
+    for (name, where_, change, worst, vdw_ratio) in results {
+        assert!(worst <= 1.0, "{name} {where_}: {worst}");
+        assert!(vdw_ratio <= 1.0, "{name} {where_}: {vdw_ratio}");
+        assert!(change.vdw != 0.0 && change.elec != 0.0, "{name} {where_}");
+    }
+}
+
+/// **The `s`-states are what their headers say**: [`STAGES`] runs from 0 to 1 upwards and
+/// [`STAGE_INDEX`] gives `s` = 0 window 0's seed and every other state one past [`grid`]'s
+/// candidates, all distinct; on the 3 Å pocket each state's header ([`staged_header`]) reads back
+/// as its state, its `s` to the bit and its seed; the potential the run builds for it
+/// ([`stage_potential`]) is `H` at that `s`, and at that `s` it is `H(0) + s ΔU₄` within
+/// [`staged_held`]'s bound; and each header is state 0's but for its state, `s`, index and seed.
+#[test]
+fn the_staged_states_are_what_their_headers_say() {
+    assert_eq!(STAGES[0], 0.0);
+    assert_eq!(STAGES[STAGES.len() - 1], 1.0);
+    assert!(STAGES.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(STAGE_INDEX[0], 0);
+    assert!(STAGE_INDEX[1..].iter().all(|&i| i >= grid().len()));
+    let distinct: std::collections::BTreeSet<usize> = STAGE_INDEX.iter().copied().collect();
+    assert_eq!(distinct.len(), STAGE_INDEX.len());
+    let b = small_staged().swap_remove(0);
+    let vdw = VdwSwap::new(&b.sur, &b.labels);
+    let frames = FramesDelta::new(&b.sur, &b.labels, &b.charges);
+    let start = || b.at.clone();
+    let phase = b.phase(&vdw, &frames, &start);
+    let change = frames.at(&b.at);
+    let headers: Vec<String> = (0..STAGES.len())
+        .map(|k| staged_header(&phase, PROTOCOL, k))
+        .collect();
+    for (k, head) in headers.iter().enumerate() {
+        let (state, s, index, seed) = staged_state_of(head).expect("a state");
+        assert_eq!(state, k, "{head}");
+        assert_eq!(s.to_bits(), STAGES[k].to_bits(), "{head}");
+        assert_eq!(index, STAGE_INDEX[k], "{head}");
+        assert_eq!(seed, window_seed(PROTOCOL.seed, index), "{head}");
+        let st = stage_potential(&phase, k);
+        assert_eq!(st.s.to_bits(), s.to_bits(), "state {k}");
+        let held = staged_held(&st, &b.at, &change);
+        assert!(held <= 1.0, "state {k}: {held}");
+        let own = |j: usize| {
+            format!(
+                "state {j} s {} of {} index {} seed {:016x} ",
+                exact(STAGES[j]),
+                STAGES.map(exact).join(","),
+                STAGE_INDEX[j],
+                window_seed(PROTOCOL.seed, STAGE_INDEX[j])
+            )
+        };
+        assert!(head.contains(&own(k)), "{head}");
+        assert_eq!(head.replace(&own(k), &own(0)), headers[0], "state {k}");
+    }
+    println!("{}", headers[2]);
+}
+
+/// **A killed staged run resumes to the same bits**, through the production's own
+/// [`staged_state`] on the 3 Å pocket at a protocol of eight 0.5 fs steps and three samples a
+/// state, in temporary directories: every state run uninterrupted; and states 0 and 1 run, then
+/// what a run killed during state 2 leaves — its `.partial`, a header and one sample — then the
+/// whole phase again. States 0 and 1 are read, not run (their files' bytes unchanged), the start is
+/// asked for only by the states that run, the partial is begun afresh and renamed, and **every
+/// number of every state is the uninterrupted run's to the bit**; and state 2's positions are
+/// [`sample_on`] of `H` at the `s` and seed index its header says, so a state runs what its header
+/// says it ran. And each guard refuses by name:
+/// a state asked for at another seed, and a state file cut short at every line.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn a_staged_run_resumes_to_the_same_bits() {
+    let b = small_staged().swap_remove(0);
+    let vdw = VdwSwap::new(&b.sur, &b.labels);
+    let frames = FramesDelta::new(&b.sur, &b.labels, &b.charges);
+    let started = std::cell::Cell::new(0usize);
+    let start = || {
+        started.set(started.get() + 1);
+        b.at.clone()
+    };
+    let phase = b.phase(&vdw, &frames, &start);
+    let p = Protocol {
+        time_step: 0.5e-15,
+        temperature: KELVIN,
+        friction: 50e12,
+        equilibration: 2,
+        stride: 2,
+        samples: 3,
+        seed: 0x5A62,
+    };
+    let whole = fresh_dir("staged-whole");
+    let full = staged_states(&whole, "t", &phase, p);
+    assert_eq!(started.get(), STAGES.len());
+    let killed = fresh_dir("staged-killed");
+    for k in 0..2 {
+        staged_state(&killed, "t", &phase, p, k);
+    }
+    let bytes = |d: &std::path::Path, k: usize| std::fs::read(d.join(format!("small_t_{k}.txt")));
+    let before = [bytes(&killed, 0).unwrap(), bytes(&killed, 1).unwrap()];
+    let text = std::fs::read_to_string(whole.join("small_t_2.txt")).unwrap();
+    let partial: String = text.lines().take(2).map(|l| format!("{l}\n")).collect();
+    std::fs::write(killed.join("small_t_2.partial"), partial).unwrap();
+    started.set(0);
+    let resumed = staged_states(&killed, "t", &phase, p);
+    assert_eq!(started.get(), STAGES.len() - 2, "states 0 and 1 read back");
+    assert!(bytes(&killed, 0).unwrap() == before[0] && bytes(&killed, 1).unwrap() == before[1]);
+    assert!(!killed.join("small_t_2.partial").exists());
+    let all = |r: &StagedRecord| -> Vec<u64> {
+        let mut v: Vec<u64> = r.numbers().iter().map(|x| x.to_bits()).collect();
+        v.pop(); // the seconds
+        v
+    };
+    for (a, c) in full.iter().zip(&resumed) {
+        assert_eq!((a.state, a.s.to_bits()), (c.state, c.s.to_bits()));
+        assert_eq!(a.du.len(), p.samples);
+        assert!(a.held <= 1.0, "state {}: {}", a.state, a.held);
+        assert!(all(a) == all(c), "state {}", a.state);
+    }
+    // Each state's samples are its own: the states differ. And a state ran at its header's `s`
+    // and seed: state 2's positions are `sample_on` of `H` at the `s` and index its header says.
+    assert!(full[0].digests != full[4].digests);
+    let (_, s, index, _) = staged_state_of(&staged_header(&phase, p, 2)).expect("a state");
+    let st = Staged::new(&b.base, b.restraint, &b.charges, &vdw, b.lambda, s);
+    let mut digests = Vec::new();
+    sample_on(&st, &b.at, &b.template, p, index, |_, at| {
+        digests.push(positions_digest(at))
+    });
+    assert!(
+        digests == full[2].digests,
+        "state 2 ran at its header's s and seed"
+    );
+    println!(
+        "resumed: {} states, {} numbers each the uninterrupted run's",
+        resumed.len(),
+        all(&resumed[0]).len()
+    );
+
+    let other = Protocol {
+        seed: p.seed + 1,
+        ..p
+    };
+    let why = refusal(|| drop(staged_state(&killed, "t", &phase, other, 0)));
+    assert!(why.contains("was run differently"), "{why}");
+    let file = std::fs::read_to_string(whole.join("small_t_3.txt")).unwrap();
+    let cut = fresh_dir("staged-cut");
+    for k in 1..file.len() - 1 {
+        if !file.is_char_boundary(k) {
+            continue;
+        }
+        assert!(
+            parse_staged(&file[..k]).is_err(),
+            "cut at byte {k} of {} read as whole",
+            file.len()
+        );
+    }
+    let short = &file[..file.len() - 3];
+    std::fs::write(
+        cut.join("small_t_0.txt"),
+        short.replacen(
+            &staged_header(&phase, p, 3),
+            &staged_header(&phase, p, 0),
+            1,
+        ),
+    )
+    .unwrap();
+    let why = refusal(|| drop(staged_state(&cut, "t", &phase, p, 0)));
+    assert!(why.contains("not whole"), "{why}");
+    for d in [whole, killed, cut] {
+        let _ = std::fs::remove_dir_all(d);
     }
 }

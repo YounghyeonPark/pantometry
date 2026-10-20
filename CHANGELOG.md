@@ -3913,6 +3913,135 @@ protects nothing.
 
   459 tests are listed in the crate, 45 of them ignored, so 414 run by default (453, 44 and 409
   before). There is no `powi` or `powf` in either file this change touches.
+
+- **Variant 4's one step, checked by sampling the states between: written, costed, not run.**
+  `variant_4_staged_measured` (ignored) samples `H(s) = H_UFF + s ΔU₄` at `s` = 0, 0.25, 0.5,
+  0.75 and 1, bound and in W3's water. Each state is a fresh run, `s` = 0 included, so all five
+  share one protocol. It then chains BAR between neighbours (`bennett_chain`, the delta method's
+  autocorrelation-aware error) to `ΔG_swap(bound)` and `ΔG_swap(water)`. It prints
+  `ΔΔG_bind = ΔG_swap(bound) − ΔG_swap(water)` with the halves, TI and the one step from either
+  end, set against the one step's +3.953 ± 0.113, its −5.02 / −0.62, and experiment's −5.19 /
+  −0.90. Nothing in `src/` changed.
+  - **The forces of `ΔU₄`, at one whole evaluation a step.** Benzene's cross Coulomb energy `C(q)`
+    is linear in benzene's charges: its real-space pairs, the reciprocal sum's cross terms (mesh
+    or classical) and the background's. So `C((1 − s) q_old + s q_new) = C(q_old) + s ΔU_elec`
+    exactly, and the rest's own terms do not see benzene's charges. `Staged` therefore evaluates
+    the field once, with benzene's charges `(1 − s) q_old + s q_new`. Every force of
+    `s ΔU_elec` then comes out of the field's own evaluation, the reciprocal force on atoms far
+    from benzene included. Two corrections are made by hand:
+    - **benzene's 36 own Coulomb pairs**, quadratic in its charges, are taken back to QEq's,
+      energy and force;
+    - **`s ΔU_vdW`** is added as a test-side pair loop over benzene × the 11 877 atoms with a well
+      in either model (`VdwSwap`). Its long-range correction difference is constant in the
+      positions at a fixed volume, so it is added to the energy and given no force.
+
+    `(1 − s) q_old + s q_new` is QEq's charges to the bit at `s` = 0 and FreeSolv's at `s` = 1.
+    `H` is linear in `s` by construction, not just to first order. The other ways were dearer:
+    `couplings` gives the cross energy but no force, and the coupled-less-decoupled difference
+    costs two more whole evaluations a step.
+  - **What each state records** is `ΔU₄` by the frames' own computation, not the dynamics':
+    `cross_deltas` to variant 3, which is `reparametrise`'s fourth `ΔU` to the bit, plus
+    `ChargeSwap::delta`. It also records the coupling at the phase's state and a digest of the
+    positions.
+  - **The production.** It has the leg's box, start (`saved_start`, read only), template and
+    restraint, and W3's box melted as W3 melts it. Each state goes through `sample_on`, which
+    `sample_frames` is now written on, seeded `window_seed(seed, STAGE_INDEX[k])` with indices
+    0, 33, 34, 35, 36. **`s` = 0 is index 0**, so under `PROTOCOL` it is the leg's window 0 and
+    under `FRAMES` the saved frames, to the bit if nothing has changed. The run compares the two
+    and reports the result without asserting it: against `window_00.txt`'s coupling, sample by
+    sample, and against the frames' position digests. The other indices are past the grid's 33
+    candidates.
+  - **The files.** Each state is resumable on its own: `staged/{water,complex}_{long,short}_K.txt`
+    under `PANTOMETRY_W4_DIR`, written to `.partial`, begun afresh and renamed once whole.
+    - The header holds the state, `s` among all five, the index and seed, the protocol literally,
+      λ, the atom count, the phase's identity, and digests of both charge sets and both van der
+      Waals models.
+    - The trailer holds the count, the seconds, the worst identity and a digest of every number,
+      so a file cut anywhere is refused.
+    - The lock and log are `staged/long.*` or `staged/short.*`. Nothing outside `staged/` is
+      written.
+    - Every 200th sample, from the first, is held to the frames' `s ΔU₄` on a second `H(s)`,
+      which leaves the dynamics' field untouched. This is asserted after everything is printed.
+
+  **The cost**, measured by `the_staged_step_costed` (ignored, release, one core, 613 s, writes
+  nothing). It ran 200 steps of the complex and 500 of the water from the prepared start and the
+  melted box:
+
+  | | the field (ms a step) | `H(0.5)` (ms a step) | over the field | a sample's records (ms) | a check (ms) |
+  | --- | --- | --- | --- | --- | --- |
+  | complex, 30 417 atoms | 309.5 | 309.7 | +0.1% | 114.3 | 1 195 |
+  | water, 1 533 atoms | 21.0 | 21.3 | +1.2% | 8.7 | 79.5 |
+
+  | protocol, per state | steps a state | complex | water | in all, with the build (183 s) and the melt (274 s) |
+  | --- | --- | --- | --- | --- |
+  | `PROTOCOL`, 20 ps + 200 ps every 100 fs | 110 000 | 47.6 h | 3.3 h | **51.0 h, 2.1 days** |
+  | `FRAMES`, 4 ps + 16 ps every 50 fs | 10 000 | 4.4 h | 0.3 h | **4.8 h** |
+
+  - **The long run is over two days**, so the short one is written as well:
+    `variant_4_staged_short_measured`, the same code at `FRAMES`.
+    - **The long run buys** 2000 samples of 200 ps a state, ten times the one step's time in
+      water. The one step's error is the thing in doubt: its water halves differed by 0.37
+      against an error of 0.09.
+    - **The short run buys** the overlap test at the one step's own length. It shows whether
+      sampling the states between moves +3.953, but it inherits the 16 ps question: its halves
+      will be as noisy.
+    - Both assume the run is not throttled. Measured here at 309.5 ms against the 297–301 of the
+      last unthrottled runs; the throttled 1 000+ ms would triple the first row.
+  - **Commands.**
+    `PANTOMETRY_W4_DIR=C:/pantometry-w4/leg cargo test --release --locked -p pantometry-forcefield
+    --test benzene_bound_in_tip3p variant_4_staged_measured -- --ignored --nocapture`, and
+    `variant_4_staged_short_measured` for the short one.
+
+  **Checked** (five default tests, 6–13 s each unoptimised, on the 3 Å pocket through the mesh
+  with its restraint and W3's small box through the classical sum):
+  - `the_staged_forces_are_the_gradient_of_its_change`. `F_H(1) − F_H(0)` is held against central
+    differences of the frames' `ΔU₄` at h = 10⁻⁵ Å, a path with no force in it, on every axis of
+    every benzene atom, the atom nearest it, and **an atom past the cutoff of every benzene atom**,
+    whose `ΔU₄` force is the reciprocal sum's alone. The worst is 0.045 of the tolerance (pocket)
+    and 1.9e-4 (water). The far atom's force is 86 times its tolerance, and the test asks for ten.
+    No pair a moved atom is in lies within 8 h of the cutoff. At h = 10⁻⁴ Å one did, about one
+    expected at that band, so h went down a decade.
+  - `the_staged_hamiltonian_at_zero_is_the_field`. At `s` = 0 the decoupling equals the field's.
+    Its energy and every force have the same bits at the leg's state and at λ = (1, 0.5, 0.7),
+    where the restraint and soft core count. Three samples of its dynamics are `sample_frames`'
+    to the bit, and at `s` = 0.5 they are not.
+  - `the_staged_change_is_the_frames_change`. `H(s) − H(0)` equals the frames' `s ΔU₄` at all four
+    `s`, as built and after four steps, to at most 0.003 of the bound (64 ε of both evaluations'
+    parts and the own pairs, plus the van der Waals summation bound). `VdwSwap`'s sum is the
+    frames' within its summation bound.
+  - `the_staged_states_are_what_their_headers_say`. Each header reads back as its state, `s` to
+    the bit, index and seed. `stage_potential` builds `H` at that `s`, and it holds there. Each
+    header is state 0's but for those four fields.
+  - `a_staged_run_resumes_to_the_same_bits`. A run killed in state 2 resumes with every number of
+    every state the uninterrupted run's to the bit, and the finished states are read rather than
+    run. **State 2's positions are `sample_on` at the `s` and index its header says**, so a state
+    runs what it says it ran. Another seed is refused by name, and so is the file cut at every
+    byte.
+
+  The real boxes' identity held too: `the_staged_step_costed` asserts `staged_held` ≤ 1 on the
+  whole complex and on W3's box at `s` = 0.5.
+
+  **Nine sabotages, each caught by its test.** Each was applied by script in binary mode at an
+  anchor that occurs once, from an aside copy named for the run, and restored by `cp`, `touch`
+  and SHA-256 (`11eb9276…` before and after every one; `cargo fmt` changed only the layout
+  since, and every anchor still occurs once).
+
+  | sabotage | caught by | how far |
+  | --- | --- | --- |
+  | `ΔU_vdW`'s force sign flipped | the gradient | 1.3e8 of the tolerance |
+  | `s` applied twice (`s² q_new`) | the frames' change | 7.4e7 to 2.1e10 of the bound |
+  | the swap's electrostatic forces dropped, reciprocal ones included (the field's old-charge forces) | the gradient | the far atom's force 0; 3.3e4 |
+  | the long-range term given a force | the gradient | 8.2e2 |
+  | the own pairs' force left out | the gradient | 1.5e3 |
+  | the restraint left off `H(s)` | the identity at `s` = 0 | the decoupling not the field's |
+  | the header's `s` squared | the headers | state 1 read as 6.25e-2 |
+  | a state seeded by `k`, not its index | the resume | state 2 not at its header's seed |
+  | the trailer's digest unchecked | the resume | a cut at byte 639 of 655 read as whole |
+
+  **Counts.** `cargo test -p pantometry-forcefield -- --list` lists 467 tests, 48 of them ignored,
+  so 419 run by default (459, 45 and 414 before). `benzene_bound_in_tip3p.rs` has 40 default tests
+  (25.7 s unoptimised) and eleven ignored. **Not run**: either staged measurement, the workspace
+  suite and the gate. There is no `powi` or `powf` in the file.
 - **`pantometry-pharmacokinetic` takes oral doses: a first-order absorption depot, with
   bioavailability and a lag, on the books and checked against the Bateman function.** The module
   docs had said why there was none — absorption is a rate constant on an *amount*, a clearance acts
