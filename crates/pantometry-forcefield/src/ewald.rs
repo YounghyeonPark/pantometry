@@ -27,7 +27,10 @@
 //!   reciprocal sum is over all pairs, excluded ones included, because `|S(k)|²` cannot tell them
 //!   apart; `E_excl` takes their smooth part, `erf(αr)/r`, back out — exactly, at any `α`, so an
 //!   excluded pair contributes nothing at all. Every excluded pair is corrected wherever it is,
-//!   not only inside the cutoff.
+//!   not only inside the cutoff. **A scaled pair is a partial exclusion**: the periodic force
+//!   field's 1-4 pairs, scaled by `s_c` when asked ([`crate::PeriodicForceField::with_one_four`]),
+//!   take `1 − s_c` of the smooth part back out and keep `s_c` of the screened pair, derived in
+//!   [`crate::periodic`].
 //! - **The self term** removes each charge's interaction with its own Gaussian, which the
 //!   reciprocal sum contains: `lim_{r→0} q² erf(αr)/r = 2α q²/√π`, halved because the pair sum is
 //!   over `i < j`.

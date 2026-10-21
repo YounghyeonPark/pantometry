@@ -56,7 +56,8 @@
 //! and `D_ij x_ij⁶ = (√D_i x_i³)(√D_j x_j³)`, so the double sums are squares of single ones, `O(N)`.
 //! For one type, both are A&T's printed `(8/3)πNρεσ³[(σ/r_c)⁹/3 − (σ/r_c)³]` and
 //! `(16/3)πρ²εσ³[(2/3)(σ/r_c)⁹ − (σ/r_c)³]`, which the tests check, with the integrals by
-//! quadrature.
+//! quadrature. Under Lorentz–Berthelot they do not factor, and are summed by atom class instead:
+//! see the next section.
 //!
 //! Why plain, not shifted or switched: the correction is exact for a truncated potential with
 //! `g = 1` beyond the cutoff, and needs no correction of its own as a shifted or switched one
@@ -88,6 +89,66 @@
 //! `tests/benzene_bound_in_tip3p.rs` holds a pocket of 181L cut by every face to the vacuum force
 //! field.
 //!
+//! # Another force field's non-bonded terms: overrides, Lorentz–Berthelot, scaled 1-4 pairs
+//!
+//! Three opt-in rules, so that a solute can carry another force field's van der Waals — GAFF's,
+//! say — on UFF's bonded terms. **At their defaults every bit is as it was**: nothing is computed
+//! differently, and the tests hold an evaluation with every rule set to its default to the plain
+//! field's bits, and the plain field's default path to the bits HEAD `b6558df` computed before
+//! these rules existed, on two systems whose every input is the same on every platform.
+//!
+//! - **[`PeriodicForceField::with_nonbonded`]** sets the `[x, D]` of any run of atoms, bonded
+//!   molecules included, in UFF's form: `x` the minimum of the atom's pair with itself and `D` its
+//!   depth, so AMBER's `R*/2` and `ε` are `x = 2 (R*/2)` and `D = ε`. Refused by name
+//!   ([`NonbondedError`]) unless the lengths match, the run is inside the atoms, and every value is
+//!   finite with `D ≥ 0` and `x > 0` — or `[0, 0]`, an atom with no van der Waals at all, as
+//!   GAFF's `ho` is written and as this field holds TIP3P's hydrogens. `D = 0` makes every pair of
+//!   the atom zero under either rule, whatever its `x`; `x = 0` with a well is refused, since it
+//!   would make every pair of the atom zero and drop the well without a word.
+//! - **[`PeriodicForceField::with_mixing`]**: [`Mixing::Geometric`], UFF's eqs 21b and 22,
+//!   `x_ij = √(x_i x_j)`, the default; or [`Mixing::LorentzBerthelot`], `x_ij = (x_i + x_j)/2` and
+//!   `D_ij = √(D_i D_j)`. `x` is `2^⅙ σ`, so the arithmetic mean of `x` is that of `σ`, and AMBER's
+//!   `R*_ij = R*_i + R*_j`. Every pair goes through one function, so the cut-off pairs, the soft
+//!   core of a decoupling, its own pairs in vacuum and its cross pairs all follow the rule.
+//! - **[`PeriodicForceField::with_one_four`]`(s_v, s_c)`** scales the van der Waals and the Coulomb
+//!   energy of every 1-4 pair — two atoms whose shortest path through the bonds is three bonds —
+//!   by `s_v` and `s_c`: GAFF's and AMBER's are `½` and `1/1.2`. **Exclusion comes first**: a pair
+//!   that is 1-2 or 1-3 by any path is excluded whatever other paths it has (so a four- or
+//!   five-membered ring has no 1-4 pair across it), and a pair that is 1-4 by two paths (the para
+//!   atoms of a six-membered ring) is scaled once. Like an excluded pair, a 1-4 pair is evaluated
+//!   wherever it is, not only inside the cutoff, at its minimum image; the pair search leaves it
+//!   out. The default `(1, 1)` is UFF's, every 1-4 pair a pair like any other.
+//!
+//! **A 1-4 pair's Coulomb term in Ewald is a partial exclusion.** The reciprocal sum and the self
+//! term together contain `k_e q_i q_j erf(αr)/r` for every pair, whether or not it is excluded,
+//! since `|S(k)|²` cannot tell pairs apart. Taking the pair out of the real-space loop and adding
+//!
+//! ```text
+//! s_c · k_e q_i q_j erfc(αr)/r  −  (1 − s_c) · k_e q_i q_j erf(αr)/r
+//! ```
+//!
+//! leaves it, with the reciprocal sum's `erf(αr)/r`, at `s_c (erfc + erf)/r = s_c/r` exactly. The
+//! first part is booked as real space ([`EwaldEnergy::real`]) and the second as an exclusion
+//! ([`EwaldEnergy::excluded`]); `s_c = 1` is the real-space pair and `s_c = 0` the excluded pair,
+//! each uncut. The force is the derivative of the two along the pair, and the pair's virial is
+//! `d ⊗ F` like any central pair's, `d` its minimum-image separation; the self term and the
+//! background do not see it. The tests hold one molecule in growing boxes to its vacuum energy
+//! with the 1-4 pairs scaled, less the tinfoil dipole term, the rest falling as `L⁻⁵`.
+//!
+//! **The long-range correction under Lorentz–Berthelot** does not factor: `D_ij x_ij¹²` is not a
+//! product of one function of `i` and one of `j`. It is summed by class instead — atoms with the
+//! same `[x, D]`, bit for bit, are one class `t` of `n_t` atoms — as
+//! `Σ_i Σ_j D_ij x_ij^m = Σ_t Σ_u n_t n_u D_tu x_tu^m` for `m` = 12 and 6, which is exact, the
+//! classes found in `O(N T)` and summed in `O(T²)` for `T` classes, not `O(N²)`. A solvent of
+//! one molecule has a few classes, and a protein of ff14SB's types thirty. The decoupling's cross
+//! part is the same sum over the group's classes and the rest's.
+//!
+//! **In a decoupling** ([`PeriodicDecoupling`]) the group's own 1-4 pairs are intramolecular and
+//! stay in vacuum at every λ, scaled, with its other own pairs; no 1-4 pair crosses the partition,
+//! since no bond does. So the decoupled state is still the rest in its box and the group alone in
+//! vacuum under this field's non-bonded rules — which with any rule set is no longer the vacuum
+//! [`ForceField`]'s, that being UFF's.
+//!
 //! # Decoupling inside the box
 //!
 //! [`PeriodicDecoupling`] is [`crate::Decoupling`] under periodic boundaries, an [`Alchemical`] for
@@ -98,7 +159,8 @@
 //! background, the self terms cancelling exactly. So `∂U/∂λ_e` is that cross energy, at every λ.
 //!
 //! **The group's own non-bonded terms are not periodic**: its pairs among themselves, in vacuum,
-//! all of them, on its whole molecules — the vacuum [`ForceField`]'s for that molecule — and no
+//! all of them, on its whole molecules — the vacuum [`ForceField`]'s for that molecule, at the
+//! default non-bonded rules — and no
 //! interaction of the group with its own images, at any λ. A choice, and the reason: the decoupled
 //! state is then the rest in its box plus the group alone in vacuum, **exactly the decoupled
 //! state of [`crate::Decoupling`]**, so both legs of a cycle end in the same state of the ligand
@@ -174,6 +236,155 @@ use crate::neighbours::NeighbourList;
 use crate::uff::UffType;
 use crate::water;
 use std::f64::consts::PI;
+use std::fmt;
+use std::ops::Range;
+
+/// How two atoms' van der Waals combine into their pair's: see the module documentation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mixing {
+    /// UFF's eqs 21b and 22: `x_ij = √(x_i x_j)`, `D_ij = √(D_i D_j)`. The default.
+    #[default]
+    Geometric,
+    /// Lorentz–Berthelot, as AMBER and GAFF combine: `x_ij = (x_i + x_j)/2`, `D_ij = √(D_i D_j)`.
+    LorentzBerthelot,
+}
+
+/// Why [`PeriodicForceField::with_nonbonded`] refused its values.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NonbondedError {
+    /// The run of atoms is not inside the force field's: `start..end` against `atoms` atoms.
+    OutOfRange {
+        /// The run's first atom.
+        start: usize,
+        /// One past its last.
+        end: usize,
+        /// How many atoms the force field has.
+        atoms: usize,
+    },
+    /// The values are not one per atom of the run.
+    Lengths {
+        /// How many atoms the run has.
+        atoms: usize,
+        /// How many values were given.
+        values: usize,
+    },
+    /// An atom's `x` or `D` is not finite.
+    NotFinite {
+        /// The atom.
+        atom: usize,
+    },
+    /// An atom's `x` is negative, or zero with a well: only `[0, 0]` may have `x = 0`.
+    Distance {
+        /// The atom.
+        atom: usize,
+        /// Its `x`, metres.
+        value: f64,
+    },
+    /// An atom's `D` is negative.
+    Well {
+        /// The atom.
+        atom: usize,
+        /// Its `D`, joules.
+        value: f64,
+    },
+}
+
+impl fmt::Display for NonbondedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NonbondedError::OutOfRange { start, end, atoms } => write!(
+                f,
+                "atoms {start}..{end} are not inside the force field's {atoms} atoms"
+            ),
+            NonbondedError::Lengths { atoms, values } => write!(
+                f,
+                "{values} van der Waals values for {atoms} atoms: they must be one per atom"
+            ),
+            NonbondedError::NotFinite { atom } => {
+                write!(f, "atom {atom}'s van der Waals is not finite")
+            }
+            NonbondedError::Distance { atom, value } => write!(
+                f,
+                "atom {atom}'s van der Waals distance x = {value:e} m is negative, or zero with a \
+                 well: only an atom with no van der Waals at all may have x = 0"
+            ),
+            NonbondedError::Well { atom, value } => write!(
+                f,
+                "atom {atom}'s van der Waals well D = {value:e} J is negative"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NonbondedError {}
+
+/// Scaled 1-4 pairs ([`PeriodicForceField::with_one_four`]).
+#[derive(Clone, Debug, PartialEq)]
+struct OneFour {
+    /// `[s_v, s_c]`, not both 1.
+    scale: [f64; 2],
+    /// Every 1-4 pair once, `[i, j]` with `i < j`, sorted.
+    pairs: Vec<[usize; 2]>,
+    /// The excluded pairs and the 1-4 pairs: what the pair search leaves out.
+    skip: Exclusions,
+}
+
+/// The pairs three bonds apart that are neither 1-2 nor 1-3, once each, sorted.
+fn one_four_pairs(n: usize, bonds: &[[usize; 2]], exclusions: &Exclusions) -> Vec<[usize; 2]> {
+    let mut adjacent = vec![Vec::new(); n];
+    for &[i, j] in bonds {
+        adjacent[i].push(j);
+        adjacent[j].push(i);
+    }
+    let mut out = Vec::new();
+    for &[j, k] in bonds {
+        for &i in &adjacent[j] {
+            if i == k {
+                continue;
+            }
+            for &l in &adjacent[k] {
+                if l == j || l == i || exclusions.contains(i, l) {
+                    continue;
+                }
+                out.push([i.min(l), i.max(l)]);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// What the long-range correction needs of a set of atoms: under geometric mixing the two sums
+/// `[Σ √D x⁶, Σ √D x³]`, and under Lorentz–Berthelot each class of identical `[x, D]` with its
+/// count, in order of first appearance.
+enum TailSet {
+    Sums([f64; 2]),
+    Classes(Vec<([f64; 2], f64)>),
+}
+
+/// `[Σ_{i∈A} Σ_{j∈B} D_ij x_ij¹², Σ_{i∈A} Σ_{j∈B} D_ij x_ij⁶]` for two sets summarised under one
+/// mixing rule.
+fn tail_products(a: &TailSet, b: &TailSet) -> [f64; 2] {
+    match (a, b) {
+        (TailSet::Sums(a), TailSet::Sums(b)) => [a[0] * b[0], a[1] * b[1]],
+        (TailSet::Classes(a), TailSet::Classes(b)) => {
+            let mut s = [0.0; 2];
+            for &([xa, da], na) in a {
+                for &([xb, db], nb) in b {
+                    let x = 0.5 * (xa + xb);
+                    let x2 = x * x;
+                    let x6 = x2 * x2 * x2;
+                    let w = na * nb * (da * db).sqrt();
+                    s[0] += w * x6 * x6;
+                    s[1] += w * x6;
+                }
+            }
+            s
+        }
+        _ => unreachable!("both sets are summarised under the field's one rule"),
+    }
+}
 
 /// An orthorhombic periodic box: three edges at right angles, metres. See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -428,20 +639,21 @@ pub(crate) fn for_each_pair(
     }
 }
 
-/// `(2π/V) Σ_i Σ_j D_ij [x_ij¹²/(9 r_c⁹) − 2 x_ij⁶/(3 r_c³)]` for two sets of atoms given by their
-/// sums `[Σ √D x⁶, Σ √D x³]`: the long-range correction of every ordered pair with one atom in
-/// each, joules.
-fn tail_energy(a: [f64; 2], b: [f64; 2], cutoff: f64, volume: f64) -> f64 {
+/// `(2π/V) Σ_i Σ_j D_ij [x_ij¹²/(9 r_c⁹) − 2 x_ij⁶/(3 r_c³)]` for two sets of atoms given by
+/// [`tail_products`]' `p = [Σ Σ D_ij x_ij¹², Σ Σ D_ij x_ij⁶]`: the long-range correction of every
+/// ordered pair with one atom in each, joules. (Under geometric mixing `p` is a product of two sums
+/// and `2 p₁` is `(2 a₁) b₁` exactly, a power of two scaling, so the bits are the factored form's.)
+fn tail_energy(p: [f64; 2], cutoff: f64, volume: f64) -> f64 {
     let rc3 = cutoff * cutoff * cutoff;
     let rc9 = rc3 * rc3 * rc3;
-    2.0 * PI / volume * (a[0] * b[0] / (9.0 * rc9) - 2.0 * a[1] * b[1] / (3.0 * rc3))
+    2.0 * PI / volume * (p[0] / (9.0 * rc9) - 2.0 * p[1] / (3.0 * rc3))
 }
 
-/// A&T's `P_tail` for the same sums, pascals.
-fn tail_pressure(a: [f64; 2], b: [f64; 2], cutoff: f64, volume: f64) -> f64 {
+/// A&T's `P_tail` for the same products, pascals.
+fn tail_pressure(p: [f64; 2], cutoff: f64, volume: f64) -> f64 {
     let rc3 = cutoff * cutoff * cutoff;
     let rc9 = rc3 * rc3 * rc3;
-    2.0 * PI / (3.0 * volume * volume) * (4.0 * a[0] * b[0] / (3.0 * rc9) - 4.0 * a[1] * b[1] / rc3)
+    2.0 * PI / (3.0 * volume * volume) * (4.0 * p[0] / (3.0 * rc9) - 4.0 * p[1] / rc3)
 }
 
 /// A periodic system's energy, by term, joules per molecule. `total` is accumulated separately.
@@ -455,8 +667,8 @@ pub struct PeriodicEnergy {
     pub torsion: f64,
     /// Inversion.
     pub inversion: f64,
-    /// Van der Waals, the pairs inside the cutoff (and, in a [`PeriodicDecoupling`], the group's
-    /// own in vacuum and its soft-core pairs with the rest).
+    /// Van der Waals, the pairs inside the cutoff and any scaled 1-4 pairs (and, in a
+    /// [`PeriodicDecoupling`], the group's own in vacuum and its soft-core pairs with the rest).
     pub van_der_waals: f64,
     /// The long-range van der Waals correction, `E_tail`.
     pub dispersion_correction: f64,
@@ -496,8 +708,12 @@ pub struct PeriodicForceField {
     charges: Vec<f64>,
     /// `[x_i, D_i]`, metres and joules.
     vdw: Vec<[f64; 2]>,
+    /// How the pairs combine them.
+    mixing: Mixing,
     bonds: Vec<[usize; 2]>,
     pub(crate) exclusions: Exclusions,
+    /// The scaled 1-4 pairs, or `None` at the default `(1, 1)`.
+    one_four: Option<OneFour>,
     /// `[atom, the atom it is reached from]`, breadth first, roots left out.
     tree: Vec<[usize; 2]>,
     /// The real-space pairs' Verlet list, when one is asked for ([`crate::neighbours`]).
@@ -510,6 +726,8 @@ struct Split<'a> {
     lambda: Lambda,
     soft_core: SoftCore,
     own: &'a [Pair],
+    /// Each own pair's `[s_v, s_c]`: `[1, 1]` but for its 1-4 pairs.
+    own_scale: &'a [[f64; 2]],
 }
 
 /// The shared evaluation's result.
@@ -658,11 +876,130 @@ impl PeriodicForceField {
             ewald: Ewald::new(cell, parameters),
             charges,
             vdw,
+            mixing: Mixing::Geometric,
             bonds,
             exclusions: Exclusions::from_pairs(n, &excluded),
+            one_four: None,
             tree,
             neighbours: None,
         })
+    }
+
+    /// The same force field with the van der Waals of atoms `atoms` set to `van_der_waals`, one
+    /// `[x, D]` an atom in UFF's form — `x` the distance of the minimum of the atom's pair with
+    /// itself, metres, and `D` its depth, joules; AMBER's `R*/2` and `ε` are `x = 2 (R*/2)` and
+    /// `D = ε` — for any atoms, a bonded solute's, a water's or an ion's. See the module
+    /// documentation. Everything else is unchanged; a [`PeriodicDecoupling`] takes the values its
+    /// field has when it is built.
+    ///
+    /// # Errors
+    ///
+    /// [`NonbondedError`], naming what is wrong: the run is not inside the atoms, the values are not
+    /// one per atom of it, or an atom's values are not finite, its `x` negative or zero with a
+    /// well, or its `D` negative. `[0, 0]`, no van der Waals at all, is taken. Nothing is changed
+    /// then.
+    pub fn with_nonbonded(
+        mut self,
+        atoms: Range<usize>,
+        van_der_waals: Vec<[f64; 2]>,
+    ) -> Result<PeriodicForceField, NonbondedError> {
+        let n = self.vdw.len();
+        if atoms.start > atoms.end || atoms.end > n {
+            return Err(NonbondedError::OutOfRange {
+                start: atoms.start,
+                end: atoms.end,
+                atoms: n,
+            });
+        }
+        if van_der_waals.len() != atoms.len() {
+            return Err(NonbondedError::Lengths {
+                atoms: atoms.len(),
+                values: van_der_waals.len(),
+            });
+        }
+        for (k, &[x, d]) in van_der_waals.iter().enumerate() {
+            let atom = atoms.start + k;
+            if !x.is_finite() || !d.is_finite() {
+                return Err(NonbondedError::NotFinite { atom });
+            }
+            if x < 0.0 || (x == 0.0 && d != 0.0) {
+                return Err(NonbondedError::Distance { atom, value: x });
+            }
+            if d < 0.0 {
+                return Err(NonbondedError::Well { atom, value: d });
+            }
+        }
+        self.vdw[atoms].copy_from_slice(&van_der_waals);
+        Ok(self)
+    }
+
+    /// The same force field with its pairs' van der Waals combined by `mixing` ([`Mixing`]):
+    /// every cut-off pair, every 1-4 pair, the long-range correction, and a decoupling's soft core,
+    /// cross pairs and own pairs. [`Mixing::Geometric`], UFF's, is the default.
+    pub fn with_mixing(mut self, mixing: Mixing) -> PeriodicForceField {
+        self.mixing = mixing;
+        self
+    }
+
+    /// How the pairs' van der Waals combine.
+    pub fn mixing(&self) -> Mixing {
+        self.mixing
+    }
+
+    /// The same force field with every 1-4 pair's van der Waals scaled by `van_der_waals` and its
+    /// Coulomb energy by `coulomb` — GAFF's are `½` and `1/1.2` — the Coulomb term in Ewald as a
+    /// partial exclusion. 1-2 and 1-3 pairs stay excluded. `(1, 1)`, UFF's, is the default and
+    /// leaves every 1-4 pair a pair like any other, to the bit. See the module documentation. A
+    /// neighbour list starts again empty, with the same skin.
+    ///
+    /// # Panics
+    ///
+    /// If a scale is negative or not finite.
+    pub fn with_one_four(mut self, van_der_waals: f64, coulomb: f64) -> PeriodicForceField {
+        assert!(
+            [van_der_waals, coulomb]
+                .iter()
+                .all(|s| s.is_finite() && *s >= 0.0),
+            "a 1-4 scale must be finite and not negative: {van_der_waals}, {coulomb}"
+        );
+        self.one_four = if van_der_waals == 1.0 && coulomb == 1.0 {
+            None
+        } else {
+            let n = self.charges.len();
+            let pairs = one_four_pairs(n, &self.bonds, &self.exclusions);
+            let mut all = self.exclusions.pairs().to_vec();
+            all.extend_from_slice(&pairs);
+            Some(OneFour {
+                scale: [van_der_waals, coulomb],
+                pairs,
+                skip: Exclusions::from_pairs(n, &all),
+            })
+        };
+        self.neighbours = self.neighbours.as_ref().map(NeighbourList::emptied);
+        self
+    }
+
+    /// The 1-4 scales `[van der Waals, Coulomb]`, `[1, 1]` by default.
+    pub fn one_four(&self) -> [f64; 2] {
+        self.one_four.as_ref().map_or([1.0, 1.0], |o| o.scale)
+    }
+
+    /// Every 1-4 pair that is scaled, once, `[i, j]` with `i < j`, sorted: none at the default
+    /// scales, where a 1-4 pair is a pair like any other.
+    pub fn one_four_pairs(&self) -> &[[usize; 2]] {
+        self.one_four.as_ref().map_or(&[], |o| &o.pairs)
+    }
+
+    /// Each atom's van der Waals `[x, D]`, metres and joules, in UFF's form: its type's, or what
+    /// [`PeriodicForceField::with_nonbonded`] set.
+    pub fn van_der_waals(&self) -> &[[f64; 2]] {
+        &self.vdw
+    }
+
+    /// The pairs the pair search leaves out: the excluded ones, and the scaled 1-4 pairs, which are
+    /// evaluated on their own.
+    pub(crate) fn skipped(&self) -> &Exclusions {
+        self.one_four.as_ref().map_or(&self.exclusions, |o| &o.skip)
     }
 
     /// The same force field with partial charges `charges`, elementary charges.
@@ -701,6 +1038,9 @@ impl PeriodicForceField {
         }
         self.ions += ions.len();
         self.exclusions = Exclusions::from_pairs(self.charges.len(), self.exclusions.pairs());
+        if let Some(o) = &mut self.one_four {
+            o.skip = Exclusions::from_pairs(self.charges.len(), o.skip.pairs());
+        }
         self.neighbours = self.neighbours.as_ref().map(NeighbourList::emptied);
         self
     }
@@ -809,25 +1149,62 @@ impl PeriodicForceField {
         s
     }
 
+    /// The atoms `keep` accepts, summarised for the long-range correction under this field's
+    /// mixing: their two sums, or their classes. See the module documentation.
+    fn tail_set(&self, keep: impl Fn(usize) -> bool) -> TailSet {
+        match self.mixing {
+            Mixing::Geometric => TailSet::Sums(self.tail_sums(keep)),
+            Mixing::LorentzBerthelot => {
+                let mut classes: Vec<([f64; 2], f64)> = Vec::new();
+                for (i, v) in self.vdw.iter().enumerate() {
+                    if !keep(i) {
+                        continue;
+                    }
+                    let bits = v.map(f64::to_bits);
+                    match classes
+                        .iter_mut()
+                        .find(|(c, _)| c.map(f64::to_bits) == bits)
+                    {
+                        Some(class) => class.1 += 1.0,
+                        None => classes.push((*v, 1.0)),
+                    }
+                }
+                TailSet::Classes(classes)
+            }
+        }
+    }
+
     /// The long-range van der Waals correction `E_tail`, joules: see the module documentation.
     pub fn dispersion_correction(&self) -> f64 {
-        let s = self.tail_sums(|_| true);
-        tail_energy(s, s, self.ewald.parameters().cutoff, self.cell().volume())
+        let s = self.tail_set(|_| true);
+        tail_energy(
+            tail_products(&s, &s),
+            self.ewald.parameters().cutoff,
+            self.cell().volume(),
+        )
     }
 
     /// Allen and Tildesley's long-range correction to the pressure, `P_tail`, pascals: see the
     /// module documentation for how it differs from the virial's `E_tail/V`.
     pub fn pressure_correction(&self) -> f64 {
-        let s = self.tail_sums(|_| true);
-        tail_pressure(s, s, self.ewald.parameters().cutoff, self.cell().volume())
+        let s = self.tail_set(|_| true);
+        tail_pressure(
+            tail_products(&s, &s),
+            self.ewald.parameters().cutoff,
+            self.cell().volume(),
+        )
     }
 
-    /// The van der Waals pair of atoms `i` and `j`, combined as [`Pair::new`] combines them.
+    /// The van der Waals pair of atoms `i` and `j`, combined by the field's [`Mixing`]: under the
+    /// default, as [`Pair::new`] combines two types.
     fn pair(&self, i: usize, j: usize) -> Pair {
         let ([xi, di], [xj, dj]) = (self.vdw[i], self.vdw[j]);
         Pair {
             atoms: [i, j],
-            distance: (xi * xj).sqrt(),
+            distance: match self.mixing {
+                Mixing::Geometric => (xi * xj).sqrt(),
+                Mixing::LorentzBerthelot => 0.5 * (xi + xj),
+            },
             well: (di * dj).sqrt(),
         }
     }
@@ -897,10 +1274,11 @@ impl PeriodicForceField {
         }
 
         // The pairs inside the cutoff: by the cell list, or by the neighbour list in the cell
-        // list's order.
+        // list's order. The excluded pairs, and any scaled 1-4 pairs, are left out.
         let q = &self.charges;
+        let skip = self.skipped();
         let pair_term = |i: usize, j: usize, d: [f64; 3], r2: f64| {
-            if self.exclusions.contains(i, j) {
+            if skip.contains(i, j) {
                 return;
             }
             let (gi, gj) = (marked(i), marked(j));
@@ -945,7 +1323,7 @@ impl PeriodicForceField {
             add_pair(&mut forces, &mut virial, i, j, d, radial);
         };
         match &self.neighbours {
-            Some(list) => list.for_each_pair(&cell, at, cutoff, &self.exclusions, pair_term),
+            Some(list) => list.for_each_pair(&cell, at, cutoff, skip, pair_term),
             None => for_each_pair(&cell, at, cutoff, pair_term),
         }
 
@@ -961,6 +1339,35 @@ impl PeriodicForceField {
             e.ewald.excluded += c;
             e.ewald.total += c;
             add_pair(&mut forces, &mut virial, i, j, d, dc / r);
+        }
+
+        // The scaled 1-4 pairs outside the group, wherever they are: `s_v` of the van der Waals,
+        // and `s_c` of the screened Coulomb pair with `1 − s_c` of its smooth part taken back out
+        // of the reciprocal sum, which leaves `s_c k_e q_i q_j / r` (see the module documentation).
+        if let Some(o) = &self.one_four {
+            let [sv, sc] = o.scale;
+            for &[i, j] in &o.pairs {
+                if marked(i) || marked(j) {
+                    continue;
+                }
+                let d = cell.minimum_image(sub(at[i], at[j]));
+                let r = norm(d);
+                let (v, dv) = self.pair(i, j).at(r);
+                e.van_der_waals += sv * v;
+                e.total += sv * v;
+                let mut radial = sv * dv / r;
+                let qq = q[i] * q[j];
+                if qq != 0.0 {
+                    let (c, dc) = self.ewald.real_pair(qq, r);
+                    let (x, dx) = self.ewald.excluded_pair(qq, r);
+                    let (real, excluded) = (sc * c, (1.0 - sc) * x);
+                    e.ewald.real += real;
+                    e.ewald.excluded += excluded;
+                    e.ewald.total += real + excluded;
+                    radial += (sc * dc + (1.0 - sc) * dx) / r;
+                }
+                add_pair(&mut forces, &mut virial, i, j, d, radial);
+            }
         }
 
         // Reciprocal space, self and background.
@@ -990,10 +1397,10 @@ impl PeriodicForceField {
         coupling.gradient[1] += bg_cross;
 
         // The long-range van der Waals correction.
-        let s_rest = self.tail_sums(|i| !marked(i));
-        let s_group = self.tail_sums(marked);
-        let t_rest = tail_energy(s_rest, s_rest, cutoff, volume);
-        let t_cross = 2.0 * tail_energy(s_rest, s_group, cutoff, volume);
+        let s_rest = self.tail_set(|i| !marked(i));
+        let s_group = self.tail_set(marked);
+        let t_rest = tail_energy(tail_products(&s_rest, &s_rest), cutoff, volume);
+        let t_cross = 2.0 * tail_energy(tail_products(&s_rest, &s_group), cutoff, volume);
         e.dispersion_correction = t_rest + lv * t_cross;
         e.total += t_rest + lv * t_cross;
         coupling.energy += lv * t_cross;
@@ -1006,17 +1413,18 @@ impl PeriodicForceField {
 
         // The group's own pairs, in vacuum: on the whole molecules, with no image taken, so
         // that a group of several molecules keeps their placement as given.
+        // A 1-4 pair among them is scaled; every other has `[1, 1]`, which changes no bit.
         if let Some(s) = split {
-            for p in s.own {
+            for (p, &[sv, sc]) in s.own.iter().zip(s.own_scale) {
                 let [i, j] = p.atoms;
                 let d = sub(whole[i], whole[j]);
                 let r = norm(d);
                 let (v, dv) = p.at(r);
-                e.van_der_waals += v;
-                e.total += v;
-                let mut radial = dv / r;
+                e.van_der_waals += sv * v;
+                e.total += sv * v;
+                let mut radial = sv * dv / r;
                 if q[i] != 0.0 && q[j] != 0.0 {
-                    let c = coulomb(q[i], q[j], r);
+                    let c = sc * coulomb(q[i], q[j], r);
                     e.electrostatic += c;
                     radial -= c / (r * r);
                 }
@@ -1048,6 +1456,8 @@ pub struct PeriodicDecoupling {
     field: PeriodicForceField,
     group: Vec<bool>,
     own: Vec<Pair>,
+    /// Each own pair's `[s_v, s_c]`, the field's 1-4 scales for a 1-4 pair and `[1, 1]` else.
+    own_scale: Vec<[f64; 2]>,
     restraint: Option<Boresch>,
     soft_core: SoftCore,
 }
@@ -1078,10 +1488,15 @@ impl PeriodicDecoupling {
         }
         let members: Vec<usize> = (0..n).filter(|&i| group[i]).collect();
         let mut own = Vec::new();
+        let mut own_scale = Vec::new();
+        let scale = field.one_four();
+        let one_four = field.one_four_pairs();
         for (p, &i) in members.iter().enumerate() {
             for &j in &members[p + 1..] {
                 if !field.exclusions.contains(i, j) {
                     own.push(field.pair(i, j));
+                    let is_one_four = one_four.binary_search(&[i.min(j), i.max(j)]).is_ok();
+                    own_scale.push(if is_one_four { scale } else { [1.0, 1.0] });
                 }
             }
         }
@@ -1089,6 +1504,7 @@ impl PeriodicDecoupling {
             field: field.clone(),
             group: group.to_vec(),
             own,
+            own_scale,
             restraint: None,
             soft_core: SoftCore::default(),
         })
@@ -1131,9 +1547,17 @@ impl PeriodicDecoupling {
         &self.group
     }
 
-    /// The group's own non-bonded pairs, computed in vacuum at every λ.
+    /// The group's own non-bonded pairs, computed in vacuum at every λ, combined by the field's
+    /// [`Mixing`]; a 1-4 pair among them is scaled by the field's 1-4 scales
+    /// ([`PeriodicDecoupling::own_scales`]).
     pub fn own_pairs(&self) -> &[Pair] {
         &self.own
+    }
+
+    /// Each of [`PeriodicDecoupling::own_pairs`]' `[s_v, s_c]`: the field's 1-4 scales for a 1-4
+    /// pair, and `[1, 1]` for every other.
+    pub fn own_scales(&self) -> &[[f64; 2]] {
+        &self.own_scale
     }
 
     /// The energy by term at `at` and `lambda`, the restraint aside.
@@ -1152,6 +1576,7 @@ impl PeriodicDecoupling {
             lambda,
             soft_core: self.soft_core,
             own: &self.own,
+            own_scale: &self.own_scale,
         };
         self.field.core(at, Some(&split), forces)
     }
@@ -1216,26 +1641,25 @@ impl PeriodicDecoupling {
         let q_rest: f64 = rest_charges.iter().sum();
         let q_group: f64 = members.iter().map(|&i| q[i]).sum();
         let background = 2.0 * f.ewald.background(1.0) * q_rest * q_group;
-        let s_rest = f.tail_sums(|i| !self.group[i]);
-        let s_group = f.tail_sums(|i| self.group[i]);
+        let s_rest = f.tail_set(|i| !self.group[i]);
+        let s_group = f.tail_set(|i| self.group[i]);
         CrossTerms {
             pairs,
             coulomb: real + reciprocal + background,
-            tail: 2.0 * tail_energy(s_rest, s_group, cutoff, volume),
+            tail: 2.0 * tail_energy(tail_products(&s_rest, &s_group), cutoff, volume),
         }
     }
 
     /// The long-range van der Waals correction between the group and the rest at full coupling,
-    /// joules: `2 (2π/V) Σ_{i∈G} Σ_{j∉G} D_ij [x_ij¹²/(9 r_c⁹) − 2 x_ij⁶/(3 r_c³)]`, the part
-    /// [`PeriodicDecoupling`] scales by `λ_v`. It depends on nothing that moves, so it is exactly
-    /// its own contribution to the free energy of decoupling.
+    /// joules: `2 (2π/V) Σ_{i∈G} Σ_{j∉G} D_ij [x_ij¹²/(9 r_c⁹) − 2 x_ij⁶/(3 r_c³)]`, combined by
+    /// the field's [`Mixing`], the part [`PeriodicDecoupling`] scales by `λ_v`. It depends on
+    /// nothing that moves, so it is exactly its own contribution to the free energy of decoupling.
     pub fn cross_dispersion_correction(&self) -> f64 {
         let f = &self.field;
-        let s_rest = f.tail_sums(|i| !self.group[i]);
-        let s_group = f.tail_sums(|i| self.group[i]);
+        let s_rest = f.tail_set(|i| !self.group[i]);
+        let s_group = f.tail_set(|i| self.group[i]);
         2.0 * tail_energy(
-            s_rest,
-            s_group,
+            tail_products(&s_rest, &s_group),
             f.ewald.parameters().cutoff,
             f.cell().volume(),
         )

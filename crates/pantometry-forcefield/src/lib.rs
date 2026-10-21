@@ -121,6 +121,12 @@
 //!   request, 23–34 ms there, written from Essmann et al. (1995) with its own transform, and checked
 //!   against the interpolation's Fourier series, Madelung's and Wigner's constants exactly on the
 //!   grid, and the convergence rates its order predicts. See [`periodic`], [`ewald`] and [`pme`].
+//!   **Another force field's non-bonded terms** go on UFF's bonded ones by three opt-in rules,
+//!   every bit unchanged at their defaults: [`PeriodicForceField::with_nonbonded`] sets any atoms'
+//!   van der Waals, refused by name ([`NonbondedError`]); [`PeriodicForceField::with_mixing`]
+//!   combines by Lorentz–Berthelot ([`Mixing`]), the long-range correction then summed by atom class
+//!   in `O(T²)`; and [`PeriodicForceField::with_one_four`] scales the 1-4 pairs, the Coulomb term in
+//!   Ewald as a partial exclusion. A decoupling's soft core, cross terms and own pairs follow them.
 //! - [`water`] is **rigid TIP3P water**, step W2 of explicit water: Jorgensen et al.'s Table I
 //!   (1983, read as two readable sources reproduce it), the O–O Lennard-Jones term as a UFF pair
 //!   so that a water oxygen mixes with a UFF solute by UFF's own geometric rule — a stated
@@ -286,6 +292,19 @@
 //! forms; Kolafa and Perram's real-space estimate against sixteen disordered boxes; `erfc`
 //! against mpmath; a decoupling's end states and `∂U/∂λ` against the systems and sums they are;
 //! and dynamics in the box the same bits however it is cut into calls.
+//!
+//! Another force field's non-bonded terms in the box
+//! (`tests/the_nonbonded_overrides_against_closed_forms.rs`): every rule at its default the plain
+//! field's bits; one pair against Lorentz–Berthelot's formula in σ and ε; the long-range correction
+//! under Lorentz–Berthelot against its double sum over every ordered pair, and with one class
+//! against A&T's printed form; the 1-4 pairs against a breadth-first search, a five-membered ring
+//! having none across it; forces and the virial as the energy's derivatives with every rule on,
+//! classical and by the mesh; one molecule in growing boxes as its vacuum energy with the 1-4 pairs
+//! scaled, less the tinfoil term, the rest falling as `L⁻⁵`; a decoupling's end states, λ
+//! derivatives, couplings and reciprocal energy; the bits however a run is cut, with the
+//! neighbour list on or off; a box split by its faces against the same box whole; ions added
+//! after the rules against before them; and the default path against the bits the commit before
+//! these rules computed.
 //!
 //! Smooth particle-mesh Ewald against closed forms (`tests/the_particle_mesh_against_closed_forms.rs`):
 //! the B-spline against its truncated-power sum at every order from 3 to 12, the Euler factor
@@ -466,7 +485,8 @@ pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
 pub use neighbours::NeighbourListStatus;
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use periodic::{
-    PeriodicBox, PeriodicDecoupling, PeriodicEnergy, PeriodicEvaluation, PeriodicForceField,
+    Mixing, NonbondedError, PeriodicBox, PeriodicDecoupling, PeriodicEnergy, PeriodicEvaluation,
+    PeriodicForceField,
 };
 pub use pme::{Pme, PmeParameters};
 pub use qeq::{Charges, Qeq, QeqError};

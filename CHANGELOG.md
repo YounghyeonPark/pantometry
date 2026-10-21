@@ -4500,6 +4500,173 @@ protects nothing.
     419 before). The new file has eight default and four ignored. **Not run**: the workspace suite
     and the gate. There is no `powi` or `powf` in the new files.
 
+- **`PeriodicForceField` carries another force field's non-bonded terms, the library change 4c-1
+  proposed: `with_nonbonded`, `with_mixing` and `with_one_four`, every default the same bits; and
+  GAFF's octanol measured with them, P −178 bar and ΔH_vap 77.3 kJ/mol against UFF's −930 and
+  91.9 and experiment's 1 and 70.98, and the hydroxyls hydrogen-bonded.** New in
+  `src/periodic.rs`: `Mixing` (`Geometric`, the default, and `LorentzBerthelot`) and
+  `NonbondedError`, both exported;
+  `PeriodicForceField::with_nonbonded`, `with_mixing`, `mixing`, `with_one_four`, `one_four`,
+  `one_four_pairs` and `van_der_waals`; `PeriodicDecoupling::own_scales`. New tests:
+  `tests/the_nonbonded_overrides_against_closed_forms.rs` and `tests/nonbonded/`, and
+  `tests/liquid_octanol_with_gaff.rs`, kept out of the published crate. 4c-1's measurement moved
+  from `liquid_octanol_in_a_box.rs` into `tests/octanol/` unchanged, parameterised by the field's
+  rules and the gas's potential, so that the GAFF run is the same protocol to the step.
+  - **The API.** `with_nonbonded(atoms, van_der_waals)` sets any run of atoms' `[x, D]` in UFF's
+    form — AMBER's `R*/2` and `ε` are `x = 2 R*/2`, `D = ε` — bonded solutes included, and refuses
+    by name a run outside the atoms or backwards, values not one per atom, a value not finite, an
+    `x` negative or zero with a well, or a `D` negative; `[0, 0]`, no van der Waals at all, is
+    taken, as the field already holds TIP3P's hydrogens.
+    `with_mixing(Mixing::LorentzBerthelot)` makes `x_ij = (x_i + x_j)/2`, which is `σ`'s mean since `x = 2^⅙ σ`, and keeps `D_ij = √(D_i D_j)`.
+    `with_one_four(s_v, s_c)` scales every pair whose shortest path is three bonds; **exclusion
+    comes first**, so a pair 1-2 or 1-3 by any path is never scaled and a five-membered ring has
+    no 1-4 pair across it, and a pair 1-4 by two paths (para atoms of a six-ring) is scaled once.
+    A 1-4 pair is evaluated wherever it is, as an excluded pair is, and the pair search leaves it
+    out. Every pair goes through one function, so the soft core, the cross pairs and the group's
+    own pairs follow the mixing rule.
+  - **A 1-4 pair's Coulomb in Ewald is a partial exclusion, derived.** The reciprocal sum and the
+    self term hold `k_e q_i q_j erf(αr)/r` for every pair, since `|S(k)|²` cannot tell them apart.
+    Taking the pair out of real space and adding `s_c erfc(αr)/r − (1 − s_c) erf(αr)/r` (times
+    `k_e q_i q_j`) leaves `s_c (erfc + erf)/r = s_c/r` exactly; the first part is booked as real
+    space and the second as an exclusion, `s_c = 1` being the real-space pair and `s_c = 0` the
+    excluded one. Its force is the two parts' derivative along the pair and its virial `d ⊗ F`.
+  - **The long-range correction under Lorentz–Berthelot does not factor**, `D_ij x_ij¹²` not being
+    a product of a function of `i` and one of `j`. It is summed by class — atoms with the same
+    `[x, D]`, to the bit — as `Σ_t Σ_u n_t n_u D_tu x_tu^m`, exact, the classes found in `O(N T)`
+    and summed in `O(T²)`. The geometric path is the old `O(N)` one, and its bits are kept: the
+    tail now takes the product `a₁b₁` and doubles it, which equals `(2a₁)b₁` exactly.
+  - **In a decoupling**, the group's own 1-4 pairs are intramolecular and stay in vacuum at every
+    λ, scaled; no 1-4 pair can cross the partition, since no bond does. The decoupled state is the
+    rest in its box and the group in vacuum under the field's own rules, which with any rule set
+    is no longer the vacuum `ForceField`'s.
+  - **Checked** (eighteen default tests, 11 s unoptimised on one thread, the values invented and
+    no force field's):
+    - **every rule at its default is the plain field's bits**: UFF's own values written over the
+      sixteen-octanol box in two runs meeting between a carbon and an oxygen, geometric mixing and
+      `(1, 1)` set explicitly; every energy term, force and virial component, both tail
+      corrections, and a decoupling's energies, forces and couplings at three states, through
+      classical Ewald, the mesh and the neighbour list. The crate's 427 existing default tests
+      pass unchanged — **but no existing pin covers the field's pair or tail path** (the one bit
+      pin near it is PME's `Ewald::evaluate`), so this compares the new code with itself, and the
+      review's pin to HEAD's bits, below, is what holds the default path;
+    - **one pair is Lorentz–Berthelot's formula** in σ and ε, `σ = x · 2^(−1/6)` by the kernel's
+      `exp` and `ln`, energy and force within `64 ε` at 3.0, 3.35, 4.0 and 6.0 Å, and the geometric
+      field the geometric formula; the two part by 14% at 3.0 Å (−0.08585 against −0.09971
+      kcal/mol), far beyond the bound;
+    - **the tail is its double sum over all 432² ordered pairs**, six classes — one sharing a
+      carbon's `D` and not its `x`, one its `x` and not its `D` — energy and pressure
+      within `(N² + 64) ε` of the parts' magnitudes (every term positive): −2.829591748451e-19
+      against −2.829591748452e-19 J, the geometric rule's −2.722112168436e-19, 3.9% apart; the
+      decoupling's cross part both ways round; and with one class A&T's printed forms within
+      `128 ε`;
+    - **the 1-4 pairs are the breadth-first search's pairs at three bonds**: octanol 66, its
+      `Σ_bonds (deg_j − 1)(deg_k − 1)` since it is acyclic; benzene 21; cyclopropane 12, all H–H;
+      cyclobutane 24, 8 C–H and 16 H–H; cyclopentane 40, every one with a hydrogen; none of them
+      excluded, and the exclusions the search's 1-2 and 1-3;
+    - **forces as `−∇E` and the virial as `−∂U/∂ε`** with every rule on, six atoms and three
+      strains by central differences: the worst 0.010 of its tolerance through classical Ewald
+      and 0.021 through the mesh;
+    - **a 1-4 pair's scaled Coulomb through Ewald**: one octanol in cubes of 40, 60 and 80 Å with
+      `r_c = L/2` at δ = 10⁻¹² is the direct vacuum sum with the 1-4 pairs at `s_c`, less
+      `2π k_e μ²/3V`; what is left falls by 7.648 and 4.223 against `L⁻⁵`'s 7.594 and 4.214, the
+      forces' by 7.702 and 4.231. The 1-4 pairs' share of the vacuum Coulomb, −2.81 kcal/mol, is
+      15 000 times what is left in the smallest box. Its van der Waals is the direct pair sum;
+    - **decoupling benzene from octanol with every rule on**: the end states are the systems they
+      say within `10⁻¹²` of the parts, energy and every force, its 21 1-4 pairs scaled and its 36
+      own pairs counted; `∂U/∂λ_e` and `∂U/∂λ_v` are central differences at four states;
+      `couplings` is `coupling`'s bits, and `U(λ) − U(0)` its energy within `128 ε`; the decoupled
+      reciprocal energy is `rest + λ_e · cross` within `64 ε`, classical and by the mesh;
+    - **determinism**: twelve steps in one call, as 12 × 1 and as 5 + 7, the same positions and
+      velocities; and along them a neighbour list rebuilt at every step and one built once give
+      the cell list's evaluation to the bit.
+  - **Sabotages, seven, each caught**, applied by script in binary to anchors that occur once and
+    restored by copy, `touch` and SHA-256:
+
+    | sabotage | caught by |
+    | --- | --- |
+    | Lorentz–Berthelot's `x` the geometric mean | the one pair; the large box's van der Waals; the end states |
+    | the 1-4 Coulomb scaled in real space only, the reciprocal sum not corrected | the large box: −0.543 kcal/mol left in 40 Å, where the bound is a thousandth of the 1-4 share's −2.81 |
+    | the 1-4 force's sign | the forces through Ewald and the mesh; the large box's forces |
+    | the tail by geometric mixing under Lorentz–Berthelot | the tail's double sum |
+    | an override written one atom on | the defaults' bits, the one pair, A&T's form, the tail, the large box, the end states |
+    | the soft core by the old mixing | the end states; `U(λ) − U(0)` against the coupling |
+    | the couplings' cross pairs by the old mixing | `U(λ) − U(0)` against the coupling |
+
+  - **Reviewed, and six sabotages that passed now caught.** numerics-reviewer found them;
+    invariant-guard found nothing. Each was applied and restored as above, with `--no-fail-fast`
+    so that one test binary's failure could not hide another's:
+
+    | sabotage | before the review | after |
+    | --- | --- | --- |
+    | Lorentz–Berthelot's classes keyed on `D` alone | passed, 15 of 15 | the tail's double sum; GAFF's tail, whose `hc` and `h1` share `ε` |
+    | keyed on `x` alone | passed | the tail's double sum |
+    | a scaled 1-4 pair's minimum image dropped | passed: every test gave whole molecules | a box with 436 of its 1 056 scaled 1-4 pairs split by a face, against the same box whole |
+    | `with_ions` not growing the 1-4 table | passed, and would panic | rules then ions against ions then rules |
+    | the 1-4 walk's `l == i` dropped | passed, and would panic on a three-ring | cyclopropane's 12 and cyclobutane's 24 |
+    | the tail's `/ (9 r_c⁹)` as `/ 9 / r_c⁹` | passed: the defaults compared the new code with itself | the default path pinned to HEAD's bits |
+
+    - **The pin to HEAD `b6558df`** (`tests/pinned/`, written by that commit from the same file in
+      an extracted copy of its tree): 64 TIP3P waters and a chloride — every energy term, five
+      atoms' forces, the virial — and nine octanols at the dictionary's ideal coordinates with
+      AM1-BCC's charges, their non-bonded terms; plain, with every rule set to its default
+      explicitly, and with the neighbour list. **Every input is the same bits on every platform**,
+      so CI can hold it: decimal literals and the kernel's `Rng` for positions, α, the cutoff and
+      the mesh fixed rather than chosen, the reciprocal part by the mesh. A pin of 4c-1's
+      sixteen-octanol box would not have been: its conformer comes from a minimiser through the
+      platform's `cos`, and classical Ewald uses the platform's `sin_cos`.
+    - **One cutoff's rounding hides the rearranged tail**: it rounded alike for both systems, and
+      at sixteen cutoffs each in one value of 64. So both corrections are pinned at 256 cutoffs a
+      system, 1 024 values, by their FNV-1a digest; that rearrangement, applied to HEAD's own tail,
+      moves 6 of them.
+    - **The split box**: every coordinate past a face brought back by one edge, `p − L`, exact by
+      Sterbenz's lemma, so the two boxes are the same points one image apart. Energy within 0.00
+      ε of its parts, forces within 12.9 ε of the largest (8.3 by the mesh), the virial within 1.8
+      ε; held at 64 ε.
+    - **`x = 0` with `D = 0` is now taken**, the question being mine to settle: GAFF's `ho` is
+      written as `gaff.dat` gives it rather than with an invented length, the field already holds
+      TIP3P's hydrogens as exactly `[0, 0]`, and every pair of such an atom is zero under either
+      rule. `x = 0` with a well stays refused, since it would drop the well without a word.
+  - **No slowdown with the defaults.** 4c-1's 192-octanol box, release, one core, the HEAD binary
+    and this one alternated four times: the least ms an evaluation and a step, PME with the
+    neighbour list 107.4 and 123.3 before, 92.4 and 106.0 after; PME with the cell list 140.9 and
+    143.2, 111.7 and 119.8; classical 155.5 and 192.8, 169.0 and 177.1. The same binary varied by
+    20–30% between rounds, the machine loaded, so this says no slowdown is visible and no more.
+  - **GAFF's octanol, measured** (`liquid_octanol_with_gaff.rs`, `the_liquid_with_gaff_measured`,
+    release, run once): GAFF's Lennard-Jones by Lorentz–Berthelot, GAFF's 1-4 scales and
+    AM1-BCC's charges on UFF's bonded terms, by 4c-1's protocol to the step, 25 000 steps of 2 fs
+    in 1 976 s.
+
+    | | (b) GAFF's LJ, LB, 1-4, AM1-BCC | (a) UFF, QEq | (c) UFF, AM1-BCC | experiment |
+    | --- | --- | --- | --- | --- |
+    | P at 0.8262 g/cm³ (bar) | −178 ± 46 | −930 ± 45 | −788 ± 56 | 1 |
+    | ΔH_vap (kJ/mol) | 77.3 ± 0.7 | 91.9 ± 0.9 | 97.3 ± 0.7 | 70.98 |
+    | g_OO's first peak | 2.824 Å, 10.61; 1.79 O inside 3.71 Å | 3.39 Å, 0.82; 0.06 O | 3.37 Å, 2.47; 1.40 O | near 2.7 Å (quoted) |
+
+    **6.3 kJ/mol (9%) too cohesive, where UFF was 21–26**, and pulling at a fifth of UFF's
+    pressure. `U_gas` is 19.238 ± 0.153 kcal/mol, eight runs of 200 ps in a vacuum potential
+    written out in the tests, whose forces are its energy's derivatives (a default test).
+    **The hydroxyls hydrogen-bond**: `ho` has no van der Waals, the O–O peak is at 2.82 Å, and
+    1.79 oxygens are inside its minimum — two, as in a chain. Settled: `U/N`'s halves 1.369 and
+    1.360 kcal/mol, τ 2.4 samples of 0.1 ps; `P`'s −120 ± 73 and −237 ± 23 bar. What remains
+    is this hybrid's, its bonded terms and geometry UFF's, and says nothing of GAFF's own octanol.
+  - **GAFF's values live only in `tests/liquid_octanol_with_gaff.rs`**, with their provenance:
+    ambermini at `f7c421c4`, `share/amber/dat/leap/parm/gaff.dat`, SHA-256 `95e3c655…44d8433`,
+    fetched again and reproduced, its `MOD4 RE` lines for `c3`, `hc`, `h1`, `oh` and `ho` quoted.
+    GPL-sourced, so the file is in `Cargo.toml`'s `exclude` and its comment says why;
+    `cargo package --list` holds neither it nor `tests/amber/`, and no packaged file carries the
+    five types' numbers. **GAFF's bonded terms are not used**: bonds, angles, torsions, inversions,
+    the constraints' lengths and the conformer are UFF's. `ho`'s `R*/2` and `ε` are both zero and
+    it is written so, `[0, 0]`. The measurement was run when `with_nonbonded` took only `x > 0`,
+    with `ho` at `[1 Å, 0]`; a default test holds the sixteen-octanol GAFF box's evaluation — every
+    term, force and virial component, both corrections — to the same bits either way, since with
+    `D = 0` every pair of the atom is zero, so the trajectory and what it measured stand.
+  - **Counts.** The crate's tests are 502, 53 of them ignored, so 449 run by default (479, 52 and
+    427 before): the closed-form file's eighteen, and the GAFF file's four default and one ignored.
+    **Not run**: the workspace's test suite and the whole gate; run were `cargo fmt`, clippy on
+    the workspace's every target, `cargo doc` with warnings denied, the 1.78 build, both wasm32
+    steps, the crate's suite in debug and the `pantometry` prose tests. There is no `powi` or
+    `powf` in the new or changed code.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round

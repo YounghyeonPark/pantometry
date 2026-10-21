@@ -44,6 +44,11 @@
 //!   pair with an oxygen is `x` = 3.18 Å, repulsive at the 1.8 Å an H···O bond needs. GAFF's `ho` has
 //!   none. So the cohesion is all van der Waals: summed over the molecule, UFF's `C₆` between two
 //!   octanols is 1.28 times GAFF's, and its hydrogens' wells are 2.8 times GAFF's `hc`.
+//! - **Model (b), GAFF's van der Waals and 1-4 scales by Lorentz–Berthelot with AM1-BCC's charges**,
+//!   which needed [`PeriodicForceField::with_nonbonded`], `with_mixing` and `with_one_four`, is
+//!   measured by the same protocol in `liquid_octanol_with_gaff.rs`, kept out of the published
+//!   crate for GAFF's values: P −178 ± 46 bar, ΔH_vap 77.3 ± 0.7 kJ/mol, and g_OO's first peak at
+//!   2.82 Å, a hydrogen bond.
 //! - **The temperature settles in 2.5 ps after the hot stage; U/N and P do not, in (c)**: its U/N
 //!   falls 0.4 kcal/mol between the sample's halves, and τ is 2 ps. (a)'s halves agree to 0.11.
 //!   Neither was melted long enough for an octanol whose viscosity is eight times water's.
@@ -56,28 +61,18 @@ mod hydration;
 mod octanol;
 
 use octanol::*;
-use pantometry_forcefield::uff::{self, KCAL_PER_MOL};
+use pantometry_forcefield::uff;
 use pantometry_forcefield::{
-    Alchemical, AtLambda, Bath, Estimate, EwaldParameters, Lambda, MolecularDynamics, PeriodicBox,
+    Alchemical, AtLambda, Bath, EwaldParameters, Lambda, MolecularDynamics, PeriodicBox,
     PeriodicDecoupling, PeriodicEnergy, PeriodicForceField, PmeParameters, Shake, UffType,
 };
-use pantometry_units::BOLTZMANN;
 use std::f64::consts::PI;
 
 const EPS: f64 = f64::EPSILON;
-const KELVIN: f64 = 298.15;
 /// The small boxes' lattice: one molecule along its axis, four by four across.
 const SMALL: [usize; 3] = [1, 4, 4];
 /// The small boxes' cutoff: under half their shortest edge, 6.96 Å.
 const SMALL_CUTOFF: f64 = 6.5 * ANGSTROM;
-/// The measurement's lattice: 192 molecules, 41.6 × 36.4 × 33.6 Å.
-const LIQUID: [usize; 3] = [3, 8, 8];
-/// One kJ/mol in joules per molecule: the crate's `KCAL_PER_MOL` over the thermochemical 4.184.
-const KJ_PER_MOL: f64 = KCAL_PER_MOL / 4.184;
-
-fn kcal(j: f64) -> f64 {
-    j / KCAL_PER_MOL
-}
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -89,12 +84,6 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 fn len(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
-}
-
-/// `x` to the whole power `n` by repeated multiplication: `powi` is not used for any input or
-/// reference, its precision being unspecified and platform-dependent.
-fn pow(x: f64, n: u32) -> f64 {
-    (0..n).fold(1.0, |p, _| p * x)
 }
 
 /// The magnitudes the energy is a sum of, for its rounding.
@@ -135,29 +124,6 @@ fn finite_difference(energy: impl Fn(f64) -> (f64, f64), h: f64) -> (f64, f64) {
 /// The small box: 16 octanols at the liquid's density, `r_c` = 6.5 Å, δ = 10⁻⁵.
 fn small_box(o: &Octanol, seed: u64) -> Liquid {
     Liquid::lattice(o, SMALL, DENSITY, seed, SMALL_CUTOFF, 1e-5)
-}
-
-/// `steps` of constrained BAOAB at `dt` in a 5 ps⁻¹ bath at 298.15 K, from rest-thermalised
-/// velocities, on `potential`; the dynamics and the positions.
-fn bathed(
-    template: &MolecularDynamics,
-    potential: &impl pantometry_forcefield::Potential,
-    start: &[[f64; 3]],
-    dt: f64,
-    steps: usize,
-    seed: u64,
-) -> (MolecularDynamics, Vec<[f64; 3]>) {
-    let mut at = start.to_vec();
-    let mut md = template
-        .clone()
-        .with_bath(Bath::Langevin {
-            temperature: KELVIN,
-            friction: 5e12,
-            seed,
-        })
-        .thermalised(&at, KELVIN, seed);
-    md.run(potential, &mut at, dt, steps);
-    (md, at)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -718,66 +684,6 @@ fn benzene_in_octanol_lambda_derivatives_are_the_whole_energys() {
 // ---------------------------------------------------------------------------------------------
 // The liquid, measured
 
-/// The pressure of the untruncated fluid at `at`, pascals, by the molecular virial: each
-/// molecule's forces taken at its centre of mass, so that the constraint forces, internal to it,
-/// drop out; the kinetic part the bath's `N_mol k_B T` exactly; and A&T's tail in place of the
-/// virial's. W2's, with flexible molecules: the molecular virial is the atomic one less
-/// `Σ_i (r_i − R_mol)·F_i`, on whole molecules, which molecular dynamics keeps them.
-fn pressure(field: &PeriodicForceField, l: &Liquid, at: &[[f64; 3]]) -> f64 {
-    let ev = field.evaluate(at);
-    let mut w = ev.virial[0][0] + ev.virial[1][1] + ev.virial[2][2];
-    for r in &l.molecules {
-        let m: f64 = l.masses[r.clone()].iter().sum();
-        let com = [0, 1, 2].map(|k| r.clone().map(|i| l.masses[i] * at[i][k]).sum::<f64>() / m);
-        for i in r.clone() {
-            w -= dot(sub(at[i], com), ev.forces[i]);
-        }
-    }
-    let v = field.cell().volume();
-    let n = l.molecules.len() as f64;
-    (n * BOLTZMANN.to_si() * KELVIN + w / 3.0) / v - field.dispersion_correction() / v
-        + field.pressure_correction()
-}
-
-/// The O–O histogram of one frame, normalised to `g(r)`, bins of `width` to `bins`.
-fn g_oo(
-    cell: &PeriodicBox,
-    at: &[[f64; 3]],
-    oxygens: &[usize],
-    width: f64,
-    bins: usize,
-) -> Vec<f64> {
-    let n = oxygens.len();
-    let mut h = vec![0.0; bins];
-    for a in 0..n {
-        for b in a + 1..n {
-            let d = cell.minimum_image(sub(at[oxygens[a]], at[oxygens[b]]));
-            let k = (len(d) / width) as usize;
-            if k < bins {
-                h[k] += 1.0;
-            }
-        }
-    }
-    let v = cell.volume();
-    for (k, x) in h.iter_mut().enumerate() {
-        let (r0, r1) = (k as f64 * width, (k + 1) as f64 * width);
-        let shell = 4.0 / 3.0 * PI * (pow(r1, 3) - pow(r0, 3));
-        *x /= (n * (n - 1)) as f64 / 2.0 * shell / v;
-    }
-    h
-}
-
-/// The measurement's field: PME at δ = 10⁻⁵ by `PmeParameters::for_accuracy`, and the neighbour
-/// list at its measured skin.
-fn production_field(l: &Liquid) -> PeriodicForceField {
-    let p = l.field.ewald().parameters();
-    let mesh = PmeParameters::for_accuracy(&l.cell(), &p, 1e-5, l.at.len());
-    l.field
-        .clone()
-        .with_mesh(mesh)
-        .with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN)
-}
-
 /// **Milliseconds a step** of the 192-molecule box at 2 fs, release, one core, after 0.2 ps at
 /// 0.5 fs off the lattice: classical Ewald with the cell list, PME with the cell list, and PME with
 /// the neighbour list; each the best of three runs of 20 steps, and one evaluation of each alone.
@@ -824,93 +730,14 @@ fn the_cost_measured() {
     }
 }
 
-/// One record of the melt: the time (ps), `U/N` (kcal/mol), the pressure (bar), the temperature (K).
-type Row = (f64, f64, f64, f64);
-
-/// One stage of the melt: its length, step, bath and temperature.
-struct Stage {
-    name: &'static str,
-    picoseconds: f64,
-    dt: f64,
-    friction: f64,
-    temperature: f64,
-}
-
-/// **The melt and the measurement**: 0.4 ps at 0.5 fs in a 50 ps⁻¹ bath at 298.15 K, which takes
-/// out the lattice's strain; then 10 ps at 500 K and 2 fs to lose the lattice's order; then 14 ps
-/// at 298.15 K to settle, then 26 ps sampled in a 1 ps⁻¹ bath: 25 000 steps of 2 fs, chosen to fit
-/// an hour at the 115 ms a step [`the_cost_measured`] first read. It read 46.5 ms the second time,
-/// and the runs took 48–64 ms a step (26 minutes) and 48–116 (44 minutes): the same code, the
-/// machine's speed changing under it. **They are short for this liquid**, whose viscosity is 7.3 mPa s at 25 °C (CRC Handbook p. 6-234, as PubChem quotes it),
-/// eight times water's, and the melt's blocks are printed so that what has not settled shows.
-const PLAN: [Stage; 4] = [
-    Stage {
-        name: "strain out",
-        picoseconds: 0.4,
-        dt: 0.5 * FS,
-        friction: 50e12,
-        temperature: KELVIN,
-    },
-    Stage {
-        name: "hot",
-        picoseconds: 10.0,
-        dt: 2.0 * FS,
-        friction: 5e12,
-        temperature: 500.0,
-    },
-    Stage {
-        name: "settle",
-        picoseconds: 14.0,
-        dt: 2.0 * FS,
-        friction: 5e12,
-        temperature: KELVIN,
-    },
-    Stage {
-        name: "sample",
-        picoseconds: 26.0,
-        dt: 2.0 * FS,
-        friction: 1e12,
-        temperature: KELVIN,
-    },
-];
-
-/// `U` of one molecule in vacuum at 298.15 K, joules: eight runs of `ps_each` after 10 ps each,
-/// every X–H held, a 5 ps⁻¹ bath; the mean over the runs and its standard error from their spread.
-fn gas(o: &Octanol, ps_each: f64) -> (f64, f64) {
-    let means: Vec<f64> = (0..8u64)
-        .map(|s| {
-            let template =
-                MolecularDynamics::new(o.masses.clone()).with_bond_constraints(o.shake());
-            let (mut md, mut at) = bathed(&template, &o.vacuum, &o.at, 2.0 * FS, 5000, 0x6A5 + s);
-            let steps = (ps_each * 1e-12 / (2.0 * FS)).round() as usize;
-            let mut sum = 0.0;
-            let mut count = 0usize;
-            for k in 0..steps {
-                md.step(&o.vacuum, &mut at, 2.0 * FS);
-                if k % 50 == 0 {
-                    sum += md.potential_energy().expect("stepped");
-                    count += 1;
-                }
-            }
-            sum / count as f64
-        })
-        .collect();
-    let m = means.iter().sum::<f64>() / 8.0;
-    let var = means.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / 7.0;
-    (m, (var / 8.0).sqrt())
-}
-
-/// **The liquid, measured**, model (a): UFF with QEq's charges. [`LIQUID`]'s 192 molecules at
-/// [`DENSITY`], `r_c` = 9 Å, PME at δ = 10⁻⁵ with the neighbour list, every X–H held, 2 fs; melted
-/// by [`PLAN`]. Reported: every 0.1 ps of the melt, `U/N`, the pressure and the temperature in
-/// 2.5 ps blocks, to show how long each takes to settle; over the sample, `U/N`, `P` with their
-/// autocorrelation-aware errors and the sample's halves, `ΔH_vap = U_gas − U_liq/N + RT` with the
-/// gas sampled in vacuum, and `g_OO`'s first peak and minimum. Nothing about the model is
-/// asserted: only that the box has no overlap, every held bond stays held, and the run is finite.
+/// **The liquid, measured**, model (a): UFF with QEq's charges, by [`octanol::measure_liquid`] —
+/// [`LIQUID`]'s 192 molecules at [`DENSITY`], melted by [`octanol::PLAN`] — with the gas sampled in
+/// UFF's vacuum force field.
 #[test]
 #[ignore = "192 octanols melted and sampled, about an hour with --release: run with --release -- --ignored --nocapture"]
 fn the_liquid_measured() {
-    liquid("UFF, QEq's charges", Octanol::new(None));
+    let o = Octanol::new(None);
+    measure_liquid("UFF, QEq's charges", &o, &|field| field, &o.vacuum);
 }
 
 /// **The same with FreeSolv's AM1-BCC charges** on UFF's van der Waals and bonded terms
@@ -923,183 +750,6 @@ fn the_liquid_with_am1bcc_charges_measured() {
     let (elements, bonds) = freesolv::component_graph(&qeq.component);
     let mapped =
         freesolv::charges_onto(&freesolv::octanol(), &elements, &bonds).expect("the same molecule");
-    liquid("UFF, AM1-BCC's charges", Octanol::new(Some(mapped.charges)));
-}
-
-/// [`the_liquid_measured`]'s protocol for octanol `o`.
-fn liquid(name: &str, o: Octanol) {
-    let started = std::time::Instant::now();
-    let l = Liquid::lattice(&o, LIQUID, DENSITY, 0x0C71, 9.0 * ANGSTROM, 1e-5);
-    let (r, _, _) = closest_contact(&l.at, &l.molecules, &l.cell());
-    println!(
-        "\n{name}: {} octanols, {} atoms, box {:.3} × {:.3} × {:.3} Å at {:.6} g/cm³; closest contact {:.3} Å",
-        l.octanols,
-        l.at.len(),
-        l.cell().lengths()[0] / ANGSTROM,
-        l.cell().lengths()[1] / ANGSTROM,
-        l.cell().lengths()[2] / ANGSTROM,
-        l.density() / 1e3,
-        r / ANGSTROM
-    );
-    assert!(r >= OVERLAP);
-    let field = production_field(&l);
-    let n = l.octanols as f64;
-    let oxygens: Vec<usize> = l
-        .molecules
-        .iter()
-        .map(|m| m.start + index(&o.component, "OAB"))
-        .collect();
-    let mut at = l.at.clone();
-    let mut md = l.dynamics();
-    let mut series: Vec<Row> = Vec::new();
-    let mut sample_u = Vec::new();
-    let mut sample_p = Vec::new();
-    let width = 0.02 * ANGSTROM;
-    let bins = (l.cell().half_shortest_edge() / width) as usize;
-    let mut g = vec![0.0; bins];
-    let mut frames = 0usize;
-    let mut time = 0.0;
-    for (k, stage) in PLAN.iter().enumerate() {
-        md = md.with_bath(Bath::Langevin {
-            temperature: stage.temperature,
-            friction: stage.friction,
-            seed: 0x0C10 + k as u64,
-        });
-        if k == 0 {
-            md = md.thermalised(&at, stage.temperature, 0x0C10);
-        }
-        md.forget_forces();
-        let steps = (stage.picoseconds * 1e-12 / stage.dt).round() as usize;
-        let every = ((0.1e-12 / stage.dt).round() as usize).max(1);
-        let t0 = std::time::Instant::now();
-        for s in 0..steps {
-            md.step(&field, &mut at, stage.dt);
-            if (s + 1) % every == 0 {
-                time += every as f64 * stage.dt;
-                let u = kcal(md.potential_energy().expect("stepped")) / n;
-                let p = pressure(&field, &l, &at) / 1e5;
-                series.push((time * 1e12, u, p, md.half_step_temperature()));
-                if stage.name == "sample" {
-                    sample_u.push(u);
-                    sample_p.push(p);
-                    if (s + 1) % (5 * every) == 0 {
-                        for (x, y) in g
-                            .iter_mut()
-                            .zip(g_oo(&l.cell(), &at, &oxygens, width, bins))
-                        {
-                            *x += y;
-                        }
-                        frames += 1;
-                    }
-                }
-            }
-        }
-        let elapsed = t0.elapsed().as_secs_f64();
-        println!(
-            "stage {} ({}): {} ps at {} fs, {} K, γ {} /ps: {:.0} s, {:.1} ms a step",
-            k,
-            stage.name,
-            stage.picoseconds,
-            stage.dt / FS,
-            stage.temperature,
-            stage.friction / 1e12,
-            elapsed,
-            1e3 * elapsed / steps as f64
-        );
-    }
-    assert!(series.iter().all(|s| s.1.is_finite() && s.2.is_finite()));
-    let shake = l.shake();
-    let worst = shake
-        .bonds()
-        .iter()
-        .zip(shake.lengths())
-        .map(|(&[i, j], d)| (len(sub(at[i], at[j])) - d).abs() / d)
-        .fold(0.0f64, f64::max);
-    println!("the worst held bond is {worst:.2e} of its length off it");
-    assert!(worst < 1e-10);
-
-    println!("\nthe melt, in blocks of 2.5 ps:\n| t (ps) | U/N (kcal/mol) | P (bar) | T (K) |\n| --- | --- | --- | --- |");
-    for block in series.chunks(25) {
-        let m = |f: &dyn Fn(&Row) -> f64| block.iter().map(f).sum::<f64>() / block.len() as f64;
-        println!(
-            "| {:.1}–{:.1} | {:.3} | {:.0} | {:.1} |",
-            block[0].0 - 0.1,
-            block[block.len() - 1].0,
-            m(&|s| s.1),
-            m(&|s| s.2),
-            m(&|s| s.3)
-        );
-    }
-    let u = Estimate::of(&sample_u);
-    let p = Estimate::of(&sample_p);
-    // The sample's halves, as a check on drift the autocorrelation cannot see.
-    let half = sample_u.len() / 2;
-    let (u1, u2) = (
-        Estimate::of(&sample_u[..half]),
-        Estimate::of(&sample_u[half..]),
-    );
-    let (p1, p2) = (
-        Estimate::of(&sample_p[..half]),
-        Estimate::of(&sample_p[half..]),
-    );
-    println!(
-        "\nU/N = {:.3} ± {:.3} kcal/mol (τ {:.1} samples of 0.1 ps); halves {:.3} ± {:.3}, {:.3} ± {:.3}",
-        u.mean, u.error, u.tau, u1.mean, u1.error, u2.mean, u2.error
-    );
-    println!(
-        "P = {:.0} ± {:.0} bar (τ {:.1}); halves {:.0} ± {:.0}, {:.0} ± {:.0}; experiment at this density: 1 bar",
-        p.mean, p.error, p.tau, p1.mean, p1.error, p2.mean, p2.error
-    );
-    let (ug, ug_err) = gas(&o, 200.0);
-    let rt = BOLTZMANN.to_si() * KELVIN;
-    let u_liq = u.mean * KCAL_PER_MOL;
-    let dh = ug - u_liq + rt;
-    let dh_err = (ug_err * ug_err + (u.error * KCAL_PER_MOL) * (u.error * KCAL_PER_MOL)).sqrt();
-    println!(
-        "U_gas = {:.3} ± {:.3} kcal/mol (eight runs of 200 ps); ΔH_vap = U_gas − U/N + RT = {:.2} \
-         ± {:.2} kcal/mol = {:.1} ± {:.1} kJ/mol",
-        kcal(ug),
-        kcal(ug_err),
-        kcal(dh),
-        kcal(dh_err),
-        dh / KJ_PER_MOL,
-        dh_err / KJ_PER_MOL
-    );
-    println!("  experiment: 70.98 kJ/mol at 25 °C (CRC Handbook 95th ed. p. 6-142, as PubChem CID 957 quotes it, read)");
-    let mean_g: Vec<f64> = g.iter().map(|x| x / frames as f64).collect();
-    let lo = (2.3 * ANGSTROM / width) as usize;
-    let hi = (3.4 * ANGSTROM / width) as usize;
-    let b = (lo..hi)
-        .max_by(|&i, &j| mean_g[i].total_cmp(&mean_g[j]))
-        .expect("bins");
-    let (y0, y1, y2) = (mean_g[b - 1], mean_g[b], mean_g[b + 1]);
-    let shift = 0.5 * (y0 - y2) / (y0 - 2.0 * y1 + y2);
-    let r_peak = (b as f64 + 0.5 + shift) * width;
-    let min_hi = (4.5 * ANGSTROM / width) as usize;
-    let m = (b..min_hi)
-        .min_by(|&i, &j| mean_g[i].total_cmp(&mean_g[j]))
-        .expect("bins");
-    let second = (m..((6.5 * ANGSTROM / width) as usize).min(bins))
-        .max_by(|&i, &j| mean_g[i].total_cmp(&mean_g[j]))
-        .expect("bins");
-    // The coordination number to the first minimum: the oxygens a hydroxyl's neighbours are.
-    let rho = n / l.cell().volume();
-    let coordination: f64 = (0..m)
-        .map(|k| {
-            let (r0, r1) = (k as f64 * width, (k + 1) as f64 * width);
-            mean_g[k] * rho * 4.0 / 3.0 * PI * (pow(r1, 3) - pow(r0, 3))
-        })
-        .sum();
-    println!(
-        "g_OO over {frames} frames: first peak at {:.3} Å, height {:.2}; first minimum at {:.2} Å, \
-         {:.3}; {:.2} oxygens inside it; the next maximum at {:.2} Å, {:.2}",
-        r_peak / ANGSTROM,
-        y1 - 0.25 * (y0 - y2) * shift,
-        (m as f64 + 0.5) * width / ANGSTROM,
-        mean_g[m],
-        coordination,
-        (second as f64 + 0.5) * width / ANGSTROM,
-        mean_g[second]
-    );
-    println!("the whole run {:.0} s", started.elapsed().as_secs_f64());
+    let o = Octanol::new(Some(mapped.charges));
+    measure_liquid("UFF, AM1-BCC's charges", &o, &|field| field, &o.vacuum);
 }
