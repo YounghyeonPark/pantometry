@@ -4383,6 +4383,123 @@ protects nothing.
     a slow mode that 16 ps samples a few times only. The long protocol, 51 h, would reach it. It
     is written and not run.
 
+- **Step 4c-1, a box of liquid 1-octanol for benzene's log P: built and checked, and UFF's
+  octanol measured too cohesive by 21–26 kJ/mol with no hydrogen bond in it, so the solvent should
+  be GAFF's nonbonded terms — which the periodic field cannot carry for a solute without a library
+  change, proposed and not made.** New `tests/liquid_octanol_in_a_box.rs` and `tests/octanol/`;
+  `components/OC9.cif`; FreeSolv's `mobley_36119.mol2` in `tests/freesolv/`. Nothing in `src/`
+  changed.
+  - **The molecule** is `OC9` of the dictionary (OCTAN-1-OL; `OCT` is n-octane), fetched
+    2026-10-21, SHA-256 `6591016d…af8b6c`, added to `every_component_is_the_molecule_it_says`:
+    eight `C_3`, one `O_3`, eighteen `H_`. FreeSolv v0.52's `mobley_36119.mol2` (CC BY 4.0, from
+    the same `mol2files_gaff.tar.gz` as benzene's, whose SHA-256 reproduced; the file's own is
+    `ecfa179d…929831`) gives AM1-BCC's charges by graph isomorphism, equal under all 768
+    automorphisms. Its row is −4.09 ± 0.60 by experiment, −2.69 ± 0.03 calculated. **QEq's charges
+    are four times AM1-BCC's on the chain**: +0.14 to +0.18 e on every C–H hydrogen against +0.02
+    to +0.06, Σ|q| 6.02 e.
+  - **The box** is one dictionary entry of many molecules (`octanol::joined`, each atom
+    `<name>_<k>`), since the field takes a solute as one component and has no third kind of
+    molecule. It is a lattice of the relaxed all-trans conformer, each turned end for end and about
+    its axis by `Rng::for_index`, and each cell the conformer's spans plus one gap solved for the
+    density. 192 molecules (3 × 8 × 8, 5 184 atoms) in 41.86 × 36.23 × 33.14 Å at **0.8262 g/cm³**:
+    the CRC Handbook's 25 °C value as PubChem's HSDB record quotes it, read. The often-quoted 0.827
+    is 0.1% higher and nearer 20 °C. The gap is 2.335 Å, and the closest contact by brute force is
+    exactly that.
+  - **The design question: which force field for the solvent.**
+    - **(a) UFF with QEq, measured, and wrong.** At experiment's density P = −930 ± 45 bar;
+      ΔH_vap = U_gas − U/N + RT = **91.9 ± 0.9 kJ/mol against 70.98** (CRC, read via PubChem). The
+      gas is one molecule in vacuum, eight runs of 200 ps. **g_OO has no hydrogen-bond peak**: its
+      first is at 3.39 Å, height 0.82, with 0.06 oxygens inside the minimum. UFF gives the hydroxyl
+      hydrogen every hydrogen's van der Waals (2.886 Å, 0.044 kcal/mol), and its pair with an oxygen
+      is repulsive at the 1.8 Å an H···O bond needs. So the excess cohesion is van der Waals.
+      Summed over the molecule, UFF's `C₆` between two octanols is 1.28 times GAFF's, and its
+      hydrogens' wells are 2.8 times GAFF's `hc` (0.044 against 0.0157).
+    - **(c) UFF with FreeSolv's AM1-BCC charges, measured as the half of (b) that needs no
+      library change, and worse**: P −788 ± 56 bar, ΔH_vap 97.3 ± 0.7 and still rising (U/N's
+      halves −1.23 and −1.59), g_OO's first peak at 3.37 Å. **It is not the charges.**
+    - **(b) GAFF's Lennard-Jones and AM1-BCC charges on UFF's bonded terms is the
+      recommendation, and it needs a library change**, so it stopped there. Charges are already
+      the caller's (`with_charges`). A solute's van der Waals is not: `PeriodicForceField::vdw` is
+      private and filled only from UFF types, TIP3P's oxygen and `with_ions`, whose atoms are
+      bonded to nothing. Three more things GAFF needs that the field does not do:
+      - **Lorentz–Berthelot**: the field combines geometrically (`c3`–`hc` σ 3.002 against
+        3.025 Å, 0.8%), and the long-range correction's `O(N)` form rests on it;
+      - **GAFF's 1-4 scaling** (½ van der Waals, 1/1.2 Coulomb): the field excludes 1-2 and 1-3
+        only, and in Ewald a partly scaled pair is a partial exclusion;
+      - **the decoupling's soft core** reads the field's own pair, and so would follow either.
+
+      **The API proposed, not written**:
+      `PeriodicForceField::with_nonbonded(atoms: Range<usize>, van_der_waals: Vec<[f64; 2]>)`
+      in UFF's `[x, D]` form; `with_mixing(Mixing::{Geometric, LorentzBerthelot})`, geometric the
+      default and every existing bit kept; and `with_one_four(van_der_waals, coulomb)`, default
+      `(1, 1)`.
+
+      **Its checks**:
+      - with every override equal to its UFF type's, the same bits;
+      - one pair against Lorentz–Berthelot's formula;
+      - the tail under Lorentz–Berthelot against its double sum written out, by type pairs in
+        `O(T²)`, and against A&T's one-type form;
+      - forces and the virial as the energy's derivatives;
+      - a 1-4 pair at its scale through Ewald's exclusion correction;
+      - W3's end states and λ derivatives for a solute so overridden.
+
+      GAFF's five types (`c3` 1.9080/0.1094, `hc` 1.4870/0.0157, `h1` 1.3870/0.0157, `oh`
+      1.7210/0.2104, `ho` 0/0) were read from ambermini's `gaff.dat` (the SHA-256 W4 cites,
+      reproduced) and are not in the repository. Under GPL v3 they would go in a package-excluded
+      file as `tests/amber/` is, or come from openmmforcefields' MIT `gaff.xml`.
+    - **Dry, not wet.** Water-saturated octanol is about 0.27 water by mole fraction (quoted, not
+      read), 71 waters for 192 octanols. `PeriodicForceField::solvated` already takes TIP3P after a
+      many-molecule solute, so wet needs no library change. What it would add: waters clustered on
+      the hydroxyls, a slower melt, and the medium log P is measured in. Not built.
+  - **Checked** (eight default tests, 3.4 s unoptimised in all, on boxes of 16 molecules,
+    `r_c` = 6.5 Å):
+    - the molecules' mass over the volume is the density within 8 ε at 16 and 192 molecules, and
+      the box's own 432 masses within their sum's rounding, `(N + 8) ε`;
+    - the closest contact over the 27 images is at least 2 Å and within 10% of the gap;
+    - **the brute force itself sees across every face and a molecule's own image**;
+    - typing the whole box is typing each molecule;
+    - every X–H, counted from the elements, is held, and nothing else is (288). After 40 steps
+      at 2 fs each is within 0.95 of SHAKE's default tolerance of its UFF length, with no velocity
+      along itself beyond RATTLE's;
+    - the degrees of freedom are 1 005 = 3N − N_held − 3 in NVE and 1 008 in a bath;
+    - **constrained NVE on four octanols falls as h²**: ratios 4.2445–4.2965, 4.0588–4.0696 and
+      4.0155–4.0181, the excess shrinking by 0.2587–0.2647, over sixteen starts
+      (`the_h_squared_band_measured`, release; the debug start is the same bits). The bands are
+      three half-spreads either side (3.5 for the shrink). 2 fs is nearer h² than in W3 or W4,
+      every hydrogen being held;
+    - **benzene decoupled from 12 octanols**: the end states are the systems they say, energy and
+      every force within 1e-12; the long-range correction's cross part is its double sum over
+      three octanol types; `∂U/∂λ_e` and `∂U/∂λ_v` match the whole energy's central differences at
+      four states.
+  - **The cost**: 46.5 ms a step at 2 fs with PME (order 7, 32³) and the neighbour list, release,
+    one core, for 5 184 atoms. The cell list is 53.5 ms, classical Ewald 80.9 ms. A first reading
+    was 115, and the two runs went 48–64 and 48–116 ms a step: the same code, the machine's speed
+    changing under it.
+  - **How long it takes to settle**: the temperature settles within 2.5 ps of leaving 500 K. In
+    (a) U/N and P are steady from 12.5 ps on (halves 18.00 and 17.89 kcal/mol, −846 and
+    −1 014 bar). In (c) U/N is still falling after 26 ps sampled.
+  - **Sabotages, nine, each caught where this says**, applied by script in binary with
+    once-only anchors and restored by copy, `touch` and SHA-256:
+
+    | sabotage | caught by |
+    | --- | --- |
+    | the density off by 1% | the density |
+    | the lattice 5% long across a face | the contact, 1.677 Å |
+    | the contact check's images dropped | the checker's own test |
+    | both of those at once | the checker's own test; the box's contact passes, which is why the self-test exists |
+    | the O–H constraints missing | the held set; the degrees of freedom, 1 021 |
+    | SHAKE a thousand times looser | the held lengths, 971 of the default tolerance |
+    | `Δq/h` × 0.999 after SHAKE | h², the ratio from 0.5 fs at 4.027 (and the shrink at 0.363) |
+    | benzene's own Coulomb × 0.999 | the end states |
+    | the tail's cross part as `λ_v²` | `∂U/∂λ_v` at (0.4, 0.8) |
+
+    **SHAKE loosened passed the first version of the held-length check**, which measured each bond
+    in units of `shake.tolerance()`. That loosened with the sabotage, so the check could not see
+    it. It now measures against `Shake::DEFAULT_TOLERANCE`.
+  - **Counts.** The crate's tests are 479, 52 of them ignored, so 427 run by default (467, 48 and
+    419 before). The new file has eight default and four ignored. **Not run**: the workspace suite
+    and the gate. There is no `powi` or `powf` in the new files.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round

@@ -93,6 +93,7 @@ fn every_component_is_the_molecule_it_says() {
         ("N4B", include_str!("../components/N4B.cif")),
         ("PXY", include_str!("../components/PXY.cif")),
         ("OXE", include_str!("../components/OXE.cif")),
+        ("OC9", include_str!("../components/OC9.cif")),
     ] {
         let c = Component::from_ccd(text).expect("parses");
         let stated = c

@@ -24,6 +24,9 @@
 //! - **The map** ([`charges_onto`]) is a graph isomorphism, element and bonds: never the file's
 //!   order. All of them are enumerated, so a symmetric molecule's charges that are not equal by
 //!   symmetry show as a spread.
+//! - **And octan-1-ol** ([`MOBLEY_36119`]), for step 4c's solvent: the same archive at the same
+//!   commit, kept the same way, its own SHA-256 in [`OCTANOL_SHA256`]. Its AM1-BCC charges on
+//!   UFF's octanol are one of the models `tests/liquid_octanol_in_a_box.rs` measures.
 
 #![allow(dead_code)]
 
@@ -375,4 +378,99 @@ pub fn component_graph(c: &Component) -> (Vec<Element>, Vec<[usize; 2]>) {
 /// FreeSolv's benzene, read ([`MOBLEY_3053621`]).
 pub fn benzene() -> Mol2 {
     parse(MOBLEY_3053621).expect("FreeSolv's mobley_3053621.mol2")
+}
+
+/// Where [`MOBLEY_36119`] came from: the same archive, at the same commit, as [`SOURCE`].
+pub const OCTANOL_SOURCE: &str = "github.com/MobleyLab/FreeSolv v0.52, commit \
+                                  9d8a8097d587a6c084befbb2abde6dd2a0f31ba3, mol2files_gaff.tar.gz \
+                                  (SHA-256 15ece6114442a8eb5e720c0ad25bb48e4a6a35392da36f72b80a6f2f415fd133) \
+                                  → mol2files_gaff/mobley_36119.mol2";
+
+/// The SHA-256 of [`MOBLEY_36119`]'s bytes.
+pub const OCTANOL_SHA256: &str = "ecfa179de0b94f48c38072f66bae1932fd0ac0e297b11969dafed89468929831";
+
+/// **FreeSolv v0.52's `mobley_36119.mol2`, octan-1-ol, byte for byte** ([`OCTANOL_SOURCE`]),
+/// CC BY 4.0 as [`MOBLEY_3053621`] is: GAFF's types (`c3`, `oh`, `hc`, `h1`, `ho`) and AM1-BCC's
+/// charges to four places, as FreeSolv ran its hydration free energy. Its database row,
+/// `mobley_36119; CCCCCCCCO; octan-1-ol`, is [`OCTANOL_EXPERIMENT`] and [`OCTANOL_CALCULATED`].
+/// The charges sum to zero exactly, as written: O1 −0.6023, its H18 +0.3984, C8 +0.1314, the
+/// other seven carbons −0.0918 to −0.0782 and the seventeen hydrogens on carbon +0.0194 to +0.0552.
+pub const MOBLEY_36119: &str = r#"@<TRIPOS>MOLECULE
+octan-1-ol
+   27    26     1     0     0
+SMALL
+No Charge or Current Charge
+
+
+@<TRIPOS>ATOM
+      1 C1          2.5800    3.1400   -2.3930 c3        1 MOL     -0.091800
+      2 C2          2.1180    1.7400   -2.7630 c3        1 MOL     -0.080400
+      3 C3          0.9800    1.7770   -3.7840 c3        1 MOL     -0.078800
+      4 C4          0.5210    0.3650   -4.1520 c3        1 MOL     -0.078600
+      5 C5         -0.6200    0.3420   -5.1750 c3        1 MOL     -0.078300
+      6 C6         -1.0790   -1.0710   -5.5420 c3        1 MOL     -0.078200
+      7 C7         -2.2160   -1.0340   -6.5630 c3        1 MOL     -0.083300
+      8 C8         -2.6810   -2.4350   -6.9360 c3        1 MOL      0.131400
+      9 O1         -3.7340   -2.3320   -7.8840 oh        1 MOL     -0.602300
+     10 H1          3.3940    3.1040   -1.6610 hc        1 MOL      0.032900
+     11 H2          1.7580    3.7240   -1.9640 hc        1 MOL      0.032900
+     12 H3          2.9440    3.6670   -3.2800 hc        1 MOL      0.032900
+     13 H4          1.7880    1.2190   -1.8570 hc        1 MOL      0.037500
+     14 H5          2.9670    1.1780   -3.1700 hc        1 MOL      0.037500
+     15 H6          0.1440    2.3480   -3.3670 hc        1 MOL      0.039700
+     16 H7          1.3150    2.3020   -4.6870 hc        1 MOL      0.039700
+     17 H8          0.2130   -0.1730   -3.2470 hc        1 MOL      0.038900
+     18 H9          1.3690   -0.1890   -4.5750 hc        1 MOL      0.038900
+     19 H10        -1.4690    0.9200   -4.7910 hc        1 MOL      0.041600
+     20 H11        -0.2740    0.8530   -6.0820 hc        1 MOL      0.041600
+     21 H12        -1.4210   -1.6000   -4.6460 hc        1 MOL      0.039300
+     22 H13        -0.2350   -1.6370   -5.9540 hc        1 MOL      0.039300
+     23 H14        -1.8950   -0.5060   -7.4690 hc        1 MOL      0.055200
+     24 H15        -3.0640   -0.4630   -6.1660 hc        1 MOL      0.055200
+     25 H16        -1.8640   -3.0110   -7.3840 h1        1 MOL      0.019400
+     26 H17        -3.0540   -2.9700   -6.0570 h1        1 MOL      0.019400
+     27 H18        -4.0060   -3.2390   -8.1000 ho        1 MOL      0.398400
+@<TRIPOS>BOND
+     1    1    2 1   
+     2    2    3 1   
+     3    3    4 1   
+     4    4    5 1   
+     5    5    6 1   
+     6    6    7 1   
+     7    7    8 1   
+     8    8    9 1   
+     9    1   10 1   
+    10    1   11 1   
+    11    1   12 1   
+    12    2   13 1   
+    13    2   14 1   
+    14    3   15 1   
+    15    3   16 1   
+    16    4   17 1   
+    17    4   18 1   
+    18    5   19 1   
+    19    5   20 1   
+    20    6   21 1   
+    21    6   22 1   
+    22    7   23 1   
+    23    7   24 1   
+    24    8   25 1   
+    25    8   26 1   
+    26    9   27 1   
+@<TRIPOS>SUBSTRUCTURE
+     1 MOL         1 TEMP              0 ****  ****    0 ROOT
+"#;
+
+/// FreeSolv's experimental hydration free energy of octan-1-ol and its uncertainty, kcal/mol: the
+/// database row of [`OCTANOL_SOURCE`]'s commit, whose uncertainty is the default FreeSolv assigns
+/// when none was available.
+pub const OCTANOL_EXPERIMENT: (f64, f64) = (-4.09, 0.60);
+
+/// FreeSolv's calculated GAFF/AM1-BCC hydration free energy of octan-1-ol in TIP3P and its
+/// uncertainty, kcal/mol: the same row.
+pub const OCTANOL_CALCULATED: (f64, f64) = (-2.69, 0.03);
+
+/// FreeSolv's octan-1-ol, read ([`MOBLEY_36119`]).
+pub fn octanol() -> Mol2 {
+    parse(MOBLEY_36119).expect("FreeSolv's mobley_36119.mol2")
 }

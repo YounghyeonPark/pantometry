@@ -57,6 +57,7 @@ time, and assert the edit's anchor occurs exactly once before making it.
 | `N4B.cif` | N-BUTYLBENZENE | C10 H14 | 2011-06-04 | 2026-10-05 | `130733106105fc8719ecb3502d48b8c214f1a53e80b15680b2a9011272dabb81` |
 | `PXY.cif` | PARA-XYLENE | C8 H10 | 2024-09-27 | 2026-10-05 | `092ecd1a419b68c552a9fbf047b38b12b2c2a251270c305effc0ee71d8ee77a9` |
 | `OXE.cif` | ORTHO-XYLENE | C8 H10 | 2024-09-27 | 2026-10-05 | `60bba235532452cccb2f15046df69be1402e9e9232fd692d4519e22aaea2ae05` |
+| `OC9.cif` | OCTAN-1-OL — 1-octanol, the solvent of log P (`OCT` is n-octane) | C8 H18 O | 2011-06-04 | 2026-10-21 | `6591016df1b408d992edf91841057b4474e5f1acc09c174ae01d1b0bb8af8b6c` |
 
 **How each entry was found and checked.** By exact name or by formula through RCSB's search API,
 then read: its name, its formula, and its bond table, which must be the molecule's — every heavy
