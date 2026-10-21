@@ -12,13 +12,16 @@ repository.workspace = true
 # Kept in the repository and out of the published crate. `tests/amber/` holds ff14SB's
 # Lennard-Jones and residue types, read from ambermini, which is AmberTools 14 under GPL v3. The
 # values may well be facts rather than a work, but MIT OR Apache-2.0 should not rest on that.
-# `benzene_bound_in_tip3p.rs` uses them. `liquid_octanol_with_gaff.rs` carries GAFF's van der Waals
-# for octanol's five types, read from the same ambermini's `gaff.dat`, and is kept out for the same
-# reason. FreeSolv's CC BY 4.0 mol2 in `tests/freesolv/` needs only its attribution, which travels
-# with it, so it stays.
+# `benzene_bound_in_tip3p.rs` uses them. `tests/gaff/` holds GAFF's van der Waals for octanol's five
+# types and benzene's two, read from the same ambermini's `gaff.dat`, and is kept out for the same
+# reason, with the three files that include it: `liquid_octanol_with_gaff.rs`,
+# `benzene_partitioned_into_octanol.rs` and `benzene_bound_in_tip3p.rs`. FreeSolv's CC BY 4.0 mol2 in
+# `tests/freesolv/` needs only its attribution, which travels with it, so it stays.
 exclude = [
     "tests/amber/",
     "tests/benzene_bound_in_tip3p.rs",
+    "tests/benzene_partitioned_into_octanol.rs",
+    "tests/gaff/",
     "tests/liquid_octanol_with_gaff.rs",
 ]
 

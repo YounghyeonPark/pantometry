@@ -59,6 +59,7 @@
 
 mod amber;
 mod freesolv;
+mod gaff;
 mod hydration;
 mod protein;
 
@@ -9446,4 +9447,64 @@ fn a_staged_run_resumes_to_the_same_bits() {
     for d in [whole, killed, cut] {
         let _ = std::fs::remove_dir_all(d);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 4c-2's direct water route: benzene's model the staged run's
+
+/// **The direct route's benzene is variant 4's, to the bit**: `benzene_partitioned_into_octanol.rs`
+/// decouples GAFF/AM1-BCC benzene from water and from octanol directly, with its model built by
+/// [`gaff::benzene_in_water`] from `gaff.dat`'s `ca` and `ha` read again and FreeSolv's types. On
+/// W3's small box, every atom's `[x, D]` is the one variant 4's staged run swapped in
+/// ([`VdwSwap`]'s variant 3, [`gaff_benzene`] written from the same file separately), the waters
+/// TIP3P's, the mixing Lorentz–Berthelot in both, and benzene's charges [`am1bcc`]'s, the waters'
+/// TIP3P's, all to the bit. And **the direct field's cross van der Waals is the frames' variant 3**:
+/// `U(coupled) − U(decoupled)`'s van der Waals is [`cross_sum`]'s pairs, by the frames' own loop and
+/// mixing, within both sums' rounding. What is not the same, and is not meant to be: benzene's own
+/// pairs, GAFF's, AM1-BCC's and 1-4 scaled there, UFF's and QEq's in the staged run.
+#[test]
+fn the_direct_routes_benzene_is_variant_4s() {
+    let b = hydration::Benzene::new(None);
+    let w = hydration::Solvated::new(&b, 3, 0x5EC6, 2.3 * ANGSTROM, 4.6 * ANGSTROM, 1e-5);
+    let free = water_surroundings(&b, &w);
+    let labels = water_labels(&free);
+    let swap = VdwSwap::new(&free, &labels);
+    let q4 = am1bcc(&freesolv::component_graph(&b.component)).charges;
+    let direct = gaff::benzene_in_water(w.field.clone(), &b.component);
+    let n = w.at.len();
+    let bits2 =
+        |v: &[[f64; 2]]| -> Vec<[u64; 2]> { v.iter().map(|x| x.map(f64::to_bits)).collect() };
+    let bits = |v: &[f64]| -> Vec<u64> { v.iter().map(|x| x.to_bits()).collect() };
+    assert_eq!(bits2(direct.van_der_waals()), bits2(&swap.to.vdw[..n]));
+    assert_eq!(swap.to.mixing, Mixing::LorentzBerthelot);
+    assert_eq!(
+        direct.mixing(),
+        pantometry_forcefield::Mixing::LorentzBerthelot
+    );
+    assert_eq!(bits(&direct.charges()[..12]), bits(&q4));
+    assert_eq!(
+        bits(&direct.charges()[12..]),
+        bits(&w.field.charges()[12..])
+    );
+    // The cross van der Waals, by the field and by the frames.
+    let d = PeriodicDecoupling::new(&direct, &w.group).expect("benzene decouples");
+    let on = d.energy(&w.at, Lambda::COUPLED);
+    let off = d.energy(&w.at, Lambda::new(0.0, 0.0, 0.0));
+    let frames = cross_sum(&free, &w.at, &swap.to, CrossSum::default());
+    let field = on.van_der_waals - off.van_der_waals;
+    let bound = 64.0 * EPS * (magnitude(&on) + magnitude(&off))
+        + summation_bound(frames.terms, frames.magnitude);
+    println!(
+        "the cross van der Waals: the field {:+.12e} kcal/mol, the frames {:+.12e}, {:.3} of the \
+         bound; {} pairs",
+        kcal(field),
+        kcal(frames.pairs),
+        (field - frames.pairs).abs() / bound,
+        frames.terms
+    );
+    assert!((field - frames.pairs).abs() <= bound);
+    assert!(
+        frames.terms > 0 && frames.pairs.abs() > 1e3 * bound,
+        "the sum is seen"
+    );
 }

@@ -43,6 +43,7 @@
 #![allow(clippy::needless_range_loop)]
 
 mod freesolv;
+mod gaff;
 mod nonbonded;
 mod octanol;
 
@@ -51,58 +52,9 @@ use octanol::*;
 use pantometry_forcefield::uff::KCAL_PER_MOL;
 use pantometry_forcefield::{Component, Element, Mixing, PeriodicForceField, Potential};
 
-/// Where [`GAFF`] was read: ambermini at the commit W4's ff14SB tables cite.
-pub const GAFF_SOURCE: &str = "github.com/choderalab/ambermini \
-                               f7c421c46dca9f0e0f87b10a9c87985b446d8ff9 \
-                               share/amber/dat/leap/parm/gaff.dat";
-
-/// The SHA-256 of [`GAFF_SOURCE`]'s bytes, reproduced on 2026-10-21 and the one W4 cites.
-pub const GAFF_SHA256: &str = "95e3c655c225064435742ab6414a87e6c30a559e8be60de0482eba55144d8433";
-
-/// **GAFF 1.7's van der Waals for octanol's five types**, `(type, R*/2 in Å, ε in kcal/mol)`, as
-/// `gaff.dat`'s `MOD4 RE` block writes them (its first line: "AMBER General Force Field for
-/// organic molecules (Version 1.7, Nov 2013)"), lines 5892–5912:
-///
-/// ```text
-///   h1          1.3870  0.0157             Veenstra et al JCC,8,(1992),963
-///   hc          1.4870  0.0157             OPLS
-///   ho          0.0000  0.0000             OPLS Jorgensen, JACS,110,(1988),1657
-///   oh          1.7210  0.2104             OPLS
-///   c3          1.9080  0.1094             OPLS
-/// ```
-pub const GAFF: [(&str, f64, f64); 5] = [
-    ("c3", 1.9080, 0.1094),
-    ("hc", 1.4870, 0.0157),
-    ("h1", 1.3870, 0.0157),
-    ("oh", 1.7210, 0.2104),
-    ("ho", 0.0, 0.0),
-];
-
-/// GAFF's and AMBER's 1-4 scales: `SCNB` = 2 and `SCEE` = 1.2, so `½` of the van der Waals and
-/// `1/1.2` of the Coulomb energy.
-pub const ONE_FOUR: [f64; 2] = [0.5, 1.0 / 1.2];
-
-/// GAFF's `[x, D]` in UFF's form, `x = 2 (R*/2)` and `D = ε`, for type `kind`.
-pub fn gaff(kind: &str) -> [f64; 2] {
-    let &(_, r, e) = GAFF
-        .iter()
-        .find(|t| t.0 == kind)
-        .unwrap_or_else(|| panic!("no GAFF type {kind} here"));
-    [2.0 * r * ANGSTROM, e * KCAL_PER_MOL]
-}
-
-/// Each atom of the dictionary's octanol's GAFF type, from FreeSolv's `mobley_36119.mol2` by graph
-/// isomorphism.
-pub fn gaff_types(c: &Component) -> Vec<String> {
-    let mol2 = freesolv::octanol();
-    let (elements, bonds) = freesolv::component_graph(c);
-    let mapped = freesolv::charges_onto(&mol2, &elements, &bonds).expect("the same molecule");
-    mapped
-        .map
-        .iter()
-        .map(|&j| mol2.atoms[j].kind.clone())
-        .collect()
-}
+// GAFF's values, where they were read, its 1-4 scales and octanol's types: `tests/gaff/`, kept out
+// of the published crate with this file and shared with `benzene_partitioned_into_octanol.rs`.
+pub use gaff::{gaff, gaff_types, GAFF, GAFF_SHA256, GAFF_SOURCE, ONE_FOUR};
 
 /// Octanol with FreeSolv's AM1-BCC charges.
 fn am1bcc_octanol() -> Octanol {

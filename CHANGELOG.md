@@ -4667,6 +4667,123 @@ protects nothing.
     steps, the crate's suite in debug and the `pantometry` prose tests. There is no `powi` or
     `powf` in the new or changed code.
 
+- **Step 4c-2, benzene's log P: GAFF/AM1-BCC benzene decoupled from octanol and from water by
+  one route and one model — written, costed, not run; the two boxes melted and a pilot run for
+  τ.** New `tests/benzene_partitioned_into_octanol.rs` and `tests/gaff/`, both kept out of the
+  published crate; `liquid_octanol_with_gaff.rs` now takes GAFF's values from `tests/gaff/`, and
+  `benzene_bound_in_tip3p.rs` has one test more. Nothing in `src/` changed.
+  - **The thermodynamics.** `log P = −(ΔG_solv,oct − ΔG_hyd)/(RT ln 10)`, each
+    `ΔG_solv = −ΔG_decouple`, W3's decoupling in each box. Experiment's `log K_ow` 2.13 is Hansch,
+    Leo and Hoekman (1995) p. 18 as PubChem CID 241's HSDB record quotes it, read 2026-10-21 (its
+    HMDB and ICSC records give 2.13 too, its Sangster entry 2.31): `ΔG_oct − ΔG_hyd = −2.906`
+    kcal/mol at 298.15 K. Both legs are at fixed volume and the same concentration at each end, so
+    the standard state cancels from the ratio.
+  - **The model, the same in both legs**: GAFF's `ca` and `ha` (read again from `gaff.dat`, the
+    SHA-256 W4 cites reproduced, lines 5897 and 5913), Lorentz–Berthelot, GAFF's 1-4 scales and
+    FreeSolv's AM1-BCC charges (−0.0001 e net, as FreeSolv ran them), on UFF's bonded terms. The
+    mixing and 1-4 scales are the field's, field-wide, and octanol needs them, so **benzene's own
+    pairs are GAFF's, AM1-BCC's and 1-4 scaled at both ends of both legs**: they cancel from each
+    `ΔG_decouple` but for the solvent's effect on benzene's conformations, small for a ring with
+    its C–H held. The staged route's −0.82 ± 0.15 kept benzene's own pairs UFF's and QEq's; its
+    cross model is this one's to the bit (below).
+  - **Dry octanol.** Water-saturated octanol is about 0.27 water by mole fraction (quoted): wet
+    would add waters on the hydroxyls and is the medium 2.13 was measured in. It needs no library
+    change (`solvated` takes TIP3P after a many-molecule solute). Not built.
+  - **The octanol box**: 4c-1's 192 sites, benzene at the centre, every octanol within 2 Å of it
+    removed (four), and **the lattice built at 0.8413 g/cm³ so that the 188 octanols are at
+    0.8262 in the volume benzene leaves them**, `N m/(V − v_B)` with `v_B` 89 cm³/mol (quoted), a
+    fixed point in the number removed. Uncompensated it would be 1.8% light: at a compressibility of
+    order 10⁻⁴ bar⁻¹ (quoted), some 200 bar more tension, and `P v_B` ≈ 0.4 kcal/mol. 5 088
+    atoms, 41.86 × 35.82 × 32.92 Å, `r_c` 9 Å, PME at δ = 10⁻⁵ with the neighbour list.
+    **The water box** is W3's with the model swapped in.
+  - **The melts**, run (`the_pilot_measured`, release, exit 0 on 2026-10-21 after 12 748 s), each
+    into `start.txt` under a header with digests of the box as built and of the model, which the
+    production reads back: benzene grown in as W3 grows it (λ_v 0.5 and 1 uncharged, then coupled,
+    0.5 ps each at 0.5 fs), then in octanol 10 ps at 500 K and **60 ps at 298.15 K, which it
+    needed**. U per octanol in 2.5 ps blocks fell from 2.31 kcal/mol at the start of the settle to
+    1.48 by 20 ps and **was flat from about 40 ps**, 1.18–1.39 over the last 20 ps (mean 1.30;
+    4c-1's GAFF liquid 1.36); the settle's halves 1.88 ± 0.22 and 1.38 ± 0.04, τ 3.1 ps. P went from
+    +220 to −110…+60 bar over the last 20 ps (mean −42; 4c-1's −178 ± 46 with no benzene and no
+    compensation). The water, W3's 20 ps: U/N's halves −9.546 ± 0.011 and −9.560 ± 0.015, P
+    −102 ± 79 bar. Each window then discards 20 ps of its own.
+  - **τ, from the pilot** (300 samples of 0.1 ps after 2 ps, τ in samples):
+
+    | state | water: ⟨∂U/∂λ⟩ (kcal/mol), τ | octanol: ⟨∂U/∂λ⟩, τ |
+    | --- | --- | --- |
+    | charges on, `∂/∂λ_e` | −6.74 ± 0.51, 7.2 | −1.56 ± 0.48, **22.2** |
+    | charges off, `∂/∂λ_v` at 1 | −5.62 ± 0.24, 0.6 (βΔU 0.6–1.4) | −8.46 ± 0.43, 1.1 (βΔU 1.3–4.3) |
+    | `λ_v` 0.3, soft core | +10.11 ± 2.45, 10.2 | −3.42 ± 1.05, 3.6 |
+
+    **Octanol's charged states are three times slower than water's** (2.2 ps against 0.7), the
+    van der Waals states no slower. So 200 ps gives about 45 independent samples where it is
+    slowest, and the 20 + 200 ps stays; **the short protocol's 16 ps would give about four** at
+    the charged states in octanol, so it is a smoke test of the machinery, not a measurement.
+  - **Resumable and headed W4's way**, under `PANTOMETRY_OCTANOL_DIR` (`water/`, `octanol/`): each
+    window `window_NN.partial` until whole, its header the candidate, λ, the protocol, the atom
+    count, the candidates, and digests of the start **and of the model** (every `[x, D]` and
+    charge, the mixing, the 1-4 scales, α, `r_c`, `k_c` and the mesh); a lock per run and one
+    around a melt.
+
+  **Checked** (eight default tests, 2.8–3.3 s unoptimised, on sixteen octanol sites at `r_c` 6.5 Å
+  and 27 waters at 4.6 Å):
+  - the model is what it says in both boxes — `ca`/`ha` by element, octanol's GAFF types, TIP3P's
+    waters, AM1-BCC's charges and not QEq's, Lorentz–Berthelot, GAFF's scales, 21 + 66 per
+    octanol 1-4 pairs — and benzene the same bits in both;
+  - the octanol at 0.8262 g/cm³ in the volume benzene leaves, within `10³ ε`, and not without the
+    compensation;
+  - the end states the systems they say, energy and every force within 10⁻¹² of the parts:
+    coupled the field less benzene alone in the box plus benzene in vacuum by direct sums (36 own
+    pairs, 21 scaled); decoupled the solvent alone plus that vacuum benzene;
+  - `∂U/∂λ_e` and `∂U/∂λ_v` the whole energy's central differences at four states, in both;
+  - every one of the 29 candidates' `couplings` its `coupling` to the bit, and `U(λ) − U(0)` its
+    energy within `128 ε` (worst 0.008 of it);
+  - the decoupled reciprocal energy `rest + λ_e · cross` within `64 ε`, octanol classical and by
+    the mesh, water classical;
+  - a killed leg resumed to the same bits, and refused by name: another melt seed, a start one ulp
+    away, **the same start under another model**, a `start.txt` cut short; and the model digest
+    moved by each of one `x`, one charge, the mixing and a 1-4 scale;
+  - in `benzene_bound_in_tip3p.rs`, `the_direct_routes_benzene_is_variant_4s`: every atom's
+    `[x, D]` the staged run's variant 3 to the bit (`gaff_benzene` there and `tests/gaff/` here
+    written from `gaff.dat` separately), both Lorentz–Berthelot, the charges `am1bcc`'s to the bit,
+    and the direct field's cross van der Waals the frames' own loop, −5.0237 kcal/mol, at 0.000 of
+    the bound.
+
+  **Sabotages**, each applied by script in binary to an anchor occurring once, from aside copies
+  named for the run, restored by `cp`, `touch` and SHA-256 (`d76b5a54…` and `a3e234e5…` before and
+  after), `--no-fail-fast`:
+
+  | sabotage | caught by |
+  | --- | --- |
+  | benzene's mixing geometric in `benzene_in_water` | the variant-4 check; the end states; the model |
+  | benzene's AM1-BCC charges not applied in `benzene_in_water` | the variant-4 check **only**: this file's boxes start from a benzene that already carries them |
+  | that, and the benzene built with QEq's charges | the model; the end states |
+  | octanol's box with the 1-4 scales off | the model; the end states |
+  | the window header without the model digest | the resume, at the same start under another model |
+
+  **The cost**, `the_cost_measured`, release, one core, before the pilot (writes nothing):
+
+  | | atoms | ms a step | couplings at 29 states | a window, long / short | 13 windows, long / short | 17 windows | the melt |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | water | 1 533 | 20.5 | 3.5 ms | 0.63 / 0.06 h | 8.2 / 0.7 h | 10.7 / 1.0 h | 0.07 h |
+  | octanol | 5 088 | 49.4 | 2.8 ms | 1.51 / 0.14 h | 19.6 / 1.8 h | 25.7 / 2.3 h | 0.52 h |
+  | both, with the melts | | | | | **28.4 / 3.1 h** | 37.0 / 3.9 h | |
+
+  The pilot ran at 120 ms a step in octanol and 38–50 in water, the machine throttled; at that
+  speed the long run is about 70–90 h. The melts are done, so their share is spent.
+
+  **Commands**, not run: `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test --release
+  --locked -p pantometry-forcefield --test benzene_partitioned_into_octanol the_partition_measured
+  -- --ignored --nocapture`, and `the_partition_short_measured` for 4 + 16 ps. Each prints both
+  water numbers, the direct leg's and the staged −0.82, and log P from each.
+
+  **Counts.** The crate's tests are 515, 57 of them ignored, so 458 run by default (502, 53 and
+  449 before): the new file's eight and four, and `benzene_bound_in_tip3p.rs`'s one. `cargo package
+  --list` holds none of `tests/gaff/`, the new file, `tests/amber/` or the two other GAFF-carrying
+  files, and no packaged file carries a GAFF number. **Not run**: either production, the workspace
+  suite and the whole gate; run were `cargo fmt`, clippy on the crate's every target with warnings
+  denied, `cargo doc` with warnings denied, the 1.78 build, both wasm32 steps and the crate's suite
+  in debug. There is no `powi` or `powf` in the new code.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
