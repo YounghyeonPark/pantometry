@@ -37,9 +37,42 @@
 //! - **The tolerance**, [`Shake::DEFAULT_TOLERANCE`] = 10⁻¹²: a bond is converged when
 //!   `|r² − d²| ≤ 2 tol d²`, its length within about `tol d` of `d`, and its velocity when
 //!   `|r·u| ≤ tol |r| |u|`. Rounding alone leaves a bond in a box 25 Å across about `25 ε` ≈ 6 × 10⁻¹⁵
-//!   of its length from `d`, so the tolerance is two hundred times above the floor it could not get
-//!   below. A sweep corrects only the bonds outside it; a sweep that corrects none ends the
-//!   iteration. [`Shake::MAX_SWEEPS`] without convergence panics, naming the worst bond.
+//!   of its length from `d`, so **the position tolerance** is two hundred times above the floor it
+//!   could not get below. A sweep corrects only the bonds outside it; a sweep that corrects none
+//!   ends the iteration. [`Shake::MAX_SWEEPS`] without convergence panics, naming the worst bond.
+//!   That floor is set by the coordinates, which a periodic run keeps within a few boxes of the
+//!   origin: a correction of a bond outside the tolerance moves its lighter atom by more than
+//!   `tol d / 2`, and that rounds away only on a coordinate past about `tol d / (√3 ε)` ≈ 2600 Å.
+//! - **The velocity tolerance has no such margin, and its floor can be anywhere.** Each velocity is
+//!   stored to half an ulp of each component, so `r·u` is not known better than
+//!   `(ε/2) |r| (|v_i| + |v_j|)`, and that is above `tol |r| |u|` whenever `|u|` is below about
+//!   `ε / (2 tol)` ≈ 1.1 × 10⁻⁴ of `|v_i| + |v_j|` — two atoms moving fast together. Such a bond can
+//!   sit outside the tolerance with a correction too small to change a bit of either velocity.
+//!   4c-2's liquid octanol found one at step 52 641 of its first window: a C–H with both atoms at
+//!   1253 m/s and `|u|` = 0.017 m/s, `2.17 × 10⁻¹²` off tangent and a correction of 3 × 10⁻¹⁴ m/s,
+//!   below half an ulp of 1253; the rate fits `P(|u|/|v| < t) ≈ 0.11 t²`, about one bond in 10⁹
+//!   checks. **The iteration therefore ends at the first sweep that changes no bit of any
+//!   velocity**: one that corrected nothing, every bond within the tolerance, or one whose every
+//!   correction rounded away — a fixed point, since the next sweep would start from the same bits
+//!   and repeat it exactly. At a fixed point every bond is within the tolerance or at the rounding
+//!   floor: a correction that leaves a component unchanged is at most half an ulp of it, so at most
+//!   `(ε/2) |v|` on each atom, and the two atoms' corrections add up to `|r·u| / |r|`, so
+//!   `|r·u| ≤ (ε/2) |r| (|v_i| + |v_j|)`, to the rounding of the correction's own three products.
+//!   **No run that completed before this rule is changed by it, by a bit**: such a sweep used to
+//!   repeat until [`Shake::MAX_SWEEPS`] and panic, so no completed run contains one, and every other
+//!   sweep is the arithmetic it was.
+//! - **A bond can also walk.** Rarely, its coarse components are at the floor while one much smaller
+//!   than the others, with ulps to match, keeps taking a correction of an ulp or two a sweep: bits
+//!   change every sweep and the fixed point is thousands of sweeps away. Measured by HEAD's sweep
+//!   on 4 × 10⁷ C–H, CH₂, CH₃ and H–C–C–H states, a common velocity of 380 to 1630 m/s and `|u|/|v|`
+//!   drawn with density ∝ `t` below 3 × 10⁻⁴, as `0.11 t²` implies: 992 of 1 289 614 stalls walked
+//!   past [`Shake::MAX_SWEEPS`], and none was a cycle, a state that came back; two followed in an
+//!   earlier sample reached their fixed points at sweeps 2968 and 23 002.
+//!   So after [`Shake::MAX_SWEEPS`] sweeps the velocities are accepted if every bond is within the
+//!   tolerance or within `2 ε |r| (|v_i| + |v_j|)`, four times the floor a fixed point is proved to
+//!   reach — the 992 walks reached 0.96 of that floor at worst — and otherwise it panics, naming the
+//!   bond: a genuine failure to converge, two constraints on one atom nearly parallel, is still
+//!   loud. That too changes only runs that panicked.
 //! - **Frozen atoms** are atoms of infinite mass: their inverse mass is taken as zero, so a
 //!   constraint between a frozen and a free atom holds the free one at its distance from the
 //!   frozen one, and moves nothing frozen. A constraint between two frozen atoms is skipped. SETTLE
@@ -114,12 +147,21 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+fn norm(a: [f64; 3]) -> f64 {
+    dot(a, a).sqrt()
+}
+
 impl Shake {
     /// A bond is converged within this relative tolerance: see the module documentation.
     pub const DEFAULT_TOLERANCE: f64 = 1e-12;
 
     /// Sweeps over the bonds before the iteration gives up and panics.
     pub const MAX_SWEEPS: usize = 1000;
+
+    /// After [`Shake::MAX_SWEEPS`] sweeps that kept changing bits, a bond's velocity along it is
+    /// accepted within this many `ε |r| (|v_i| + |v_j|)`: four times the floor a fixed point is
+    /// proved to reach. See the module documentation, "The tolerance".
+    const ROUNDING_FLOOR: f64 = 2.0;
 
     /// Atoms `bonds[k]` held at distance `lengths[k]` metres, at [`Shake::DEFAULT_TOLERANCE`].
     ///
@@ -326,13 +368,16 @@ impl Shake {
     }
 
     /// Removes from `velocities` every component along a constraint at positions `at`, by RATTLE's
-    /// projection: afterwards `(r_i − r_j)·(v_i − v_j) = 0` for every constraint, to the tolerance.
-    /// Atoms `frozen` marks are not touched. Returns the sweeps taken.
+    /// projection: afterwards `(r_i − r_j)·(v_i − v_j) = 0` for every constraint, to the tolerance
+    /// or to the rounding floor of the two velocities, whichever is larger — see the module
+    /// documentation, "The tolerance". Atoms `frozen` marks are not touched. Returns the sweeps
+    /// taken.
     ///
     /// # Panics
     ///
     /// If the lengths of the slices disagree or an atom is past them, or after
-    /// [`Shake::MAX_SWEEPS`] sweeps without convergence.
+    /// [`Shake::MAX_SWEEPS`] sweeps if a bond is still outside both the tolerance and twice that
+    /// floor.
     pub fn constrain_velocities(
         &self,
         masses: &[f64],
@@ -348,7 +393,10 @@ impl Shake {
         let inv = Shake::inverse_masses(masses, frozen);
         let v = velocities;
         for sweep in 1..=Shake::MAX_SWEEPS {
-            let mut moved = false;
+            // Whether this sweep changed a bit of any velocity. A sweep that corrected nothing
+            // changed none; one whose every correction rounded away changed none either, and is a
+            // fixed point: the next sweep would start from these bits and repeat it exactly.
+            let mut changed = false;
             for &[i, j] in &self.bonds {
                 let w = inv[i] + inv[j];
                 if w == 0.0 {
@@ -367,21 +415,55 @@ impl Shake {
                     continue;
                 }
                 let kappa = along / (w * r2);
+                let old = [v[i], v[j]];
                 for x in 0..3 {
                     v[i][x] -= kappa * inv[i] * r[x];
                     v[j][x] += kappa * inv[j] * r[x];
                 }
-                moved = true;
+                changed |= !same_bits(old[0], v[i]) || !same_bits(old[1], v[j]);
             }
-            if !moved {
+            if !changed {
                 return sweep;
             }
         }
+        // Still changing bits: accepted only if every bond is at the rounding floor or within the
+        // tolerance, and otherwise the loud failure it always was.
+        let (k, worst) = self.worst_velocity(&inv, at, v);
+        if worst <= 1.0 {
+            return Shake::MAX_SWEEPS;
+        }
         panic!(
-            "RATTLE's velocities did not converge in {} sweeps",
-            Shake::MAX_SWEEPS
+            "RATTLE's velocities did not converge in {} sweeps: the bond of atoms {:?} has {worst:e} \
+             of its allowance along it",
+            Shake::MAX_SWEEPS,
+            self.bonds[k]
         );
     }
+
+    /// The bond whose velocity along it is furthest outside its allowance, and how far: `|r·u|`
+    /// over `|r|` times the larger of `tol |u|` and `c ε (|v_i| + |v_j|)`, `c` being
+    /// [`Shake::ROUNDING_FLOOR`].
+    fn worst_velocity(&self, inv: &[f64], at: &[[f64; 3]], v: &[[f64; 3]]) -> (usize, f64) {
+        self.bonds
+            .iter()
+            .enumerate()
+            .filter(|(_, &[i, j])| inv[i] + inv[j] != 0.0)
+            .map(|(k, &[i, j])| {
+                let r = sub(at[i], at[j]);
+                let u = sub(v[i], v[j]);
+                let floor = Shake::ROUNDING_FLOOR * f64::EPSILON * (norm(v[i]) + norm(v[j]));
+                let allowance = norm(r) * (self.tolerance * norm(u)).max(floor);
+                let along = dot(r, u).abs();
+                // Nothing along it is within any allowance, a zero one included.
+                (k, if along == 0.0 { 0.0 } else { along / allowance })
+            })
+            .fold((0, 0.0), |a, b| if b.1 > a.1 { b } else { a })
+    }
+}
+
+/// Whether two velocities are the same bits, a zero's sign included.
+fn same_bits(a: [f64; 3], b: [f64; 3]) -> bool {
+    a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
 #[cfg(test)]
@@ -431,6 +513,106 @@ mod tests {
         let at = [[0.0, 0.0, 0.0], [1.0e-10, 0.0, 0.0]];
         let mut v = [[f64::NAN, 0.0, 0.0], [0.0, 0.0, 0.0]];
         s.constrain_velocities(&[1e-26, 1e-27], &[false, false], &at, &mut v);
+    }
+
+    const AMU: f64 = 1.660_539_066_60e-27;
+    const EPS: f64 = f64::EPSILON;
+
+    /// A C–H as 4c-2's octanol stalled on one: both atoms at 1252 m/s together, 0.0172 m/s apart,
+    /// and off tangent by twice the tolerance — but by less than the rounding of 1252 m/s, so the
+    /// correction RATTLE computes rounds away and leaves both velocities as they were. HEAD
+    /// `c51c91e` repeated that sweep a thousand times and panicked. The fixed point is the end: one
+    /// sweep, not a bit changed, and the bond at the rounding floor a fixed point is proved to reach.
+    #[test]
+    fn a_correction_that_rounds_away_ends_the_iteration() {
+        let masses = [12.011 * AMU, 1.008 * AMU];
+        let at = [
+            [2e-9, 1.8e-9, 1.4e-9],
+            [
+                1.995_747_504_985_207_3e-9,
+                1.731_960_079_763_316_2e-9,
+                1.314_950_099_704_145_1e-9,
+            ],
+        ];
+        let v0 = [
+            [723.001_329_121_774_7, -723.500_083_070_110_9, 723.2],
+            [722.984_162_617_424_8, -723.499_010_163_589_1, 723.2],
+        ];
+        let s = Shake::new(vec![[0, 1]], vec![norm(sub(at[0], at[1]))]);
+        let (r, u) = (sub(at[0], at[1]), sub(v0[0], v0[1]));
+        let off = dot(r, u) / (norm(r) * norm(u));
+        // The stall, as the library sees it: outside the tolerance, |u| 70 000 times below |v|.
+        assert!(off.abs() > 2.0 * Shake::DEFAULT_TOLERANCE, "{off:e}");
+        assert!((norm(u) - 0.0172).abs() < 1e-6 && (1250.0..1255.0).contains(&norm(v0[0])));
+        let mut v = v0;
+        assert_eq!(s.constrain_velocities(&masses, &[false; 2], &at, &mut v), 1);
+        assert!(same_bits(v[0], v0[0]) && same_bits(v[1], v0[1]));
+        // (ε/2) |r| (|v_i| + |v_j|), and sixteen roundings for the bound's arithmetic and this one.
+        let floor = 0.5 * EPS * norm(r) * (norm(v[0]) + norm(v[1])) * (1.0 + 16.0 * EPS);
+        let along = dot(r, sub(v[0], v[1])).abs();
+        assert!(along <= floor, "{:e} of the floor", along / floor);
+    }
+
+    /// A C–H whose velocities are 1.49, −299 and 1400 m/s on the three axes, nearly perpendicular
+    /// to the first: after its first sweep the bond's corrections on the coarse components round
+    /// away, and the fine one takes one or two ulps a sweep, changing bits every sweep for 5166
+    /// sweeps before a fixed point. HEAD `c51c91e` panicked at its thousandth. It is accepted at
+    /// [`Shake::MAX_SWEEPS`] because it is at the floor, and still outside the tolerance.
+    #[test]
+    fn a_bond_that_walks_past_the_sweeps_is_accepted_at_the_floor() {
+        let masses = [12.011 * AMU, 1.008 * AMU];
+        let at = [
+            [2e-9, 1.8e-9, 1.4e-9],
+            [
+                1.997_820_435_869_243_6e-9,
+                1.734_613_076_077_307_4e-9,
+                1.312_817_434_769_743_4e-9,
+            ],
+        ];
+        let mut v = [
+            [
+                1.490_000_077_425_301_5,
+                -299.069_999_612_873_46,
+                1_400.089_999_767_724,
+            ],
+            [
+                1.489_999_077_425_301_6,
+                -299.070_004_612_873_5,
+                1_400.090_002_767_724,
+            ],
+        ];
+        let s = Shake::new(vec![[0, 1]], vec![norm(sub(at[0], at[1]))]);
+        assert_eq!(
+            s.constrain_velocities(&masses, &[false; 2], &at, &mut v),
+            Shake::MAX_SWEEPS
+        );
+        let (r, u) = (sub(at[0], at[1]), sub(v[0], v[1]));
+        let along = dot(r, u).abs();
+        assert!(
+            along > Shake::DEFAULT_TOLERANCE * norm(r) * norm(u),
+            "within the tolerance"
+        );
+        let accepted = Shake::ROUNDING_FLOOR * EPS * norm(r) * (norm(v[0]) + norm(v[1]));
+        println!(
+            "the walk at the last sweep: {:.3} of the floor accepted",
+            along / accepted
+        );
+        assert!(along <= accepted);
+    }
+
+    /// One free atom between two frozen ones, its two bonds 10⁻³ rad from parallel: Gauss–Seidel
+    /// takes `cos² 10⁻³` off the error a sweep, a thousand sweeps leave it 0.999 of what it was,
+    /// ten orders above the floor. That is a failure to converge, and still panics.
+    #[test]
+    #[should_panic(
+        expected = "RATTLE's velocities did not converge in 1000 sweeps: the bond of atoms"
+    )]
+    fn a_genuine_failure_to_converge_still_panics() {
+        let at = [[0.0, 0.0, 0.0], [1e-10, 0.0, 0.0], [2e-10, 1e-13, 0.0]];
+        let lengths = vec![1e-10, norm(sub(at[1], at[2]))];
+        let s = Shake::new(vec![[0, 1], [1, 2]], lengths);
+        let mut v = [[0.0; 3], [100.0, 100.0, 0.0], [0.0; 3]];
+        s.constrain_velocities(&[AMU; 3], &[true, false, true], &at, &mut v);
     }
 
     /// Three bonds that share atoms (a bent chain and its closing bond, a triangle) converge to the

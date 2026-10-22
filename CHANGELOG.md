@@ -4987,6 +4987,33 @@ protects nothing.
 
 ### Fixed
 
+- **`pantometry-forcefield`: RATTLE could stall on a bond whose atoms move fast together, and
+  panic.** `Shake::constrain_velocities` holds a bond tangent when `|r·u| ≤ tol |r| |u|`, relative
+  to the bond's own relative velocity `u`, which can be as small as it likes; each velocity is
+  stored to half an ulp, so `r·u` is not known better than `(ε/2) |r| (|v_i| + |v_j|)`, and below
+  `|u|` ≈ 1.1 × 10⁻⁴ of `|v_i| + |v_j|` the tolerance asks for less than that. The module said the
+  tolerance was "two hundred times above the floor", which is true of the position test, relative
+  to `d²`, and not of this one. 4c-2's octanol found it at step 52 641 of window 0: a C–H with both
+  atoms at 1253 m/s and `|u|` = 0.0172 m/s was `2.17 × 10⁻¹²` off tangent, against 10⁻¹², and its
+  correction of about 3 × 10⁻¹⁴ m/s was below half an ulp of 1253, so the sweep left every bit as
+  it was and repeated itself to `MAX_SWEEPS` and a panic. The rate fits `P(|u|/|v| < t) ≈ 0.11 t²`,
+  about one bond in 10⁹ checks. **The iteration now ends at the first sweep that changes no bit of
+  any velocity**: one that corrected nothing, as before, or one whose every correction rounded
+  away, which is a fixed point — the next sweep starts from the same bits and repeats it — and
+  leaves each corrected bond within `(ε/2) |r| (|v_i| + |v_j|)`. **No completed run changes by a
+  bit**: before, such a sweep could only end in the panic, so no run that finished contains one,
+  and every other sweep is the same arithmetic. A rarer stall, one bond **walking** an ulp or two a
+  sweep through a velocity component much smaller than the others, reaches its fixed point only
+  after thousands of sweeps: 992 of 1.29 × 10⁶ stalls measured on C–H, CH₂, CH₃ and H–C–C–H states,
+  none of them a cycle. After `MAX_SWEEPS` those are accepted if every bond is within the
+  tolerance or `2 ε |r| (|v_i| + |v_j|)` — the walks reached a quarter of that at worst — and
+  anything else still panics, now naming the bond. SHAKE's positions cannot stall this way below a
+  coordinate of about 2600 Å, and SETTLE does not iterate. `a_correction_that_rounds_away_ends_the_iteration`
+  is the octanol's stall rebuilt on two atoms, `a_bond_that_walks_past_the_sweeps_is_accepted_at_the_floor`
+  is a walk of 5166 sweeps, and both panic on `c51c91e`'s `shake.rs`;
+  `a_genuine_failure_to_converge_still_panics` holds one free atom between two frozen ones on bonds
+  10⁻³ rad from parallel, a billion times outside its allowance after a thousand sweeps.
+
 - **The viewer's scale bar did not measure what its label said.** `scale_bar` assumed half the
   screen was half the subject, `(nice / widest) * 0.5` of the half-width, and that ignores the
   focal length `Camera::fit` chooses and the distance the camera stands at. Framed on scene 14's
