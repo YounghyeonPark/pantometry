@@ -1950,13 +1950,16 @@ fn partition_measured(tag: &str, base: Protocol) {
     }
 }
 
-/// **Benzene's log P at W3's protocol** (release, one core; not run): both legs, each window 20 ps
+/// **Benzene's log P at W3's protocol** (release, one core; run once, at `3cb1427`, exit 0 on
+/// 2026-10-23 after 70 562 s, the water leg's windows read back from `c51c91e`'s run): log P
+/// 2.06 ± 0.20 from the two direct legs and 2.28 ± 0.20 with the staged water, against 2.13.
+/// Nothing here asserts it. Both legs, each window 20 ps
 /// discarded and 200 ps sampled ([`LONG`]), under `PANTOMETRY_OCTANOL_DIR` in `water/long/` and
 /// `octanol/long/`. `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test --release --locked
 /// -p pantometry-forcefield --test benzene_partitioned_into_octanol the_partition_measured --
 /// --ignored --nocapture`.
 #[test]
-#[ignore = "both legs at W3's protocol, thirteen to seventeen windows each: days with --release, not run"]
+#[ignore = "both legs at W3's protocol, thirteen windows each: about a day with --release, run once (2026-10-23)"]
 fn the_partition_measured() {
     partition_measured("long", LONG);
 }

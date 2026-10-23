@@ -4668,8 +4668,8 @@ protects nothing.
     `powf` in the new or changed code.
 
 - **Step 4c-2, benzene's log P: GAFF/AM1-BCC benzene decoupled from octanol and from water by
-  one route and one model — written, costed, not run; the two boxes melted and a pilot run for
-  τ.** New `tests/benzene_partitioned_into_octanol.rs` and `tests/gaff/`, both kept out of the
+  one route and one model — written and costed here, the two boxes melted and a pilot run for
+  τ; run since (the next entry).** New `tests/benzene_partitioned_into_octanol.rs` and `tests/gaff/`, both kept out of the
   published crate; `liquid_octanol_with_gaff.rs` now takes GAFF's values from `tests/gaff/`, and
   `benzene_bound_in_tip3p.rs` has one test more. Nothing in `src/` changed.
   - **The thermodynamics.** `log P = −(ΔG_solv,oct − ΔG_hyd)/(RT ln 10)`, each
@@ -4783,6 +4783,42 @@ protects nothing.
   suite and the whole gate; run were `cargo fmt`, clippy on the crate's every target with warnings
   denied, `cargo doc` with warnings denied, the 1.78 build, both wasm32 steps and the crate's suite
   in debug. There is no `powi` or `powf` in the new code.
+
+- **Benzene's log P from simulation is 2.06 ± 0.20, against experiment's 2.13.** The long run of
+  `the_partition_measured`, with GAFF/AM1-BCC benzene decoupled directly from TIP3P and from
+  GAFF-nonbonded dry octanol, finished on 2026-10-23 at `3cb1427`. It took 70 562 s on one core,
+  with throttling off for the process, and exited 0. Its water leg was `c51c91e`'s, read back
+  through the window headers. The octanol leg had panicked once on that commit at step 52 641
+  (the RATTLE fix, under Fixed) and was rerun from its first window. Nothing asserts any of it.
+
+  | leg | ΔG_decouple, BAR | TI | its halves | lowest overlap |
+  | --- | --- | --- | --- | --- |
+  | water, 13 windows | +1.130 ± 0.144 | +1.298 | +1.273, +0.985 | 0.241 |
+  | octanol, 13 windows | +3.936 ± 0.235 | +4.110 | +4.271, +3.602 | 0.292 |
+
+  | | this work | experiment |
+  | --- | --- | --- |
+  | ΔG_oct − ΔG_hyd, direct legs | −2.807 | −2.906 (= −2.13 RT ln 10) |
+  | ΔG_oct − ΔG_hyd, staged water (cf5758f's −0.82) | −3.116 | |
+  | **log P, direct legs** | **2.06 ± 0.20** | **2.13** (Hansch, Leo and Hoekman 1995, via PubChem) |
+  | log P, staged water | 2.28 ± 0.20 | |
+
+  - **Both routes bracket experiment within their error.** The direct route is 0.07 low and the
+    staged one 0.15 high.
+  - **The two water routes disagree by 0.31**, about 1.5 of their combined errors: direct −1.13
+    against staged −0.82, and FreeSolv's own −0.81. The direct leg's halves differ by 0.29, and
+    the octanol leg's by 0.67, against quoted errors of 0.14 and 0.24. **The errors are
+    optimistic.**
+  - **Where the error lives.** The octanol windows with charges on had τ of 53 and 35 samples,
+    against 1–20 elsewhere: about 40 independent samples in the 200 ps. A second seed, or a longer
+    charge segment, would say how much of the halves' 0.67 is the hydroxyl network's slow
+    reorganisation.
+  - **No window was inserted** in either leg. The lowest overlaps were 0.241 and 0.292.
+  - **What it is not.**
+    - The octanol is dry. Experiment's is wet, about 0.27 water by mole fraction, which for a
+      nonpolar solute is usually a small shift.
+    - The octanol's bonded terms are UFF's.
+    - Its density is experiment's, not the model's own at 1 bar (P ≈ −42 bar).
 
 ### Changed
 
