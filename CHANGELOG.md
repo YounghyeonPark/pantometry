@@ -4820,6 +4820,21 @@ protects nothing.
     - The octanol's bonded terms are UFF's.
     - Its density is experiment's, not the model's own at 1 bar (P ≈ −42 bar).
 
+- **A second seed for the octanol leg's charge segment: written, costed, not run.**
+  `the_octanol_charges_reseeded_measured` reruns candidates 0, 4 and 8 (`λ_e` 1, 0.5, 0) from
+  the same `start.txt`, model and 20 + 200 ps protocol, with only the campaign seed changed,
+  `0x4C2_0C71` to `0x4C2_5EED`, into `octanol/reseed/`. It prints both seeds' charge segment, their
+  difference, the single-run spread it implies against the halves' 0.67 and the quoted 0.235, and
+  log P with the two seeds' mean and an error `max(|d|/2, BAR's)`: one difference, one degree of
+  freedom. It reads every `long/` file it needs, octanol and water, before running anything, and
+  refuses a missing one rather than running it. About 4.5 h, from `long/`'s 5 328, 5 342 and
+  5 566 s. Two default tests: the headers differ from `long/`'s in the seed's word alone and the
+  window seeds are apart from both legs' and the melts'; and `long/`'s window is refused in
+  `reseed/`, the seed reaches the dynamics, and a killed reseed resumes to the bit. A header made
+  to ignore the seed failed both. `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test
+  --release --locked -p pantometry-forcefield --test benzene_partitioned_into_octanol
+  the_octanol_charges_reseeded_measured -- --ignored --nocapture`.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round

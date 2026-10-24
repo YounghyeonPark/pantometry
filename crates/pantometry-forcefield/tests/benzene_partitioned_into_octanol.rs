@@ -59,6 +59,12 @@
 //! the mixing, the 1-4 scales and the Ewald parameters — so a window run under another model or
 //! from another start is refused by name; and a lock.
 //!
+//! **The charge segment reseeded** ([`the_octanol_charges_reseeded_measured`], written, not run):
+//! the octanol leg's candidates 0, 4 and 8 again, from the same start under the same model and
+//! protocol, with only the campaign seed changed ([`RESEED`]), into `octanol/reseed/`. Its windows
+//! with charges on had τ of 53 and 35 samples in `long/`, and the leg's halves differ by 0.67
+//! against a quoted 0.235: the second seed measures what one seed's error leaves out.
+//!
 //! # What the melts and the pilot measured
 //!
 //! [`the_pilot_measured`], run once on 2026-10-21, release, one core, exit 0 after 12 748 s; nothing
@@ -1759,6 +1765,189 @@ fn a_killed_leg_resumes_to_the_same_bits() {
     }
 }
 
+/// **The reseeded windows' headers differ from `long/`'s only in the seed**, at each of the charge
+/// segment's candidates: the same leg and start, [`LONG`] seeded as `long/` was and [`reseeded`],
+/// one word of the header apart, the seed's, `long/`'s `0x4c20c71` against [`RESEED`]'s; every
+/// other field of the protocol the same. And **every window seed the reseed gives is apart from
+/// every one the two `long/` legs give** at all 29 candidates, from the melts' and from the three
+/// campaign seeds themselves.
+#[test]
+fn the_reseed_differs_from_long_only_in_its_seed() {
+    let s = small_octanol(0x2E5, false);
+    let long_p = seeded(LONG, "octanol");
+    let p = reseeded(long_p);
+    assert_eq!(Protocol { seed: 0, ..p }, Protocol { seed: 0, ..long_p });
+    assert_ne!(p.seed, long_p.seed);
+    let leg = |p: Protocol| {
+        Leg::new(
+            "octanol",
+            &s.decoupling,
+            &s.template,
+            s.at.clone(),
+            p,
+            grid(),
+        )
+    };
+    let (long, re) = (leg(long_p), leg(p));
+    for g in CHARGE_SEGMENT {
+        let (a, b) = (header(&long, g), header(&re, g));
+        let (wa, wb): (Vec<&str>, Vec<&str>) = (
+            a.split_whitespace().collect(),
+            b.split_whitespace().collect(),
+        );
+        assert_eq!(wa.len(), wb.len());
+        let differ: Vec<usize> = (0..wa.len()).filter(|&i| wa[i] != wb[i]).collect();
+        assert_eq!(differ.len(), 1, "candidate {g}:\n{a}\n{b}");
+        let i = differ[0];
+        assert_eq!(
+            wa[i - 7],
+            "protocol",
+            "the seed is the protocol's seventh word"
+        );
+        assert_eq!(wa[i], "0x4c20c71");
+        assert_eq!(wb[i], format!("{RESEED:#x}"));
+        println!(
+            "candidate {g}: the headers differ only at word {i}, {} against {}",
+            wa[i], wb[i]
+        );
+    }
+    let mut others: Vec<u64> = vec![MELT_SEED];
+    for name in ["octanol", "water"] {
+        let base = seeded(LONG, name).seed;
+        others.push(base);
+        others.extend((0..grid().len()).map(|g| window_seed(base, g)));
+    }
+    others.extend((0..OCTANOL_MELT.len()).map(|k| window_seed(MELT_SEED, k)));
+    assert!(!others.contains(&RESEED));
+    for g in CHARGE_SEGMENT {
+        assert!(!others.contains(&window_seed(RESEED, g)), "candidate {g}");
+    }
+    assert_ne!(RESEED_TAG, "long");
+}
+
+/// Every gradient and energy a record holds, as bits.
+#[cfg(not(target_family = "wasm"))]
+fn record_bits(r: &Recorded) -> Vec<u64> {
+    let mut v: Vec<u64> = r.gradients.iter().flatten().map(|x| x.to_bits()).collect();
+    for e in &r.energies {
+        v.extend(e.iter().map(|x| x.to_bits()));
+    }
+    v
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn is_empty(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir)
+        .expect("a directory")
+        .next()
+        .is_none()
+}
+
+/// **The reseed refuses `long/`'s files, and resumes**, through the measurement's own
+/// [`read_back_start`], [`read_back`], [`finished_schedule`], [`reseeded`] and [`window`] on the
+/// small octanol box, a melt of five steps and windows of eight 0.5 fs steps and three samples at
+/// the charge segment's candidates, `long/` seeded as the production's:
+///
+/// - a start or a window that is not there is **refused by name and nothing is written** — no
+///   melt, no window;
+/// - `long/`'s window copied into `reseed/` is refused, and the reseed's read back as `long/`'s;
+/// - **the seed reaches the dynamics**: every reseeded record differs from `long/`'s;
+/// - a reseed killed during its last window — its `.partial` a header and one sample — resumes to
+///   the uninterrupted reseed's bits, the finished windows' bytes unchanged.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn the_reseed_refuses_long_and_resumes() {
+    let s = small_octanol(0x2E5, false);
+    let l = s.liquid.as_ref().expect("a liquid");
+    let sys = octanol_system(l, s.field.clone(), &TEST_MELT);
+    let tiny = Protocol {
+        time_step: 0.5e-15,
+        temperature: KELVIN,
+        friction: 50e12,
+        equilibration: 2,
+        stride: 2,
+        samples: 3,
+        seed: seeded(LONG, "octanol").seed,
+    };
+    let root = fresh_dir("reseed");
+    let why = refusal(|| drop(read_back_start(&sys, &root)));
+    assert!(why.contains("is not there"), "{why}");
+    assert!(is_empty(&root), "no melt was run");
+    let start = melted(&sys, &root, MELT_SEED);
+    let bits = |at: &[[f64; 3]]| -> Vec<u64> { at.iter().flatten().map(|x| x.to_bits()).collect() };
+    assert_eq!(bits(&read_back_start(&sys, &root)), bits(&start));
+    let leg = |p: Protocol| {
+        Leg::new(
+            "octanol",
+            &sys.decoupling,
+            &sys.template,
+            start.clone(),
+            p,
+            grid(),
+        )
+    };
+    let (long, re) = (leg(tiny), leg(reseeded(tiny)));
+    let dirs = ["long", RESEED_TAG, "killed"].map(|d| root.join(d));
+    for d in &dirs {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let [long_dir, dir, killed] = &dirs;
+    let long_records: Vec<Recorded> = CHARGE_SEGMENT
+        .iter()
+        .map(|&g| window(&long, long_dir, g))
+        .collect();
+    assert_eq!(finished_schedule(long_dir), CHARGE_SEGMENT);
+
+    let why = refusal(|| drop(read_back(&re, dir, 0)));
+    assert!(why.contains("is not there"), "{why}");
+    assert!(is_empty(dir), "no window was run");
+    std::fs::copy(long_dir.join("window_00.txt"), dir.join("window_00.txt")).unwrap();
+    let why = refusal(|| drop(window(&re, dir, 0)));
+    assert!(why.contains("was run differently"), "long/'s file: {why}");
+    std::fs::remove_file(dir.join("window_00.txt")).unwrap();
+    let whole: Vec<Recorded> = CHARGE_SEGMENT
+        .iter()
+        .map(|&g| window(&re, dir, g))
+        .collect();
+    let why = refusal(|| drop(read_back(&long, dir, 0)));
+    assert!(
+        why.contains("was run differently"),
+        "the reseed's file: {why}"
+    );
+    for (a, b) in long_records.iter().zip(&whole) {
+        assert_eq!(a.grid, b.grid);
+        assert_ne!(record_bits(a), record_bits(b), "candidate {}", a.grid);
+    }
+
+    for &g in &CHARGE_SEGMENT[..2] {
+        window(&re, killed, g);
+    }
+    let bytes = |p: std::path::PathBuf| std::fs::read(p).expect("a file");
+    let finished = [0, 4].map(|g| bytes(killed.join(format!("window_{g:02}.txt"))));
+    let text = std::fs::read_to_string(dir.join("window_08.txt")).unwrap();
+    let partial: String = text.lines().take(2).map(|l| format!("{l}\n")).collect();
+    std::fs::write(killed.join("window_08.partial"), partial).unwrap();
+    let resumed: Vec<Recorded> = CHARGE_SEGMENT
+        .iter()
+        .map(|&g| window(&re, killed, g))
+        .collect();
+    for (k, g) in [0, 4].into_iter().enumerate() {
+        assert!(
+            bytes(killed.join(format!("window_{g:02}.txt"))) == finished[k],
+            "window {g} read, not run"
+        );
+    }
+    assert!(!killed.join("window_08.partial").exists());
+    for (a, b) in whole.iter().zip(&resumed) {
+        assert_eq!(record_bits(a), record_bits(b), "candidate {}", a.grid);
+    }
+    println!(
+        "reseeded: {} records, each apart from long/'s and resumed to the bit",
+        resumed.len()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The measurements: written, costed, not run
 
@@ -1769,6 +1958,20 @@ struct LegResult {
     ti: (f64, f64),
     halves: [f64; 2],
     overlap: f64,
+}
+
+/// The chain's BAR over each window's first half of samples and over its second, kcal/mol.
+fn halves_of(records: &[Recorded], kt: f64) -> [f64; 2] {
+    let half = records[0].energies.len() / 2;
+    let first: Vec<Recorded> = records.iter().map(|r| r.slice(0..half)).collect();
+    let second: Vec<Recorded> = records
+        .iter()
+        .map(|r| r.slice(half..r.energies.len()))
+        .collect();
+    [
+        kcal(kt * chain(&first, kt).value),
+        kcal(kt * chain(&second, kt).value),
+    ]
 }
 
 /// The leg's table — each window's λ, TI term, τ and seconds, each interval's BAR and overlap —
@@ -1812,16 +2015,7 @@ fn report(dir: &std::path::Path, name: &str, records: &[Recorded], kt: f64) -> L
         );
     }
     let total = chain(records, kt);
-    let half = records[0].energies.len() / 2;
-    let first: Vec<Recorded> = records.iter().map(|r| r.slice(0..half)).collect();
-    let second: Vec<Recorded> = records
-        .iter()
-        .map(|r| r.slice(half..r.energies.len()))
-        .collect();
-    let halves = [
-        to_kcal(chain(&first, kt).value),
-        to_kcal(chain(&second, kt).value),
-    ];
+    let halves = halves_of(records, kt);
     let out = LegResult {
         bar: (to_kcal(total.value), to_kcal(total.error)),
         ti: (ti, ti_error),
@@ -1969,6 +2163,255 @@ fn the_partition_measured() {
 #[ignore = "both legs at 4 + 16 ps a window: hours with --release, not run"]
 fn the_partition_short_measured() {
     partition_measured("short", SHORT);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The octanol leg's charge segment, reseeded
+
+/// **The charge segment's windows**: candidates 0, 4 and 8, `λ_e` 1, 0.5 and 0 at full van der
+/// Waals. The first two are the octanol leg's slowest windows (τ 53 and 35 samples in `long/`), and
+/// 8 closes the segment, where the van der Waals segment begins.
+const CHARGE_SEGMENT: [usize; 3] = [0, 4, 8];
+
+/// **The reseeded campaign's seed**: window `g` is seeded `window_seed(RESEED, g)`. Not the octanol
+/// leg's `0x4C2_0C71` ([`seeded`]), nor the water leg's `0x4C2_3A7E`, nor the melts' `0x4C2_E01`;
+/// [`the_reseed_differs_from_long_only_in_its_seed`] holds every window seed it gives apart from
+/// every seed those three give.
+const RESEED: u64 = 0x4C2_5EED;
+
+/// The reseeded windows' directory, `ROOT/octanol/reseed/`, beside `long/` and never in it.
+const RESEED_TAG: &str = "reseed";
+
+/// `p` with only its seed changed, to [`RESEED`].
+fn reseeded(p: Protocol) -> Protocol {
+    Protocol { seed: RESEED, ..p }
+}
+
+/// The candidates whose windows a finished run left whole in `dir`, ascending: its schedule,
+/// whatever the insertion added.
+fn finished_schedule(dir: &std::path::Path) -> Vec<usize> {
+    (0..grid().len())
+        .filter(|g| dir.join(format!("window_{g:02}.txt")).is_file())
+        .collect()
+}
+
+/// Window `g` as a finished run left it in `dir`, header-checked by [`window`]; **refused by name
+/// when it is not there**, so that reading a finished run never runs one of its windows.
+fn read_back(leg: &Leg, dir: &std::path::Path, g: usize) -> Recorded {
+    let path = dir.join(format!("window_{g:02}.txt"));
+    assert!(
+        path.is_file(),
+        "{} is not there: a finished run is read, not run",
+        path.display()
+    );
+    window(leg, dir, g)
+}
+
+/// `sys`'s `start.txt` in `leg_dir`, header-checked by [`melted`]; **refused by name when it is
+/// not there**, so that no melt is run in its place.
+fn read_back_start(sys: &System, leg_dir: &std::path::Path) -> Vec<[f64; 3]> {
+    let path = leg_dir.join("start.txt");
+    assert!(
+        path.is_file(),
+        "{} is not there: the start is read, not melted",
+        path.display()
+    );
+    melted(sys, leg_dir, MELT_SEED)
+}
+
+/// A segment's BAR along its chain, kcal/mol, and its error.
+fn segment(records: &[Recorded], kt: f64) -> (f64, f64) {
+    let c = chain(records, kt);
+    (kcal(kt * c.value), kcal(kt * c.error))
+}
+
+/// **The octanol leg's charge segment at a second seed, and log P with it** (release, one core;
+/// written, not run). The same leg, model, start (`octanol/start.txt`, header-checked) and
+/// protocol as `long/`, [`LONG`] at 20 + 200 ps, with only the seed changed, to [`RESEED`]: the
+/// windows at [`CHARGE_SEGMENT`] through [`window`], resumable and headed, into
+/// `PANTOMETRY_OCTANOL_DIR/octanol/reseed/` under the lock `octanol/reseed.lock`. Before any of
+/// them runs, every file it reads is read and checked: the octanol leg's `long/` windows and the
+/// water leg's, through [`read_back`], so a missing one fails in seconds and none is run.
+///
+/// It prints the charge segment's BAR from both seeds and their difference; a single run's spread
+/// that difference implies, `|d|/√2`, and the whole octanol leg's with the van der Waals segment's
+/// quoted error added, against the halves' difference and the BAR's quoted error; and log P with
+/// the charge segment the two seeds' mean, its error `max(|d|/2, √(e₁² + e₂²)/2)` — the seed
+/// spread's standard error of the mean, or the BAR's, the larger — the van der Waals segment and
+/// the water leg read from `long/`. **One difference is one degree of freedom**: the spread it
+/// implies is known to a factor of a few. Nothing is asserted but that the segments add to the
+/// leg.
+///
+/// About 4.5 h: `long/`'s three windows took 5 328, 5 342 and 5 566 s.
+/// `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test --release --locked -p
+/// pantometry-forcefield --test benzene_partitioned_into_octanol
+/// the_octanol_charges_reseeded_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "three octanol windows at W3's protocol: about 4.5 h with --release, not run"]
+fn the_octanol_charges_reseeded_measured() {
+    let root = results_dir();
+    let t = std::time::Instant::now();
+    let sys = octanol_leg();
+    let leg_dir = root.join(sys.name);
+    let (long_dir, dir) = (leg_dir.join("long"), leg_dir.join(RESEED_TAG));
+    assert_ne!(long_dir, dir, "the reseed never writes into long/");
+    let _lock = Lock::take(&leg_dir, RESEED_TAG);
+    let start = read_back_start(&sys, &leg_dir);
+    let long_p = seeded(LONG, sys.name);
+    let kt = long_p.kt();
+    let long = Leg::new(
+        sys.name,
+        &sys.decoupling,
+        &sys.template,
+        start.clone(),
+        long_p,
+        grid(),
+    );
+    let schedule = finished_schedule(&long_dir);
+    assert!(
+        schedule.get(..3) == Some(&CHARGE_SEGMENT[..]),
+        "long/'s schedule {schedule:?} does not begin with the charge segment {CHARGE_SEGMENT:?}"
+    );
+    let long_records: Vec<Recorded> = schedule
+        .iter()
+        .map(|&g| read_back(&long, &long_dir, g))
+        .collect();
+    let water = water_leg();
+    let water_dir = root.join(water.name);
+    let wleg = Leg::new(
+        water.name,
+        &water.decoupling,
+        &water.template,
+        read_back_start(&water, &water_dir),
+        seeded(LONG, water.name),
+        grid(),
+    );
+    let water_long = water_dir.join("long");
+    let water_records: Vec<Recorded> = finished_schedule(&water_long)
+        .iter()
+        .map(|&g| read_back(&wleg, &water_long, g))
+        .collect();
+    assert!(water_records.len() >= 2, "water/long/ is a finished leg");
+
+    std::fs::create_dir_all(&dir).expect("the reseed's directory");
+    let p = reseeded(long_p);
+    let leg = Leg::new(sys.name, &sys.decoupling, &sys.template, start, p, grid());
+    log(
+        &dir,
+        RESEED_TAG,
+        &format!(
+            "{}: the charge segment {CHARGE_SEGMENT:?} reseeded, {:#x} for long/'s {:#x}; \
+             protocol {p:?}, model {:016x}",
+            sys.name, p.seed, long_p.seed, leg.model
+        ),
+    );
+    let records: Vec<Recorded> = CHARGE_SEGMENT
+        .iter()
+        .map(|&g| window(&leg, &dir, g))
+        .collect();
+
+    // The segments add to the leg: the same intervals' BARs summed in another order.
+    let (whole, charges, vdw) = (
+        chain(&long_records, kt),
+        chain(&long_records[..3], kt),
+        chain(&long_records[2..], kt),
+    );
+    assert!(
+        (whole.value - (charges.value + vdw.value)).abs()
+            <= 64.0 * EPS * (charges.value.abs() + vdw.value.abs()),
+        "the segments add to the leg"
+    );
+    let to_kcal = |x: f64| kcal(kt * x);
+    let mut lines = Vec::new();
+    for (name, rs, seed) in [
+        ("long/", &long_records[..3], long_p.seed),
+        ("reseed/", &records[..], p.seed),
+    ] {
+        let (g, e) = segment(rs, kt);
+        let h = halves_of(rs, kt);
+        let mut line = format!(
+            "{name} (seed {seed:#x}): the charge segment's ΔG {g:+.3} ± {e:.3} kcal/mol, halves \
+             {:+.3}, {:+.3};",
+            h[0], h[1]
+        );
+        for k in 0..rs.len() {
+            let tau = Estimate::of(&rs[k].gradients.iter().map(|x| x[1]).collect::<Vec<_>>()).tau;
+            line.push_str(&format!(" candidate {} τ {tau:.1}", rs[k].grid));
+            if k + 1 < rs.len() {
+                let b = interval_bar(&rs[k], &rs[k + 1], kt);
+                line.push_str(&format!(
+                    ", → {} {:+.3} ± {:.3} overlap {:.3};",
+                    rs[k + 1].grid,
+                    to_kcal(b.delta),
+                    to_kcal(b.error()),
+                    b.overlap
+                ));
+            }
+        }
+        lines.push(line);
+    }
+    let (a, ea) = segment(&long_records[..3], kt);
+    let (b, eb) = segment(&records, kt);
+    let (v, ev) = segment(&long_records[2..], kt);
+    let d = b - a;
+    let combined = (ea * ea + eb * eb).sqrt();
+    let single = d.abs() / std::f64::consts::SQRT_2;
+    let leg_spread = (single * single + ev * ev).sqrt();
+    let leg_halves = halves_of(&long_records, kt);
+    let quoted = to_kcal(whole.error);
+    lines.push(format!(
+        "the charge segment's seeds differ by {d:+.3} kcal/mol, {:.2} of their combined quoted \
+         error {combined:.3}; a single run's spread from it |d|/√2 = {single:.3}, one degree of \
+         freedom",
+        d.abs() / combined
+    ));
+    lines.push(format!(
+        "the whole octanol leg: long/'s {:+.3} ± {quoted:.3} (BAR, quoted), halves {:+.3}, {:+.3}, \
+         differing by {:.3}, which implies a single run's spread of half that, {:.3}; the van der \
+         Waals segment {v:+.3} ± {ev:.3} (one seed, its own spread not measured); the seeds' \
+         spread with it, √((|d|/√2)² + e_v²) = {leg_spread:.3}",
+        to_kcal(whole.value),
+        leg_halves[0],
+        leg_halves[1],
+        (leg_halves[0] - leg_halves[1]).abs(),
+        0.5 * (leg_halves[0] - leg_halves[1]).abs()
+    ));
+    // log P with the charge segment the two seeds' mean.
+    let mean = 0.5 * (a + b);
+    let e_mean = (0.5 * d.abs()).max(0.5 * combined);
+    let g_oct = -(mean + v);
+    let e_oct = (e_mean * e_mean + ev * ev).sqrt();
+    let (w, ew) = segment(&water_records, kt);
+    let g_hyd = -w;
+    let rt_ln10 = kcal(BOLTZMANN.to_si() * KELVIN) * std::f64::consts::LN_10;
+    let log_p = |g_oct: f64, hyd: f64| -(g_oct - hyd) / rt_ln10;
+    let err = |e_oct: f64, e_hyd: f64| (e_oct * e_oct + e_hyd * e_hyd).sqrt() / rt_ln10;
+    let e_long = quoted;
+    lines.push(format!(
+        "long/ alone: ΔG_solv,oct {:+.3} ± {e_long:.3}, ΔG_hyd {g_hyd:+.3} ± {ew:.3}, log P {:.2} \
+         ± {:.2}",
+        -to_kcal(whole.value),
+        log_p(-to_kcal(whole.value), g_hyd),
+        err(e_long, ew)
+    ));
+    lines.push(format!(
+        "with the two seeds: the charge segment {mean:+.3} ± {e_mean:.3} (the larger of |d|/2 = \
+         {:.3} and the BAR's {:.3}); ΔG_solv,oct {g_oct:+.3} ± {e_oct:.3}; log P {:.2} ± {:.2} \
+         from the direct legs, {:.2} ± {:.2} with the staged water's {:+.2} ± {:.2}; experiment \
+         {LOG_P}; {:.0} s",
+        0.5 * d.abs(),
+        0.5 * combined,
+        log_p(g_oct, g_hyd),
+        err(e_oct, ew),
+        log_p(g_oct, HYDRATION_STAGED.0),
+        err(e_oct, HYDRATION_STAGED.1),
+        HYDRATION_STAGED.0,
+        HYDRATION_STAGED.1,
+        t.elapsed().as_secs_f64()
+    ));
+    for line in lines {
+        log(&dir, RESEED_TAG, &line);
+    }
 }
 
 /// **The melts and the pilot** (release, one core, in the background): each leg melted into
