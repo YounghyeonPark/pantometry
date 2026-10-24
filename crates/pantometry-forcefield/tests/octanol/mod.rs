@@ -126,10 +126,20 @@ impl Octanol {
     /// 1-octanol with `charges`, or QEq's at the dictionary's ideal geometry when `None`.
     pub fn new(charges: Option<Vec<f64>>) -> Octanol {
         let component = Component::from_ccd(OC9).expect("OC9");
-        let types = uff::assign(&component);
         let ideal: Vec<[f64; 3]> = component.atoms().iter().map(|a| a.at).collect();
         let charges =
             charges.unwrap_or_else(|| qeq::charges(&component, &ideal).expect("QEq").charges);
+        Octanol::relaxed(component, charges, ["CAA", "OAB", "CAC"])
+    }
+
+    /// **Any molecule made the same way**, `component` with `charges`: relaxed in vacuum under
+    /// UFF from the dictionary's ideal geometry, every X–H put on its length, and turned into its
+    /// frame by the atoms `frame = [a, b, c]` — `a → b` along `+x`, `c` in the `xy` plane at `+y`.
+    /// Octanol's is `["CAA", "OAB", "CAC"]`; the struct keeps octanol's name because octanol was
+    /// the first, and `tests/hexadecane/` builds its alkanes with it.
+    pub fn relaxed(component: Component, charges: Vec<f64>, frame: [&str; 3]) -> Octanol {
+        let types = uff::assign(&component);
+        let ideal: Vec<[f64; 3]> = component.atoms().iter().map(|a| a.at).collect();
         let vacuum = ForceField::new(&component, &types)
             .expect("UFF")
             .with_charges(charges.clone());
@@ -145,9 +155,9 @@ impl Octanol {
         let com =
             [0, 1, 2].map(|k| at.iter().zip(&masses).map(|(p, m)| m * p[k]).sum::<f64>() / total);
         let (c1, c2, o) = (
-            index(&component, "CAA"),
-            index(&component, "CAC"),
-            index(&component, "OAB"),
+            index(&component, frame[0]),
+            index(&component, frame[2]),
+            index(&component, frame[1]),
         );
         let u = unit(sub(at[o], at[c1]));
         let w = unit(cross(u, sub(at[c2], at[c1])));

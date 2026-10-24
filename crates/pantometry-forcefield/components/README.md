@@ -58,6 +58,8 @@ time, and assert the edit's anchor occurs exactly once before making it.
 | `PXY.cif` | PARA-XYLENE | C8 H10 | 2024-09-27 | 2026-10-05 | `092ecd1a419b68c552a9fbf047b38b12b2c2a251270c305effc0ee71d8ee77a9` |
 | `OXE.cif` | ORTHO-XYLENE | C8 H10 | 2024-09-27 | 2026-10-05 | `60bba235532452cccb2f15046df69be1402e9e9232fd692d4519e22aaea2ae05` |
 | `OC9.cif` | OCTAN-1-OL — 1-octanol, the solvent of log P (`OCT` is n-octane) | C8 H18 O | 2011-06-04 | 2026-10-21 | `6591016df1b408d992edf91841057b4474e5f1acc09c174ae01d1b0bb8af8b6c` |
+| `R16.cif` | HEXADECANE — n-hexadecane, the oil of benzene's oil:water partition | C16 H34 | 2011-06-04 | 2026-10-24 | `1438ae72b9b358efeea7a6dfd4473eb6b35863dd622182227f0e7b889ba99281` |
+| `D10.cif` | DECANE — n-decane, the oil if hexadecane will not stay liquid | C10 H22 | 2011-06-04 | 2026-10-24 | `bdcfa84887428ea5dc748e25fb19a4abd57e2639e73244474c90e6371fb57149` |
 
 **How each entry was found and checked.** By exact name or by formula through RCSB's search API,
 then read: its name, its formula, and its bond table, which must be the molecule's — every heavy
@@ -66,6 +68,13 @@ each to its own stated formula and one bond per hydrogen. **`ACE` is named "ACET
 the dictionary's N-terminal acetyl cap, and as an entry it is CH₃–CH=O with all four hydrogens — C=O,
 C–CH₃, the aldehyde C–H and three methyl C–H — which is acetaldehyde atom for atom; it is used as
 acetaldehyde for that reason, and the name is the dictionary's, not this crate's.
+
+**The oils, fetched for step C-1.** `R16` and `D10` were fetched on 2026-10-24 and their SHA-256
+is the one the design study recorded for each. Both have complete ideal coordinates
+(`pdbx_ideal_coordinates_missing_flag` N), an all-trans chain, and a bond table of an unbranched
+chain with every carbon's hydrogens; their atom names are the dictionary's (`C27`–`C42` with
+`H271`… for `R16`, `C1`–`C10` for `D10`), and nothing reads them but the chain walk in
+`tests/hexadecane/`. `D10` is the fallback oil, kept so that it needs no second fetch.
 
 Ideal coordinates are what the crate uses. Aspirin's model coordinates come from PDB entry `1OXR`;
 the fallback test uses them, and so does the comparison of aspirin's relaxed structure with them.

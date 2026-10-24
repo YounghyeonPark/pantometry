@@ -2246,8 +2246,13 @@ fn segment(records: &[Recorded], kt: f64) -> (f64, f64) {
 /// `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test --release --locked -p
 /// pantometry-forcefield --test benzene_partitioned_into_octanol
 /// the_octanol_charges_reseeded_measured -- --ignored --nocapture`.
+///
+/// **Run once**, at `86b5eb3`, exit 0 on 2026-10-24 after 15 763 s. The charge segment is +0.793 ±
+/// 0.111 from long/ and +0.410 ± 0.069 reseeded: 0.384 apart, 2.9 of their quoted errors. With the
+/// two seeds' mean, log P is 1.92 ± 0.23 from the direct legs and 2.14 ± 0.23 with the staged
+/// water, against 2.13. Nothing here asserts it.
 #[test]
-#[ignore = "three octanol windows at W3's protocol: about 4.5 h with --release, not run"]
+#[ignore = "three octanol windows at W3's protocol: about 4.5 h with --release, run once (2026-10-24)"]
 fn the_octanol_charges_reseeded_measured() {
     let root = results_dir();
     let t = std::time::Instant::now();

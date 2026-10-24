@@ -4820,7 +4820,7 @@ protects nothing.
     - The octanol's bonded terms are UFF's.
     - Its density is experiment's, not the model's own at 1 bar (P ≈ −42 bar).
 
-- **A second seed for the octanol leg's charge segment: written, costed, not run.**
+- **A second seed for the octanol leg's charge segment: written and costed here, run since (the next entry).**
   `the_octanol_charges_reseeded_measured` reruns candidates 0, 4 and 8 (`λ_e` 1, 0.5, 0) from
   the same `start.txt`, model and 20 + 200 ps protocol, with only the campaign seed changed,
   `0x4C2_0C71` to `0x4C2_5EED`, into `octanol/reseed/`. It prints both seeds' charge segment, their
@@ -4834,6 +4834,79 @@ protects nothing.
   to ignore the seed failed both. `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test
   --release --locked -p pantometry-forcefield --test benzene_partitioned_into_octanol
   the_octanol_charges_reseeded_measured -- --ignored --nocapture`.
+
+- **Step C-1, an n-hexadecane box for benzene's oil:water partition: built, checked and measured,
+  and it is not a liquid; n-decane, the fallback, is liquid in pressure and still aligned.** New
+  `tests/liquid_hexadecane_with_gaff.rs` and `tests/hexadecane/`, both kept out of the published
+  crate with `tests/gaff/` (GAFF's numbers are GPL v3); `components/R16.cif` and `D10.cif`, byte for
+  byte, SHA-256 as the design study recorded them; FreeSolv v0.52's octane, nonane and decane
+  (`mobley_3167746`, `4375719`, `2197088`, CC BY 4.0) in `tests/freesolv/`, each with its SHA-256.
+  `Octanol::relaxed` makes any molecule the way `Octanol::new` makes octanol, which now calls it.
+  - **The model**: GAFF's `c3` and `hc` by Lorentz–Berthelot, GAFF's 1-4 scales, on UFF's bonded
+    terms and UFF's relaxed all-trans conformer. **The charges are decane's by position**: the
+    outer four carbons at each end and their hydrogens at decane's own end values, the eight between
+    at decane's interior (C5 = C6), then every atom shifted by `−Σq/N`. Before the shift they sum to
+    −0.0047 e (decane's own file to −0.0005), and the shift is +0.000094 e an atom.
+  - **What earns the transfer, and it is not the brief's 0.001 e**: the construction on FreeSolv's
+    own octane, nonane and decane is worst 0.001035 e off in octane (H on C4), **0.001193 in nonane**
+    (C3: −0.0795 there, −0.0783 in decane, −0.0793 in octane), and reproduces decane to its own shift.
+    That is AM1-BCC's chain-to-chain scatter at four places, which no construction from one chain
+    follows; the bound is the measured 0.0012 plus half a unit of the fourth place, 0.00125.
+  - **The box**: 98 molecules on a 2 × 7 × 7 lattice, 46.0 × 36.3 × 28.7 Å at 0.7701 g/cm³, gap
+    2.29 Å. **Not the brief's 36 Å cube of 95**: the extended chain is 20.5 Å, and a cube does not
+    hold a whole number of its sites. PME with the neighbour list: **128 ms a step** in
+    `the_cost_measured` (classical Ewald 211, PME with the cell list 153), and 47 ms a step in the
+    measurement's own run on the same machine an hour later. A 4c-2-style leg at the former is 3.9 h
+    a 220 ps window, 51 h for thirteen.
+  - **Hexadecane, measured** (`the_liquid_measured`, 2 177 s): the melt is 0.4 ps strain out, 30 ps
+    at 600 K, 20 ps settle and 40 ps sampled. **P −1179 ± 28 bar** at experiment's density;
+    **ΔH_vap 118.5 ± 2.6 kJ/mol against 81.35** (CRC 95th ed. p. 6-139 via PubChem CID 11006; NIST
+    81.3 ± 0.6); U/N still falling, 15.56 → 13.68 kcal/mol between the sample's halves; the chains'
+    nematic order **0.86** against an isotropic set's 0.08 ± 0.03, and their trans fraction rising to
+    0.97. `g(r)`'s first peaks: CH₃–CH₃ 4.67 Å, 2.63; interior 5.30 Å, 1.85. The MSD of the centres is
+    5.8 Å² at 20 ps with a log-log slope of 0.67–0.80, so the `D` of 4.0 × 10⁻¹⁰ m²/s that matches
+    experiment's (≈ 3.9 × 10⁻¹⁰, quoted, not read) is a slope through sub-diffusion and proves
+    nothing. **Verdict: an aligned, ordering phase, not a liquid.** The melt (a parallel lattice
+    of 20 Å rods that 30 ps at 600 K turns only to 0.94) and the model (melting point unknown;
+    experiment's is only 6.8 K below 298.15 K) are not separated.
+  - **Decane, the fallback, measured** by the same protocol (`the_decane_liquid_measured`, 1 533 s,
+    112 molecules): **P −52 ± 31 bar**, **ΔH_vap 58.3 ± 0.7 against 51.42 kJ/mol** (CRC p. 6-135),
+    `g(r)` peaks of a liquid (1.3), D 6.1 × 10⁻¹⁰ m²/s before Yeh–Hummer's +2.2 — but the order is
+    still **0.57**, falling, against an isotropic 0.08, and the MSD's slope is under one at 20 ps.
+    **Verdict: liquid in pressure, structure and cohesion, not yet isotropic, so not equilibrated.**
+  - **Default checks**, seconds in debug: the transfer reproduces octane, nonane and decane; hexadecane's
+    charges are decane's per position plus the shift and sum to zero; the model is what it says
+    (types read off the elements and equal to FreeSolv's three files', every atom's `[x, D]` and
+    charge to the bit, 135 = `9 (n − 1)` 1-4 pairs a molecule by the closed form and by
+    breadth-first search); the box at its density, no overlap over 27 images, every bond under half
+    an edge; every X–H held; the degrees of freedom; constrained NVE on four hexadecanes falls as
+    `h²`, ratios 4.2293–4.2504, 4.0550–4.0603 and 4.0144–4.0159 and the excess shrinking by
+    0.2581–0.2646 over sixteen starts, held to bands; and the order parameter, the dihedral count and
+    the MSD on closed cases. Eight tests, three ignored measurements and the band measurement.
+  - **Sabotaged, each failing the check it was for**: three carbons from each end instead of four
+    (the decane reproduction, 0.0002 e off at C5, and the per-position table); the net correction
+    dropped (decane's 0.0000156 e shift missing, and hexadecane's carbon 1); the lattice built 1%
+    light (the density); one hydrogen typed `h1` (the model, atom 20). Applied by script with a
+    unique anchor, restored by copy, `touch` and SHA-256.
+
+- **A second seed moves octanol's charge segment by 0.38 kcal/mol, 2.9 of its quoted errors; with
+  both seeds, benzene's log P is 1.92 ± 0.23 direct and 2.14 ± 0.23 with the staged water,
+  against 2.13.** `the_octanol_charges_reseeded_measured` ran once at `86b5eb3`, release, one core,
+  with throttling off for the process: exit 0 on 2026-10-24 after 15 763 s. Nothing asserts it.
+
+  | charge segment, octanol | ΔG (BAR) | halves | τ at λ_e 1, 0.5, 0 (samples) |
+  | --- | --- | --- | --- |
+  | long/, seed 0x4C2_0C71 | +0.793 ± 0.111 | +0.983, +0.612 | 53.4, 34.5, 10.8 |
+  | reseed/, seed 0x4C2_5EED | +0.410 ± 0.069 | +0.316, +0.510 | 68.0, 10.2, 29.6 |
+
+  - **BAR's quoted error is optimistic by about 2.5 here.** The seeds differ by 0.384 against a
+    combined quoted 0.131. That puts one run's spread at about 0.27, matching the 0.34 that long/'s
+    halves implied for the whole leg. One difference is one degree of freedom, so the spread is
+    known only to a factor of a few. The van der Waals segment's own spread is not measured.
+  - **With the charge segment as the two seeds' mean** (+0.601 ± 0.192), ΔG_solv,oct is −3.744 ±
+    0.282, and log P is **1.92 ± 0.23** from the two direct legs or **2.14 ± 0.23** with cf5758f's
+    staged water. Experiment is 2.13, so both are still within their error, now with an error
+    that has been measured rather than quoted.
 
 ### Changed
 
