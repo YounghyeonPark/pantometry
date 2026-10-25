@@ -22,11 +22,18 @@
 //!   NVE and `3N − N_held` in a bath;
 //! - **constrained NVE falls as `h²`** on four hexadecanes, with the excess over four shrinking;
 //! - **what the liquid is judged by is right on closed cases**: the order parameter, the dihedral
-//!   count and the mean-square displacement.
+//!   count and the mean-square displacement;
+//! - C-1b's isotropic start: **the rotations are uniform on SO(3)** (twenty moments of 20 000 against
+//!   Haar measure's closed ones, within 3 σ); **the contact check sees every image** (two closed
+//!   cases); **the start is what it says** (its density, no overlap by brute force over 27 images,
+//!   every bond the relaxed conformer's and under half an edge, the directions the drawn ones, the
+//!   trans fraction the generator's count, the order inside the isotropic band); and **it is
+//!   deterministic**, its seed reaching it.
 //!
 //! Ignored, release: [`the_liquid_measured`] (and [`the_decane_liquid_measured`]), the melt, the
 //! pressure at experiment's density, `ΔH_vap`, the carbons' `g(r)`, the self-diffusion coefficient
-//! and the chains' order; [`the_cost_measured`]; [`the_h_squared_band_measured`].
+//! and the chains' order; [`the_isotropic_decane_measured`], the same from C-1b's start;
+//! [`the_cost_measured`] and [`the_partition_leg_cost_measured`]; [`the_h_squared_band_measured`].
 //!
 //! # What the hexadecane measured: not a liquid
 //!
@@ -81,6 +88,40 @@
 //! - **But not yet isotropic, so not equilibrated**: the order is 0.57, eighteen isotropic standard
 //!   deviations off and still falling, and the MSD has not reached slope one by 20 ps. The lattice's
 //!   alignment is what is left, and 30 ps at 600 K took it only to 0.67.
+//!
+//! # And the decane from an isotropic start (C-1b): a liquid, isotropic only to the band's edge
+//!
+//! [`the_isotropic_decane_measured`], run once on 2026-10-24 at `c156f21` with the working tree,
+//! release, one core with throttling off: exit 0 after 6 803 s, 202 000 steps at 32.5–34.3 ms a step
+//! with the records. C-1's box and density; the start packed in 267 iterations, its worst pair at
+//! 1.002 of the packing radii, order 0.045, trans 0.8125 (147 gauche of 784).
+//!
+//! | | measured | experiment / reference |
+//! | --- | --- | --- |
+//! | P at 0.7255 g/cm³ (bar) | −33 ± 16; halves −25, −40 | 1 |
+//! | ΔH_vap (kJ/mol) | 59.2 ± 0.5 | 51.42 (CRC via PubChem) |
+//! | U/N in the sample's halves (kcal/mol) | 12.637 ± 0.043, 12.481 ± 0.077 (1.8 σ apart) | |
+//! | nematic order | 0.157 ± 0.007; halves 0.160, 0.154 | isotropic set of 112: 0.076 ± 0.027, band ≤ 0.157 |
+//! | trans fraction | 0.851; halves 0.845, 0.858 (3.2 σ apart) — rising | the start 0.8125 |
+//! | g(r) first peak, CH₃–CH₃ / interior / all C | 4.31 Å, 1.63 / 5.32 Å, 1.28 / 5.19 Å, 1.29 | |
+//! | MSD at 10, 20, 40 ps | 4.20, 7.09, 13.02 Å²; log-log slope 0.67, 0.76, 0.88 | 1 for diffusion |
+//! | D from 10–40 ps (m²/s) | 5.0 × 10⁻¹⁰ ± 0.4 (seven groups); with Yeh–Hummer's +2.2, 7.2 × 10⁻¹⁰ | not read |
+//!
+//! - **The melt, measured**: at 600 K the order stayed in the band from the first block, its 2.5 ps
+//!   blocks 0.06–0.19, and `U/N` was flat at 36.1–36.5 kcal/mol: the hot stage's 200 ps had nothing
+//!   left to melt. At 298.15 K `U/N` fell 36 → 13 in 10 ps and its settle's second half was
+//!   12.836 ± 0.024, so `U` needs about 20 ps of settling, not 100. **The trans fraction did not
+//!   settle**: 0.66 hot, 0.80 and 0.83 in the settle's halves, 0.845 and 0.858 in the sample's. And
+//!   the order rose with it, 0.085 → 0.131 → 0.160 → 0.154 over the four halves.
+//! - **The verdict: a liquid, not shown to be an isotropic one.** Its pressure is experiment's to
+//!   within 35 bar, its `g(r)` a liquid's, its MSD on the way to diffusion (0.88 at 40 ps), and the
+//!   C-1 lattice's 0.57 is gone. But the order averages 0.157, at the isotropic band's own edge, and
+//!   the trans fraction is still rising. Whether 0.157 is a liquid's short-range orientational
+//!   correlation in a box of 112 — a real liquid's per-frame order is not an ideal random set's — or
+//!   the start of the order C-1 never lost, this run cannot say.
+//! - **ΔH_vap is 7.8 kJ/mol (15%) high, as C-1's 58.3 was**: the excess over experiment is the
+//!   model's, not the lattice's alignment. `D` is under half the value usually quoted for decane
+//!   (about 1.3 × 10⁻⁹, not read), which a too-cohesive liquid would also give.
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
@@ -88,19 +129,21 @@
 mod freesolv;
 mod gaff;
 mod hexadecane;
+mod hydration;
 mod nonbonded;
 mod octanol;
 
-use gaff::{gaff, ONE_FOUR};
+use gaff::{gaff, Model, ONE_FOUR};
 use hexadecane::*;
+use hydration::Benzene;
 use octanol::{
-    bathed, bonds_to_hydrogen, closest_contact, gas, kcal, pressure, production, Liquid, Stage,
-    ANGSTROM, FS, KELVIN, KJ_PER_MOL, OVERLAP,
+    bathed, bonds_to_hydrogen, closest_contact, gas, joined, kcal, pressure, production, Liquid,
+    Stage, ANGSTROM, FS, KELVIN, KJ_PER_MOL, OVERLAP,
 };
 use pantometry_forcefield::uff::KCAL_PER_MOL;
 use pantometry_forcefield::{
-    Bath, Component, Element, Estimate, EwaldParameters, Mixing, MolecularDynamics, PeriodicBox,
-    PeriodicForceField, PmeParameters, Shake,
+    AtLambda, Bath, Component, Element, Estimate, EwaldParameters, Lambda, Mixing,
+    MolecularDynamics, PeriodicBox, PeriodicDecoupling, PeriodicForceField, PmeParameters, Shake,
 };
 use pantometry_units::BOLTZMANN;
 use std::f64::consts::PI;
@@ -730,18 +773,9 @@ type Row = (f64, f64, f64, f64, f64, f64);
 /// with the gas sampled in [`gas_phase`]; `g(r)` of the terminal and the interior carbons; the
 /// centres' mean-square displacement and the self-diffusion coefficient; the order parameter against
 /// an isotropic set's and the trans fraction against the gas's all-trans start.
-fn measure(oil: &Oil) {
+fn measure(oil: &Oil, a: &Alkane, l: &Liquid, plan: &[Stage]) {
     let started = std::time::Instant::now();
-    let a = Alkane::new(oil.entry);
-    let l = Liquid::lattice(
-        &a.molecule,
-        oil.lattice,
-        oil.density,
-        0xC1,
-        9.0 * ANGSTROM,
-        1e-5,
-    );
-    let field = production(with_gaff(l.field.clone(), &a), &l);
+    let field = production(with_gaff(l.field.clone(), a), l);
     let n = l.octanols as f64;
     println!(
         "\n{}: {} molecules, {} atoms, box {:.3} × {:.3} × {:.3} Å at {:.6} g/cm³",
@@ -791,6 +825,7 @@ fn measure(oil: &Oil) {
     );
     let mut md = l.dynamics();
     let mut series: Vec<Row> = Vec::new();
+    let mut stage_of: Vec<usize> = Vec::new();
     let (mut sample_u, mut sample_p, mut sample_s, mut sample_trans, mut sample_ends) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut centres_of: Vec<Vec<[f64; 3]>> = Vec::new();
@@ -800,7 +835,7 @@ fn measure(oil: &Oil) {
     let mut frames = 0usize;
     let mut time = 0.0;
     let mut sample_ms = 0.0;
-    for (k, stage) in PLAN.iter().enumerate() {
+    for (k, stage) in plan.iter().enumerate() {
         md = md.with_bath(Bath::Langevin {
             temperature: stage.temperature,
             friction: stage.friction,
@@ -818,10 +853,11 @@ fn measure(oil: &Oil) {
             if (s + 1) % every == 0 {
                 time += every as f64 * stage.dt;
                 let u = kcal(md.potential_energy().expect("stepped")) / n;
-                let p = pressure(&field, &l, &at) / 1e5;
+                let p = pressure(&field, l, &at) / 1e5;
                 let order = order_of(&at);
                 let (trans, e2e) = conformations(&at, &l.molecules, &a.carbons);
                 series.push((time * 1e12, u, p, md.half_step_temperature(), order, trans));
+                stage_of.push(k);
                 if stage.name == "sample" {
                     sample_u.push(u);
                     sample_p.push(p);
@@ -886,6 +922,64 @@ fn measure(oil: &Oil) {
             m(&|s| s.5)
         );
     }
+    // Each stage's relaxation: when the order first sat in the isotropic band, and its halves.
+    let band = iso + 3.0 * iso_sd;
+    println!(
+        "\neach stage, against the isotropic band S ≤ {iso:.4} + 3 × {iso_sd:.4} = {band:.4}, the \
+         halves' means ± their errors (the pressure's kinetic part is 298.15 K's in every stage):"
+    );
+    for (k, stage) in plan.iter().enumerate() {
+        let rows: Vec<&Row> = series
+            .iter()
+            .zip(&stage_of)
+            .filter(|(_, &j)| j == k)
+            .map(|(r, _)| r)
+            .collect();
+        if rows.len() < 20 {
+            continue;
+        }
+        let entered = rows
+            .chunks(25)
+            .find(|b| b.iter().map(|r| r.4).sum::<f64>() / b.len() as f64 <= band)
+            .map(|b| b[0].0 - 0.1);
+        let h = rows.len() / 2;
+        let halves = |f: &dyn Fn(&Row) -> f64| {
+            let xs: Vec<f64> = rows.iter().map(|r| f(r)).collect();
+            let (e1, e2) = (Estimate::of(&xs[..h]), Estimate::of(&xs[h..]));
+            let apart =
+                (e1.mean - e2.mean).abs() / (e1.error * e1.error + e2.error * e2.error).sqrt();
+            (e1, e2, apart)
+        };
+        let (u1, u2, du) = halves(&|r| r.1);
+        let (p1, p2, dp) = halves(&|r| r.2);
+        let (s1, s2, ds) = halves(&|r| r.4);
+        let (t1, t2, dt) = halves(&|r| r.5);
+        println!(
+            "  {} ({} ps at {} K): order first in the band in the block from {}; U/N {:.3} ± {:.3}, \
+             {:.3} ± {:.3} ({du:.1} σ apart); P {:.0} ± {:.0}, {:.0} ± {:.0} ({dp:.1} σ); order \
+             {:.4} ± {:.4}, {:.4} ± {:.4} ({ds:.1} σ); trans {:.4} ± {:.4}, {:.4} ± {:.4} ({dt:.1} σ)",
+            stage.name,
+            stage.picoseconds,
+            stage.temperature,
+            entered.map_or("never".to_string(), |t| format!("{t:.1} ps")),
+            u1.mean,
+            u1.error,
+            u2.mean,
+            u2.error,
+            p1.mean,
+            p1.error,
+            p2.mean,
+            p2.error,
+            s1.mean,
+            s1.error,
+            s2.mean,
+            s2.error,
+            t1.mean,
+            t1.error,
+            t2.mean,
+            t2.error
+        );
+    }
     let half = sample_u.len() / 2;
     let report = |name: &str, xs: &[f64], digits: usize| {
         let (e, e1, e2) = (
@@ -916,7 +1010,7 @@ fn measure(oil: &Oil) {
         ends0 / ANGSTROM
     );
 
-    let gas_potential = gas_phase(&a);
+    let gas_potential = gas_phase(a);
     let (ug, ug_err) = gas(&a.molecule, &gas_potential, 200.0);
     let rt = BOLTZMANN.to_si() * KELVIN;
     let dh = ug - u.mean * KCAL_PER_MOL + rt;
@@ -952,10 +1046,15 @@ fn measure(oil: &Oil) {
         );
     }
 
-    // The self-diffusion coefficient from the centres' MSD: lags in frames of 0.1 ps.
-    let lags: Vec<usize> = (1..=200).collect();
+    // The self-diffusion coefficient from the centres' MSD: lags in frames of 0.1 ps, to half the
+    // sample and at most 40 ps.
+    let most = (centres_of.len() / 2).min(400);
+    let lags: Vec<usize> = (1..=most).collect();
     let all = msd(&centres_of, &lags, None);
-    for &t in &[10usize, 20, 50, 100, 150, 200] {
+    for t in [10usize, 20, 50, 100, 150, 200, 300, 400]
+        .into_iter()
+        .filter(|&t| t <= most)
+    {
         let k = t - 1;
         let slope = (all[k].ln() - all[k / 2].ln()) / 2f64.ln();
         println!(
@@ -966,9 +1065,9 @@ fn measure(oil: &Oil) {
             slope
         );
     }
-    let fit = |m: &[f64]| {
-        // Least squares over lags 5–20 ps.
-        let pts: Vec<(f64, f64)> = (49..200)
+    let fit_over = |m: &[f64], from: usize, to: usize| {
+        // Least squares over lags `from` to `to` frames.
+        let pts: Vec<(f64, f64)> = (from - 1..to)
             .map(|k| ((k + 1) as f64 * 0.1e-12, m[k]))
             .collect();
         let c = pts.len() as f64;
@@ -981,6 +1080,7 @@ fn measure(oil: &Oil) {
         let den: f64 = pts.iter().map(|p| (p.0 - mx) * (p.0 - mx)).sum();
         num / den / 6.0
     };
+    let fit = |m: &[f64]| fit_over(m, 50, 200);
     let d_all = fit(&all);
     let groups: Vec<f64> = (0..7)
         .map(|gi| {
@@ -1007,6 +1107,22 @@ fn measure(oil: &Oil) {
         yeh_hummer,
         bath
     );
+    if most >= 400 {
+        let late = fit_over(&all, 100, 400);
+        let late_groups: Vec<f64> = (0..7)
+            .map(|gi| {
+                let members: Vec<usize> = (0..l.octanols).filter(|i| i % 7 == gi).collect();
+                fit_over(&msd(&centres_of, &lags, Some(&members)), 100, 400)
+            })
+            .collect();
+        let lm = late_groups.iter().sum::<f64>() / 7.0;
+        let lse = (late_groups.iter().map(|x| (x - lm) * (x - lm)).sum::<f64>() / 6.0 / 7.0).sqrt();
+        println!(
+            "D from the MSD's slope over 10–40 ps: {late:.3e} m²/s, seven groups {lm:.3e} ± \
+             {lse:.3e}; with Yeh–Hummer's term {:.3e}",
+            late + yeh_hummer
+        );
+    }
     println!(
         "  melting point {:.2} K: {:.1} K below 298.15 K; order over the sample {:.4} against an \
          isotropic {iso:.4} ± {iso_sd:.4}",
@@ -1021,18 +1137,33 @@ fn measure(oil: &Oil) {
     let _ = p;
 }
 
+/// C-1's start: `oil`'s lattice of parallel, all-trans chains at its density, turned end for end
+/// and about their axes by seed `0xC1`; `r_c` = 9 Å.
+fn lattice_start(a: &Alkane, oil: &Oil) -> Liquid {
+    Liquid::lattice(
+        &a.molecule,
+        oil.lattice,
+        oil.density,
+        0xC1,
+        9.0 * ANGSTROM,
+        1e-5,
+    )
+}
+
 /// **Liquid n-hexadecane, measured**: [`measure`] on [`HEXADECANE`].
 #[test]
 #[ignore = "98 hexadecanes melted and sampled, about two hours with --release: run with --release -- --ignored --nocapture"]
 fn the_liquid_measured() {
-    measure(&HEXADECANE);
+    let a = Alkane::new(R16);
+    measure(&HEXADECANE, &a, &lattice_start(&a, &HEXADECANE), &PLAN);
 }
 
 /// **Liquid n-decane, measured**, the fallback: [`measure`] on [`DECANE`].
 #[test]
 #[ignore = "112 decanes melted and sampled, about forty minutes with --release: run with --release -- --ignored --nocapture"]
 fn the_decane_liquid_measured() {
-    measure(&DECANE);
+    let a = Alkane::new(D10);
+    measure(&DECANE, &a, &lattice_start(&a, &DECANE), &PLAN);
 }
 
 /// **Milliseconds a step** of the 98-hexadecane box at 2 fs, release, one core, after 0.2 ps at
@@ -1095,5 +1226,470 @@ fn the_cost_measured() {
         "at the last: a 220 ps window {:.2} h, thirteen {:.1} h, before the couplings' cost",
         window / 3600.0,
         13.0 * window / 3600.0
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// C-1b: an isotropic start
+
+/// The isotropic start's seed.
+const START_SEED: u64 = 0xC1B;
+
+/// The packer's budget: it took 262 iterations on [`START_SEED`]'s 112 decanes.
+const PACKING_ITERATIONS: usize = 20_000;
+
+/// **C-1b's decane start**: [`isotropic`] on [`DECANE`]'s box of 112, `r_c` = 9 Å.
+fn decane_start(a: &Alkane, seed: u64) -> Start {
+    isotropic(
+        a,
+        DECANE.lattice,
+        DECANE.density,
+        seed,
+        START_TRANS,
+        9.0 * ANGSTROM,
+        1e-5,
+        PACKING_ITERATIONS,
+    )
+}
+
+/// **The rotations are uniform on SO(3)**: 20 000 drawn by [`uniform_rotation`], each from
+/// `Rng::for_index(seed, k)`. Each is proper and orthogonal to rounding; and against Haar measure's
+/// closed moments, each within three standard errors for N: every entry's mean is 0 (variance 1/3,
+/// each column being a uniform unit vector) and its mean square 1/3 (variance `1/5 − 1/9 = 4/45`);
+/// the trace's mean is 0 and its mean square 1 (`E[(tr R)ᵏ]` is the number of invariants in the
+/// `k`-th tensor power of the rotation representation: 0, 1, 1, 3), so the mean square's variance
+/// is `3 − 1 = 2`. Sabotaged, a rotation about z only fails `⟨R22²⟩` at 316 σ, and a uniform axis
+/// turned by a uniform angle — not Haar — the trace at 140 σ, whose mean it puts at 1, and the
+/// diagonal's means at 80.
+#[test]
+fn the_rotations_are_uniform_on_so3() {
+    let n = 20_000usize;
+    let mut first = [[0.0; 3]; 3];
+    let mut second = [[0.0; 3]; 3];
+    let (mut tr, mut tr2) = (0.0, 0.0);
+    let mut worst_orthogonal = 0.0f64;
+    for k in 0..n {
+        let r = uniform_rotation(&mut pantometry_core::Rng::for_index(0x0503, k as u64));
+        let det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1])
+            - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
+            + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
+        worst_orthogonal = worst_orthogonal.max((det - 1.0).abs());
+        for i in 0..3 {
+            for j in 0..3 {
+                let rr: f64 = (0..3).map(|m| r[i][m] * r[j][m]).sum();
+                let want = if i == j { 1.0 } else { 0.0 };
+                worst_orthogonal = worst_orthogonal.max((rr - want).abs());
+                first[i][j] += r[i][j] / n as f64;
+                second[i][j] += r[i][j] * r[i][j] / n as f64;
+            }
+        }
+        let t = r[0][0] + r[1][1] + r[2][2];
+        tr += t / n as f64;
+        tr2 += t * t / n as f64;
+    }
+    assert!(
+        worst_orthogonal <= 16.0 * EPS,
+        "not a rotation: {worst_orthogonal:e}"
+    );
+    let root = (n as f64).sqrt();
+    let mut worst = 0.0f64;
+    let mut z = |x: f64, mean: f64, variance: f64, what: &str| {
+        let s = (x - mean) / (variance.sqrt() / root);
+        println!("{what}: {x:+.5} against {mean:.5}, {s:+.2} σ");
+        worst = worst.max(s.abs());
+        s
+    };
+    let mut zs = Vec::new();
+    for i in 0..3 {
+        for j in 0..3 {
+            zs.push(z(first[i][j], 0.0, 1.0 / 3.0, &format!("⟨R{i}{j}⟩")));
+            zs.push(z(
+                second[i][j],
+                1.0 / 3.0,
+                4.0 / 45.0,
+                &format!("⟨R{i}{j}²⟩"),
+            ));
+        }
+    }
+    zs.push(z(tr, 0.0, 1.0, "⟨tr R⟩"));
+    zs.push(z(tr2, 1.0, 2.0, "⟨(tr R)²⟩"));
+    println!(
+        "{n} rotations: worst {worst:.2} σ of 20 moments; orthogonal to {worst_orthogonal:.1e}"
+    );
+    for s in zs {
+        assert!(s.abs() <= 3.0, "a moment {s:.2} σ from Haar measure's");
+    }
+}
+
+/// **The brute-force contact check sees every image, closed cases**: two one-atom molecules
+/// 0.5 Å inside opposite faces of a 30 Å box are 1 Å apart through the face, a ratio of 0.5 for two
+/// hydrogens at full radii (sum 2 Å), which the box's interior pair at 29 Å would not show; and
+/// one atom alone in a 3 Å box meets its own image at 3 Å, 1.5 of the sum.
+#[test]
+fn the_contact_check_sees_every_image() {
+    let cell = PeriodicBox::cubic(30.0 * ANGSTROM);
+    let at = [
+        [0.5 * ANGSTROM, 4.0 * ANGSTROM, 5.0 * ANGSTROM],
+        [29.5 * ANGSTROM, 4.0 * ANGSTROM, 5.0 * ANGSTROM],
+    ];
+    let radii = [1.0 * ANGSTROM; 2];
+    let (w, i, j) = worst_contact(&at, &[0..1, 1..2], &radii, &cell);
+    println!("across a face: {w:.6} of the radii, atoms {i} and {j}");
+    assert!((w - 0.5).abs() <= 64.0 * EPS, "{w}");
+    let small = PeriodicBox::cubic(3.0 * ANGSTROM);
+    let (w, _, _) = worst_contact(
+        &[[1.0 * ANGSTROM; 3]],
+        std::slice::from_ref(&(0..1)),
+        &[1.0 * ANGSTROM],
+        &small,
+    );
+    println!("its own image: {w:.6} of the radii");
+    assert!((w - 1.5).abs() <= 64.0 * EPS, "{w}");
+}
+
+/// **The isotropic start is what it says**, C-1b's 112 decanes: the box at its density to rounding,
+/// as C-1's; no two atoms nearer than their packing radii by brute force over the 27 images; every
+/// bond under half the shortest edge and at the relaxed conformer's length to rounding — the
+/// gauche turns are rigid rotations — so every held X–H is at its length; every molecule's
+/// end-to-end direction its drawn rotation of its conformer's, to rounding, so the packer turned
+/// nothing; the trans fraction counted from the dihedrals `1 − gauche / (7 × 112)` exactly, the
+/// generator's own count; and the end-to-end vectors' order inside the band an isotropic set of 112
+/// shows, mean plus three standard deviations.
+#[test]
+fn the_isotropic_start_is_what_it_says() {
+    let a = Alkane::new(D10);
+    let t = std::time::Instant::now();
+    let s = decane_start(&a, START_SEED);
+    let l = &s.liquid;
+    let p = &s.packed;
+    println!(
+        "built in {:.1} s: {} iterations, {} evaluations, {} pair lists; penalty {:.3e} → {:.3e} Å⁴; \
+         worst {:.5} of the radii",
+        t.elapsed().as_secs_f64(),
+        p.iterations,
+        p.evaluations,
+        p.lists,
+        p.penalty[0],
+        p.penalty[1],
+        p.worst
+    );
+    let cell = l.cell();
+    let m = l.octanols as f64;
+    let density = m * a.molecule.mass() / cell.volume();
+    assert_eq!(l.octanols, 112);
+    assert!(
+        (density / DECANE.density - 1.0).abs() <= 8.0 * EPS,
+        "{density}"
+    );
+    let bound = (l.masses.len() as f64 + 8.0) * EPS;
+    assert!((l.density() / DECANE.density - 1.0).abs() <= bound);
+
+    let t = std::time::Instant::now();
+    let (w, i, j) = worst_contact(&l.at, &l.molecules, &s.radii, &cell);
+    let name = |k: usize| l.component.atoms()[k].name.clone();
+    println!(
+        "brute force over 27 images in {:.1} s: the worst pair {w:.5} of its radii' sum, {} and {}, \
+         {:.3} Å apart",
+        t.elapsed().as_secs_f64(),
+        name(i),
+        name(j),
+        w * (s.radii[i] + s.radii[j]) / ANGSTROM
+    );
+    assert!(w >= 1.0, "an overlap at {w} of the radii");
+
+    // Each bond at the relaxed conformer's length, and under half an edge.
+    let n = a.molecule.at.len();
+    let mut worst_bond = 0.0f64;
+    let mut longest = 0.0f64;
+    for (k, r) in l.molecules.iter().enumerate() {
+        for b in a.molecule.component.bonds() {
+            let [x, y] = b.atoms;
+            let here = len(sub(l.at[r.start + x], l.at[r.start + y]));
+            let relaxed = len(sub(a.molecule.at[x], a.molecule.at[y]));
+            worst_bond = worst_bond.max((here / relaxed - 1.0).abs());
+            longest = longest.max(here);
+            assert_eq!(r.len(), n, "molecule {k}");
+        }
+    }
+    println!(
+        "every bond the relaxed conformer's to {worst_bond:.1e}; the longest {:.3} Å, half the \
+         shortest edge {:.3} Å",
+        longest / ANGSTROM,
+        cell.half_shortest_edge() / ANGSTROM
+    );
+    assert!(worst_bond <= 64.0 * EPS);
+    assert!(longest < cell.half_shortest_edge());
+    // The relaxed conformer's X–H are on their lengths to SHAKE's tolerance, and the start's are
+    // the conformer's to rounding.
+    let shake = l.shake();
+    let held = shake
+        .bonds()
+        .iter()
+        .zip(shake.lengths())
+        .map(|(&[x, y], d)| (len(sub(l.at[x], l.at[y])) / d - 1.0).abs())
+        .fold(0.0f64, f64::max);
+    println!(
+        "every held bond within {:.3} of SHAKE's tolerance of its length",
+        held / Shake::DEFAULT_TOLERANCE
+    );
+    assert!(held <= Shake::DEFAULT_TOLERANCE, "a held bond {held:e} off");
+
+    // The packer turned nothing.
+    let ends = a.ends();
+    let drawn: Vec<[f64; 3]> = s
+        .bodies
+        .iter()
+        .zip(&s.rotations)
+        .map(|(b, r)| {
+            let e = sub(rotate(r, b[ends[1]]), rotate(r, b[ends[0]]));
+            e.map(|x| x / len(e))
+        })
+        .collect();
+    let built = directions(&l.at, &l.molecules, ends);
+    let turned = drawn
+        .iter()
+        .zip(&built)
+        .map(|(u, v)| len(sub(*u, *v)))
+        .fold(0.0f64, f64::max);
+    println!("the built directions are the drawn ones to {turned:.1e}");
+    assert!(turned <= 1e-12, "{turned:e}");
+
+    let gauche: usize = s.gauche.iter().sum();
+    let (trans, e2e) = conformations(&l.at, &l.molecules, &a.carbons);
+    let dihedrals = 7 * l.octanols;
+    let want = (dihedrals - gauche) as f64 / dihedrals as f64;
+    let order = nematic_order(&built);
+    let (iso, sd) = isotropic_order(l.octanols, 1000, 0x150);
+    println!(
+        "{gauche} gauche of {}: trans {trans:.4} counted, {want:.4} drawn; ends {:.2} Å apart; order \
+         {order:.4} against an isotropic set's {iso:.4} ± {sd:.4}, band ≤ {:.4}",
+        7 * l.octanols,
+        e2e / ANGSTROM,
+        iso + 3.0 * sd
+    );
+    assert_eq!(trans.to_bits(), want.to_bits());
+    assert!(order <= iso + 3.0 * sd, "the start's order {order}");
+}
+
+/// **The start is deterministic and its seed reaches it**: built twice from [`START_SEED`], the
+/// same bits in every position; built from another seed, different ones.
+#[test]
+fn the_isotropic_start_is_deterministic() {
+    let a = Alkane::new(D10);
+    let one = decane_start(&a, START_SEED);
+    let two = decane_start(&a, START_SEED);
+    let other = decane_start(&a, START_SEED + 4);
+    let bits = |s: &Start| -> Vec<u64> {
+        s.liquid
+            .at
+            .iter()
+            .flat_map(|p| p.map(f64::to_bits))
+            .collect()
+    };
+    assert_eq!(bits(&one), bits(&two), "the same seed, the same bits");
+    let differ = bits(&one)
+        .iter()
+        .zip(bits(&other))
+        .filter(|(x, y)| **x != *y)
+        .count();
+    println!(
+        "another seed moves {differ} of {} coordinates",
+        3 * one.liquid.at.len()
+    );
+    assert!(differ > 0, "the seed does not reach the start");
+}
+
+/// **C-1b's melt**: chosen before it ran, from what C-1 measured — its 30 ps at 600 K took the
+/// lattice's order only to 0.67 — and from the brief's ≥ 200 ps hot and ≥ 100 ps settling. 1 ps at
+/// 0.5 fs in a 50 ps⁻¹ bath takes the packing's strain out (a probe's 0.4 ps took `U/N` from 65.6 to
+/// 17.7 kcal/mol); 200 ps at 600 K; 100 ps at 298.15 K to settle; then 100 ps sampled in a 1 ps⁻¹
+/// bath, so that the mean-square displacement reaches 40 ps of lag. 202 000 steps.
+///
+/// **What the run measured of the lengths** (the module documentation): the hot stage was in the
+/// isotropic band from its first block and flat in `U`, so it needed far less than 200 ps; `U/N`
+/// settled in about 20 ps at 298.15 K; the trans fraction had not settled in 200 ps there, so a
+/// next run needs a longer settle, not a longer melt.
+const ISOTROPIC_PLAN: [Stage; 4] = [
+    Stage {
+        name: "strain out",
+        picoseconds: 1.0,
+        dt: 0.5 * FS,
+        friction: 50e12,
+        temperature: KELVIN,
+    },
+    Stage {
+        name: "hot",
+        picoseconds: 200.0,
+        dt: 2.0 * FS,
+        friction: 5e12,
+        temperature: 600.0,
+    },
+    Stage {
+        name: "settle",
+        picoseconds: 100.0,
+        dt: 2.0 * FS,
+        friction: 5e12,
+        temperature: KELVIN,
+    },
+    Stage {
+        name: "sample",
+        picoseconds: 100.0,
+        dt: 2.0 * FS,
+        friction: 1e12,
+        temperature: KELVIN,
+    },
+];
+
+/// **Liquid n-decane from an isotropic start, measured**: [`measure`] on C-1b's start and
+/// [`ISOTROPIC_PLAN`].
+#[test]
+#[ignore = "112 decanes from an isotropic start, 202 000 steps, two to four hours with --release: run with --release -- --ignored --nocapture"]
+fn the_isotropic_decane_measured() {
+    let a = Alkane::new(D10);
+    let s = decane_start(&a, START_SEED);
+    let (w, _, _) = worst_contact(
+        &s.liquid.at,
+        &s.liquid.molecules,
+        &s.radii,
+        &s.liquid.cell(),
+    );
+    println!(
+        "C-1b's start: {} packer iterations, the worst pair {w:.5} of its radii; {} gauche",
+        s.packed.iterations,
+        s.gauche.iter().sum::<usize>()
+    );
+    assert!(w >= 1.0);
+    measure(&DECANE, &a, &s.liquid, &ISOTROPIC_PLAN);
+}
+
+/// **The partition leg's box**: C-1b's decane start with benzene at the box's centre, and every
+/// decane with an atom nearer to benzene's than their packing radii' sum removed — benzene's own
+/// radii a carbon's and a hydrogen's — so that what is left is overlap-free without packing again.
+/// GAFF everywhere: benzene's FreeSolv types and charges, the decanes' as C-1's. The density is
+/// left as the removal leaves it: this box is for the cost, not for a free energy.
+fn partition_box(a: &Alkane) -> (Liquid, PeriodicForceField, usize) {
+    let s = decane_start(a, START_SEED);
+    let l = s.liquid;
+    let c = Component::from_ccd(hydration::BNZ).expect("BNZ");
+    let model = Model::benzene(&c);
+    let b = Benzene::new(Some(model.charges.clone()));
+    let cell = l.cell();
+    let centre = cell.lengths().map(|x| 0.5 * x);
+    let bat = b.centred_at(centre);
+    let brad: Vec<f64> = b
+        .component
+        .atoms()
+        .iter()
+        .map(|x| packing_radius(x.element))
+        .collect();
+    let keep: Vec<usize> = (0..l.octanols)
+        .filter(|&m| {
+            !l.molecules[m].clone().any(|i| {
+                bat.iter().zip(&brad).any(|(q, rq)| {
+                    let d = cell.minimum_image(sub(l.at[i], *q));
+                    len(d) < s.radii[i] + rq
+                })
+            })
+        })
+        .collect();
+    let removed = l.octanols - keep.len();
+    let o = &a.molecule;
+    let mut parts: Vec<&Component> = vec![&b.component];
+    let mut types = b.types.clone();
+    let mut charges = b.charges.clone();
+    let mut masses = b.masses.clone();
+    let mut at = bat.clone();
+    let mut molecules: Vec<std::ops::Range<usize>> = Vec::new();
+    molecules.push(0..bat.len());
+    let mut vdw = model.vdw.clone();
+    for &m in &keep {
+        let start = at.len();
+        at.extend(l.molecules[m].clone().map(|i| l.at[i]));
+        molecules.push(start..at.len());
+        parts.push(&o.component);
+        types.extend(o.types.iter().cloned());
+        charges.extend_from_slice(&o.charges);
+        masses.extend_from_slice(&o.masses);
+        vdw.extend(a.vdw());
+    }
+    let component = joined(&parts);
+    let p = EwaldParameters::for_accuracy(&cell, 9.0 * ANGSTROM, 1e-5);
+    let field = PeriodicForceField::new(&component, &types, cell, p)
+        .expect("benzene in decane")
+        .with_charges(charges.clone());
+    let n = vdw.len();
+    let field = field
+        .with_nonbonded(0..n, vdw)
+        .expect("GAFF's values are valid")
+        .with_mixing(Mixing::LorentzBerthelot)
+        .with_one_four(ONE_FOUR[0], ONE_FOUR[1]);
+    let liquid = Liquid {
+        component,
+        types,
+        charges,
+        field: field.clone(),
+        at,
+        masses,
+        molecules,
+        solute: b.at.len(),
+        octanols: keep.len(),
+        site: l.site,
+        gap: l.gap,
+    };
+    let field = production(field, &liquid);
+    (liquid, field, removed)
+}
+
+/// **Milliseconds a step of the eventual partition leg**, release, one core: benzene in C-1b's
+/// decane box, PME with the neighbour list, every X–H held, 2 fs; after 0.2 ps at 0.5 fs off the
+/// start in a 50 ps⁻¹ bath. The plain field and the decoupling at `λ_v` = 0.5 with no charge, each the
+/// best of three runs of 50 steps; and a 4c-2-style window at the latter, 110 000 steps.
+#[test]
+#[ignore = "a timing, release only: run with --release -- --ignored --nocapture"]
+fn the_partition_leg_cost_measured() {
+    let a = Alkane::new(D10);
+    let (l, field, removed) = partition_box(&a);
+    let (w, _, _) = {
+        let radii: Vec<f64> = l
+            .component
+            .atoms()
+            .iter()
+            .map(|x| packing_radius(x.element))
+            .collect();
+        worst_contact(&l.at, &l.molecules, &radii, &l.cell())
+    };
+    println!(
+        "benzene and {} decanes ({removed} removed), {} atoms, box {:.2?} Å; worst contact {w:.4} of \
+         the radii",
+        l.octanols,
+        l.at.len(),
+        l.cell().lengths().map(|x| x / ANGSTROM)
+    );
+    assert!(w >= 1.0);
+    let group: Vec<bool> = (0..l.at.len()).map(|i| i < l.solute).collect();
+    let decoupling = PeriodicDecoupling::new(&field, &group).expect("benzene decouples");
+    let potential = AtLambda {
+        hamiltonian: &decoupling,
+        lambda: Lambda::new(0.0, 0.0, 0.5),
+    };
+    let (mut md, mut at) = bathed(&l.dynamics(), &potential, &l.at, 0.5 * FS, 400, 0xC1B5);
+    let mut best = [f64::INFINITY; 2];
+    for _ in 0..3 {
+        md.forget_forces();
+        let t = std::time::Instant::now();
+        md.run(&field, &mut at, 2.0 * FS, 50);
+        best[0] = best[0].min(t.elapsed().as_secs_f64() / 50.0);
+        md.forget_forces();
+        let t = std::time::Instant::now();
+        md.run(&potential, &mut at, 2.0 * FS, 50);
+        best[1] = best[1].min(t.elapsed().as_secs_f64() / 50.0);
+    }
+    println!(
+        "the plain field {:.1} ms a step; the decoupling at λ_v 0.5 {:.1} ms; a 220 ps window at the \
+         latter {:.2} h, thirteen {:.1} h, before the couplings' cost",
+        1e3 * best[0],
+        1e3 * best[1],
+        110_000.0 * best[1] / 3600.0,
+        13.0 * 110_000.0 * best[1] / 3600.0
     );
 }

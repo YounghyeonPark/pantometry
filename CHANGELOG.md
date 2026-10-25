@@ -4889,6 +4889,92 @@ protects nothing.
     light (the density); one hydrogen typed `h1` (the model, atom 20). Applied by script with a
     unique anchor, restored by copy, `touch` and SHA-256.
 
+- **Step C-1b, n-decane from an isotropic start: the lattice's alignment is gone and the box is a
+  liquid, but not yet shown to be an isotropic one.** C-1's decane, built as a parallel lattice of
+  extended chains, was still at nematic order 0.57 after 90 ps. It is now built isotropic from the
+  start (`tests/hexadecane/`'s `isotropic`), in C-1's own box of 112 at 0.7255 g/cm³.
+  - **The start**: each molecule is UFF's relaxed all-trans decane with each C–C–C–C dihedral left
+    trans with probability 0.75 or turned rigidly by ±120°. A draw is refused when two atoms more
+    than three bonds apart come nearer than 1.8 Å: one gauche measures 1.87 Å, and `g⁺g⁻` 0.72.
+    The molecule is then turned by a rotation uniform on SO(3) (Shoemake's quaternion) and set at
+    its C-1 lattice site. Both draws come from `Rng::for_index(seed, molecule)`.
+  - **The packing**: the molecules are moved apart, never turned, by L-BFGS on Packmol's overlap
+    penalty. The radii are H 0.8 Å and C 1.2 Å, so H–H 1.6 Å, C–H 2.0 and C–C 2.4. When the descent
+    jams, every overlapping molecule takes a random kick of up to 1 Å per axis, drawn from an
+    indexed stream, and the descent restarts.
+  - **What was measured and rejected for the packing**:
+    - **Turning by the torque re-aligns the rods**: the order went to 0.55 from the lattice, and to
+      0.24 after a first pass without turning.
+    - **Without kicks it jams**: full radii could not be reached, 0.85 jammed at 0.95 of them, and at
+      0.8 only 5 of 16 seeds cleared.
+    - **Growing the radii in stages jammed worse.**
+    - **With the kicks, 15 of 16 seeds clear** in 20 000 iterations, and the start's own seed in 267
+      with none.
+  - **The strain is what is left**, and 1 ps at 0.5 fs takes it out: `U/N` went 65.6 → 17.7 kcal/mol
+    in 0.4 ps.
+  - **Measured** (`the_isotropic_decane_measured`, once, release, throttling off, exit 0 after
+    6 803 s): 1 ps strain out, 200 ps at 600 K, 100 ps settle, 100 ps sampled, 202 000 steps.
+
+    | quantity | measured | target |
+    | --- | --- | --- |
+    | P (bar) | −33 ± 16 (halves −25, −40) | 1 |
+    | ΔH_vap (kJ/mol) | 59.2 ± 0.5 | 51.42 |
+    | nematic order | **0.157 ± 0.007** (halves 0.160, 0.154) | isotropic 0.076 ± 0.027, band ≤ 0.157 |
+    | trans fraction | 0.851 (halves 0.845, 0.858: 3.2 σ apart, rising) | — |
+    | U/N halves (kcal/mol) | 12.637 ± 0.043, 12.481 ± 0.077 (1.8 σ apart) | — |
+    | `g(r)` first peaks, CH₃ / interior / all C | 1.63 / 1.28 / 1.29 | — |
+    | MSD log-log slope at 10, 20, 40 ps | 0.67, 0.76, **0.88** | 1 |
+    | D, 10–40 ps (m²/s) | 5.0 × 10⁻¹⁰, and 7.2 × 10⁻¹⁰ with Yeh–Hummer's +2.2 | about 1.3 × 10⁻⁹ (not read) |
+
+  - **The melt, measured**:
+    - **The hot stage was in the isotropic band from its first 2.5 ps block** (blocks 0.06–0.19)
+      and flat in U, so 200 ps there bought nothing.
+    - **U settled in about 20 ps at 298.15 K.**
+    - **The trans fraction did not settle** in the 200 ps at 298.15 K: 0.80, 0.83, 0.845, 0.858
+      over the halves. The order rose with it: 0.085, 0.131, 0.160, 0.154.
+    - **A next run needs a longer settle, not a longer melt.**
+  - **Verdict: liquid, not shown isotropic.**
+    - **What says liquid**: the pressure, `g(r)`, and an MSD heading for diffusion.
+    - **What falls short**: the order sits at the isotropic band's own edge, and the trans fraction
+      fails the halves test.
+    - **What this run cannot decide**: whether 0.157 is a real liquid's orientational correlation in
+      112 molecules or a slow return of order.
+    - **ΔH_vap is 15% high, as C-1's 58.3 was**: the excess is the model's.
+  - **Hexadecane would probably not melt this way.** Its chains are 1.6× longer and turn more
+    slowly. Experiment's melting point is only 6.8 K below 298.15 K, and the model's own is unknown.
+    Decane, with 55 K of margin, still has a drifting conformer population after 200 ps. Not run.
+  - **The partition leg's cost** (`the_partition_leg_cost_measured`): benzene in this box with one
+    decane removed (3 564 atoms), PME with the neighbour list, 2 fs. It measured **32.7 ms a step
+    plain and 33.2 decoupled** with throttling off, and 77 with it on. A 220 ps window is 1.0 h, and
+    thirteen are 13.2 h before the couplings.
+  - **Default checks, debug, 7 s together**:
+    - **The rotations are uniform on SO(3)**: 20 000 draws, twenty moments against Haar measure's
+      closed ones (entries 0 and 1/3, trace 0, its square 1), the worst at 1.62 σ.
+    - **The contact check sees every image**: two closed cases, across a face and a lone atom's own
+      image.
+    - **The start is what it says**:
+      - the density to 8 ε, and no overlap by brute force over 27 images (worst 1.002);
+      - every bond the relaxed conformer's to 8 × 10⁻¹⁵, under half an edge, and every held X–H
+        within SHAKE's tolerance;
+      - the directions the drawn ones to 7 × 10⁻¹⁶;
+      - the trans fraction the generator's count to the bit;
+      - the order inside the band.
+    - **The start is deterministic**: the same bits twice, and another seed moves every coordinate.
+    - `worst_contact` keeps molecules whole, where `closest_contact`'s wrap atom by atom would make
+      a molecule across a face meet itself.
+  - **Sabotaged, each failing the check it was for**:
+    - a rotation about z only: `⟨R22²⟩` 316 σ, and the start's order 0.209;
+    - a uniform axis by a uniform angle: the trace 140 σ;
+    - the contact check dropping the x images: the face case;
+    - the packer's minimum image dropped: an overlap at 0.069 of the radii;
+    - the seed ignored: "the seed does not reach the start";
+    - the molecule index ignored: order 1.0.
+
+    Each was applied in binary mode with an anchor counted once, and restored by `cp`, `touch` and
+    SHA-256.
+  - **Counts**: four new default tests (twelve in the file) and two new ignored ones (six). C-1's
+    measurements take their start and plan as arguments now; the same protocol, not rerun.
+
 - **A second seed moves octanol's charge segment by 0.38 kcal/mol, 2.9 of its quoted errors; with
   both seeds, benzene's log P is 1.92 ± 0.23 direct and 2.14 ± 0.23 with the staged water,
   against 2.13.** `the_octanol_charges_reseeded_measured` ran once at `86b5eb3`, release, one core,

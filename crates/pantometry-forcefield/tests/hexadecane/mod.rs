@@ -21,6 +21,13 @@
 //!   variation at four places, which no construction by position from one chain can follow.
 //!   [`HOMOLOGUE_BOUND`] is the measured 0.0012 plus half a unit of the files' fourth place.
 //!
+//! **C-1b's isotropic start** ([`isotropic`]): C-1's lattice of parallel chains never lost its
+//! alignment, so each molecule is instead a conformer with random gauche defects
+//! ([`Alkane::conformer`]) in a uniformly random orientation ([`uniform_rotation`]), set at its
+//! lattice site in C-1's own box and then moved, never turned, until no two atoms overlap
+//! ([`pack`]). The orientations are the draws to rounding, so the start is isotropic by
+//! construction rather than by melting.
+//!
 //! **Kept out of the published crate** (`Cargo.toml`'s `exclude`) with `tests/gaff/`, whose numbers
 //! it uses.
 
@@ -31,9 +38,11 @@
 use crate::freesolv::{self, Mol2};
 use crate::gaff::{gaff, ONE_FOUR};
 use crate::nonbonded::Vacuum;
-use crate::octanol::{Octanol, ANGSTROM};
+use crate::octanol::{joined, Liquid, Octanol, ANGSTROM};
 use pantometry_core::Rng;
-use pantometry_forcefield::{Component, Element, Mixing, PeriodicBox, PeriodicForceField};
+use pantometry_forcefield::{
+    Component, Element, EwaldParameters, Mixing, PeriodicBox, PeriodicForceField,
+};
 use std::f64::consts::PI;
 use std::ops::Range;
 
@@ -578,4 +587,747 @@ pub fn first_shell(g: &[f64], width: f64, range: [f64; 2]) -> ([f64; 2], [f64; 2
         .min_by(|&i, &j| g[i].total_cmp(&g[j]))
         .expect("bins");
     (peak, [(m as f64 + 0.5) * width, g[m]])
+}
+
+// ---------------------------------------------------------------------------------------------
+// An isotropic start: step C-1b
+
+/// A 3 × 3 rotation matrix, rows first.
+pub type Rotation = [[f64; 3]; 3];
+
+/// `r v`.
+pub fn rotate(r: &Rotation, v: [f64; 3]) -> [f64; 3] {
+    [dot(r[0], v), dot(r[1], v), dot(r[2], v)]
+}
+
+/// `a b`.
+fn compose(a: &Rotation, b: &Rotation) -> Rotation {
+    let mut c = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                c[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    c
+}
+
+/// **The rotation by `angle` about the unit vector `axis`**, Rodrigues' formula.
+pub fn about(axis: [f64; 3], angle: f64) -> Rotation {
+    let (s, c) = angle.sin_cos();
+    let t = 1.0 - c;
+    let [x, y, z] = axis;
+    [
+        [c + t * x * x, t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, c + t * y * y, t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, c + t * z * z],
+    ]
+}
+
+/// **A rotation drawn uniformly on SO(3)** — by Haar measure — from three draws of `rng`: the unit
+/// quaternion `(√(1−u₁) sin 2πu₂, √(1−u₁) cos 2πu₂, √u₁ sin 2πu₃, √u₁ cos 2πu₃)`, which is uniform
+/// on the 3-sphere (K. Shoemake, "Uniform random rotations", *Graphics Gems III*, 1992, 124–132),
+/// and the 3-sphere double-covers SO(3) with Haar measure as its image.
+pub fn uniform_rotation(rng: &mut Rng) -> Rotation {
+    let (u1, u2, u3) = (rng.unit(), rng.unit(), rng.unit());
+    let (a, b) = ((1.0 - u1).sqrt(), u1.sqrt());
+    let (s2, c2) = (2.0 * PI * u2).sin_cos();
+    let (s3, c3) = (2.0 * PI * u3).sin_cos();
+    let (x, y, z, w) = (a * s2, a * c2, b * s3, b * c3);
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+/// **The packer's radius of an atom, metres**: a pair of atoms in different molecules is an overlap
+/// nearer than the sum of theirs — H–H 1.6 Å, C–H 2.0 Å and C–C 2.4 Å: [`PACKING_SCALE`] of 1.0 Å
+/// for hydrogen and 1.5 Å for carbon, whose sums would be the 2.0 Å [`crate::octanol::OVERLAP`] is
+/// for H–H, 2.5 and 3.0.
+pub fn packing_radius(e: Element) -> f64 {
+    let full = match e {
+        Element::H => 1.0,
+        Element::C => 1.5,
+        other => panic!("an alkane has no {other:?}"),
+    };
+    PACKING_SCALE * full * ANGSTROM
+}
+
+/// **What the packer can reach without turning a molecule**, as a fraction of the full radii:
+/// measured on C-1b's 112 decanes at 0.7255 g/cm³, [`pack`] without its random kicks cleared every
+/// overlap at 0.8 for 5 of 16 seeds in 5 000 iterations and at 0.75 for 13; at 0.85 the start's seed
+/// was left at 0.95 of the radii after 20 000; and growing the radii in stages, 0.5 to 0.8, jammed
+/// worse (0.90 and 0.88 on the first two seeds). With the kicks, 0.8 clears for 15 of 16 seeds in
+/// 20 000 iterations, the start's own in 267 with none. Rigid conformers in fixed, random
+/// orientations jam short of a liquid's own closest contacts. What is left is strain the first
+/// stage takes out: GAFF's `hc`–`hc` at 1.6 Å is +25 kcal/mol, and in the first 0.4 ps at 0.5 fs the
+/// box's `U/N` measured 65.6 → 17.7 kcal/mol, with the temperature at 298 K from 0.1 ps.
+pub const PACKING_SCALE: f64 = 0.8;
+
+/// **The trans probability of each C–C–C–C dihedral of a start's conformer**: 0.75, between the
+/// 0.825 C-1's decane reached at 298.15 K and a melt's lower value, each gauche ±120° from trans
+/// with equal probability.
+pub const START_TRANS: f64 = 0.75;
+
+/// **How far apart two atoms of one molecule more than three bonds apart must be in a start's
+/// conformer**, metres. Measured on the dictionary's decane turned rigidly: one gauche brings two
+/// hydrogens five bonds apart to 1.87 Å, and `g⁺g⁻` to 0.72 Å, so 1.8 Å keeps every single gauche
+/// and refuses the pentane clash. 2.0 Å refused every gauche, and left every chain all-trans.
+pub const SELF_CLEARANCE: f64 = 1.8 * ANGSTROM;
+
+/// The number of bonds between each pair of atoms, by breadth-first search.
+fn bond_distances(n: usize, bonds: &[[usize; 2]]) -> Vec<Vec<usize>> {
+    let adj = adjacency(n, bonds);
+    (0..n)
+        .map(|i| {
+            let mut d = vec![usize::MAX; n];
+            d[i] = 0;
+            let mut queue = std::collections::VecDeque::from([i]);
+            while let Some(a) = queue.pop_front() {
+                for &b in &adj[a] {
+                    if d[b] == usize::MAX {
+                        d[b] = d[a] + 1;
+                        queue.push_back(b);
+                    }
+                }
+            }
+            d
+        })
+        .collect()
+}
+
+/// The atoms on `b`'s side of the bond `a`–`b`, `b` included.
+fn beyond(adj: &[Vec<usize>], a: usize, b: usize) -> Vec<usize> {
+    let mut seen = vec![false; adj.len()];
+    seen[a] = true;
+    seen[b] = true;
+    let mut stack = vec![b];
+    let mut side = vec![b];
+    while let Some(x) = stack.pop() {
+        for &y in &adj[x] {
+            if !seen[y] {
+                seen[y] = true;
+                stack.push(y);
+                side.push(y);
+            }
+        }
+    }
+    side
+}
+
+/// A conformer drawn for a start: positions about the centre of mass (metres), in the molecule's
+/// frame, and how many of its dihedrals are gauche.
+pub struct Conformer {
+    pub at: Vec<[f64; 3]>,
+    pub gauche: usize,
+}
+
+impl Alkane {
+    /// **A conformer with random gauche defects**: from the relaxed all-trans conformer, each of the
+    /// `n − 3` C–C–C–C dihedrals left trans with probability `p_trans` and otherwise turned by +120°
+    /// or −120° — the whole of the chain beyond its middle bond rotated rigidly about that bond, so
+    /// that every bond length and angle is the relaxed conformer's to rounding, and every held X–H
+    /// stays at its length. Drawn again, from the same stream, while two atoms more than three bonds
+    /// apart are nearer than [`SELF_CLEARANCE`] (`g⁺g⁻`'s clash). Returned about its centre of mass.
+    ///
+    /// # Panics
+    ///
+    /// If a thousand draws all clash.
+    pub fn conformer(&self, rng: &mut Rng, p_trans: f64) -> Conformer {
+        let o = &self.molecule;
+        let n = o.at.len();
+        let bonds: Vec<[usize; 2]> = o.component.bonds().iter().map(|b| b.atoms).collect();
+        let adj = adjacency(n, &bonds);
+        let apart = bond_distances(n, &bonds);
+        let sides: Vec<(usize, usize, Vec<usize>)> = (1..self.carbons.len() - 2)
+            .map(|k| {
+                let (a, b) = (self.carbons[k], self.carbons[k + 1]);
+                (a, b, beyond(&adj, a, b))
+            })
+            .collect();
+        for _ in 0..1000 {
+            let mut at = o.at.clone();
+            let mut gauche = 0;
+            for (a, b, side) in &sides {
+                let u = rng.unit();
+                if u < p_trans {
+                    continue;
+                }
+                let sign = if u < 0.5 * (1.0 + p_trans) { 1.0 } else { -1.0 };
+                let r = about(unit(sub(at[*b], at[*a])), sign * 2.0 * PI / 3.0);
+                let pivot = at[*b];
+                for &i in side {
+                    let d = rotate(&r, sub(at[i], pivot));
+                    at[i] = [pivot[0] + d[0], pivot[1] + d[1], pivot[2] + d[2]];
+                }
+                gauche += 1;
+            }
+            let clash = (0..n).any(|i| {
+                (i + 1..n).any(|j| {
+                    let d = sub(at[i], at[j]);
+                    apart[i][j] > 3 && dot(d, d) < SELF_CLEARANCE * SELF_CLEARANCE
+                })
+            });
+            if clash {
+                continue;
+            }
+            let total = o.mass();
+            let com = [0, 1, 2]
+                .map(|k| at.iter().zip(&o.masses).map(|(p, m)| m * p[k]).sum::<f64>() / total);
+            return Conformer {
+                at: at.iter().map(|p| sub(*p, com)).collect(),
+                gauche,
+            };
+        }
+        panic!("a thousand conformers all clash");
+    }
+}
+
+/// What [`pack`] did: the positions and centres (metres), its iterations and evaluations, how many
+/// times its pair list was built, the overlap penalty before and after (Å⁴), and the worst pair's
+/// distance over the sum of its radii — at least one when it succeeded.
+pub struct Packed {
+    pub at: Vec<[f64; 3]>,
+    pub centres: Vec<[f64; 3]>,
+    pub iterations: usize,
+    pub evaluations: usize,
+    pub lists: usize,
+    /// How many times it was jammed and moved the overlapping molecules at random.
+    pub kicks: usize,
+    pub penalty: [f64; 2],
+    pub worst: f64,
+}
+
+/// How far past the radii [`pack`] pushes, as a factor: it minimises the overlap at `1.1` of every
+/// pair's sum and stops when none is nearer than the sum itself.
+pub const PACKING_MARGIN: f64 = 1.1;
+
+/// The pair list's skin, Å: pairs within the longest reach plus this are listed, and the list is
+/// built again once a molecule has moved half of it.
+const PACKING_SKIN: f64 = 1.0;
+
+/// How many iterations [`pack`] descends before it calls itself jammed and moves every molecule in
+/// an overlap by a random step.
+const PACKING_ROUND: usize = 300;
+
+/// The random step's largest component, Å.
+const PACKING_KICK: f64 = 1.0;
+
+/// How many past steps [`pack`]'s L-BFGS keeps.
+const PACKING_MEMORY: usize = 8;
+
+/// The furthest [`pack`] moves any centre in one step, Å.
+const PACKING_STRIDE: f64 = 0.5;
+
+/// **Every pair of atoms in different molecules within `reach` by minimum image**, `i < j`, by a
+/// cell list of cells at least `reach` across. Å.
+fn pairs_within(x: &[[f64; 3]], owner: &[usize], l: [f64; 3], reach: f64) -> Vec<[usize; 2]> {
+    let nc = l.map(|e| ((e / reach).floor() as usize).max(3));
+    let cell_of = |p: [f64; 3]| {
+        [0, 1, 2].map(|k| {
+            let w = p[k] - l[k] * (p[k] / l[k]).floor();
+            ((w / l[k] * nc[k] as f64) as usize).min(nc[k] - 1)
+        })
+    };
+    let index = |c: [usize; 3]| (c[0] * nc[1] + c[1]) * nc[2] + c[2];
+    let mut cells = vec![Vec::new(); nc[0] * nc[1] * nc[2]];
+    let home: Vec<[usize; 3]> = x.iter().map(|p| cell_of(*p)).collect();
+    for (i, c) in home.iter().enumerate() {
+        cells[index(*c)].push(i);
+    }
+    let mut pairs = Vec::new();
+    for i in 0..x.len() {
+        let c = home[i];
+        for dx in [nc[0] - 1, 0, 1] {
+            for dy in [nc[1] - 1, 0, 1] {
+                for dz in [nc[2] - 1, 0, 1] {
+                    let n = [
+                        (c[0] + dx) % nc[0],
+                        (c[1] + dy) % nc[1],
+                        (c[2] + dz) % nc[2],
+                    ];
+                    for &j in &cells[index(n)] {
+                        if j <= i || owner[j] == owner[i] {
+                            continue;
+                        }
+                        let d = minimum_image(sub(x[i], x[j]), l);
+                        if dot(d, d) < reach * reach {
+                            pairs.push([i, j]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pairs
+}
+
+/// `d − L round(d/L)` per axis.
+fn minimum_image(mut d: [f64; 3], l: [f64; 3]) -> [f64; 3] {
+    for k in 0..3 {
+        d[k] -= l[k] * (d[k] / l[k]).round();
+    }
+    d
+}
+
+/// **The overlap penalty and its gradient** over `pairs`, Å units: `Σ (t² − r²)²` over every pair
+/// nearer than `t = PACKING_MARGIN (ρ_i + ρ_j)`, by minimum image — Packmol's objective (L.
+/// Martínez et al., *J. Comput. Chem.* **30**, 2157 (2009)) — and the smallest `r / (ρ_i + ρ_j)`
+/// among those pairs (infinite when none).
+fn overlap(
+    x: &[[f64; 3]],
+    pairs: &[[usize; 2]],
+    rho: &[f64],
+    l: [f64; 3],
+) -> (f64, Vec<[f64; 3]>, f64) {
+    let mut f = 0.0;
+    let mut g = vec![[0.0; 3]; x.len()];
+    let mut worst = f64::INFINITY;
+    for &[i, j] in pairs {
+        let d = minimum_image(sub(x[i], x[j]), l);
+        let r2 = dot(d, d);
+        let sum = rho[i] + rho[j];
+        let t = PACKING_MARGIN * sum;
+        if r2 < t * t {
+            let e = t * t - r2;
+            f += e * e;
+            for k in 0..3 {
+                g[i][k] -= 4.0 * e * d[k];
+                g[j][k] += 4.0 * e * d[k];
+            }
+            worst = worst.min(r2.sqrt() / sum);
+        }
+    }
+    (f, g, worst)
+}
+
+/// **Rigid molecules moved apart, never turned, until no two atoms overlap**: molecule `m`'s atoms
+/// are `centres[m] + rotations[m] bodies[m][i]`, and only the centres move, so every molecule keeps
+/// the orientation it was drawn with. L-BFGS on [`overlap`]'s penalty in the centres, whose
+/// gradient is each molecule's atoms' summed, with a backtracking (Armijo) line search, no centre
+/// moved more than [`PACKING_STRIDE`] a step, and a pair list rebuilt once a molecule has moved half
+/// [`PACKING_SKIN`]. Molecules with `fixed[m]` do not move. **Jammed** — [`PACKING_ROUND`]
+/// iterations without clearing, or a line search that finds no lower penalty along steepest descent
+/// — every molecule in an overlap is moved by a step of up to [`PACKING_KICK`] along each axis, drawn
+/// from `Rng::for_index(seed, kick × molecules + molecule)`, and the descent starts again.
+/// Deterministic: every draw indexed, and every sum in one order. Stops when the worst pair is at
+/// its radii's sum, or after `max_iterations`.
+///
+/// **Why the molecules are not turned**: measured on C-1b's 112 decanes, a packer that also turned
+/// them by the gradient's torque — from the lattice sites, at full radii — took the nematic order of
+/// uniformly drawn orientations to 0.55; and from a box first packed without turning at 0.6 of the
+/// radii, to 0.24. Rods pushed apart at a liquid's density line up, so turning undoes the start's
+/// point.
+#[allow(clippy::too_many_arguments)]
+pub fn pack(
+    bodies: &[Vec<[f64; 3]>],
+    radii: &[Vec<f64>],
+    centres: Vec<[f64; 3]>,
+    rotations: &[Rotation],
+    fixed: &[bool],
+    cell: &PeriodicBox,
+    seed: u64,
+    max_iterations: usize,
+) -> Packed {
+    let a = ANGSTROM;
+    let l = cell.lengths().map(|x| x / a);
+    let mols = bodies.len();
+    let owner: Vec<usize> = bodies
+        .iter()
+        .enumerate()
+        .flat_map(|(m, b)| (0..b.len()).map(move |_| m))
+        .collect();
+    let rho: Vec<f64> = radii.iter().flatten().map(|r| r / a).collect();
+    // Each molecule's atoms about its centre, turned once and for all.
+    let arms: Vec<Vec<[f64; 3]>> = bodies
+        .iter()
+        .zip(rotations)
+        .map(|(b, r)| b.iter().map(|p| rotate(r, p.map(|x| x / a))).collect())
+        .collect();
+    let place = |c: &[f64]| -> Vec<[f64; 3]> {
+        arms.iter()
+            .enumerate()
+            .flat_map(|(m, b)| {
+                b.iter()
+                    .map(move |p| [c[3 * m] + p[0], c[3 * m + 1] + p[1], c[3 * m + 2] + p[2]])
+            })
+            .collect()
+    };
+    let reach = PACKING_MARGIN * 2.0 * rho.iter().fold(0.0f64, |m, r| m.max(*r)) + PACKING_SKIN;
+    // The rigid gradient: each free molecule's atoms' summed.
+    let gather = |g: &[[f64; 3]]| -> Vec<f64> {
+        let mut out = vec![0.0; 3 * mols];
+        for (i, gi) in g.iter().enumerate() {
+            let m = owner[i];
+            if !fixed[m] {
+                for k in 0..3 {
+                    out[3 * m + k] += gi[k];
+                }
+            }
+        }
+        out
+    };
+    let mut c: Vec<f64> = centres.iter().flat_map(|p| p.map(|x| x / a)).collect();
+    let mut x = place(&c);
+    let mut listed_at = c.clone();
+    let mut pairs = pairs_within(&x, &owner, l, reach);
+    let mut lists = 1;
+    let (mut f, g0, mut worst) = overlap(&x, &pairs, &rho, l);
+    let mut g = gather(&g0);
+    let start = f;
+    let mut evaluations = 1;
+    let mut iterations = 0;
+    let mut history: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
+    let vdot = |u: &[f64], v: &[f64]| u.iter().zip(v).map(|(p, q)| p * q).sum::<f64>();
+    let (mut kicks, mut since_kick) = (0usize, 0usize);
+    while worst < 1.0 && iterations < max_iterations {
+        if since_kick >= PACKING_ROUND {
+            // Jammed: every molecule in an overlap moved by a random step and the descent
+            // started again. Packmol's `movebad`, in spirit.
+            let mut bad = vec![false; mols];
+            for &[i, j] in &pairs {
+                let e = minimum_image(sub(x[i], x[j]), l);
+                let r = dot(e, e).sqrt();
+                if r < rho[i] + rho[j] {
+                    bad[owner[i]] = true;
+                    bad[owner[j]] = true;
+                }
+            }
+            for m in (0..mols).filter(|&m| bad[m] && !fixed[m]) {
+                let mut rng = Rng::for_index(seed, (kicks * mols + m) as u64);
+                for k in 0..3 {
+                    c[3 * m + k] += PACKING_KICK * (2.0 * rng.unit() - 1.0);
+                }
+            }
+            x = place(&c);
+            pairs = pairs_within(&x, &owner, l, reach);
+            listed_at = c.clone();
+            lists += 1;
+            let (f2, g2, worst2) = overlap(&x, &pairs, &rho, l);
+            evaluations += 1;
+            f = f2;
+            g = gather(&g2);
+            worst = worst2;
+            history.clear();
+            kicks += 1;
+            since_kick = 0;
+            continue;
+        }
+        iterations += 1;
+        since_kick += 1;
+        // The two-loop recursion.
+        let mut q = g.clone();
+        let mut alphas = Vec::with_capacity(history.len());
+        for (s, y) in history.iter().rev() {
+            let rho_k = 1.0 / vdot(y, s);
+            let alpha = rho_k * vdot(s, &q);
+            for (qi, yi) in q.iter_mut().zip(y) {
+                *qi -= alpha * yi;
+            }
+            alphas.push((rho_k, alpha));
+        }
+        let scale = match history.last() {
+            Some((s, y)) => vdot(s, y) / vdot(y, y),
+            None => {
+                let most = (0..mols)
+                    .map(|m| vdot(&g[3 * m..3 * m + 3], &g[3 * m..3 * m + 3]).sqrt())
+                    .fold(0.0f64, f64::max);
+                0.1 / most
+            }
+        };
+        for qi in q.iter_mut() {
+            *qi *= scale;
+        }
+        for ((s, y), (rho_k, alpha)) in history.iter().zip(alphas.iter().rev()) {
+            let beta = rho_k * vdot(y, &q);
+            for (qi, si) in q.iter_mut().zip(s) {
+                *qi += (alpha - beta) * si;
+            }
+        }
+        let mut d: Vec<f64> = q.iter().map(|v| -v).collect();
+        if vdot(&d, &g) >= 0.0 {
+            history.clear();
+            d = g.iter().map(|v| -v * scale.abs()).collect();
+        }
+        let longest = (0..mols)
+            .map(|m| vdot(&d[3 * m..3 * m + 3], &d[3 * m..3 * m + 3]).sqrt())
+            .fold(0.0f64, f64::max);
+        if longest > PACKING_STRIDE {
+            for v in d.iter_mut() {
+                *v *= PACKING_STRIDE / longest;
+            }
+        }
+        let slope = vdot(&d, &g);
+        let mut t = 1.0;
+        let mut accepted = None;
+        while t > 1e-12 {
+            let c2: Vec<f64> = c.iter().zip(&d).map(|(p, v)| p + t * v).collect();
+            let moved = (0..mols)
+                .map(|m| {
+                    let e = [0, 1, 2].map(|k| c2[3 * m + k] - listed_at[3 * m + k]);
+                    dot(e, e).sqrt()
+                })
+                .fold(0.0f64, f64::max);
+            let x2 = place(&c2);
+            if moved > 0.5 * PACKING_SKIN {
+                pairs = pairs_within(&x2, &owner, l, reach);
+                listed_at = c2.clone();
+                lists += 1;
+            }
+            let (f2, g2, worst2) = overlap(&x2, &pairs, &rho, l);
+            evaluations += 1;
+            if f2 <= f + 1e-4 * t * slope {
+                accepted = Some((c2, x2, f2, gather(&g2), worst2));
+                break;
+            }
+            t *= 0.5;
+        }
+        let Some((c2, x2, f2, g2, worst2)) = accepted else {
+            if history.is_empty() {
+                since_kick = PACKING_ROUND;
+            }
+            history.clear();
+            continue;
+        };
+        let s: Vec<f64> = c2.iter().zip(&c).map(|(p, q)| p - q).collect();
+        let y: Vec<f64> = g2.iter().zip(&g).map(|(p, q)| p - q).collect();
+        if vdot(&s, &y) > 0.0 {
+            history.push((s, y));
+            if history.len() > PACKING_MEMORY {
+                history.remove(0);
+            }
+        }
+        c = c2;
+        x = x2;
+        f = f2;
+        g = g2;
+        worst = worst2;
+    }
+    Packed {
+        at: x.iter().map(|p| p.map(|v| v * a)).collect(),
+        centres: (0..mols)
+            .map(|m| [c[3 * m] * a, c[3 * m + 1] * a, c[3 * m + 2] * a])
+            .collect(),
+        iterations,
+        evaluations,
+        lists,
+        kicks,
+        penalty: [start, f],
+        worst,
+    }
+}
+
+/// **The worst contact by brute force over the 27 images**: the smallest `r / (ρ_i + ρ_j)`, radii
+/// `radii`, over every pair of atoms in different molecules at each of the 27 shifts
+/// `n ∈ {−1, 0, 1}³`, and every atom with its own molecule's at the 26 that are not zero.
+/// Independent of [`pack`]'s cell list and minimum image. Returns the ratio and the two atoms.
+///
+/// **The positions are taken as they are, each molecule whole**, not wrapped atom by atom: a
+/// molecule across a face would otherwise meet itself at a shift that is not an image, which is
+/// what `closest_contact` would do here, its lattice's molecules each lying inside the box. So
+/// that the 27 hold every nearest image, every atom must lie within a quarter-edge of the box: then
+/// each difference is under 1.5 edges, and its nearest image is one of the 27.
+///
+/// # Panics
+///
+/// If an atom lies further than a quarter of an edge outside the box.
+pub fn worst_contact(
+    at: &[[f64; 3]],
+    molecules: &[Range<usize>],
+    radii: &[f64],
+    cell: &PeriodicBox,
+) -> (f64, usize, usize) {
+    let l = cell.lengths();
+    for p in at {
+        for k in 0..3 {
+            assert!(
+                p[k] >= -0.25 * l[k] && p[k] < 1.25 * l[k],
+                "an atom at {p:?} is past a quarter-edge outside the box"
+            );
+        }
+    }
+    let w = at;
+    let mut owner = vec![usize::MAX; at.len()];
+    for (m, r) in molecules.iter().enumerate() {
+        for i in r.clone() {
+            owner[i] = m;
+        }
+    }
+    assert!(
+        owner.iter().all(|&m| m != usize::MAX),
+        "every atom is in a molecule"
+    );
+    let mut best = (f64::INFINITY, 0, 0);
+    for i in 0..w.len() {
+        for j in i..w.len() {
+            let same = owner[i] == owner[j];
+            let d = sub(w[i], w[j]);
+            let s = radii[i] + radii[j];
+            for nx in -1i32..=1 {
+                for ny in -1i32..=1 {
+                    for nz in -1i32..=1 {
+                        if same && nx == 0 && ny == 0 && nz == 0 {
+                            continue;
+                        }
+                        let e = [
+                            d[0] + nx as f64 * l[0],
+                            d[1] + ny as f64 * l[1],
+                            d[2] + nz as f64 * l[2],
+                        ];
+                        let ratio = dot(e, e).sqrt() / s;
+                        if ratio < best.0 {
+                            best = (ratio, i, j);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+/// What [`isotropic`] built: the box, and how — each molecule's conformer about its centre of mass,
+/// its gauche count and the rotation drawn for it, and the packer's report.
+pub struct Start {
+    pub liquid: Liquid,
+    pub bodies: Vec<Vec<[f64; 3]>>,
+    pub rotations: Vec<Rotation>,
+    pub gauche: Vec<usize>,
+    pub packed: Packed,
+    /// Every atom's packing radius.
+    pub radii: Vec<f64>,
+}
+
+/// **An isotropic start**: `counts` molecules of alkane `a` in [`Liquid::cell_of`]'s box at
+/// `density` — C-1's box, so the density is exact to rounding as there — each molecule a
+/// [`Alkane::conformer`] at `p_trans` turned by a [`uniform_rotation`], both drawn from
+/// `Rng::for_index(seed, molecule)`, its centre of mass first at its lattice site; then [`pack`]ed
+/// until no two atoms overlap, and each centre wrapped into the box. Ewald at `cutoff` and
+/// `accuracy`, UFF's non-bonded terms until [`with_gaff`] puts GAFF's on.
+///
+/// # Panics
+///
+/// If the packer does not clear every overlap in `max_iterations`.
+#[allow(clippy::too_many_arguments)]
+pub fn isotropic(
+    a: &Alkane,
+    counts: [usize; 3],
+    density: f64,
+    seed: u64,
+    p_trans: f64,
+    cutoff: f64,
+    accuracy: f64,
+    max_iterations: usize,
+) -> Start {
+    let o = &a.molecule;
+    let (cell, site, gap) = Liquid::cell_of(o, counts, density);
+    let mols = counts[0] * counts[1] * counts[2];
+    let one: Vec<f64> = o
+        .component
+        .atoms()
+        .iter()
+        .map(|x| packing_radius(x.element))
+        .collect();
+    let (mut bodies, mut centres, mut rotations, mut gauche) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for i in 0..counts[0] {
+        for j in 0..counts[1] {
+            for k in 0..counts[2] {
+                let index = ((i * counts[1] + j) * counts[2] + k) as u64;
+                let mut rng = Rng::for_index(seed, index);
+                let c = a.conformer(&mut rng, p_trans);
+                rotations.push(uniform_rotation(&mut rng));
+                bodies.push(c.at);
+                gauche.push(c.gauche);
+                centres.push([
+                    (i as f64 + 0.5) * site[0],
+                    (j as f64 + 0.5) * site[1],
+                    (k as f64 + 0.5) * site[2],
+                ]);
+            }
+        }
+    }
+    let radii = vec![one.clone(); mols];
+    let packed = pack(
+        &bodies,
+        &radii,
+        centres,
+        &rotations,
+        &vec![false; mols],
+        &cell,
+        seed ^ 0x9AC4,
+        max_iterations,
+    );
+    assert!(
+        packed.worst >= 1.0,
+        "the packer left an overlap at {} of the radii after {} iterations",
+        packed.worst,
+        packed.iterations
+    );
+    // Each molecule moved by whole edges so that its centre of mass is in the box.
+    let n = o.at.len();
+    let mut at = packed.at.clone();
+    let mut molecules = Vec::new();
+    for m in 0..mols {
+        let r = m * n..(m + 1) * n;
+        let total = o.mass();
+        let com = [0, 1, 2].map(|k| {
+            r.clone()
+                .map(|i| o.masses[i - m * n] * at[i][k])
+                .sum::<f64>()
+                / total
+        });
+        let shift = sub(cell.wrap(com), com);
+        for i in r.clone() {
+            at[i] = [
+                at[i][0] + shift[0],
+                at[i][1] + shift[1],
+                at[i][2] + shift[2],
+            ];
+        }
+        molecules.push(r);
+    }
+    let parts: Vec<&Component> = (0..mols).map(|_| &o.component).collect();
+    let component = joined(&parts);
+    let types: Vec<_> = (0..mols).flat_map(|_| o.types.iter().cloned()).collect();
+    let charges: Vec<f64> = (0..mols).flat_map(|_| o.charges.iter().copied()).collect();
+    let masses: Vec<f64> = (0..mols).flat_map(|_| o.masses.iter().copied()).collect();
+    let p = EwaldParameters::for_accuracy(&cell, cutoff, accuracy);
+    let field = PeriodicForceField::new(&component, &types, cell, p)
+        .expect("alkanes in their box")
+        .with_charges(charges.clone());
+    Start {
+        liquid: Liquid {
+            component,
+            types,
+            charges,
+            field,
+            at,
+            masses,
+            molecules,
+            solute: 0,
+            octanols: mols,
+            site,
+            gap,
+        },
+        bodies,
+        rotations,
+        gauche,
+        packed,
+        radii: radii.concat(),
+    }
 }
