@@ -4994,6 +4994,115 @@ protects nothing.
     staged water. Experiment is 2.13, so both are still within their error, now with an error
     that has been measured rather than quoted.
 
+- **Step C-2, benzene's log P(decane/water): benzene decoupled from C-1b's isotropic n-decane —
+  written, costed, not run.** New `tests/benzene_partitioned_into_decane.rs`, and
+  `tests/partition/`, which holds 4c-2's machinery moved out of
+  `benzene_partitioned_into_octanol.rs` unchanged so that both files run through it: the model,
+  the boxes, the melts, the digests, the headed and resumable windows, the lock and the report.
+  Both are in `Cargo.toml`'s `exclude` with the other GAFF-carrying files. Nothing in `src/`
+  changed.
+  - **The model.** Benzene is the octanol and water legs' to the bit: GAFF's `ca`/`ha` by
+    Lorentz–Berthelot, GAFF's 1-4 scales, FreeSolv's AM1-BCC charges, on UFF's bonded terms. The
+    decane is C-1's: GAFF's `c3`/`hc` and the AM1-BCC charges transferred by position.
+  - **The water leg is read back, not rerun**: 4c-2's `octanol/water/start.txt` and its thirteen
+    `long/` windows through their own headers, so a window under another model, start or seed is
+    refused by name and a missing one is refused rather than run. Nothing is written there. Read
+    in release by `the_water_leg_read_back`, which writes nothing: BAR +1.130 ± 0.144, TI +1.298,
+    halves +1.273 and +0.985, lowest overlap 0.241, which is 4c-2's own log to the digit. The
+    directory listing was unchanged before and after.
+  - **The box**: C-1b's start exactly (112 sites, seed `0xC1B`, 0.7255 g/cm³), benzene at the
+    centre, and every decane nearer than the packing radii' sum removed. One was removed, leaving
+    3 564 atoms. **The density is then made up by shrinking the box**: `V' = N m/ρ + v_B` with
+    4c-2's `v_B` of 89 cm³/mol, every edge and every centre scaled by `(V'/V)^(1/3)` = 0.998372,
+    the molecules rigid and unturned, and the packer run again with benzene held (18 iterations).
+    The decane is then at 0.7255000000 g/cm³ in the volume benzene leaves. Uncompensated it would
+    be 0.7219, 0.49% light.
+    - **4c-2's fixed point does not exist here.** Rebuilding the isotropic start at each new
+      density repacks it from scratch, and measured on the production box the number removed
+      flipped and never settled in ten rounds (the first draft of this file panicked on exactly
+      that). Shrinking decides the number removed once, on C-1b's start.
+  - **The melt**: 1 ps of strain out at 0.5 fs, 5 ps at 600 K, and **200 ps at 298.15 K**. `U`,
+    `P`, the nematic order and the trans fraction are recorded every 0.1 ps into `melt.txt` beside
+    `start.txt`, headed and digested, and logged in 2.5 ps blocks.
+  - **The settle's gate.** The windows run only if the settle passes, and the gate is read back
+    from `melt.txt` each time the start is used, so a rerun cannot step past a failure. It is taken
+    over the settle less its first 20 ps (C-1b's `U` settled in about 20):
+    - the halves of `U` and of `P` each agree within 3 of their combined τ-corrected errors. Three
+      is the line C-1b's own reading drew: its `U` halves 1.8 σ apart were called settled, and its
+      trans fraction's 3.2 σ not;
+    - the order's halves agree the same way, and a rising order is refused under that name;
+    - the order's second half is at most the isotropic band plus 0.04, about 0.20 for 111 decanes.
+      That passes a liquid like C-1b's (0.157 ± 0.007) with six of its errors to spare, and
+      refuses residual alignment: Maier–Saupe's order at the isotropic–nematic transition is
+      0.43, and C-1's aligned decane was 0.57;
+    - the trans fraction is reported and not gated, since C-1b found it still rising at 200 ps.
+  - **The windows**: 4c-2's schedule, insertion and `LONG` protocol (20 + 200 ps), with the
+    leg's own seed `0xC2_DEC` and melt seed `0xC2_E01`. **The decanes' order is recorded at every
+    sample** as a diagnostic: a `# observed` line beside the sample, through the new
+    `window_observed`, reported per window and asserted nowhere. A file read back must hold one
+    observation per sample. Octanol's windows carry none and are `window`'s to the byte.
+  - **What it prints**: the leg's table, BAR, TI, the halves, the lowest overlap and the order
+    per window, ΔG_solv,dec, and log P(decane/water) from the direct legs and with the staged
+    water's −0.82. The comparisons are n-hexadecane:water **2.14** (25 °C: log L¹⁶ 2.786, Abraham
+    descriptors from Stolov et al. 2014, plus log₁₀ K_aw with K_aw 0.2273 from the Henry's constant
+    in PubChem/HSDB, giving 2.143) and olive oil:saline **2.23** (37 °C, Gargas 1989). **No
+    measured value for decane itself was read.**
+
+  **Checked** (ten default tests, about 60 s together unoptimised, on twelve decane sites at
+  `r_c` 6.5 Å, 268 atoms, unless named):
+  - both models are what they say. Benzene's atoms are `ca`/`ha` with FreeSolv's charges and not
+    QEq's, and its digest of `[x, D]`, charges, mixing and 1-4 scales, and its own pairs' scales,
+    equal the octanol and water small boxes' built by `tests/partition/`'s own code. The decanes'
+    atoms are `c3`/`hc` as FreeSolv's decane file types them, each `[x, D]` GAFF's and each charge
+    the transferred one to the bit and not QEq's, every molecule neutral. Mixing is
+    Lorentz–Berthelot with GAFF's scales, on 21 + 81 per decane 1-4 pairs;
+  - in the production's box, the density 0.7255 within 10³ ε with benzene in, the box shrunk, and
+    0.49% off without the compensation. Nothing overlaps over the 27 images, benzene included
+    (worst 1.00018 of the radii). Every bond is its own molecule's to 7 × 10⁻¹⁵, and every
+    molecule is whole and in order;
+  - the end states are the systems they say, to 10⁻¹² in energy and every force; `∂U/∂λ_e` and
+    `∂U/∂λ_v` match central differences at four states; every state of `couplings` is its own
+    `coupling` to the bit; and the reciprocal energy is `rest + λ_e · cross`, classical and mesh;
+  - **the settle's gate on closed cases**: white noise passes; `U` drifting is refused (12.6 σ),
+    `P` drifting (10.1 σ), the order rising (4.3 σ, "rising"), the order flat at 0.22 ("above the
+    band"), and a settle too short to judge; a drifting trans fraction passes;
+  - a killed leg resumes to the same bits: windows, their orders and the melt's rows. It refuses
+    by name another melt seed, another window seed, a start one ulp away, the same start under
+    another model (the decanes' charges QEq's), a window with no order, and a `start.txt` or
+    `melt.txt` cut short;
+  - this leg's 34 seeds are apart from all 96 of 4c-2's.
+
+  **Sabotaged**, each applied by script in binary mode to an anchor counted once, from copies
+  named for the run, and restored by `cp`, `touch` and SHA-256 (`39f5407c…` and `16feeb43…`
+  before and after):
+
+  | sabotage | caught by |
+  | --- | --- |
+  | the decanes' charges QEq's | the model (atom 12); the end states (decoupled); the resume, whose "another model" is then the same model |
+  | the field's mixing geometric | the model; the end states (coupled) |
+  | the density compensation dropped | the density (721.95 kg/m³) |
+  | the window header without the model digest | the resume, at the same start under another model |
+
+  **The cost**, `the_decane_leg_cost_measured`, release, one core, EcoQoS off and AboveNormal
+  priority from launch. It ran **32.5 ms a step** at 2 fs, the couplings at 29 states 2.2 ms, and a
+  melt record 29.5 ms. That gives **the melt 0.96 h, a window 0.99 h, and the leg 13.9 h at
+  thirteen windows** (17.8 h at seventeen). A first run with the throttle on measured 75.3 ms, as
+  C-1b's 77 did.
+
+  **Commands**, not run: `PANTOMETRY_DECANE_DIR=C:/pantometry-w4/decane
+  PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test --release --locked -p
+  pantometry-forcefield --test benzene_partitioned_into_decane the_decane_partition_measured --
+  --ignored --nocapture`. `the_water_leg_read_back` takes the octanol variable alone.
+
+  **Counts.** The crate's tests are 551, 67 of them ignored, so 484 run by default (538, 64 and
+  475 before): the new file's nine and three. `cargo package --list` holds neither new file nor
+  any other GAFF-carrying one, and no packaged file carries a GAFF number. **Not run**: the
+  production, the workspace suite and the whole gate. Run were `cargo fmt`, clippy on the crate's
+  every target with warnings denied, `cargo doc` with warnings denied, the 1.78 workspace build
+  (and the two partition test files compiled under 1.78), both wasm32 steps, the crate's suite in
+  debug, and `no_string_lost_its_line_continuation`. There is no `powi` or `powf` in the new
+  code.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
