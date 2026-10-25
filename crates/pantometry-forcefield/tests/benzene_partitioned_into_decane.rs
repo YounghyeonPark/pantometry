@@ -77,6 +77,31 @@
 //! The trans fraction is reported with its halves and not gated: C-1b found it still rising after
 //! 200 ps, and the brief gates the three above.
 //!
+//! # The settle failed, and is extended
+//!
+//! **Run 2026-10-25, the settle failed its gate**: over 1 800 records, 26.1–206.0 ps, `U/N`'s halves
+//! 0.32 σ apart and `P`'s 0.29 σ, but the order's 0.0737 ± 0.0047 and 0.1314 ± 0.0069 (τ 35 and 40
+//! samples), **6.96 σ apart, "rising"**; its second half was under the band's 0.1969. One reading,
+//! *a hypothesis and not a finding*: the order left 600 K fully random and relaxed up to the
+//! liquid's own orientational correlation, C-1b's 0.157.
+//!
+//! **What follows was registered before any of it was run, and is not to be changed after**
+//! ([`DECANE_EXTENSION`], [`extension_verdict`]):
+//!
+//! - **the settle continued 300 ps** at 298.15 K, 2 fs, its own 5 ps⁻¹ bath, from the melt's end
+//!   in `start.txt`. The melt kept its positions and not its velocities, so they are thermalised
+//!   afresh at 298.15 K from `window_seed(`[`EXTENSION_SEED`]`, 0)`, which also seeds the bath. The
+//!   same five columns every 0.1 ps, into `extension.txt`, the end into `extended.txt`, both headed
+//!   ([`extension_header`]: the stage, the seed, the start's digest and the melt's whole header)
+//!   and digested, and read back every time the start is used. `melt.txt` and `start.txt` are read
+//!   and never written;
+//! - **the gate on the extension's last 200 ps alone**, records 1 000 to 3 000, by
+//!   [`settle_verdict`]'s three criteria unchanged; a record of any other length is refused. The
+//!   gate over the whole extension is printed beside it and decides nothing;
+//! - if it passes, **the windows start from the extension's end**, whose digest is in every
+//!   window's header, so that no window from the melt's end can be read as one of these; if it
+//!   fails, the leg stops and nothing is retried with another window.
+//!
 //! # The windows
 //!
 //! 4c-2's: the 29 candidates, the thirteen windows of [`SCHEDULE`], a window inserted between any
@@ -87,8 +112,8 @@
 //! sample**, as a diagnostic: the end-to-end vectors' order is written beside each sample and
 //! reported per window, and nothing asserts it.
 //!
-//! Written under `PANTOMETRY_DECANE_DIR` (`start.txt`, `melt.txt`, `melt.log`, `long/`); nothing is
-//! written under `PANTOMETRY_OCTANOL_DIR`.
+//! Written under `PANTOMETRY_DECANE_DIR` (`start.txt`, `melt.txt`, `melt.log`, `extended.txt`,
+//! `extension.txt`, `extend.log`, `long/`); nothing is written under `PANTOMETRY_OCTANOL_DIR`.
 //!
 //! # Checks
 //!
@@ -97,8 +122,9 @@
 //! at its density with benzene in, and nothing overlaps, in the production's box; the end states are
 //! the systems they say; the λ derivatives are the whole energy's; every state of `couplings` is its
 //! own `coupling`; the decoupled reciprocal energy is the rest's plus `λ_e` times the cross term; the
-//! settle's gate on closed cases; and a killed leg resumes to the same bits and refuses another
-//! model, seed or start.
+//! settle's gate and the extension's on closed cases; the extension starts from the melt's end and
+//! the windows from the extension's; and a killed leg — in its extension or its windows — resumes to
+//! the same bits and refuses another model, seed or start.
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
@@ -158,6 +184,24 @@ const DECANE_MELT: [MeltStage; 3] = [
 
 /// How much of the settle the gate leaves out, picoseconds: C-1b's `U` settled in about 20 ps.
 const SETTLE_DISCARD: f64 = 20.0;
+
+/// **The settle continued, pre-registered after the first settle failed and before any of this was
+/// run**: 300 ps more at 298.15 K, 2 fs, in the settle's own 5 ps⁻¹ bath, from the melt's end.
+const DECANE_EXTENSION: [MeltStage; 1] = [stage(
+    "extend",
+    Lambda::COUPLED,
+    300.0,
+    2.0 * FS,
+    5e12,
+    KELVIN,
+)];
+
+/// The extension's seed: its bath and its fresh velocities are `window_seed(EXTENSION_SEED, 0)`.
+const EXTENSION_SEED: u64 = 0xC2_E02;
+
+/// **What of the extension the gate reads, picoseconds: its last 200**, records 1 000 to 3 000 at
+/// 0.1 ps. Pre-registered with the extension.
+const EXTENSION_GATED: f64 = 200.0;
 
 /// How far apart two halves may be, in their combined errors, and still agree: see the module
 /// documentation.
@@ -533,12 +577,41 @@ fn melted_decane(
     }
     let _lock = Lock::take(dir, "melt");
     let t = std::time::Instant::now();
-    let mut at = sys.built.clone();
+    let (at, rows) = integrate(sys, sys.melt, &sys.built, seed, watch, every, dir, "melt");
+    let partial = record_path.with_extension("partial");
+    std::fs::write(&partial, record_text(&want, &rows)).expect("the record");
+    std::fs::rename(&partial, &record_path).expect("rename");
+    write_positions(&start_path, &want, &at);
+    log(
+        dir,
+        "melt",
+        &format!("{} melted in {:.0} s", sys.name, t.elapsed().as_secs_f64()),
+    );
+    (at, rows)
+}
+
+/// **`stages` run from `from`**, each from the last: stage `k` bathed with `window_seed(seed, k)`
+/// and the velocities thermalised once, before the first, from `window_seed(seed, 0)`; every
+/// `every` seconds `U` per decane, `P`, `T`, the order and the trans fraction recorded, the time
+/// counted from zero; each stage's cost and the record in 2.5 ps blocks logged to `name.log`. The
+/// end positions and the record. The melt's and the extension's one loop.
+#[allow(clippy::too_many_arguments)]
+fn integrate(
+    sys: &System,
+    stages: &[MeltStage],
+    from: &[[f64; 3]],
+    seed: u64,
+    watch: &Watch,
+    every: f64,
+    dir: &std::path::Path,
+    name: &str,
+) -> (Vec<[f64; 3]>, Vec<MeltRow>) {
+    let mut at = from.to_vec();
     let mut md = sys.template.clone();
     let n = sys.solvent as f64;
     let mut rows: Vec<MeltRow> = Vec::new();
     let mut time = 0.0;
-    for (k, st) in sys.melt.iter().enumerate() {
+    for (k, st) in stages.iter().enumerate() {
         let s = pantometry_forcefield::free_energy::window_seed(seed, k);
         md = md.with_bath(Bath::Langevin {
             temperature: st.temperature,
@@ -576,7 +649,7 @@ fn melted_decane(
         let secs = t0.elapsed().as_secs_f64();
         log(
             dir,
-            "melt",
+            name,
             &format!(
                 "{} stage {k} ({}): {} ps at {} fs, {} K, γ {} /ps: {secs:.0} s, {:.1} ms a step",
                 sys.name,
@@ -592,9 +665,9 @@ fn melted_decane(
     assert!(rows.iter().all(|r| r.1.iter().all(|x| x.is_finite())));
     log(
         dir,
-        "melt",
+        name,
         &format!(
-            "{}: the melt in blocks of 2.5 ps\n| stage | t (ps) | U/N (kcal/mol) | P (bar) | T (K) | order | trans |\n| --- | --- | --- | --- | --- | --- | --- |",
+            "{}: the {name} in blocks of 2.5 ps\n| stage | t (ps) | U/N (kcal/mol) | P (bar) | T (K) | order | trans |\n| --- | --- | --- | --- | --- | --- | --- |",
             sys.name
         ),
     );
@@ -603,10 +676,10 @@ fn melted_decane(
         let m = |c: usize| block.iter().map(|r| r.1[c]).sum::<f64>() / block.len() as f64;
         log(
             dir,
-            "melt",
+            name,
             &format!(
                 "| {} | {:.1}–{:.1} | {:.4} | {:.0} | {:.1} | {:.4} | {:.4} |",
-                sys.melt[block[block.len() - 1].0].name,
+                stages[block[block.len() - 1].0].name,
                 block[0].1[0] - every * 1e12,
                 block[block.len() - 1].1[0],
                 m(1),
@@ -617,16 +690,157 @@ fn melted_decane(
             ),
         );
     }
+    (at, rows)
+}
+
+/// The stages as a header gives them: each one's `λ_e/λ_v/ps/dt/γ/T/name`, as [`melt_header`]'s.
+fn stages_text(stages: &[MeltStage]) -> String {
+    let st: Vec<String> = stages
+        .iter()
+        .map(|s| {
+            format!(
+                "{}/{}/{}/{}/{}/{}/{}",
+                exact(s.lambda.electrostatics),
+                exact(s.lambda.van_der_waals),
+                exact(s.picoseconds),
+                exact(s.dt),
+                exact(s.friction),
+                exact(s.temperature),
+                s.name.replace(' ', "_")
+            )
+        })
+        .collect();
+    st.join(",")
+}
+
+/// **The extension's header**: its stages, its seed, how often it records, the digest of the
+/// positions it starts from, and the whole header of the melt that left them. An extension of
+/// another melt, from other positions, at another seed or for another length is another header.
+fn extension_header(
+    sys: &System,
+    melt_header: &str,
+    from: &[[f64; 3]],
+    stages: &[MeltStage],
+    seed: u64,
+    every: f64,
+) -> String {
+    format!(
+        "# extended {} stages {} seed {seed:#x} record {} from {:016x} after {melt_header}",
+        sys.name,
+        stages_text(stages),
+        exact(every),
+        positions_digest(from)
+    )
+}
+
+/// **The settle continued**: `stages` from `from` — the melt's end, read back from `start.txt` —
+/// with velocities thermalised afresh from `window_seed(seed, 0)`, because the melt kept its
+/// positions and not its velocities. Read back from `extended.txt` and `extension.txt` in `dir`
+/// when a run wrote them under the same header ([`extension_header`]), a file extended differently
+/// or not whole refused by name; otherwise run now under a lock `extend`, logged to `extend.log`,
+/// and written atomically, the record first. Nothing the melt wrote is touched.
+#[allow(clippy::too_many_arguments)]
+fn extended_decane(
+    sys: &System,
+    dir: &std::path::Path,
+    melt_header: &str,
+    from: &[[f64; 3]],
+    stages: &[MeltStage],
+    seed: u64,
+    watch: &Watch,
+    every: f64,
+) -> (Vec<[f64; 3]>, Vec<MeltRow>) {
+    let start_path = dir.join("extended.txt");
+    let record_path = dir.join("extension.txt");
+    let want = extension_header(sys, melt_header, from, stages, seed, every);
+    if let Ok(text) = std::fs::read_to_string(&start_path) {
+        let (head, at) = parse_positions(&text).unwrap_or_else(|why| {
+            panic!(
+                "{} is not whole ({why}): remove it and extension.txt to extend again",
+                start_path.display()
+            )
+        });
+        assert_eq!(
+            head,
+            want,
+            "{} was extended differently: remove it, extension.txt and every window run from it, \
+             to extend again",
+            start_path.display()
+        );
+        assert_eq!(at.len(), sys.built.len());
+        let rows = std::fs::read_to_string(&record_path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| parse_record(&t, &want))
+            .unwrap_or_else(|why| {
+                panic!(
+                    "{} is not whole ({why}): remove extended.txt to extend again",
+                    record_path.display()
+                )
+            });
+        return (at, rows);
+    }
+    let _lock = Lock::take(dir, "extend");
+    let t = std::time::Instant::now();
+    let (at, rows) = integrate(sys, stages, from, seed, watch, every, dir, "extend");
     let partial = record_path.with_extension("partial");
     std::fs::write(&partial, record_text(&want, &rows)).expect("the record");
     std::fs::rename(&partial, &record_path).expect("rename");
     write_positions(&start_path, &want, &at);
     log(
         dir,
-        "melt",
-        &format!("{} melted in {:.0} s", sys.name, t.elapsed().as_secs_f64()),
+        "extend",
+        &format!(
+            "{} extended in {:.0} s",
+            sys.name,
+            t.elapsed().as_secs_f64()
+        ),
     );
     (at, rows)
+}
+
+/// Where the windows start from, and the records that put them there.
+struct Started {
+    /// The melt's end, `start.txt`: the failed settle's last positions.
+    melted: Vec<[f64; 3]>,
+    /// The melt's record, `melt.txt`.
+    melt: Vec<MeltRow>,
+    /// The extension's record, `extension.txt`.
+    extension: Vec<MeltRow>,
+    /// **The windows' start**: the extension's end, `extended.txt`.
+    start: Vec<[f64; 3]>,
+}
+
+/// **The leg's start**: the melt ([`melted_decane`]) and then its extension ([`extended_decane`])
+/// from the melt's end, under `dir`; the windows start from the extension's end. The production and
+/// the resume check both come here.
+#[allow(clippy::too_many_arguments)]
+fn decane_start(
+    sys: &System,
+    dir: &std::path::Path,
+    melt_seed: u64,
+    extension: &[MeltStage],
+    extension_seed: u64,
+    watch: &Watch,
+    every: f64,
+) -> Started {
+    let (melted, melt) = melted_decane(sys, dir, melt_seed, watch, every);
+    let head = decane_melt_header(sys, melt_seed, every);
+    let (start, extension) = extended_decane(
+        sys,
+        dir,
+        &head,
+        &melted,
+        extension,
+        extension_seed,
+        watch,
+        every,
+    );
+    Started {
+        melted,
+        melt,
+        extension,
+        start,
+    }
 }
 
 /// Two halves of `xs`: each one's estimate, and how far apart their means are in their combined
@@ -717,6 +931,25 @@ fn settle_verdict(
         lines.push(format!("  the settle FAILS: {}", failed.join("; ")));
         Err(lines)
     }
+}
+
+/// **The extension's pre-registered gate**: the record must be [`DECANE_EXTENSION`]'s whole length
+/// at `every` — refused by name when it is shorter, longer or not one stage — and then
+/// [`settle_verdict`]'s criteria, unchanged, over its last [`EXTENSION_GATED`] ps alone.
+fn extension_verdict(rows: &[MeltRow], every: f64, band: f64) -> Result<Vec<String>, Vec<String>> {
+    let st = &DECANE_EXTENSION[0];
+    let whole = (st.picoseconds * 1e-12 / every).round() as usize;
+    let gated = (EXTENSION_GATED * 1e-12 / every).round() as usize;
+    if rows.len() != whole || rows.iter().any(|r| r.0 != 0) {
+        return Err(vec![format!(
+            "the extension's record has {} records where its {} ps at {} ps make {whole}, one \
+             stage: not the record the gate was registered for",
+            rows.len(),
+            st.picoseconds,
+            every * 1e12
+        )]);
+    }
+    settle_verdict(rows, 0, whole - gated, band)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -839,26 +1072,69 @@ fn decane_partition_measured(tag: &str, base: Protocol) {
             model_digest(&sys.field)
         ),
     );
-    let (start, rows) = melted_decane(&sys, &root, DECANE_MELT_SEED, &watch, RECORD_EVERY);
+    let started = decane_start(
+        &sys,
+        &root,
+        DECANE_MELT_SEED,
+        &DECANE_EXTENSION,
+        EXTENSION_SEED,
+        &watch,
+        RECORD_EVERY,
+    );
     let discard = (SETTLE_DISCARD * 1e-12 / RECORD_EVERY).round() as usize;
-    let verdict = settle_verdict(&rows, sys.melt.len() - 1, discard, band);
+    let lines = match settle_verdict(&started.melt, sys.melt.len() - 1, discard, band) {
+        Ok(l) | Err(l) => l,
+    };
+    log(
+        &root,
+        tag,
+        "the first settle's gate, read back from melt.txt and reported: it failed, and the \
+         extension's gate decides",
+    );
+    for line in &lines {
+        log(&root, tag, line);
+    }
+    let lines = match settle_verdict(&started.extension, 0, 0, band) {
+        Ok(l) | Err(l) => l,
+    };
+    log(
+        &root,
+        tag,
+        "the extension's whole 300 ps under the same criteria, for information and not gated",
+    );
+    for line in &lines {
+        log(&root, tag, line);
+    }
+    let verdict = extension_verdict(&started.extension, RECORD_EVERY, band);
     let (lines, passed) = match verdict {
         Ok(l) => (l, true),
         Err(l) => (l, false),
     };
+    log(
+        &root,
+        tag,
+        "the extension's pre-registered gate, over its last 200 ps, read back from extension.txt",
+    );
     for line in &lines {
         log(&root, tag, line);
     }
     assert!(
         passed,
-        "the settle did not pass its gate, so no window runs: {}",
+        "the extension did not pass its pre-registered gate, so no window runs: {}",
         lines.join("\n")
     );
     let dir = root.join(tag);
     std::fs::create_dir_all(&dir).expect("the windows' directory");
     let p = decane_protocol(base);
     let kt = p.kt();
-    let leg = Leg::new(sys.name, &sys.decoupling, &sys.template, start, p, grid());
+    let leg = Leg::new(
+        sys.name,
+        &sys.decoupling,
+        &sys.template,
+        started.start,
+        p,
+        grid(),
+    );
     log(
         &dir,
         sys.name,
@@ -967,16 +1243,18 @@ fn decane_partition_measured(tag: &str, base: Protocol) {
     }
 }
 
-/// **Benzene's log P(decane/water) at W3's protocol** (release, one core; written, costed, not
-/// run). The water leg read back from 4c-2's run; the decane leg melted, gated, and thirteen
-/// windows of 20 + 200 ps ([`LONG`]), under `PANTOMETRY_DECANE_DIR` in `start.txt`, `melt.txt`
-/// and `long/`. About 14 h: 13.9 h at the 32.5 ms a step
+/// **Benzene's log P(decane/water) at W3's protocol** (release, one core). The water leg read
+/// back from 4c-2's run; the decane leg melted (`start.txt`, `melt.txt`: run 2026-10-25, and its
+/// settle failed its gate), the settle extended by 300 ps (`extended.txt`, `extension.txt`) and
+/// gated on the extension's last 200 ps, and thirteen windows of 20 + 200 ps ([`LONG`]) from the
+/// extension's end, in `long/`, all under `PANTOMETRY_DECANE_DIR`. About 15.3 h: the extension
+/// 1.4 h at the 33.7 ms a step the settle took, and the windows 13.9 h at the 32.5 ms a step
 /// [`the_decane_leg_cost_measured`] read. `PANTOMETRY_DECANE_DIR=C:/pantometry-w4/decane
 /// PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/octanol cargo test --release --locked -p
 /// pantometry-forcefield --test benzene_partitioned_into_decane the_decane_partition_measured --
 /// --ignored --nocapture`.
 #[test]
-#[ignore = "the decane leg melted and thirteen windows at W3's protocol: about 14 h with --release, not run"]
+#[ignore = "the decane leg melted, extended and thirteen windows at W3's protocol: about 15 h with --release"]
 fn the_decane_partition_measured() {
     decane_partition_measured("long", LONG);
 }
@@ -1061,14 +1339,12 @@ fn the_decane_leg_cost_measured() {
     let record = time(&|| {
         std::hint::black_box((pressure(&sys, &at), watch.trans(&at)));
     }) + order;
-    let melt: f64 = sys
-        .melt
-        .iter()
-        .map(|st| {
-            let n = (st.picoseconds * 1e-12 / st.dt).round();
-            n * step + (st.picoseconds * 1e-12 / RECORD_EVERY).round() * record
-        })
-        .sum();
+    let cost = |st: &MeltStage| {
+        let n = (st.picoseconds * 1e-12 / st.dt).round();
+        n * step + (st.picoseconds * 1e-12 / RECORD_EVERY).round() * record
+    };
+    let melt: f64 = sys.melt.iter().map(cost).sum();
+    let extension: f64 = DECANE_EXTENSION.iter().map(cost).sum();
     let p = decane_protocol(LONG);
     let window = p.steps_per_window() as f64 * step + p.samples as f64 * (couplings + order);
     println!(
@@ -1081,9 +1357,10 @@ fn the_decane_leg_cost_measured() {
         1e3 * record
     );
     println!(
-        "the melt {:.2} h; a window {:.2} h; 13 windows {:.1} h, 17 {:.1} h; the leg with its melt \
-         {:.1} h at thirteen, {:.1} h at seventeen",
+        "the melt {:.2} h; its extension {:.2} h; a window {:.2} h; 13 windows {:.1} h, 17 {:.1} h; \
+         the leg with its melt {:.1} h at thirteen, {:.1} h at seventeen",
         melt / 3600.0,
+        extension / 3600.0,
         window / 3600.0,
         13.0 * window / 3600.0,
         17.0 * window / 3600.0,
@@ -1693,6 +1970,92 @@ fn the_settle_gate_on_closed_cases() {
     assert!(short.join(" ").contains("too few"), "{short:?}");
 }
 
+/// **The extension's gate reads exactly its registered window**, records 1 000 to 3 000 of 3 000
+/// at 0.1 ps. White noise about constant `U` and `P`, with the order rising over the first 1 000
+/// from 0.07 to 0.15 — the first settle's shape — and flat at 0.15 after: **passes**, its line
+/// naming 2 000 records over 100.1–300.0 ps. The order flat for 1 000 and then rising from 0.12 to
+/// 0.18 is refused as rising. **The window's edges, exactly**: a `U` that is not a number at record
+/// 999 passes, and at record 1 000 or 2 999 fails, since a half's mean that holds it is not a
+/// number either. (A trend inside a half is no such probe: it lengthens that half's τ until its
+/// error covers it, and the ramp above gated whole is 1.8 σ.) A record of 2 999 or 3 001 records,
+/// a 200 ps one, or one whose first record is of another stage is refused as not the registered
+/// one.
+#[test]
+fn the_extension_gate_reads_its_registered_window() {
+    let band = 0.157;
+    let n = 3000;
+    let flat = [
+        (0.1, 0.1, 0.0),
+        (12.9, 0.0, 0.3),
+        (60.0, 0.0, 300.0),
+        (298.15, 0.0, 10.0),
+        (0.15, 0.0, 0.01),
+        (0.83, 0.0, 0.01),
+    ];
+    let rows = |order: &dyn Fn(usize) -> f64| -> Vec<MeltRow> {
+        synthetic(n, 0xE47, flat)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, mut r))| {
+                r[4] += order(i);
+                (0, r)
+            })
+            .collect()
+    };
+    let early = rows(&|i| {
+        if i < 1000 {
+            -0.08 * (1000 - i) as f64 / 1000.0
+        } else {
+            0.0
+        }
+    });
+    let ok = extension_verdict(&early, RECORD_EVERY, band)
+        .unwrap_or_else(|l| panic!("a settled last 200 ps refused:\n{}", l.join("\n")));
+    println!("{}", ok.join("\n"));
+    assert!(
+        ok[0].contains("over 2000 records, 100.1–300.0 ps"),
+        "{}",
+        ok[0]
+    );
+    let whole = match settle_verdict(&early, 0, 0, band) {
+        Ok(l) | Err(l) => l,
+    };
+    println!("gated whole, for information: {}", whole[3]);
+    for (record, passes) in [(999, true), (1000, false), (2999, false)] {
+        let mut poisoned = rows(&|_| 0.0);
+        poisoned[record].1[1] = f64::NAN;
+        let v = extension_verdict(&poisoned, RECORD_EVERY, band);
+        assert_eq!(v.is_ok(), passes, "a NaN at record {record}: {v:?}");
+    }
+    let late = rows(&|i| {
+        if i < 1000 {
+            -0.03
+        } else {
+            -0.03 + 0.06 * (i - 1000) as f64 / 2000.0
+        }
+    });
+    let why = extension_verdict(&late, RECORD_EVERY, band).expect_err("rising late");
+    assert!(why.join("\n").contains("the order is rising"), "{why:?}");
+    println!("rising late: {}", why.last().unwrap());
+    let flat_rows = rows(&|_| 0.0);
+    assert!(extension_verdict(&flat_rows, RECORD_EVERY, band).is_ok());
+    let mut other_stage = flat_rows.clone();
+    other_stage[0].0 = 1;
+    for (what, r) in [
+        ("2 999", flat_rows[..2999].to_vec()),
+        ("3 001", [&flat_rows[..], &flat_rows[..1]].concat()),
+        ("200 ps", flat_rows[..2000].to_vec()),
+        ("two stages", other_stage),
+    ] {
+        let why = extension_verdict(&r, RECORD_EVERY, band).expect_err(what);
+        assert!(
+            why.join(" ")
+                .contains("not the record the gate was registered for"),
+            "{what}: {why:?}"
+        );
+    }
+}
+
 /// A fresh directory under the system's temporary one, named by the process and `tag`.
 #[cfg(not(target_family = "wasm"))]
 fn fresh_dir(tag: &str) -> std::path::PathBuf {
@@ -1716,22 +2079,41 @@ const TEST_MELT: [MeltStage; 2] = [
     stage("settle", Lambda::COUPLED, 0.0015, 0.5 * FS, 5e12, KELVIN),
 ];
 
-/// **A killed leg resumes to the same bits**, through this file's own [`melted_decane`],
-/// [`decane_window`] and `tests/partition/`'s [`Leg`] on the small box, a melt of seven steps
-/// recording every step, and windows of eight 0.5 fs steps and three samples at candidates 0 and 8,
-/// in temporary directories:
+/// The resume test's extension: four steps at the settle's bath.
+#[cfg(not(target_family = "wasm"))]
+const TEST_EXTENSION: [MeltStage; 1] = [stage(
+    "extend",
+    Lambda::COUPLED,
+    0.002,
+    0.5 * FS,
+    5e12,
+    KELVIN,
+)];
+
+/// **A killed leg resumes to the same bits**, through this file's own [`decane_start`],
+/// [`decane_window`] and `tests/partition/`'s [`Leg`] on the small box, a melt of seven steps and an
+/// extension of four, each recording every step, and windows of eight 0.5 fs steps and three
+/// samples at candidates 0 and 8, in temporary directories:
 ///
-/// - **uninterrupted**: the melt and both windows;
-/// - **killed and resumed**: the melt and window 0, then what a run killed during window 8 leaves —
-///   its `.partial`, a header, one sample and its order — then the leg again. Window 0, `start.txt`
-///   and `melt.txt` are read, their bytes unchanged; the partial is begun afresh and renamed; and
-///   **every gradient, energy and order of both records, and every row of the melt's record, is the
+/// - **uninterrupted**: the melt, its extension and both windows. **The extension starts from
+///   `start.txt` to the bit**: its first record's `U` and order are one step from there with
+///   velocities from `window_seed(EXTENSION_SEED, 0)`, rebuilt here, its clock starts at zero, and
+///   its header names `start.txt`'s digest. **The windows start from `extended.txt`**, not from
+///   `start.txt`; the two windows' headers differ in the start's digest and nowhere else, and a
+///   window run from `start.txt` is refused by the extension's leg;
+/// - **killed during the extension**: the melt whole and a partial record left, then the leg again
+///   — the melt's files unchanged, and every row and record the uninterrupted run's to the bit;
+/// - **killed during a window**: the melt, the extension and window 0, then what a run killed
+///   during window 8 leaves — its `.partial`, a header, one sample and its order — then the leg
+///   again. Window 0 and the melt's and the extension's four files are read, their bytes unchanged; the partial is begun afresh and renamed; and
+///   **every gradient, energy and order of both records, and every row of the melt's and the extension's records, is the
 ///   uninterrupted run's to the bit**.
 ///
 /// And each guard refuses by name: the melt asked for with another seed; a window asked for at
 /// another seed, from a start one ulp away, and **from the same start under another model** — the
 /// decanes' charges QEq's — which only the header's model digest can tell; a window run without its
-/// order; a `start.txt` cut short, and a `melt.txt` cut short.
+/// order; a `start.txt` cut short, and a `melt.txt` cut short; the extension at another seed, and
+/// an `extension.txt` cut short.
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn a_killed_leg_resumes_to_the_same_bits() {
@@ -1748,13 +2130,24 @@ fn a_killed_leg_resumes_to_the_same_bits() {
         samples: 3,
         seed: DECANE_SEED,
     };
+    let begin = |dir: &std::path::Path| {
+        decane_start(
+            &sys,
+            dir,
+            DECANE_MELT_SEED,
+            &TEST_EXTENSION,
+            EXTENSION_SEED,
+            &watch,
+            every,
+        )
+    };
     let run = |dir: &std::path::Path, schedule: &[usize]| -> (Vec<Recorded>, Vec<MeltRow>) {
-        let (start, rows) = melted_decane(&sys, dir, DECANE_MELT_SEED, &watch, every);
+        let s = begin(dir);
         let leg = Leg::new(
             "decane",
             &sys.decoupling,
             &sys.template,
-            start,
+            s.start,
             protocol,
             grid(),
         );
@@ -1762,17 +2155,146 @@ fn a_killed_leg_resumes_to_the_same_bits() {
             .iter()
             .map(|&g| decane_window(&leg, dir, g, &watch))
             .collect();
-        (records, rows)
+        (records, [s.melt, s.extension].concat())
     };
     let whole = fresh_dir("whole");
     let (full, full_rows) = run(&whole, &[0, 8]);
-    assert_eq!(full_rows.len(), 7, "a record every step");
+    assert_eq!(
+        full_rows.len(),
+        7 + 4,
+        "a record every step, the melt's and the extension's"
+    );
+    let bytes = |p: std::path::PathBuf| std::fs::read(p).expect("a file");
+    let positions = |p: std::path::PathBuf| {
+        parse_positions(&std::fs::read_to_string(p).expect("a file"))
+            .expect("whole")
+            .1
+    };
+    let bits = |at: &[[f64; 3]]| -> Vec<u64> { at.iter().flatten().map(|x| x.to_bits()).collect() };
+
+    // The extension starts from the melt's end, start.txt, to the bit, with the stated
+    // re-thermalisation: its first record is one step from there, rebuilt here.
+    let started = begin(&whole);
+    let melt_end = positions(whole.join("start.txt"));
+    assert_eq!(bits(&started.melted), bits(&melt_end));
+    let ext = TEST_EXTENSION[0];
+    let s0 = pantometry_forcefield::free_energy::window_seed(EXTENSION_SEED, 0);
+    let mut md = sys
+        .template
+        .clone()
+        .with_bath(Bath::Langevin {
+            temperature: ext.temperature,
+            friction: ext.friction,
+            seed: s0,
+        })
+        .thermalised(&melt_end, ext.temperature, s0);
+    let mut at = melt_end.clone();
+    md.step(
+        &AtLambda {
+            hamiltonian: &sys.decoupling,
+            lambda: ext.lambda,
+        },
+        &mut at,
+        ext.dt,
+    );
+    let first = started.extension[0].1;
+    let u = kcal(md.potential_energy().expect("stepped")) / sys.solvent as f64;
+    assert_eq!(
+        first[0].to_bits(),
+        (every * 1e12).to_bits(),
+        "the extension's clock from zero"
+    );
+    assert_eq!(first[1].to_bits(), u.to_bits(), "the extension's first U");
+    assert_eq!(
+        first[4].to_bits(),
+        watch.order(&at).to_bits(),
+        "its first order"
+    );
+    let ext_head = std::fs::read_to_string(whole.join("extension.txt")).unwrap();
+    let ext_head = ext_head.lines().next().unwrap();
+    assert!(
+        ext_head.contains(&format!(
+            "from {:016x} after # melted",
+            positions_digest(&melt_end)
+        )),
+        "{ext_head}"
+    );
+    // The windows start from the extension's end, extended.txt, and their header says so.
+    let ext_end = positions(whole.join("extended.txt"));
+    assert_eq!(bits(&started.start), bits(&ext_end));
+    assert_ne!(bits(&ext_end), bits(&melt_end));
+    let leg_at = |start: &[[f64; 3]]| {
+        Leg::new(
+            "decane",
+            &sys.decoupling,
+            &sys.template,
+            start.to_vec(),
+            protocol,
+            grid(),
+        )
+    };
+    let (new, old) = (leg_at(&ext_end), leg_at(&melt_end));
+    let (dn, d_old) = (positions_digest(&ext_end), positions_digest(&melt_end));
+    assert_ne!(header(&new, 0), header(&old, 0));
+    assert_eq!(
+        header(&old, 0).replacen(
+            &format!("start {d_old:016x}"),
+            &format!("start {dn:016x}"),
+            1
+        ),
+        header(&new, 0),
+        "the start's digest is the whole difference"
+    );
+    let old_dir = fresh_dir("old-start");
+    decane_window(&old, &old_dir, 0, &watch);
+    let why = refusal(|| drop(decane_window(&new, &old_dir, 0, &watch)));
+    assert!(
+        why.contains("was run differently"),
+        "a window from the melt's end: {why}"
+    );
+    println!(
+        "the extension from start.txt {d_old:016x} to extended.txt {dn:016x}; its first U \
+         {u:.6} kcal/mol rebuilt to the bit"
+    );
+
+    // Killed during the extension: the melt is whole, and the extension left a partial record.
+    let mid = fresh_dir("mid-extension");
+    melted_decane(&sys, &mid, DECANE_MELT_SEED, &watch, every);
+    let melt_bytes = (bytes(mid.join("start.txt")), bytes(mid.join("melt.txt")));
+    std::fs::write(mid.join("extension.partial"), "# extended, cut short\n").unwrap();
+    let (resumed, resumed_rows) = run(&mid, &[0, 8]);
+    assert!(
+        (bytes(mid.join("start.txt")), bytes(mid.join("melt.txt"))) == melt_bytes,
+        "the extension writes nothing the melt wrote"
+    );
+    let row_bits = |rows: &[MeltRow]| -> Vec<u64> {
+        rows.iter()
+            .flat_map(|r| r.1.map(f64::to_bits))
+            .chain(rows.iter().map(|r| r.0 as u64))
+            .collect()
+    };
+    assert_eq!(
+        row_bits(&full_rows),
+        row_bits(&resumed_rows),
+        "killed in the extension"
+    );
+    for (a, b) in full.iter().zip(&resumed) {
+        assert_eq!(
+            record_bits(a),
+            record_bits(b),
+            "killed in the extension: {}",
+            a.grid
+        );
+    }
+    assert_eq!(full.len(), resumed.len());
+
     let killed = fresh_dir("killed");
     run(&killed, &[0]);
-    let bytes = |p: std::path::PathBuf| std::fs::read(p).expect("a file");
     let finished = bytes(killed.join("window_00.txt"));
     let start_bytes = bytes(killed.join("start.txt"));
     let record_bytes = bytes(killed.join("melt.txt"));
+    let extended_bytes = bytes(killed.join("extended.txt"));
+    let extension_bytes = bytes(killed.join("extension.txt"));
     let text = std::fs::read_to_string(whole.join("window_08.txt")).unwrap();
     let partial: String = text.lines().take(3).map(|l| format!("{l}\n")).collect();
     assert!(partial
@@ -1788,13 +2310,9 @@ fn a_killed_leg_resumes_to_the_same_bits() {
     );
     assert!(bytes(killed.join("start.txt")) == start_bytes);
     assert!(bytes(killed.join("melt.txt")) == record_bytes);
+    assert!(bytes(killed.join("extended.txt")) == extended_bytes);
+    assert!(bytes(killed.join("extension.txt")) == extension_bytes);
     assert!(!killed.join("window_08.partial").exists());
-    let row_bits = |rows: &[MeltRow]| -> Vec<u64> {
-        rows.iter()
-            .flat_map(|r| r.1.map(f64::to_bits))
-            .chain(rows.iter().map(|r| r.0 as u64))
-            .collect()
-    };
     assert_eq!(row_bits(&full_rows), row_bits(&resumed_rows));
     assert_eq!(full.len(), resumed.len());
     for (a, b) in full.iter().zip(&resumed) {
@@ -1925,7 +2443,29 @@ fn a_killed_leg_resumes_to_the_same_bits() {
     .unwrap();
     let why = refusal(|| drop(melted_decane(&sys, &cut, DECANE_MELT_SEED, &watch, every)));
     assert!(why.contains("melt.txt is not whole"), "{why}");
-    for d in [whole, killed, cut, plain] {
+    // The extension asked for at another seed, and its record cut short.
+    let why = refusal(|| {
+        drop(decane_start(
+            &sys,
+            &killed,
+            DECANE_MELT_SEED,
+            &TEST_EXTENSION,
+            EXTENSION_SEED + 1,
+            &watch,
+            every,
+        ))
+    });
+    assert!(why.contains("extended differently"), "{why}");
+    std::fs::write(cut.join("melt.txt"), &record_bytes).unwrap();
+    std::fs::write(cut.join("extended.txt"), &extended_bytes).unwrap();
+    std::fs::write(
+        cut.join("extension.txt"),
+        &extension_bytes[..extension_bytes.len() - 30],
+    )
+    .unwrap();
+    let why = refusal(|| drop(begin(&cut)));
+    assert!(why.contains("extension.txt is not whole"), "{why}");
+    for d in [whole, killed, cut, plain, old_dir, mid] {
         let _ = std::fs::remove_dir_all(d);
     }
 }
@@ -1943,9 +2483,10 @@ fn the_seeds_are_apart_from_4c2s() {
     }
     theirs.extend((0..grid().len()).map(|g| window_seed(0x4C2_5EED, g)));
     theirs.extend((0..OCTANOL_MELT.len()).map(|k| window_seed(MELT_SEED, k)));
-    let mut mine: Vec<u64> = vec![DECANE_SEED, DECANE_MELT_SEED];
+    let mut mine: Vec<u64> = vec![DECANE_SEED, DECANE_MELT_SEED, EXTENSION_SEED];
     mine.extend((0..grid().len()).map(|g| window_seed(DECANE_SEED, g)));
     mine.extend((0..DECANE_MELT.len()).map(|k| window_seed(DECANE_MELT_SEED, k)));
+    mine.extend((0..DECANE_EXTENSION.len()).map(|k| window_seed(EXTENSION_SEED, k)));
     for s in &mine {
         assert!(!theirs.contains(s), "{s:#x}");
     }

@@ -5103,6 +5103,64 @@ protects nothing.
   debug, and `no_string_lost_its_line_continuation`. There is no `powi` or `powf` in the new
   code.
 
+- **Step C-2's first settle failed its gate, and the settle is extended under a gate registered
+  before any of the extension was run — written, checked, not run.**
+  `the_decane_partition_measured` ran the melt on 2026-10-25 (1 ps strain out, 5 ps at 600 K,
+  200 ps at 298.15 K, 3 520 s) and stopped at the settle's gate, as it was written to. Over 1 800
+  records, 26.1–206.0 ps, `U/N`'s halves were 0.32 σ apart and `P`'s 0.29 σ, but **the nematic
+  order's halves were 0.0737 ± 0.0047 and 0.1314 ± 0.0069 (τ 35 and 40 samples), 6.96 σ apart,
+  refused as "rising"**. Its second half was under the band's 0.1969. One reading is that the
+  order left 600 K fully random and relaxed up to the liquid's own orientational correlation
+  (C-1b measured 0.157). That is a hypothesis for the extension to test, not a finding.
+  - **Registered, before any data, not to be changed after**:
+    - **the settle continued by 300 ps** at 298.15 K, 2 fs, in its own 5 ps⁻¹ bath, from the
+      melt's end in `start.txt`. **The melt kept positions and not velocities**, so the
+      velocities are thermalised afresh at 298.15 K from `window_seed(0xC2_E02, 0)`, which also
+      seeds the bath. `U`, `P`, `T`, the order and the trans fraction every 0.1 ps go into
+      `extension.txt`, and the end into `extended.txt`. Both carry a header naming the stage, the
+      seed, the start's digest and the melt's whole header, and both are digested and read back
+      on every use. `start.txt` and `melt.txt` are read, never written;
+    - **the gate is on the extension's last 200 ps alone** (records 1 000–3 000), with the first
+      settle's three criteria unchanged: the `U` halves and the `P` halves each within 3
+      τ-corrected σ, the order's halves the same, and the order's second half at most the band
+      plus 0.04. A record of any other length is refused. The gate over the whole extension is
+      printed beside it and decides nothing;
+    - if it passes, **the windows start from the extension's end**, and its digest in every
+      window header means no window from the melt's end can be read as one of these. If it
+      fails, the leg stops and nothing is retried with another window.
+  - **Checked** (default, small box): the extension's gate on closed cases, in the new
+    `the_extension_gate_reads_its_registered_window`. A record whose order rises over its first
+    1 000 records and is flat after passes, and its line names 2 000 records over 100.1–300.0 ps;
+    a rise in the last 2 000 is refused as rising (4.2 σ); and **the window's edges are pinned by
+    a non-number in `U`**: at record 999 it passes, and at 1 000 or 2 999 it fails. Records of
+    2 999, 3 001 or 2 000, or of two stages, are refused. **A trend is no probe of the window**:
+    it lengthens its half's τ to 220 until the error covers it, and the same ramp gated whole is
+    only 1.8 σ. `a_killed_leg_resumes_to_the_same_bits` now runs the melt, an extension and the
+    windows. **The extension's first `U` and order are rebuilt to the bit**, one step from
+    `start.txt` with the stated velocities. The windows start from `extended.txt`, and their
+    header differs from a `start.txt` window's in the start digest and nowhere else; a window from
+    `start.txt` is refused. A leg killed during the extension resumes to the same bits, every
+    row and record, with the melt's files unchanged. The extension is refused at another seed,
+    or with `extension.txt` cut short. The seeds test holds the extension's two seeds.
+  - **Sabotaged**, by script in binary mode, every anchor counted once before any write, and
+    restored by `cp`, `touch` and SHA-256 from named copies. All nine were caught:
+
+    | sabotage | caught by |
+    | --- | --- |
+    | the extension from the melt's beginning | the resume: the extension's first `U` |
+    | the gate over the whole extension | the gate: its line says 3 000 records, 0.1–300.0 ps |
+    | the gate over the extension's first 200 ps | the gate: the settled last 200 ps refused |
+    | the length check dropped | the gate: a 2 999-record extension judged |
+    | the windows from the melt's end | the resume: the start is not `extended.txt` |
+    | the extension's header without its start digest | the resume: the header names no start |
+    | the window header without the start digest | the resume: the two windows' headers equal |
+    | read back, the extension hands on the melt's end | the resume: the start is not `extended.txt` |
+    | run, the extension hands on its own start | the resume: a window from `start.txt` read as the extension's |
+
+  - **The cost**: the extension takes 150 000 steps, about **1.4 h** at the 33.7 ms a step the
+    settle took, and the windows **13.9 h** at thirteen (17.8 h at seventeen). The extension is
+    a fourth stage the melt never had, so `the_decane_leg_cost_measured` now prints it.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
