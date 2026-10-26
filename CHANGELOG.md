@@ -5264,6 +5264,35 @@ protects nothing.
     cargo test --release --locked -p pantometry-forcefield --test benzene_partitioned_into_decane
     the_decane_order_at_four_times_the_size_measured -- --ignored --nocapture`.
 
+- **The finite-size test ran, and its registered verdict is finite-size: decane in a box of 111 is an
+  isotropic liquid, and its order of 0.21 is the box's.** It ran at `30ab5cb`, exit 0 on 2026-10-26,
+  in 21 346 s. The stages took 564 s, 400 s and 20 377 s, at 282.0, 160.0 and 135.8 ms a step. The
+  strain out ran throttled, before throttling was turned off and the priority set to AboveNormal.
+  Over the last 200 ps, records 1 000–3 000 at 106.1–306.0 ps:
+
+  | | first half | second half | apart |
+  | --- | --- | --- | --- |
+  | `U/N` (kcal/mol) | 12.6708 ± 0.0110 | 12.6394 ± 0.0099 | 2.12 σ |
+  | `P` (bar) | 17.7 ± 6.6 | −9.8 ± 8.0 | 2.65 σ |
+  | nematic order | 0.0565 ± 0.0030 (τ 44) | 0.0770 ± 0.0049 (τ 61) | 3.58 σ, not in the rule |
+  | trans fraction | 0.8423 | 0.8428 | 0.30 σ, not in the rule |
+
+  - **S₄₄₄ = 0.0668 ± 0.0062** (τ 152 samples), against finite-size at most 0.137 and genuine order at
+    least 0.158. It is under half the finite-size threshold, and `U` and `P` are each within 3 σ, so
+    the run is settled and the verdict is not on an edge.
+  - **Not hidden because the rule does not read it:** the order's halves rose by 3.58 σ, from 0.0565
+    to 0.0770. Even the second half is inside the 444 band of uncorrelated chains (at most 0.0806) and
+    under half the genuine-order threshold.
+  - **S₄₄₄ fell further than `1/√N`.** The ratio S₁₁₁/S₄₄₄ is 3.15 against √4's 2. The rule asked
+    only for an upper bound, and the excess is noted, not read.
+  - **For information:** `U/N` is 12.65 kcal/mol here, against 12.53 at 111. The trans fraction is
+    0.843 against 0.855, and its 2.5 ps blocks fell from 0.847 to 0.832 over the last 40 ps, inside
+    the halves' agreement. Neither is gated.
+  - **What follows, as registered:** the partition leg's settle gate becomes `finite_size_gate`
+    (order at most 0.30), applied to the 111-decane extension's existing record without rerunning. The
+    13 windows follow. The run's files are in `C:/pantometry-w4/decane_finite_size`, headed and
+    digested.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
