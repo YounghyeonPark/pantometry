@@ -102,6 +102,42 @@
 //!   window's header, so that no window from the melt's end can be read as one of these; if it
 //!   fails, the leg stops and nothing is retried with another window.
 //!
+//! **Run 2026-10-25, the extension failed its gate too**: over its last 200 ps `U/N`'s halves
+//! were 0.14 σ apart and `P`'s 0.15 σ, the order's 0.2277 ± 0.0053 and 0.2103 ± 0.0044, 2.55 σ
+//! apart and so not rising — but **its second half, 0.2103, was over the band's 0.1969**. The leg
+//! stopped there, as registered, and no window ran.
+//!
+//! # The order at four times the size: registered, not run
+//!
+//! Is about 0.21 a finite-size effect — a correlated isotropic liquid's order, which falls as
+//! `1/√N` — or the model's own tendency to order? **Registered before any of it was run, and not to
+//! be changed after** ([`the_decane_order_at_four_times_the_size_measured`]):
+//!
+//! - **the box**: pure decane, **444 molecules**, four times the partition box's 111, by C-1b's
+//!   start ([`hexadecane::isotropic_sites`]): C-1b's 2 × 7 × 8 lattice replicated 2 × 2 × 1, one site
+//!   left empty in each replica ([`four_times_empty`]), every site shrunk by `(444/448)^(1/3)` so
+//!   that the 444 are at 0.7255 g/cm³, C-1b's conformers, rotations, packer and radii, seed
+//!   [`FOUR_TIMES_START_SEED`]; 14 208 atoms, 61.4 × 71.7 × 32.9 Å;
+//! - **the run** ([`FOUR_TIMES_MELT`]): 1 ps of strain out, 5 ps at 600 K, then **300 ps at
+//!   298.15 K**, `U`, `P`, `T`, the order and the trans fraction every 0.1 ps, seed
+//!   [`FOUR_TIMES_SEED`];
+//! - **the reading** ([`finite_size_verdict`]): S₄₄₄ over the last 200 ps with its τ-corrected
+//!   error, and the halves of `U` and `P`;
+//! - **the rule** ([`finite_size_outcome`]), S₁₁₁ = 0.2103 ([`S_111`]): **finite-size (isotropic
+//!   liquid)** if S₄₄₄ ≤ 0.137 = 1.3 × S₁₁₁/√4; **genuine order** if S₄₄₄ ≥ 0.158 = 0.75 × S₁₁₁;
+//!   **inconclusive** between; and **not settled**, whatever S₄₄₄, unless the halves of `U` and of
+//!   `P` each agree within 3 of their combined errors;
+//! - **if finite-size**, the partition leg's settle gate becomes [`finite_size_gate`]: the order's
+//!   halves within 3 σ as before, `U` and `P` as before, and the order's second half at most
+//!   [`FINITE_SIZE_CEILING`] = 0.30, which still refuses a nematic (the transition's 0.43, C-1's
+//!   0.57). It is written and checked, and **not called by the production**: it is to be applied to
+//!   the 111-decane extension's existing record without rerunning it.
+//!
+//! An uncorrelated random set of 444 directions shows 0.0386 ± 0.0140 (of 111, 0.0765 ± 0.0268),
+//! and is reported beside the reading. Written under `PANTOMETRY_DECANE_FINITE_SIZE_DIR`, which must
+//! be named: `built.txt`, `record.txt`, `end.txt`, headed ([`four_times_header`]) and digested,
+//! and `run.log` and `finite_size.log`.
+//!
 //! # The windows
 //!
 //! 4c-2's: the 29 candidates, the thirteen windows of [`SCHEDULE`], a window inserted between any
@@ -122,7 +158,9 @@
 //! at its density with benzene in, and nothing overlaps, in the production's box; the end states are
 //! the systems they say; the λ derivatives are the whole energy's; every state of `couplings` is its
 //! own `coupling`; the decoupled reciprocal energy is the rest's plus `λ_e` times the cross term; the
-//! settle's gate and the extension's on closed cases; the extension starts from the melt's end and
+//! settle's gate and the extension's on closed cases; the 444-decane start at its density, whole and
+//! isotropic, and deterministic; the finite-size rule's four outcomes at their edges, and the
+//! finite-size gate on closed cases; the extension starts from the melt's end and
 //! the windows from the extension's; and a killed leg — in its extension or its windows — resumes to
 //! the same bits and refuses another model, seed or start.
 
@@ -139,16 +177,17 @@ mod partition;
 
 use gaff::{gaff, Model, ONE_FOUR};
 use hexadecane::{
-    conformations, directions, isotropic, isotropic_order, nematic_order, pack, packing_radius,
-    worst_contact, Alkane, D10, DECANE, START_TRANS,
+    conformations, directions, isotropic, isotropic_order, isotropic_sites, nematic_order, pack,
+    packing_radius, with_gaff, worst_contact, Alkane, D10, DECANE, START_TRANS,
 };
 use hydration::{Benzene, Solvated};
 use nonbonded::Vacuum;
-use octanol::{joined, production, Liquid, ANGSTROM, FS, KELVIN};
+use octanol::{joined, pressure as liquid_pressure, production, Liquid, ANGSTROM, FS, KELVIN};
 use pantometry_forcefield::free_energy::refine_schedule;
 use pantometry_forcefield::{
     qeq, Alchemical, AtLambda, Bath, Component, Element, Estimate, EwaldParameters, Lambda, Mixing,
-    PeriodicBox, PeriodicDecoupling, PeriodicForceField, PmeParameters, Potential, Protocol,
+    MolecularDynamics, PeriodicBox, PeriodicDecoupling, PeriodicForceField, PmeParameters,
+    Potential, Protocol,
 };
 use pantometry_units::BOLTZMANN;
 use partition::*;
@@ -209,6 +248,69 @@ const HALVES_AGREE: f64 = 3.0;
 
 /// **How far above the isotropic band the order may sit**: see the module documentation.
 const ORDER_ALLOWANCE: f64 = 0.04;
+
+// The finite-size test, registered after the extension's gate failed and before any of it ran:
+// see the module documentation.
+
+/// **The finite-size box's lattice**: C-1b's [`DECANE`] lattice, 2 × 7 × 8, replicated 2 × 2 × 1.
+const FOUR_TIMES: [usize; 3] = [4, 14, 8];
+
+/// How many decanes it holds: four times the partition box's 111.
+const FOUR_TIMES_MOLECULES: usize = 444;
+
+/// The 111 the order is compared with: the partition box's decanes.
+const ONCE_MOLECULES: usize = 111;
+
+/// **The four sites of [`FOUR_TIMES`] left empty**, one in each 2 × 7 × 8 replica: its site
+/// `(1, 3, 4)` in the replica's own indices, one of the four nearest the replica's centre, as the
+/// partition box's benzene at its centre took one decane's place. 448 sites less four is 444.
+fn four_times_empty() -> Vec<usize> {
+    let [_, nj, nk] = FOUR_TIMES;
+    let [ri, rj, _] = DECANE.lattice;
+    let mut empty = Vec::new();
+    for a in 0..2 {
+        for b in 0..2 {
+            let (i, j, k) = (a * ri + 1, b * rj + 3, 4);
+            empty.push((i * nj + j) * nk + k);
+        }
+    }
+    empty
+}
+
+/// The finite-size box's start seed.
+const FOUR_TIMES_START_SEED: u64 = 0xC1B4;
+
+/// The finite-size run's seed: stage `k` bathed with `window_seed(FOUR_TIMES_SEED, k)`.
+const FOUR_TIMES_SEED: u64 = 0xC2_F5;
+
+/// **The finite-size run**, registered: 1 ps of strain out, 5 ps at 600 K, then **300 ps at
+/// 298.15 K**: [`DECANE_MELT`]'s first two stages, then one stage at 298.15 K as long as the
+/// 111-decane extension, in the same 5 ps⁻¹ bath at 2 fs.
+const FOUR_TIMES_MELT: [MeltStage; 3] = [
+    stage("strain out", Lambda::COUPLED, 1.0, 0.5 * FS, 50e12, KELVIN),
+    stage("hot", Lambda::COUPLED, 5.0, 2.0 * FS, 5e12, 600.0),
+    stage("settle", Lambda::COUPLED, 300.0, 2.0 * FS, 5e12, KELVIN),
+];
+
+/// What of the 300 ps at 298.15 K is read, picoseconds: the last 200, as the extension's gate.
+const FOUR_TIMES_READ: f64 = 200.0;
+
+/// **S₁₁₁, the order of the 111 decanes**: the extension's last 100 ps, its gated window's second
+/// half, 0.2103 as `the_decane_partition_measured` printed it on 2026-10-25 (0.210 to three places).
+/// The registered thresholds are 0.137 and 0.158: this value gives both to three places, where 0.210
+/// itself would sit on the rounding edge of each (0.1365 and 0.1575).
+const S_111: f64 = 0.2103;
+
+/// **Finite-size**: S₄₄₄ at most this times `S₁₁₁/√(444/111)`, which an isotropic liquid's order,
+/// falling as `1/√N`, would give with 30% to spare.
+const FINITE_SIZE_FACTOR: f64 = 1.3;
+
+/// **Genuine order**: S₄₄₄ at least this fraction of `S₁₁₁`, which an order that is the model's and
+/// not the box's would keep.
+const ORDERED_FRACTION: f64 = 0.75;
+
+/// **The partition leg's order ceiling if the verdict is finite-size** ([`finite_size_gate`]).
+const FINITE_SIZE_CEILING: f64 = 0.30;
 
 /// **n-Hexadecane:water log P for benzene, 25 °C**: `log L¹⁶ + log₁₀ K_aw`, 2.786 and 0.2273 (see the
 /// module documentation), 2.143.
@@ -606,9 +708,47 @@ fn integrate(
     dir: &std::path::Path,
     name: &str,
 ) -> (Vec<[f64; 3]>, Vec<MeltRow>) {
+    integrate_with(
+        sys.name,
+        &sys.template,
+        sys.solvent,
+        |st: &MeltStage| AtLambda {
+            hamiltonian: &sys.decoupling,
+            lambda: st.lambda,
+        },
+        |at: &[[f64; 3]]| pressure(sys, at),
+        stages,
+        from,
+        seed,
+        watch,
+        every,
+        dir,
+        name,
+    )
+}
+
+/// **[`integrate`]'s loop on any potential**: `label`'s `stages` from `from` under `template`'s
+/// dynamics, each stage's potential `potential_of` it, `U` per `molecules`, and `pressure_of` the
+/// pressure in pascals. The decane leg's melt and extension come here through [`integrate`], and
+/// the finite-size box of pure decane ([`four_times_measured`]) directly, so both are one loop.
+#[allow(clippy::too_many_arguments)]
+fn integrate_with<P: Potential>(
+    label: &str,
+    template: &MolecularDynamics,
+    molecules: usize,
+    potential_of: impl Fn(&MeltStage) -> P,
+    pressure_of: impl Fn(&[[f64; 3]]) -> f64,
+    stages: &[MeltStage],
+    from: &[[f64; 3]],
+    seed: u64,
+    watch: &Watch,
+    every: f64,
+    dir: &std::path::Path,
+    name: &str,
+) -> (Vec<[f64; 3]>, Vec<MeltRow>) {
     let mut at = from.to_vec();
-    let mut md = sys.template.clone();
-    let n = sys.solvent as f64;
+    let mut md = template.clone();
+    let n = molecules as f64;
     let mut rows: Vec<MeltRow> = Vec::new();
     let mut time = 0.0;
     for (k, st) in stages.iter().enumerate() {
@@ -622,10 +762,7 @@ fn integrate(
             md = md.thermalised(&at, st.temperature, s);
         }
         md.forget_forces();
-        let potential = AtLambda {
-            hamiltonian: &sys.decoupling,
-            lambda: st.lambda,
-        };
+        let potential = potential_of(st);
         let steps = (st.picoseconds * 1e-12 / st.dt).round() as usize;
         let stride = ((every / st.dt).round() as usize).max(1);
         let t0 = std::time::Instant::now();
@@ -638,7 +775,7 @@ fn integrate(
                     [
                         time * 1e12,
                         kcal(md.potential_energy().expect("stepped")) / n,
-                        pressure(sys, &at) / 1e5,
+                        pressure_of(&at) / 1e5,
                         md.half_step_temperature(),
                         watch.order(&at),
                         watch.trans(&at),
@@ -652,7 +789,7 @@ fn integrate(
             name,
             &format!(
                 "{} stage {k} ({}): {} ps at {} fs, {} K, γ {} /ps: {secs:.0} s, {:.1} ms a step",
-                sys.name,
+                label,
                 st.name,
                 st.picoseconds,
                 st.dt / FS,
@@ -668,7 +805,7 @@ fn integrate(
         name,
         &format!(
             "{}: the {name} in blocks of 2.5 ps\n| stage | t (ps) | U/N (kcal/mol) | P (bar) | T (K) | order | trans |\n| --- | --- | --- | --- | --- | --- | --- |",
-            sys.name
+            label
         ),
     );
     let per_block = ((2.5e-12 / every).round() as usize).max(1);
@@ -863,6 +1000,60 @@ fn settle_verdict(
     discard: usize,
     band: f64,
 ) -> Result<Vec<String>, Vec<String>> {
+    settle_verdict_under(rows, stage, discard, OrderCeiling::Band(band))
+}
+
+/// What the order's second half may not exceed in the settle's gate.
+#[derive(Clone, Copy, Debug)]
+enum OrderCeiling {
+    /// The isotropic band plus [`ORDER_ALLOWANCE`]: the gate as first registered.
+    Band(f64),
+    /// A fixed ceiling: [`FINITE_SIZE_CEILING`], registered for the case that the 444-decane box
+    /// finds 0.21 a finite-size effect ([`finite_size_gate`]).
+    Fixed(f64),
+}
+
+impl OrderCeiling {
+    fn value(self) -> f64 {
+        match self {
+            OrderCeiling::Band(band) => band + ORDER_ALLOWANCE,
+            OrderCeiling::Fixed(c) => c,
+        }
+    }
+
+    /// How the gate's first line names it.
+    fn named(self) -> String {
+        match self {
+            OrderCeiling::Band(band) => format!(
+                "the band {band:.4} + {ORDER_ALLOWANCE} = {:.4}",
+                band + ORDER_ALLOWANCE
+            ),
+            OrderCeiling::Fixed(c) => format!("the finite-size ceiling {c:.2}"),
+        }
+    }
+
+    /// What a failure says.
+    fn above(self, second: f64) -> String {
+        match self {
+            OrderCeiling::Band(band) => format!(
+                "the order's second half {second:.4} is above the band and its allowance, {:.4}",
+                band + ORDER_ALLOWANCE
+            ),
+            OrderCeiling::Fixed(c) => format!(
+                "the order's second half {second:.4} is above the finite-size ceiling, {c:.2}"
+            ),
+        }
+    }
+}
+
+/// [`settle_verdict`] with the order's second half held under `ceiling`; every other criterion,
+/// and every line under [`OrderCeiling::Band`], as [`settle_verdict`]'s.
+fn settle_verdict_under(
+    rows: &[MeltRow],
+    stage: usize,
+    discard: usize,
+    ceiling: OrderCeiling,
+) -> Result<Vec<String>, Vec<String>> {
     let kept: Vec<&[f64; 6]> = rows
         .iter()
         .filter(|r| r.0 == stage)
@@ -878,12 +1069,11 @@ fn settle_verdict(
     let column = |c: usize| -> Vec<f64> { kept.iter().map(|r| r[c]).collect() };
     let mut lines = vec![format!(
         "the settle's gate over {} records, {:.1}–{:.1} ps: halves within {HALVES_AGREE} of their \
-         combined errors, the order's second half at most the band {band:.4} + {ORDER_ALLOWANCE} = \
-         {:.4}",
+         combined errors, the order's second half at most {}",
         kept.len(),
         kept[0][0],
         kept[kept.len() - 1][0],
-        band + ORDER_ALLOWANCE
+        ceiling.named()
     )];
     let mut failed = Vec::new();
     for (c, what, gated) in [
@@ -915,13 +1105,9 @@ fn settle_verdict(
                 failed.push(format!("{what}'s halves disagree, {apart:.2} σ apart"));
             }
         }
-        let under = b.mean <= band + ORDER_ALLOWANCE;
+        let under = b.mean <= ceiling.value();
         if c == 4 && !under {
-            failed.push(format!(
-                "the order's second half {:.4} is above the band and its allowance, {:.4}",
-                b.mean,
-                band + ORDER_ALLOWANCE
-            ));
+            failed.push(ceiling.above(b.mean));
         }
     }
     if failed.is_empty() {
@@ -937,6 +1123,28 @@ fn settle_verdict(
 /// at `every` — refused by name when it is shorter, longer or not one stage — and then
 /// [`settle_verdict`]'s criteria, unchanged, over its last [`EXTENSION_GATED`] ps alone.
 fn extension_verdict(rows: &[MeltRow], every: f64, band: f64) -> Result<Vec<String>, Vec<String>> {
+    extension_verdict_under(rows, every, OrderCeiling::Band(band))
+}
+
+/// **The partition leg's settle gate if the 444-decane box finds 0.21 a finite-size effect**,
+/// registered with that test and before any of it ran: [`extension_verdict`]'s record and window
+/// unchanged, the `U`, `P` and order halves within [`HALVES_AGREE`] unchanged, and the order's second
+/// half at most [`FINITE_SIZE_CEILING`] = 0.30 in place of the band plus 0.04. 0.30 still refuses a
+/// nematic: Maier–Saupe's order at the transition is 0.43, and C-1's aligned decane was 0.57.
+///
+/// **Not called by [`decane_partition_measured`]**: it is to be applied to the 111-decane
+/// extension's existing record, without rerunning, only if [`finite_size_verdict`] says
+/// finite-size. Adopting it is calling it there in place of [`extension_verdict`].
+fn finite_size_gate(rows: &[MeltRow], every: f64) -> Result<Vec<String>, Vec<String>> {
+    extension_verdict_under(rows, every, OrderCeiling::Fixed(FINITE_SIZE_CEILING))
+}
+
+/// [`extension_verdict`] with the order held under `ceiling`.
+fn extension_verdict_under(
+    rows: &[MeltRow],
+    every: f64,
+    ceiling: OrderCeiling,
+) -> Result<Vec<String>, Vec<String>> {
     let st = &DECANE_EXTENSION[0];
     let whole = (st.picoseconds * 1e-12 / every).round() as usize;
     let gated = (EXTENSION_GATED * 1e-12 / every).round() as usize;
@@ -949,7 +1157,7 @@ fn extension_verdict(rows: &[MeltRow], every: f64, band: f64) -> Result<Vec<Stri
             every * 1e12
         )]);
     }
-    settle_verdict(rows, 0, whole - gated, band)
+    settle_verdict_under(rows, 0, whole - gated, ceiling)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1366,6 +1574,387 @@ fn the_decane_leg_cost_measured() {
         17.0 * window / 3600.0,
         (melt + 13.0 * window) / 3600.0,
         (melt + 17.0 * window) / 3600.0
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The order at four times the size
+
+/// What the finite-size reading says, by the registered rule ([`finite_size_outcome`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FiniteSize {
+    /// S₄₄₄ at most the finite-size threshold, `U` and `P` stationary.
+    Isotropic,
+    /// S₄₄₄ at least the ordered threshold, `U` and `P` stationary.
+    Ordered,
+    /// Between the two, `U` and `P` stationary.
+    Inconclusive,
+    /// `U`'s or `P`'s halves further apart than [`HALVES_AGREE`]: no verdict.
+    NotSettled,
+}
+
+impl FiniteSize {
+    fn named(self) -> &'static str {
+        match self {
+            FiniteSize::Isotropic => "finite-size (isotropic liquid)",
+            FiniteSize::Ordered => "genuine order",
+            FiniteSize::Inconclusive => "inconclusive",
+            FiniteSize::NotSettled => "not settled",
+        }
+    }
+}
+
+/// **The registered thresholds**, finite-size and ordered: `1.3 × S₁₁₁/√(444/111)` and
+/// `0.75 × S₁₁₁`, 0.1367 and 0.1577 — 0.137 and 0.158 to three places, as registered.
+fn finite_size_thresholds() -> (f64, f64) {
+    let ratio = FOUR_TIMES_MOLECULES as f64 / ONCE_MOLECULES as f64;
+    (
+        FINITE_SIZE_FACTOR * S_111 / ratio.sqrt(),
+        ORDERED_FRACTION * S_111,
+    )
+}
+
+/// **The registered rule**: *not settled* unless the halves of `U` and of `P` are each within
+/// [`HALVES_AGREE`] of their combined errors (a distance that is not a number is not within it), or
+/// if the order is not a number; then *finite-size* at or under the first of
+/// [`finite_size_thresholds`], *genuine order* at or over the second, and *inconclusive* between.
+fn finite_size_outcome(order: f64, u_apart: f64, p_apart: f64) -> FiniteSize {
+    let (isotropic, ordered) = finite_size_thresholds();
+    if !(u_apart <= HALVES_AGREE && p_apart <= HALVES_AGREE) || !order.is_finite() {
+        FiniteSize::NotSettled
+    } else if order <= isotropic {
+        FiniteSize::Isotropic
+    } else if order >= ordered {
+        FiniteSize::Ordered
+    } else {
+        FiniteSize::Inconclusive
+    }
+}
+
+/// **The finite-size reading**: the record must hold [`FOUR_TIMES_MELT`]'s 300 ps at 298.15 K whole
+/// at `every`, refused by name otherwise; over its last [`FOUR_TIMES_READ`] ps, S₄₄₄'s mean with its
+/// τ-corrected error and its halves, and the halves of `U`, `P` and the trans fraction; then
+/// [`finite_size_outcome`] on S₄₄₄'s mean and the `U` and `P` halves. The outcome, and the lines that
+/// say why, the last of them the verdict.
+fn finite_size_verdict(rows: &[MeltRow], every: f64) -> Result<(FiniteSize, Vec<String>), String> {
+    let last = FOUR_TIMES_MELT.len() - 1;
+    let st = &FOUR_TIMES_MELT[last];
+    let whole = (st.picoseconds * 1e-12 / every).round() as usize;
+    let read = (FOUR_TIMES_READ * 1e-12 / every).round() as usize;
+    let settle: Vec<&[f64; 6]> = rows.iter().filter(|r| r.0 == last).map(|r| &r.1).collect();
+    if settle.len() != whole {
+        return Err(format!(
+            "the record's stage {last} has {} records where its {} ps at {} ps make {whole}: not \
+             the record the rule was registered for",
+            settle.len(),
+            st.picoseconds,
+            every * 1e12
+        ));
+    }
+    let kept = &settle[whole - read..];
+    let column = |c: usize| -> Vec<f64> { kept.iter().map(|r| r[c]).collect() };
+    let order = Estimate::of(&column(4));
+    let (o1, o2, o_apart) = halves(&column(4));
+    let (u1, u2, u_apart) = halves(&column(1));
+    let (p1, p2, p_apart) = halves(&column(2));
+    let (t1, t2, t_apart) = halves(&column(5));
+    let outcome = finite_size_outcome(order.mean, u_apart, p_apart);
+    let (isotropic, ordered) = finite_size_thresholds();
+    let half = |what: &str, a: &Estimate, b: &Estimate, apart: f64, gated: &str| {
+        format!(
+            "  {what}: halves {:.4} ± {:.4} (τ {:.1}) and {:.4} ± {:.4} (τ {:.1}), {apart:.2} σ \
+             apart{gated}",
+            a.mean, a.error, a.tau, b.mean, b.error, b.tau
+        )
+    };
+    let settled = if outcome == FiniteSize::NotSettled {
+        "not both within"
+    } else {
+        "both within"
+    };
+    let lines = vec![
+        format!(
+            "the rule, registered before the run, over the last {FOUR_TIMES_READ} ps at {} K ({} \
+             records, {:.1}–{:.1} ps): finite-size (isotropic liquid) if S₄₄₄ ≤ {isotropic:.3} = \
+             {FINITE_SIZE_FACTOR} × S₁₁₁/√4; genuine order if S₄₄₄ ≥ {ordered:.3} = \
+             {ORDERED_FRACTION} × S₁₁₁; inconclusive between; S₁₁₁ = {S_111} from the 111-decane \
+             extension; not settled unless the halves of U and of P each agree within \
+             {HALVES_AGREE} of their combined errors",
+            st.temperature,
+            kept.len(),
+            kept[0][0],
+            kept[kept.len() - 1][0]
+        ),
+        format!(
+            "  S₄₄₄, the nematic order of the 444 end-to-end vectors: {:.4} ± {:.4} (τ {:.1} \
+             samples)",
+            order.mean, order.error, order.tau
+        ),
+        half("order", &o1, &o2, o_apart, "; reported, not in the rule"),
+        half("U/N (kcal/mol)", &u1, &u2, u_apart, ""),
+        half("P (bar)", &p1, &p2, p_apart, ""),
+        half("trans fraction", &t1, &t2, t_apart, "; reported, not in the rule"),
+        format!(
+            "the verdict: {}: S₄₄₄ {:.4} ± {:.4} against finite-size ≤ {isotropic:.3} and genuine \
+             order ≥ {ordered:.3}; U's halves {u_apart:.2} σ and P's {p_apart:.2} σ apart, {settled} \
+             {HALVES_AGREE}",
+            outcome.named(),
+            order.mean,
+            order.error
+        ),
+    ];
+    Ok((outcome, lines))
+}
+
+/// A field as [`integrate_with`]'s potential, for a box with nothing decoupled.
+struct Plain<'a>(&'a PeriodicForceField);
+
+impl Potential for Plain<'_> {
+    fn energy_and_forces(&self, at: &[[f64; 3]], forces: &mut [[f64; 3]]) -> f64 {
+        Potential::energy_and_forces(self.0, at, forces)
+    }
+}
+
+/// **The finite-size box**: [`isotropic_sites`] on [`FOUR_TIMES`] less [`four_times_empty`], at
+/// [`DECANE`]'s density — C-1b's start procedure, its conformers at [`START_TRANS`], its uniform
+/// rotations, its packer and radii and budget — from [`FOUR_TIMES_START_SEED`]; `r_c` 9 Å, Ewald at
+/// δ = 10⁻⁵ before the production's mesh. Pure decane: no benzene.
+fn four_times_start(a: &Alkane) -> hexadecane::Start {
+    isotropic_sites(
+        a,
+        FOUR_TIMES,
+        &four_times_empty(),
+        DECANE.density,
+        FOUR_TIMES_START_SEED,
+        START_TRANS,
+        9.0 * ANGSTROM,
+        1e-5,
+        PACKING_ITERATIONS,
+    )
+}
+
+/// The finite-size box's field: the decanes' GAFF model ([`with_gaff`]), with the production's mesh
+/// and neighbour list.
+fn four_times_field(a: &Alkane, l: &Liquid) -> PeriodicForceField {
+    production(with_gaff(l.field.clone(), a), l)
+}
+
+/// What the finite-size box is judged by: every molecule is a decane.
+fn four_times_watch(l: &Liquid, a: &Alkane) -> Watch {
+    Watch {
+        solvent: l.molecules.clone(),
+        ends: a.ends(),
+        carbons: a.carbons.clone(),
+    }
+}
+
+/// **The finite-size run's header**: the lattice, the sites left empty, the start's seed, trans
+/// probability and density, the stages, the run's seed, how often it records, the atom count and
+/// digests of the box as built and of the model.
+fn four_times_header(l: &Liquid, field: &PeriodicForceField, every: f64) -> String {
+    format!(
+        "# finite-size decane molecules {} sites {:?} empty {:?} start-seed {FOUR_TIMES_START_SEED:#x} \
+         trans {} density {} stages {} seed {FOUR_TIMES_SEED:#x} record {} atoms {} built {:016x} \
+         model {:016x}",
+        l.octanols,
+        FOUR_TIMES,
+        four_times_empty(),
+        exact(START_TRANS),
+        exact(DECANE.density),
+        stages_text(&FOUR_TIMES_MELT),
+        exact(every),
+        l.at.len(),
+        positions_digest(&l.at),
+        model_digest(field)
+    )
+}
+
+/// Where the finite-size run writes: `PANTOMETRY_DECANE_FINITE_SIZE_DIR`, which must be named, so
+/// that it never writes anywhere it was not sent.
+fn four_times_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(std::env::var_os("PANTOMETRY_DECANE_FINITE_SIZE_DIR").expect(
+        "PANTOMETRY_DECANE_FINITE_SIZE_DIR names the directory the finite-size run writes, and only it",
+    ));
+    std::fs::create_dir_all(&dir).expect("the finite-size directory");
+    dir
+}
+
+/// **444 decanes, run and read by the registered rule**, under [`four_times_dir`]: read back from
+/// `record.txt` and `end.txt` when a run wrote them under the same header ([`four_times_header`]),
+/// either not whole or written differently refused by name; otherwise run now under a lock `run`,
+/// the start first written to `built.txt`, [`FOUR_TIMES_MELT`] through [`integrate_with`] — `U` per
+/// decane, `P`, `T`, the order and the trans fraction every 0.1 ps, logged to `run.log` in 2.5 ps
+/// blocks — and the record and the end written atomically, the record first. Then
+/// [`finite_size_verdict`] and the uncorrelated bands of 444 and 111, logged to `finite_size.log`.
+/// Nothing about the model is asserted.
+fn four_times_measured() {
+    let t = std::time::Instant::now();
+    let dir = four_times_dir();
+    let a = Alkane::new(D10);
+    let s = four_times_start(&a);
+    let l = &s.liquid;
+    assert_eq!(l.octanols, FOUR_TIMES_MOLECULES);
+    let field = four_times_field(&a, l);
+    let watch = four_times_watch(l, &a);
+    let want = four_times_header(l, &field, RECORD_EVERY);
+    let (record_path, end_path) = (dir.join("record.txt"), dir.join("end.txt"));
+    let cell = l.cell();
+    log(
+        &dir,
+        "finite_size",
+        &format!(
+            "{} decanes, {} atoms, box {:?} Å at {:.6} g/cm³; packed in {} iterations, {} kicks, worst \
+             pair {:.5} of the radii; built in {:.1} s",
+            l.octanols,
+            l.at.len(),
+            cell.lengths().map(|x| x / ANGSTROM),
+            l.octanols as f64 * a.molecule.mass() / cell.volume() / 1e3,
+            s.packed.iterations,
+            s.packed.kicks,
+            s.packed.worst,
+            t.elapsed().as_secs_f64()
+        ),
+    );
+    let rows = if let Ok(text) = std::fs::read_to_string(&record_path) {
+        let rows = parse_record(&text, &want).unwrap_or_else(|why| {
+            panic!(
+                "{} is not this run's or not whole ({why}): remove it and end.txt to run again",
+                record_path.display()
+            )
+        });
+        let (head, end) = std::fs::read_to_string(&end_path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| parse_positions(&t))
+            .unwrap_or_else(|why| panic!("{} is not whole ({why})", end_path.display()));
+        assert_eq!(head, want, "{} was run differently", end_path.display());
+        assert_eq!(end.len(), l.at.len());
+        log(&dir, "finite_size", "read back from record.txt and end.txt");
+        rows
+    } else {
+        let _lock = Lock::take(&dir, "run");
+        write_positions(&dir.join("built.txt"), &want, &l.at);
+        let (end, rows) = integrate_with(
+            "decane ×4",
+            &l.dynamics(),
+            l.octanols,
+            |_: &MeltStage| Plain(&field),
+            |at: &[[f64; 3]]| liquid_pressure(&field, l, at),
+            &FOUR_TIMES_MELT,
+            &l.at,
+            FOUR_TIMES_SEED,
+            &watch,
+            RECORD_EVERY,
+            &dir,
+            "run",
+        );
+        let partial = record_path.with_extension("partial");
+        std::fs::write(&partial, record_text(&want, &rows)).expect("the record");
+        std::fs::rename(&partial, &record_path).expect("rename");
+        write_positions(&end_path, &want, &end);
+        rows
+    };
+    let (iso, sd) = isotropic_order(FOUR_TIMES_MOLECULES, 1000, 0x150);
+    let (iso_once, sd_once) = isotropic_order(ONCE_MOLECULES, 1000, 0x150);
+    log(
+        &dir,
+        "finite_size",
+        &format!(
+            "for information: an uncorrelated random set of {FOUR_TIMES_MOLECULES} directions gives \
+             {iso:.4} ± {sd:.4} (band ≤ {:.4}), of {ONCE_MOLECULES} {iso_once:.4} ± {sd_once:.4} (band \
+             ≤ {:.4}), a ratio of {:.3} against √4's 2",
+            iso + 3.0 * sd,
+            iso_once + 3.0 * sd_once,
+            iso_once / iso
+        ),
+    );
+    let (_, lines) = finite_size_verdict(&rows, RECORD_EVERY).unwrap_or_else(|why| panic!("{why}"));
+    for line in &lines {
+        log(&dir, "finite_size", line);
+    }
+    log(
+        &dir,
+        "finite_size",
+        &format!("the whole in {:.0} s", t.elapsed().as_secs_f64()),
+    );
+}
+
+/// **The order at four times the size** (release, one core, about 5.8 h; writes only
+/// `PANTOMETRY_DECANE_FINITE_SIZE_DIR`): [`four_times_measured`]. 154 500 steps and 3 060 records
+/// at the 132.1 ms a step and 114.4 ms a record that
+/// [`the_decane_order_at_four_times_the_size_cost_measured`] read with throttling off and
+/// AboveNormal priority; 238.0 and 258.3 ms, 10.4 h, with it on. Registered before it ran, with
+/// [`finite_size_verdict`]'s rule and [`finite_size_gate`]. `PANTOMETRY_DECANE_FINITE_SIZE_DIR=
+/// C:/pantometry-w4/decane_finite_size cargo test --release --locked -p pantometry-forcefield
+/// --test benzene_partitioned_into_decane the_decane_order_at_four_times_the_size_measured --
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "444 decanes, 154 500 steps: about six hours with --release"]
+fn the_decane_order_at_four_times_the_size_measured() {
+    four_times_measured();
+}
+
+/// **The finite-size run's cost** (release, one core, minutes; writes nothing): the 444-decane box
+/// built, 200 steps at 0.5 fs in a 50 ps⁻¹ bath off the packing, then 300 at 2 fs timed; a record's
+/// pressure, order and trans fraction timed ten times; and [`FOUR_TIMES_MELT`] projected from them.
+#[test]
+#[ignore = "the 444-decane box built and stepped a few hundred times: minutes with --release"]
+fn the_decane_order_at_four_times_the_size_cost_measured() {
+    let t = std::time::Instant::now();
+    let a = Alkane::new(D10);
+    let s = four_times_start(&a);
+    let l = &s.liquid;
+    let field = four_times_field(&a, l);
+    let watch = four_times_watch(l, &a);
+    println!(
+        "{} decanes, {} atoms, box {:.2?} Å; packed in {} iterations and {} kicks; built in {:.1} s",
+        l.octanols,
+        l.at.len(),
+        l.cell().lengths().map(|x| x / ANGSTROM),
+        s.packed.iterations,
+        s.packed.kicks,
+        t.elapsed().as_secs_f64()
+    );
+    let mut at = l.at.clone();
+    let mut md = l
+        .dynamics()
+        .with_bath(Bath::Langevin {
+            temperature: KELVIN,
+            friction: 50e12,
+            seed: 1,
+        })
+        .thermalised(&at, KELVIN, 1);
+    md.run(&field, &mut at, 0.5 * FS, 200);
+    let mut md = md.with_bath(Bath::Langevin {
+        temperature: KELVIN,
+        friction: 5e12,
+        seed: 2,
+    });
+    let steps = 300;
+    let s0 = std::time::Instant::now();
+    md.run(&field, &mut at, 2.0 * FS, steps);
+    let step = s0.elapsed().as_secs_f64() / steps as f64;
+    let s1 = std::time::Instant::now();
+    for _ in 0..10 {
+        std::hint::black_box((
+            liquid_pressure(&field, l, &at),
+            watch.order(&at),
+            watch.trans(&at),
+        ));
+    }
+    let record = s1.elapsed().as_secs_f64() / 10.0;
+    let (mut total_steps, mut records) = (0.0, 0.0);
+    for st in &FOUR_TIMES_MELT {
+        total_steps += (st.picoseconds * 1e-12 / st.dt).round();
+        records += (st.picoseconds * 1e-12 / RECORD_EVERY).round();
+    }
+    // The strain-out stage's steps are taken at the 2 fs step's cost: the same force evaluation.
+    let whole = total_steps * step + records * record;
+    println!(
+        "a step at 2 fs {:.1} ms; a record (P, order, trans) {:.1} ms; {total_steps} steps and \
+         {records} records: {:.2} h",
+        1e3 * step,
+        1e3 * record,
+        whole / 3600.0
     );
 }
 
@@ -2054,6 +2643,317 @@ fn the_extension_gate_reads_its_registered_window() {
             "{what}: {why:?}"
         );
     }
+}
+
+/// **The 444-decane start is what it says, and deterministic**: [`four_times_start`] built twice.
+///
+/// - **444 decanes, 32 atoms each, in order**, the four [`four_times_empty`] sites one per
+///   2 × 7 × 8 replica and distinct;
+/// - **at [`DECANE`]'s density**: `444 m / V` within 16 ε, and every edge C-1b's box's replicated
+///   2 × 2 × 1 times `(444/448)^(1/3)`, within 16 ε, the closed form for 448 sites shrunk to hold
+///   444 at one density;
+/// - **nothing overlaps, every molecule whole**: no two atoms nearer than their packing radii' sum by
+///   brute force over the 27 images with each molecule taken whole ([`worst_contact`]); every bond
+///   its relaxed conformer's to 64 ε and under half the shortest edge;
+/// - **isotropic**: the end-to-end vectors' order inside the band an uncorrelated random set of 444
+///   shows, its mean plus three standard deviations; and the trans fraction the generator's count
+///   to the bit;
+/// - **deterministic**: the second build is the first to the bit, every coordinate.
+#[test]
+fn the_four_times_start_is_isotropic_at_its_density_and_whole() {
+    let a = Alkane::new(D10);
+    let t = std::time::Instant::now();
+    let s = four_times_start(&a);
+    let built = t.elapsed().as_secs_f64();
+    let l = &s.liquid;
+    let o = &a.molecule;
+    let empty = four_times_empty();
+    let [_, nj, nk] = FOUR_TIMES;
+    let replica = |e: usize| {
+        let (i, j) = (e / (nj * nk), (e / nk) % nj);
+        (i / DECANE.lattice[0], j / DECANE.lattice[1])
+    };
+    let mut replicas: Vec<(usize, usize)> = empty.iter().map(|&e| replica(e)).collect();
+    replicas.sort_unstable();
+    replicas.dedup();
+    assert_eq!(
+        replicas.len(),
+        4,
+        "one empty site in each replica: {empty:?}"
+    );
+    assert_eq!(
+        FOUR_TIMES.iter().product::<usize>() - empty.len(),
+        FOUR_TIMES_MOLECULES
+    );
+    assert_eq!(l.octanols, FOUR_TIMES_MOLECULES);
+    assert_eq!(l.molecules.len(), FOUR_TIMES_MOLECULES);
+    let mut next = 0;
+    for r in &l.molecules {
+        assert_eq!(r.start, next, "the molecules are the atoms in order");
+        assert_eq!(r.len(), 32);
+        next = r.end;
+    }
+    assert_eq!(next, l.at.len());
+
+    let cell = l.cell();
+    let density = l.octanols as f64 * o.mass() / cell.volume();
+    let (once, _, _) = Liquid::cell_of(o, DECANE.lattice, DECANE.density);
+    let shrink = (FOUR_TIMES_MOLECULES as f64 / 448.0).cbrt();
+    let edges: Vec<f64> = (0..3)
+        .map(|k| {
+            let want = (FOUR_TIMES[k] / DECANE.lattice[k]) as f64 * once.lengths()[k] * shrink;
+            cell.lengths()[k] / want - 1.0
+        })
+        .collect();
+    println!(
+        "built in {built:.1} s: {} iterations, {} kicks; {} decanes in {:.3?} Å at {:.10} g/cm³; the \
+         edges C-1b's × (2, 2, 1) × (444/448)^(1/3) to {:.1e}",
+        s.packed.iterations,
+        s.packed.kicks,
+        l.octanols,
+        cell.lengths().map(|x| x / ANGSTROM),
+        density / 1e3,
+        edges.iter().fold(0.0f64, |m, x| m.max(x.abs()))
+    );
+    assert!(
+        (density / DECANE.density - 1.0).abs() <= 16.0 * EPS,
+        "{density}"
+    );
+    for (k, e) in edges.iter().enumerate() {
+        assert!(e.abs() <= 16.0 * EPS, "edge {k}: {e:e}");
+    }
+
+    let (w, i, j) = worst_contact(&l.at, &l.molecules, &s.radii, &cell);
+    println!(
+        "the worst pair over 27 images, molecules whole, {w:.5} of its radii' sum, atoms {i} and {j}"
+    );
+    assert!(w >= 1.0, "an overlap at {w} of the radii");
+    // A bond's two ends are each placed by a few roundings at the size of their coordinates — the
+    // centre plus the arm, the conversion to metres, the shift into the box — so its length is its
+    // conformer's to about `ε |x| / b` and not to `ε`: a 1.09 Å bond 70 Å from the origin carries
+    // 60 times the relative rounding of one at the origin. Each bond is held to eight of that, and
+    // the conformer's own rotation to 64 ε.
+    let mut worst = 0.0f64;
+    let mut longest = 0.0f64;
+    for r in &l.molecules {
+        for b in o.component.bonds() {
+            let [x, y] = b.atoms;
+            let (p, q) = (l.at[r.start + x], l.at[r.start + y]);
+            let here = len(sub(p, q));
+            let own = len(sub(o.at[x], o.at[y]));
+            let reach = p.iter().chain(&q).fold(0.0f64, |m, c| m.max(c.abs()));
+            let rounding = 64.0 * EPS + 8.0 * EPS * reach / own;
+            worst = worst.max((here / own - 1.0).abs() / rounding);
+            longest = longest.max(here);
+        }
+    }
+    println!("every bond its conformer's to {worst:.3} of its rounding bound");
+    assert!(
+        worst <= 1.0,
+        "a bond {worst} of its rounding bound off its conformer's"
+    );
+    assert!(longest < cell.half_shortest_edge());
+
+    let ends = a.ends();
+    let order = nematic_order(&directions(&l.at, &l.molecules, ends));
+    let (iso, sd) = isotropic_order(FOUR_TIMES_MOLECULES, 1000, 0x150);
+    let gauche: usize = s.gauche.iter().sum();
+    let dihedrals = 7 * l.octanols;
+    let (trans, _) = conformations(&l.at, &l.molecules, &a.carbons);
+    println!(
+        "order {order:.4} against an uncorrelated set of 444's {iso:.4} ± {sd:.4}, band ≤ {:.4}; \
+         {gauche} gauche of {dihedrals}, trans {trans:.4}",
+        iso + 3.0 * sd
+    );
+    assert!(order <= iso + 3.0 * sd, "the start's order {order}");
+    assert_eq!(
+        trans.to_bits(),
+        ((dihedrals - gauche) as f64 / dihedrals as f64).to_bits()
+    );
+
+    let again = four_times_start(&a);
+    let bits = |at: &[[f64; 3]]| -> Vec<u64> { at.iter().flatten().map(|x| x.to_bits()).collect() };
+    assert_eq!(
+        bits(&again.liquid.at),
+        bits(&l.at),
+        "the same seed, the same bits"
+    );
+}
+
+/// Rows of the finite-size run for the rule's closed cases: [`FOUR_TIMES_MELT`]'s 10, 50 and
+/// `settle` records at 0.1 ps, each column as [`synthetic`]'s.
+fn four_times_rows(settle: usize, seed: u64, columns: [(f64, f64, f64); 6]) -> Vec<MeltRow> {
+    synthetic(60 + settle, seed, columns)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, r))| (usize::from(i >= 10) + usize::from(i >= 60), r))
+        .collect()
+}
+
+/// **The finite-size rule on closed cases**, each of its four outcomes and its edges:
+///
+/// - the thresholds are the registered ones: 0.137 and 0.158 to three places, from 1.3 × S₁₁₁/√4
+///   and 0.75 × S₁₁₁;
+/// - **the rule itself** ([`finite_size_outcome`]): at the finite-size threshold exactly,
+///   finite-size, and one ulp above, inconclusive; at the ordered threshold exactly, genuine order,
+///   and one ulp below, inconclusive; `U`'s or `P`'s halves 3 σ apart exactly settled, one ulp more
+///   not settled, and not a number not settled; an order that is not a number, not settled;
+/// - **on a record** ([`finite_size_verdict`]): white noise about an order of 0.08, finite-size; of
+///   0.147, inconclusive; of 0.20, genuine order; `U` drifting 0.2 kcal/mol or `P` 200 bar over
+///   the window, not settled even with the order at 0.08. **The window's edges**: a `U` that is not a
+///   number at the settle's record 999 changes nothing, and at 1 000 or 2 999 makes it not settled.
+///   A settle of 2 999 or 3 001 records is refused. The verdict line names the outcome and both
+///   thresholds.
+#[test]
+fn the_finite_size_rule_on_closed_cases() {
+    let (lo, hi) = finite_size_thresholds();
+    println!("the thresholds: finite-size ≤ {lo:.6}, genuine order ≥ {hi:.6}");
+    assert_eq!(
+        (format!("{lo:.3}"), format!("{hi:.3}")),
+        ("0.137".to_string(), "0.158".to_string()),
+        "the registered thresholds"
+    );
+    let up = |x: f64| f64::from_bits(x.to_bits() + 1);
+    let down = |x: f64| f64::from_bits(x.to_bits() - 1);
+    for (order, u, p, want) in [
+        (0.0, 0.0, 0.0, FiniteSize::Isotropic),
+        (lo, 0.0, 0.0, FiniteSize::Isotropic),
+        (up(lo), 0.0, 0.0, FiniteSize::Inconclusive),
+        (down(hi), 0.0, 0.0, FiniteSize::Inconclusive),
+        (hi, 0.0, 0.0, FiniteSize::Ordered),
+        (0.5, 0.0, 0.0, FiniteSize::Ordered),
+        (lo, HALVES_AGREE, HALVES_AGREE, FiniteSize::Isotropic),
+        (lo, up(HALVES_AGREE), 0.0, FiniteSize::NotSettled),
+        (hi, 0.0, up(HALVES_AGREE), FiniteSize::NotSettled),
+        (0.147, f64::NAN, 0.0, FiniteSize::NotSettled),
+        (0.147, 0.0, f64::NAN, FiniteSize::NotSettled),
+        (f64::NAN, 0.0, 0.0, FiniteSize::NotSettled),
+    ] {
+        assert_eq!(
+            finite_size_outcome(order, u, p),
+            want,
+            "order {order:e}, U {u:e} σ, P {p:e} σ"
+        );
+    }
+
+    let settle = 3000;
+    let flat = [
+        (0.1, 0.1, 0.0),
+        (12.5, 0.0, 0.3),
+        (-45.0, 0.0, 300.0),
+        (298.15, 0.0, 10.0),
+        (0.08, 0.0, 0.01),
+        (0.855, 0.0, 0.01),
+    ];
+    let judged = |cols: [(f64, f64, f64); 6]| {
+        finite_size_verdict(&four_times_rows(settle, 0xF5, cols), RECORD_EVERY)
+            .unwrap_or_else(|why| panic!("{why}"))
+    };
+    let (outcome, lines) = judged(flat);
+    println!("{}", lines.join("\n"));
+    assert_eq!(outcome, FiniteSize::Isotropic);
+    assert!(
+        lines[0].contains("2000 records, 106.1–306.0 ps"),
+        "{}",
+        lines[0]
+    );
+    let last = lines.last().unwrap();
+    assert!(
+        last.starts_with("the verdict: finite-size (isotropic liquid): ")
+            && last.contains("finite-size ≤ 0.137 and genuine order ≥ 0.158"),
+        "{last}"
+    );
+    for (level, want) in [
+        (0.147, FiniteSize::Inconclusive),
+        (0.20, FiniteSize::Ordered),
+    ] {
+        let mut cols = flat;
+        cols[4].0 = level;
+        let (outcome, lines) = judged(cols);
+        assert_eq!(outcome, want, "{level}");
+        assert!(lines.last().unwrap().contains(want.named()));
+    }
+    for (what, column, slope) in [("U", 1, 0.2 / 2000.0), ("P", 2, 200.0 / 2000.0)] {
+        let mut cols = flat;
+        cols[column].1 = slope;
+        let (outcome, lines) = judged(cols);
+        assert_eq!(outcome, FiniteSize::NotSettled, "{what} drifting");
+        println!("{what} drifting: {}", lines.last().unwrap());
+    }
+    for (record, want) in [
+        (999, FiniteSize::Isotropic),
+        (1000, FiniteSize::NotSettled),
+        (2999, FiniteSize::NotSettled),
+    ] {
+        let mut rows = four_times_rows(settle, 0xF5, flat);
+        rows[60 + record].1[1] = f64::NAN;
+        let (outcome, _) = finite_size_verdict(&rows, RECORD_EVERY).expect("judged");
+        assert_eq!(outcome, want, "a NaN at the settle's record {record}");
+    }
+    for n in [2999, 3001] {
+        let why = finite_size_verdict(&four_times_rows(n, 0xF5, flat), RECORD_EVERY)
+            .expect_err("another length");
+        assert!(
+            why.contains("not the record the rule was registered for"),
+            "{why}"
+        );
+    }
+}
+
+/// **The partition leg's finite-size gate on closed cases** ([`finite_size_gate`]), on records of
+/// the extension's 3 000: white noise about stationary `U` and `P` and an order of 0.21 — the
+/// extension's — **passes**, which the gate as first registered refuses as above the band; 0.29
+/// passes; **0.31 is refused** as above the finite-size ceiling; and **an order rising** from 0.18
+/// to 0.24 over the gated 200 ps, all of it under 0.30, is refused as rising.
+#[test]
+fn the_finite_size_gate_for_the_partition_leg() {
+    let band = 0.1569;
+    let flat = [
+        (0.1, 0.1, 0.0),
+        (12.5, 0.0, 0.3),
+        (-45.0, 0.0, 300.0),
+        (298.15, 0.0, 10.0),
+        (0.21, 0.0, 0.01),
+        (0.855, 0.0, 0.01),
+    ];
+    let rows = |level: f64, rise: f64| -> Vec<MeltRow> {
+        let mut cols = flat;
+        cols[4].0 = level;
+        synthetic(3000, 0x9A7E, cols)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, mut r))| {
+                if i >= 1000 {
+                    r[4] += rise * (i - 1000) as f64 / 2000.0;
+                }
+                (0, r)
+            })
+            .collect()
+    };
+    let ok = finite_size_gate(&rows(0.21, 0.0), RECORD_EVERY)
+        .unwrap_or_else(|l| panic!("0.21 stationary refused:\n{}", l.join("\n")));
+    println!("{}", ok.join("\n"));
+    assert!(
+        ok[0].contains("at most the finite-size ceiling 0.30"),
+        "{}",
+        ok[0]
+    );
+    let first = extension_verdict(&rows(0.21, 0.0), RECORD_EVERY, band).expect_err("the band");
+    assert!(first.join("\n").contains("above the band"), "{first:?}");
+    assert!(finite_size_gate(&rows(0.29, 0.0), RECORD_EVERY).is_ok());
+    let high = finite_size_gate(&rows(0.31, 0.0), RECORD_EVERY).expect_err("0.31");
+    assert!(
+        high.join("\n")
+            .contains("above the finite-size ceiling, 0.30"),
+        "{high:?}"
+    );
+    let rising = finite_size_gate(&rows(0.18, 0.06), RECORD_EVERY).expect_err("rising");
+    println!("rising: {}", rising.last().unwrap());
+    assert!(
+        rising.join("\n").contains("the order is rising"),
+        "{rising:?}"
+    );
+    assert!(!rising.join("\n").contains("above the finite-size ceiling"));
 }
 
 /// A fresh directory under the system's temporary one, named by the process and `tag`.

@@ -1134,7 +1134,9 @@ pub fn pack(
 /// **The worst contact by brute force over the 27 images**: the smallest `r / (ρ_i + ρ_j)`, radii
 /// `radii`, over every pair of atoms in different molecules at each of the 27 shifts
 /// `n ∈ {−1, 0, 1}³`, and every atom with its own molecule's at the 26 that are not zero.
-/// Independent of [`pack`]'s cell list and minimum image. Returns the ratio and the two atoms.
+/// Independent of [`pack`]'s cell list and minimum image. Returns the ratio and the two atoms. For
+/// atoms of different molecules each axis's shift is chosen alone, which is the least of the 27 to
+/// the bit, since `|e|²` is a sum of one term an axis.
 ///
 /// **The positions are taken as they are, each molecule whole**, not wrapped atom by atom: a
 /// molecule across a face would otherwise meet itself at a shift that is not an image, which is
@@ -1177,6 +1179,26 @@ pub fn worst_contact(
             let same = owner[i] == owner[j];
             let d = sub(w[i], w[j]);
             let s = radii[i] + radii[j];
+            if !same {
+                // `|e|²` is a sum of one term an axis, so the least over the 27 shifts is each
+                // axis's least over its three, and the same vector: the same bits as the loop
+                // below would give, in a ninth of the work.
+                let e = [0, 1, 2].map(|k| {
+                    let mut best_k = d[k];
+                    for n in [1.0, -1.0] {
+                        let c = d[k] + n * l[k];
+                        if c.abs() < best_k.abs() {
+                            best_k = c;
+                        }
+                    }
+                    best_k
+                });
+                let ratio = dot(e, e).sqrt() / s;
+                if ratio < best.0 {
+                    best = (ratio, i, j);
+                }
+                continue;
+            }
             for nx in -1i32..=1 {
                 for ny in -1i32..=1 {
                     for nz in -1i32..=1 {
@@ -1233,9 +1255,63 @@ pub fn isotropic(
     accuracy: f64,
     max_iterations: usize,
 ) -> Start {
+    isotropic_sites(
+        a,
+        counts,
+        &[],
+        density,
+        seed,
+        p_trans,
+        cutoff,
+        accuracy,
+        max_iterations,
+    )
+}
+
+/// **[`isotropic`] with some lattice sites left empty**: the sites whose lattice indices
+/// `(i n₁ + j) n₂ + k` are in `empty` hold no molecule, and **every site is [`Liquid::cell_of`]'s at
+/// `density` scaled by `(kept/sites)^(1/3)` on every axis**, so that the box is the whole lattice's
+/// box at `density` shrunk uniformly and the molecules kept are at `density`. (Asking
+/// [`Liquid::cell_of`] for the denser lattice instead would not scale it: its sites keep a common
+/// gap, so their shape changes with the volume.) The gap returned is the unscaled lattice's. Each
+/// kept molecule is drawn from `Rng::for_index(seed, its lattice index)` exactly as [`isotropic`]
+/// draws it, and the packer is [`isotropic`]'s. With `empty` empty, it is [`isotropic`] to the bit:
+/// the box is then [`Liquid::cell_of`]'s as it stands.
+///
+/// # Panics
+///
+/// If an index in `empty` is not a site or is named twice, or the packer does not clear every
+/// overlap in `max_iterations`.
+#[allow(clippy::too_many_arguments)]
+pub fn isotropic_sites(
+    a: &Alkane,
+    counts: [usize; 3],
+    empty: &[usize],
+    density: f64,
+    seed: u64,
+    p_trans: f64,
+    cutoff: f64,
+    accuracy: f64,
+    max_iterations: usize,
+) -> Start {
     let o = &a.molecule;
-    let (cell, site, gap) = Liquid::cell_of(o, counts, density);
-    let mols = counts[0] * counts[1] * counts[2];
+    let sites = counts[0] * counts[1] * counts[2];
+    for (x, &e) in empty.iter().enumerate() {
+        assert!(e < sites, "site {e} of {sites}");
+        assert!(!empty[..x].contains(&e), "site {e} emptied twice");
+    }
+    let mols = sites - empty.len();
+    let (whole, full_site, gap) = Liquid::cell_of(o, counts, density);
+    let (cell, site) = if empty.is_empty() {
+        (whole, full_site)
+    } else {
+        let shrink = (mols as f64 / sites as f64).cbrt();
+        let site = full_site.map(|x| shrink * x);
+        (
+            PeriodicBox::new([0, 1, 2].map(|k| counts[k] as f64 * site[k])),
+            site,
+        )
+    };
     let one: Vec<f64> = o
         .component
         .atoms()
@@ -1248,6 +1324,9 @@ pub fn isotropic(
         for j in 0..counts[1] {
             for k in 0..counts[2] {
                 let index = ((i * counts[1] + j) * counts[2] + k) as u64;
+                if empty.contains(&(index as usize)) {
+                    continue;
+                }
                 let mut rng = Rng::for_index(seed, index);
                 let c = a.conformer(&mut rng, p_trans);
                 rotations.push(uniform_rotation(&mut rng));

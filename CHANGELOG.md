@@ -5161,6 +5161,109 @@ protects nothing.
     settle took, and the windows **13.9 h** at thirteen (17.8 h at seventeen). The extension is
     a fourth stage the melt never had, so `the_decane_leg_cost_measured` now prints it.
 
+- **The extension failed its pre-registered gate on the order's level, not its trend; a
+  finite-size test at 444 decanes is registered to decide which — written, checked, not run.**
+  `the_decane_partition_measured` ran the extension at `c1fa79e` (300 ps at 298.15 K, 5 357 s;
+  exit 101 on 2026-10-25, as written to when the gate fails). Over the last 200 ps, records
+  1 000–3 000 at 100.1–300.0 ps:
+
+  | | first half | second half | apart |
+  | --- | --- | --- | --- |
+  | `U/N` (kcal/mol) | 12.5278 ± 0.0200 | 12.5238 ± 0.0201 | 0.14 σ |
+  | `P` (bar) | −43.2 ± 13.1 | −46.0 ± 13.7 | 0.15 σ |
+  | nematic order | 0.2277 ± 0.0053 (τ 53) | **0.2103 ± 0.0044** (τ 32) | 2.55 σ |
+  | trans fraction | 0.8540 | 0.8551 | 0.23 σ, not gated |
+
+  Stationary in all three by the 3 σ criterion, and the order is not rising. **But its second
+  half, 0.2103, is over the registered allowance, the band 0.1569 + 0.04 = 0.1969**, so the leg
+  stopped and no window ran. The whole extension, printed and not gated, put the order's halves at
+  0.2011 and 0.2134. Its last three 2.5 ps blocks were 0.247–0.252, against 0.19–0.22 before
+  them; that is inside the halves' errors and is noted, not read.
+  - **The question**: the band is that of *uncorrelated* random chains. Is about 0.21 the
+    orientational correlation of an isotropic liquid in a box of 111, where S falls as `1/√N`, or
+    the model's own tendency to order?
+  - **Registered before any data, not to be changed after** (`tests/benzene_partitioned_into_decane.rs`):
+    - **the box**: pure decane, **N = 444**, four times 111. C-1b's 2 × 7 × 8 lattice replicated
+      2 × 2 × 1 is 448 sites. One is left empty in each replica, its site (1, 3, 4), and every site
+      is shrunk by `(444/448)^(1/3)`, so the 444 sit at 0.7255 g/cm³ in C-1b's box scaled uniformly:
+      61.40 × 71.67 × 32.86 Å, 14 208 atoms. The start is C-1b's procedure (conformers at trans
+      0.75, uniform rotations, the packer and its radii and budget), seed `0xC1B4`, through the
+      new `hexadecane::isotropic_sites`, which `isotropic` now calls with no site empty;
+    - **the run**: 1 ps of strain out, 5 ps at 600 K, then **300 ps at 298.15 K**, seed `0xC2_F5`.
+      `U`, `P`, `T`, the order and the trans fraction are recorded every 0.1 ps;
+    - **the reading**: S₄₄₄ over the last 200 ps with its τ-corrected error, plus the `U` and `P`
+      halves;
+    - **the rule**, with S₁₁₁ = 0.2103:
+      - finite-size (isotropic liquid) if S₄₄₄ ≤ **0.137** = 1.3 × S₁₁₁/√4;
+      - genuine order if S₄₄₄ ≥ **0.158** = 0.75 × S₁₁₁;
+      - inconclusive between;
+      - **not settled**, whatever S₄₄₄, unless the `U` and `P` halves each agree within 3 σ.
+
+      The thresholds are computed from S₁₁₁, as 0.1367 and 0.1577. S₁₁₁ is the logged 0.2103,
+      not 0.210: that gives the registered 0.137 and 0.158 to three places, where 0.210 would put
+      each on its rounding edge (0.1365, 0.1575);
+    - **if the verdict is finite-size**, the partition leg's settle gate becomes
+      `finite_size_gate`. It keeps the extension's window and the 3 σ halves for `U`, `P` and the
+      order, but sets the order's second half at most **0.30** in place of the band plus 0.04.
+      That still refuses a nematic: the transition is near 0.43, and C-1's aligned decane was
+      0.57. **It is written and checked, and not called by the production path**: it is to be
+      applied to the 111-decane extension's existing record without rerunning.
+    - For information: an uncorrelated random set of 444 directions gives **0.0386 ± 0.0140**
+      (band 0.0806), against 111's 0.0765 ± 0.0268. The ratio is 1.98 against `√4`.
+  - **The machinery**: the melt's loop is now `integrate_with`, generic in the potential, and
+    `integrate` calls it with the same calls in the same order. The settle gate takes its order
+    ceiling as an `OrderCeiling`, and under the band its every line is the old gate's to the byte.
+    The run writes only `PANTOMETRY_DECANE_FINITE_SIZE_DIR`, which must be named: `built.txt`,
+    `record.txt` and `end.txt`, each headed and digested (lattice, empty sites, seeds, stages,
+    atoms, the built box's and the model's digests), read back on a rerun or refused by name, and
+    run under a lock.
+    `hexadecane::worst_contact` now picks each axis's image on its own for atoms in different
+    molecules. That gives the same minimum to the bit, because `|e|²` is a sum of one term per
+    axis, and it does a ninth of the work: the 444-box check went from about 90 s to about 20 s in
+    debug, and C-1b's and C-2's boxes report the same worst pair as before.
+  - **Checked** (three new default tests, about 75 s together in debug, almost all of it the
+    444-decane start built twice):
+    - **the 444 start**:
+      - 444 molecules of 32 atoms in order, one empty site per replica;
+      - the density to 16 ε, every edge C-1b's × (2, 2, 1) × `(444/448)^(1/3)` to 0 ulps;
+      - no overlap over 27 images with the molecules whole (worst 1.00039 of the radii);
+      - every bond its conformer's within 0.275 of a rounding bound earned from the coordinates'
+        size, `64 ε + 8 ε |x|/b`. 64 ε alone was not earned at 72 Å: a 1.09 Å bond there measured
+        1.5 × 10⁻¹⁴;
+      - the order 0.0296 inside the 444 band, and the trans fraction the generator's count to
+        the bit;
+      - two builds the same bits;
+    - **the rule's four outcomes at their edges**:
+      - S₄₄₄ at each threshold exactly and one ulp past it;
+      - the `U` or `P` halves exactly 3 σ apart, then one ulp more, then not a number;
+      - on records: 0.08 is finite-size, 0.147 inconclusive and 0.20 ordered, while a drifting `U`
+        or `P` is not settled;
+      - a `U` that is not a number at the settle's record 999 changes nothing, and at 1 000 or
+        2 999 makes it not settled;
+      - settles of 2 999 or 3 001 records are refused;
+    - **the finite-size gate**:
+      - 0.21 stationary passes, where the band's gate refuses it, and 0.29 passes;
+      - 0.31 fails as above the ceiling;
+      - an order rising 0.18 → 0.24, all of it under 0.30, fails as rising (4.22 σ).
+  - **Sabotaged**, by script in binary mode with an anchor counted once, from copies named for each
+    sabotage, and restored by `cp`, `touch` and SHA-256 (the decane file `7a0b11bf…`, the module
+    `899911af…`, before and after). All four
+    were caught:
+
+    | sabotage | caught by |
+    | --- | --- |
+    | the thresholds swapped | the rule: the registered thresholds, 0.158 and 0.137 |
+    | the rule with S₁₁₁/4 in place of S₁₁₁/√4 | the rule: the registered thresholds, 0.068 |
+    | the partition gate's ceiling at 0.20 | the gate: 0.21 stationary refused |
+    | `worst_contact`'s x images dropped | the contact check's face case, 14.5 of the radii against 0.5 |
+  - **The cost**, from `the_decane_order_at_four_times_the_size_cost_measured`, release, one core:
+    **132.1 ms a step** and 114.4 ms a record with throttling off and AboveNormal priority, so the
+    154 500 steps and 3 060 records take **5.8 h**. With the throttle on, the same measurement read
+    238.0 ms and 10.4 h.
+  - **Command**, not run: `PANTOMETRY_DECANE_FINITE_SIZE_DIR=C:/pantometry-w4/decane_finite_size
+    cargo test --release --locked -p pantometry-forcefield --test benzene_partitioned_into_decane
+    the_decane_order_at_four_times_the_size_measured -- --ignored --nocapture`.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
