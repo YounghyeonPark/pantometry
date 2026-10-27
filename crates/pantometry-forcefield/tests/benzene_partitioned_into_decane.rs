@@ -107,7 +107,7 @@
 //! apart and so not rising — but **its second half, 0.2103, was over the band's 0.1969**. The leg
 //! stopped there, as registered, and no window ran.
 //!
-//! # The order at four times the size: registered, not run
+//! # The order at four times the size: registered, then run
 //!
 //! Is about 0.21 a finite-size effect — a correlated isotropic liquid's order, which falls as
 //! `1/√N` — or the model's own tendency to order? **Registered before any of it was run, and not to
@@ -130,8 +130,13 @@
 //! - **if finite-size**, the partition leg's settle gate becomes [`finite_size_gate`]: the order's
 //!   halves within 3 σ as before, `U` and `P` as before, and the order's second half at most
 //!   [`FINITE_SIZE_CEILING`] = 0.30, which still refuses a nematic (the transition's 0.43, C-1's
-//!   0.57). It is written and checked, and **not called by the production**: it is to be applied to
-//!   the 111-decane extension's existing record without rerunning it.
+//!   0.57). It is to be applied to the 111-decane extension's existing record without rerunning it.
+//!
+//! **Run 2026-10-26, the verdict is finite-size**: S₄₄₄ = 0.0668 ± 0.0062 over the last 200 ps,
+//! under half the finite-size threshold, with `U`'s halves 2.12 σ apart and `P`'s 2.65 σ. The
+//! order's own halves rose from 0.0565 to 0.0770, 3.58 σ, which the rule does not read; both are
+//! inside the 444 band. **So [`partition_gate`] is [`finite_size_gate`]**, and the gate as first
+//! registered is printed beside it and decides nothing.
 //!
 //! An uncorrelated random set of 444 directions shows 0.0386 ± 0.0140 (of 111, 0.0765 ± 0.0268),
 //! and is reported beside the reading. Written under `PANTOMETRY_DECANE_FINITE_SIZE_DIR`, which must
@@ -1132,11 +1137,19 @@ fn extension_verdict(rows: &[MeltRow], every: f64, band: f64) -> Result<Vec<Stri
 /// half at most [`FINITE_SIZE_CEILING`] = 0.30 in place of the band plus 0.04. 0.30 still refuses a
 /// nematic: Maier–Saupe's order at the transition is 0.43, and C-1's aligned decane was 0.57.
 ///
-/// **Not called by [`decane_partition_measured`]**: it is to be applied to the 111-decane
-/// extension's existing record, without rerunning, only if [`finite_size_verdict`] says
-/// finite-size. Adopting it is calling it there in place of [`extension_verdict`].
+/// It was to be applied to the 111-decane extension's existing record, without rerunning, only if
+/// [`finite_size_verdict`] said finite-size. It did, on 2026-10-26, so it is
+/// [`partition_gate`].
 fn finite_size_gate(rows: &[MeltRow], every: f64) -> Result<Vec<String>, Vec<String>> {
     extension_verdict_under(rows, every, OrderCeiling::Fixed(FINITE_SIZE_CEILING))
+}
+
+/// **The gate [`decane_partition_measured`] holds the extension to before any window runs**:
+/// [`finite_size_gate`], since the 444-decane run's registered verdict was finite-size (S₄₄₄ 0.0668
+/// ± 0.0062, 2026-10-26). [`extension_verdict`], the gate as first registered, is still printed
+/// beside it and decides nothing.
+fn partition_gate(rows: &[MeltRow], every: f64) -> Result<Vec<String>, Vec<String>> {
+    finite_size_gate(rows, every)
 }
 
 /// [`extension_verdict`] with the order held under `ceiling`.
@@ -1313,22 +1326,34 @@ fn decane_partition_measured(tag: &str, base: Protocol) {
     for line in &lines {
         log(&root, tag, line);
     }
-    let verdict = extension_verdict(&started.extension, RECORD_EVERY, band);
-    let (lines, passed) = match verdict {
+    let lines = match extension_verdict(&started.extension, RECORD_EVERY, band) {
+        Ok(l) | Err(l) => l,
+    };
+    log(
+        &root,
+        tag,
+        "the extension's gate as first registered, band plus 0.04, read back from extension.txt: \
+         it failed on 2026-10-25, and is reported and decides nothing",
+    );
+    for line in &lines {
+        log(&root, tag, line);
+    }
+    let (lines, passed) = match partition_gate(&started.extension, RECORD_EVERY) {
         Ok(l) => (l, true),
         Err(l) => (l, false),
     };
     log(
         &root,
         tag,
-        "the extension's pre-registered gate, over its last 200 ps, read back from extension.txt",
+        "the extension's gate since the 444-decane verdict, finite-size: the same last 200 ps, \
+         the order at most 0.30",
     );
     for line in &lines {
         log(&root, tag, line);
     }
     assert!(
         passed,
-        "the extension did not pass its pre-registered gate, so no window runs: {}",
+        "the extension did not pass the finite-size gate, so no window runs: {}",
         lines.join("\n")
     );
     let dir = root.join(tag);
@@ -1454,7 +1479,7 @@ fn decane_partition_measured(tag: &str, base: Protocol) {
 /// **Benzene's log P(decane/water) at W3's protocol** (release, one core). The water leg read
 /// back from 4c-2's run; the decane leg melted (`start.txt`, `melt.txt`: run 2026-10-25, and its
 /// settle failed its gate), the settle extended by 300 ps (`extended.txt`, `extension.txt`) and
-/// gated on the extension's last 200 ps, and thirteen windows of 20 + 200 ps ([`LONG`]) from the
+/// gated on the extension's last 200 ps by [`partition_gate`], and thirteen windows of 20 + 200 ps ([`LONG`]) from the
 /// extension's end, in `long/`, all under `PANTOMETRY_DECANE_DIR`. About 15.3 h: the extension
 /// 1.4 h at the 33.7 ms a step the settle took, and the windows 13.9 h at the 32.5 ms a step
 /// [`the_decane_leg_cost_measured`] read. `PANTOMETRY_DECANE_DIR=C:/pantometry-w4/decane
@@ -2904,7 +2929,8 @@ fn the_finite_size_rule_on_closed_cases() {
 /// the extension's 3 000: white noise about stationary `U` and `P` and an order of 0.21 — the
 /// extension's — **passes**, which the gate as first registered refuses as above the band; 0.29
 /// passes; **0.31 is refused** as above the finite-size ceiling; and **an order rising** from 0.18
-/// to 0.24 over the gated 200 ps, all of it under 0.30, is refused as rising.
+/// to 0.24 over the gated 200 ps, all of it under 0.30, is refused as rising. And
+/// [`partition_gate`], the production's, passes 0.21 and refuses 0.31 as this gate does.
 #[test]
 fn the_finite_size_gate_for_the_partition_leg() {
     let band = 0.1569;
@@ -2954,6 +2980,10 @@ fn the_finite_size_gate_for_the_partition_leg() {
         "{rising:?}"
     );
     assert!(!rising.join("\n").contains("above the finite-size ceiling"));
+    // The production's gate is this one: 0.21 stationary, which the band refuses, passes, and 0.31
+    // does not.
+    assert!(partition_gate(&rows(0.21, 0.0), RECORD_EVERY).is_ok());
+    assert!(partition_gate(&rows(0.31, 0.0), RECORD_EVERY).is_err());
 }
 
 /// A fresh directory under the system's temporary one, named by the process and `tag`.

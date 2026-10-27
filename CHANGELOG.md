@@ -5293,6 +5293,19 @@ protects nothing.
     13 windows follow. The run's files are in `C:/pantometry-w4/decane_finite_size`, headed and
     digested.
 
+- **The partition leg's gate is now the finite-size gate, as registered.**
+  `the_decane_partition_measured` holds the extension to `partition_gate`, which is
+  `finite_size_gate`: the same record and last 200 ps, `U`, `P` and the order's halves within
+  3 σ, and the order at most 0.30. The gate as first registered (the band plus 0.04, which the
+  extension failed) is still printed beside it and decides nothing. Nothing is rerun: the melt
+  and the extension are read back from their files, and the windows start from `extended.txt`, as
+  before. By the extension's logged numbers it passes: halves 0.2277 and 0.2103 at 2.55 σ, under
+  0.30, with `U` and `P` at 0.14 and 0.15 σ.
+  - The production's choice of gate was in a code path no default test reaches. It is now one
+    function, which `the_finite_size_gate_for_the_partition_leg` holds to passing 0.21 and refusing
+    0.31. Two sabotages were each caught there: `partition_gate` as the band's gate, and as a gate
+    with no ceiling (1.0).
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round
