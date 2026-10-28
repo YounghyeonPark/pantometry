@@ -5306,6 +5306,33 @@ protects nothing.
     0.31. Two sabotages were each caught there: `partition_gate` as the band's gate, and as a gate
     with no ceiling (1.0).
 
+- **Benzene's log P(decane/water) from simulation: 1.92 ± 0.15 with the staged water, and 1.69 ±
+  0.14 from the two direct legs.** `the_decane_partition_measured` ran at `96954e2`, exit 0 on
+  2026-10-27, in 47 995 s. `partition_gate` passed on the extension's record. The 13 windows needed
+  no insertion, their lowest overlap 0.319.
+
+  | | kcal/mol |
+  | --- | --- |
+  | ΔG_solv, decane | **−3.435 ± 0.135** (TI −3.495, halves −3.596, −3.275) |
+  | ΔG_hyd, direct (read back from 4c-2) | −1.130 ± 0.144 |
+  | ΔG_hyd, staged (FreeSolv −0.81) | −0.82 ± 0.15 |
+
+  - **Against the references registered before the run:** hexadecane:water 2.14 (25 °C) and olive
+    oil:saline 2.23 (37 °C). The staged value is 0.22 and 0.31 under them. The direct value is 0.45
+    under 2.14, about 3.2 σ. No measured decane:water value was read.
+  - **The direct legs' shortfall is the water leg's**, as in 4c-2. Its 0.32 kcal/mol of overbinding
+    against FreeSolv is 0.23 in log P. Octanol showed the same: 1.92 direct and 2.14 staged, against
+    2.13.
+  - **The decane side**: charging is +0.014 kcal/mol of the 3.435, so nearly all of it is van der
+    Waals. Against benzene's measured gas-to-hexadecane `log L¹⁶` 2.786, which is −3.80 kcal/mol,
+    decane solvates 0.37 less. That is the size of the staged value's 0.30 shortfall. Decane is not
+    hexadecane, so this is an order of magnitude and not a defect.
+  - **The order in each window**, a diagnostic: 0.11–0.24, about the 111 box's 0.21, with τ of
+    66–268 samples of 2 000; one window's halves are 8.4 σ apart. The 444-decane run read this order
+    as the box's, and nothing asserts it.
+  - **For 4c-3**, the adipose oil:water is the simulated 1.92 ± 0.15, so P = 83. Olive oil's
+    measured 169 is shown beside it, not used.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round

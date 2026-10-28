@@ -156,6 +156,27 @@
 //! Written under `PANTOMETRY_DECANE_DIR` (`start.txt`, `melt.txt`, `melt.log`, `extended.txt`,
 //! `extension.txt`, `extend.log`, `long/`); nothing is written under `PANTOMETRY_OCTANOL_DIR`.
 //!
+//! # The result: run 2026-10-27
+//!
+//! At `96954e2`, from the extension's end through [`partition_gate`], which passed. Thirteen windows,
+//! none inserted (lowest overlap 0.319), in 47 995 s.
+//!
+//! - **ΔG_solv,dec = −3.435 ± 0.135 kcal/mol** (TI −3.495, halves −3.596 and −3.275). Charging is
+//!   +0.014 of it, so nearly all of it is van der Waals.
+//! - **log P(decane/water) = 1.69 ± 0.14** with 4c-2's direct water leg (−1.130 ± 0.144). That is
+//!   0.45 under hexadecane:water's 2.14.
+//! - **It is 1.92 ± 0.15 with the staged water** (−0.82 ± 0.15, FreeSolv −0.81). That is 0.22 under
+//!   2.14 and 0.31 under olive oil's 2.23.
+//! - The direct water leg's 0.32 kcal/mol of overbinding is the octanol leg's too: 1.92 direct, 2.14
+//!   staged, against 2.13.
+//! - **Against `log L¹⁶` 2.786**, benzene's measured gas-to-hexadecane partition, −3.80 kcal/mol,
+//!   decane solvates benzene 0.37 less. That is the same size as the staged log P's shortfall
+//!   (0.30 kcal/mol). Decane is not hexadecane, so this is read as an order of magnitude and not as
+//!   a defect.
+//! - **The order in each window, a diagnostic:** 0.11–0.24, about the 111 box's 0.21, with τ of
+//!   66–268 samples of 2 000, so some windows' halves are up to 8.4 σ apart. The 444-decane run
+//!   read the box's order as finite-size, and nothing asserts it.
+//!
 //! # Checks
 //!
 //! Default, unoptimised, on a small decane box of twelve sites at `r_c` 6.5 Å unless named: both
