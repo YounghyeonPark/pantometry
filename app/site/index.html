@@ -47,6 +47,7 @@
   <button id="verify">verify</button>
   <label><input id="deep" type="checkbox"> deep</label>
   <button id="fit">fit view</button>
+  <label title="for a scene with nothing to place, whose canvas is its readings against time"><input id="log" type="checkbox"> log</label>
   <span class="sp"></span>
   <button id="play">play</button>
   <input id="frame" type="range" min="0" max="0" value="0" disabled>
@@ -162,10 +163,37 @@ function draw() {
 
   const out = call(wasm.pantometry_draw, JSON.stringify({
     ...cam, aspect: w / Math.max(1, h), frame: +$('frame').value, fit: needsFit,
+    width: w, height: h, log: $('log').checked,
   }));
   needsFit = false;
   lastDraw = out;
 
+  // Nothing to place, so the readings against time: strokes and text in this canvas's pixels,
+  // every coordinate computed by editor_core::chart, which the native shell paints too.
+  if (out.chart) {
+    const dpr = devicePixelRatio || 1;
+    for (const [points, colour, width] of out.chart.strokes) {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = width * dpr;
+      ctx.beginPath();
+      points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      ctx.stroke();
+    }
+    ctx.font = `${11 * dpr}px ui-monospace, monospace`;
+    const align = { left: ['left', 'middle'], right: ['right', 'middle'], top: ['center', 'top'],
+                    'top-left': ['left', 'top'], 'top-right': ['right', 'top'] };
+    for (const [[x, y], text, anchor, colour] of out.chart.texts) {
+      ctx.fillStyle = colour;
+      [ctx.textAlign, ctx.textBaseline] = align[anchor];
+      ctx.fillText(text, x, y);
+    }
+    ctx.textBaseline = 'alphabetic';
+    $('readings').textContent = (out.readings || [])
+      .map(r => `${r.domain}  ${r.label}  ${r.value.toFixed(4)} ${r.unit}`).join('\n');
+    $('notes').textContent = '';
+    $('clock').textContent = `t = ${out.t.toFixed(4)} s`;
+    return;
+  }
   if (out.empty) {
     ctx.fillStyle = '#8b95a3';
     ctx.font = `${14 * (devicePixelRatio || 1)}px ui-sans-serif, system-ui`;
@@ -285,6 +313,7 @@ $('report').onclick = () => $('report').classList.remove('open');
 
 $('fit').onclick = () => { needsFit = true; draw(); };
 $('frame').oninput = draw;
+$('log').onchange = draw;
 $('play').onclick = () => {
   playing = !playing;
   $('play').textContent = playing ? 'pause' : 'play';

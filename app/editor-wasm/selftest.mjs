@@ -92,9 +92,25 @@ const unrun = call(w.pantometry_draw, DRAW);
 ok('and one that has not run that it has not',
    (unrun.empty || '').includes('until it runs'), unrun.empty);
 take(w.pantometry_run());
-const readings = call(w.pantometry_draw, DRAW);
-ok('and one that ran and reports readings that it does',
-   (readings.empty || '').includes('reports readings, not places'), readings.empty);
+// **And one that ran and reports readings is not empty at all**: it is its readings against
+// time, as strokes and text in the canvas's pixels, which is `editor_core::chart` — the same
+// call the desktop paints. Held to the run: a legend entry for every reading, and a stroke
+// that stays inside the canvas it was asked for.
+const CHART = JSON.stringify({ aspect: 1.6, frame: 0, fit: true, width: 800, height: 500 });
+const readings = call(w.pantometry_draw, CHART);
+ok('and one that ran and reports readings is drawn as them, not as a sentence',
+   !!readings.chart && !readings.empty, JSON.stringify(readings).slice(0, 200));
+const legends = new Set((readings.chart?.texts || []).map(t => t[1]));
+const named = (readings.readings || []).map(r => `${r.domain} ${r.label}`);
+ok('with a legend entry for every reading the run reports',
+   named.length > 0 && named.every(n => legends.has(n)),
+   `${named.filter(n => !legends.has(n)).join(', ') || 'no readings named'}`);
+const inside = (readings.chart?.strokes || []).every(([pts]) =>
+  pts.every(([x, y]) => x >= 0 && x <= 800 && y >= 0 && y <= 500));
+ok('and every stroke inside the canvas it was asked for', inside);
+const logged = call(w.pantometry_draw, JSON.stringify({ ...JSON.parse(CHART), log: true }));
+ok('and asked for log axes, it says so',
+   (logged.chart?.texts || []).some(t => t[1].endsWith('(log)')));
 
 // The run is the CLI's run.
 call(w.pantometry_check, HOT);

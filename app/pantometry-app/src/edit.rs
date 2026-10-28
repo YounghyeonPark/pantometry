@@ -817,6 +817,10 @@ struct App {
     /// Draw surfaces at all. Off falls back to the flat splat painter, which is a *different
     /// picture* and not a style — see `viewport`.
     shaded: bool,
+    /// Draw a run with nothing to place — its readings against time — on log axes. Off by
+    /// default because a temperature is read on a linear one; on, a compartment's terminal phase
+    /// is a straight line whose slope is its rate. See `editor_core::chart`.
+    log_readings: bool,
     /// Start a run on the first update. Set by `--run`; cleared once it has fired.
     run_at_once: bool,
     /// What the cursor can be over in the shaded view, and the note each field's canvas carries.
@@ -960,6 +964,7 @@ impl App {
             gpu: Arc::new(Mutex::new(render::Shared::default())),
             built: None,
             shaded: true,
+            log_readings: false,
             run_at_once: false,
             shaded_probes: Vec::new(),
             shaded_notes: Vec::new(),
@@ -1621,6 +1626,9 @@ impl App {
                     ui.label(egui::RichText::new("Viewport").weak().size(11.0));
                     ui.radio_value(&mut self.shaded, true, "Shaded surfaces");
                     ui.radio_value(&mut self.shaded, false, "Cells (see inside)");
+                    // For the scenes with nothing to place, whose viewport is their readings
+                    // against time. It changes the picture, so it is here and not in a panel.
+                    ui.checkbox(&mut self.log_readings, "Readings on log axes");
                     ui.separator();
                     // **Solo is the outliner's.** It acts on the *selection*, and the
                     // outliner is where a selection is made — so the checkbox sits in its header,
@@ -3681,6 +3689,42 @@ impl App {
         });
 
         let Some(framing) = framing else {
+            // **Nothing to place, so the readings against time** — the numbers are the output,
+            // and this is them drawn. `editor_core::chart` decides every coordinate; this paints
+            // what it is handed and nothing else.
+            if let Some(view) = &self.run {
+                if let Some(chart) = editor_core::chart::chart(&view.run, self.log_readings) {
+                    let cursor = view.run.frames.get(view.frame).map(|f| f.t);
+                    let drawing = chart.draw(rect.width() as f64, rect.height() as f64, cursor);
+                    let at = |p: [f64; 2]| {
+                        egui::pos2(rect.left() + p[0] as f32, rect.top() + p[1] as f32)
+                    };
+                    let rgb = |c: [u8; 3]| egui::Color32::from_rgb(c[0], c[1], c[2]);
+                    for s in &drawing.strokes {
+                        painter.add(egui::Shape::line(
+                            s.points.iter().map(|p| at(*p)).collect(),
+                            egui::Stroke::new(s.width as f32, rgb(s.colour)),
+                        ));
+                    }
+                    for t in &drawing.texts {
+                        let align = match t.anchor {
+                            editor_core::chart::Anchor::Left => egui::Align2::LEFT_CENTER,
+                            editor_core::chart::Anchor::Right => egui::Align2::RIGHT_CENTER,
+                            editor_core::chart::Anchor::Top => egui::Align2::CENTER_TOP,
+                            editor_core::chart::Anchor::TopLeft => egui::Align2::LEFT_TOP,
+                            editor_core::chart::Anchor::TopRight => egui::Align2::RIGHT_TOP,
+                        };
+                        painter.text(
+                            at(t.at),
+                            align,
+                            &t.text,
+                            egui::FontId::monospace(11.0),
+                            rgb(t.colour),
+                        );
+                    }
+                    return;
+                }
+            }
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,

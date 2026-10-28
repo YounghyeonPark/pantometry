@@ -25,6 +25,8 @@
 //! - **Running and verifying** — thin passes over [`World::run`] and
 //!   [`pantometry_world::verify::verify`], returning the run's JSON (which `viewer-core` reads)
 //!   and the battery's rendered report.
+//! - **A chart of the readings**, for a run with nothing to place — see [`chart`]. Both shells
+//!   paint the strokes it hands them, so neither computes where a point goes.
 //!
 //! # The two halves, and which one this is
 //!
@@ -39,6 +41,7 @@
 
 #![deny(missing_docs)]
 
+pub mod chart;
 pub mod edit;
 
 pub use edit::{
@@ -264,7 +267,8 @@ pub fn place(at: pantometry::scene::Placed, p: [f64; 3]) -> [f64; 3] {
 /// - the scene does not check, so nothing was laid out and the error is the thing to read;
 /// - it checks and has not run, and what it draws — bodies, a protein, a fluid — only exists once
 ///   a run has placed it;
-/// - it has run and still has nothing to draw, which is the scene that reports readings.
+/// - it has run and still has nothing to draw — no panel, and no reading to chart either, since a
+///   run with readings is drawn as them (see [`chart`]).
 ///
 /// One function for both editors, because two copies of this sentence is how the desktop and the
 /// browser would come to say different things about the same scene.
@@ -275,8 +279,7 @@ pub fn nothing_to_draw(checks: bool, ran: bool) -> &'static str {
             "nothing here has a place until it runs — press run to see what it draws or reports"
         }
         (true, true) => {
-            "this scene reports readings, not places — sources, lumps and networks have no \
-             geometry to draw"
+            "this run has nothing to place and reported no readings to plot against time"
         }
     }
 }

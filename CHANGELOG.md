@@ -5378,6 +5378,36 @@ protects nothing.
     organ's balance, because at 96 h the feed is 3.1e-39. Fat departs by 1.8e-12, 0.21 of its
     bound; a frame spacing off by one step is 1.4e8 bounds out, a `K_p` off by its last digit 8.5e11.
 
+- **A run with nothing to place is drawn as its readings against time, in both editors.** The five
+  scenes with no panel — three thermal networks and the two compartment models — had a sentence
+  where their viewport was, and the frame's readings overlay sat after the early return that
+  printed it, so it never drew for them either. `editor_core::chart` now turns a run's readings
+  into one plot per unit on a shared time axis, with a cursor at the frame on screen, and hands
+  both shells the strokes and text in pixels. **View → Readings on log axes**, and `log` in the
+  browser, put each plot on decades. The sentence for a run that reports readings is gone; the
+  third case of `nothing_to_draw` is now a run with neither a panel nor a reading.
+  - **Checked against the frames and a closed form**, in `readings_have_a_chart.rs`:
+    - every point is a reading, bit for bit;
+    - a log axis drops `cleared`'s zero rather than pinning it to the floor;
+    - the slope drawn for scene `34`'s blood, read back off two vertices a day apart, is the
+      body's slowest mode — an eigenvalue of the scene's own perfusion matrix, bisected on its
+      characteristic polynomial — after Euler's `−ln(1 + hλ)/h`. It sits 2.1e-7 off against a
+      bound of 2.0e-6, which separates the stepped rate from the continuous one fourteen times
+      over.
+  - **What was wrong first:** the slope was written to 1e-9 across two adjacent frames and failed
+    at 3.2e-6. That was the file and not the chart: a run reaches an editor as JSON with seven
+    significant figures, so each reading is good to 5e-7 of itself, and the bound is now that,
+    `1e-6/Δt`.
+  - **Scene `34` is drawn every half hour**, 192 frames for 48, because at two hours apart its
+    frames missed the absorption entirely: the liver peaks at 0.6 h and the blood at 1.4 h. Frames
+    are not a physics knob here; the terminal-phase check reads the same departures, 0.12, 0.19
+    and 0.21 of their bounds.
+  - Seven sabotages, each caught: a dropped first frame, a zero pinned to the floor, `ln` against
+    `log10` bounds, a stroke drawn 1% narrower than its plot, the desktop never charting, the
+    browser never charting, and a legend written `domain: label`. The browser's selftest gained
+    four claims and the preset test now holds that none of the three sentences is on a readings
+    scene's viewport and that its time axis and every legend are.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round

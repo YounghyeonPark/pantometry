@@ -94,6 +94,26 @@ at all: it is `7.5e-14` of a framing spanning 2.7e11 m, both its ends narrowed t
 the fit, measured from a centre 2.0e10 m away, put that one point on the top edge of the viewport.
 Framed on itself, its outer end lands at 0.85 of the half-frame and it spans 0.76 of the viewport.
 
+## A run with nothing to place is drawn as its readings
+
+Five shipped scenes — three thermal networks and two compartment models — have no panel: their
+domains have nothing that is *at* anywhere. The viewport said so in a sentence and stopped. It now
+draws the run's readings against time, one plot per unit and stacked on one time axis, with a
+cursor at the frame on screen; **View → Readings on log axes** puts each plot on decades, where a
+compartment's terminal phase is a straight line.
+
+`editor_core::chart` is all of it: the lines, the axes, the ticks and every pixel coordinate. The
+desktop paints its strokes with egui and the browser with a 2D canvas, and neither computes where
+anything goes. `tests/readings_have_a_chart.rs` holds it to three things:
+
+- every point is a frame's reading, bit for bit;
+- a log axis leaves out a zero rather than pinning it to the floor;
+- the slope the log chart *draws* for scene `34`'s blood, read back off two of its vertices a day
+  apart, is the body's slowest mode — an eigenvalue of the scene's own perfusion matrix found by
+  bisection — to `1e-6/Δt`, the rounding of the seven significant figures the run's JSON carries.
+  It was written at 1e-9 across two adjacent frames first and failed at 3.2e-6; the file, not the
+  chart.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

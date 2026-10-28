@@ -357,6 +357,62 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
         }
     }
     let Some(bounds) = bounds else {
+        // **Nothing to place, so the readings against time**, as strokes and text in the canvas's
+        // own pixels — `editor_core::chart` computes every coordinate, the same one the native
+        // shell paints, and the page draws what it is handed.
+        let log = req.get("log").and_then(|v| v.as_bool()).unwrap_or(false);
+        if let Some((run, chart)) = s
+            .run
+            .as_ref()
+            .and_then(|run| Some((run, editor_core::chart::chart(run, log)?)))
+        {
+            let cursor = run.frames.get(frame_index).map(|f| f.t);
+            let d = chart.draw(num("width", 800.0), num("height", 600.0), cursor);
+            let hex = |c: [u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+            let strokes: Vec<serde_json::Value> = d
+                .strokes
+                .iter()
+                .map(|s| serde_json::json!([s.points, hex(s.colour), s.width]))
+                .collect();
+            let texts: Vec<serde_json::Value> = d
+                .texts
+                .iter()
+                .map(|t| {
+                    let anchor = match t.anchor {
+                        editor_core::chart::Anchor::Left => "left",
+                        editor_core::chart::Anchor::Right => "right",
+                        editor_core::chart::Anchor::Top => "top",
+                        editor_core::chart::Anchor::TopLeft => "top-left",
+                        editor_core::chart::Anchor::TopRight => "top-right",
+                    };
+                    serde_json::json!([t.at, t.text, anchor, hex(t.colour)])
+                })
+                .collect();
+            // The frame's readings too, for the page's readings pane: the chart is the history
+            // and the pane is the value at the cursor.
+            let frame = run.frames.get(frame_index);
+            let readings: Vec<serde_json::Value> = frame
+                .map(|f| {
+                    f.readings
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "domain": r.domain, "label": r.label, "value": r.value,
+                                "unit": r.unit
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return give(
+                serde_json::json!({
+                    "chart": { "strokes": strokes, "texts": texts },
+                    "readings": readings,
+                    "t": frame.map_or(0.0, |f| f.t),
+                })
+                .to_string(),
+            );
+        }
         return give(
             serde_json::json!({
                 "empty": editor_core::nothing_to_draw(s.checked.error.is_none(), s.run.is_some())

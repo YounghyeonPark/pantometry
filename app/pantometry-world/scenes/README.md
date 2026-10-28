@@ -212,7 +212,11 @@ it, or that used the wrong spacing on one axis, fails there and passes everythin
 The first of five scenes with **nothing to draw** -- `11`, `12`, `13`, `32` and `34`, which is the list
 `tests/scene.rs` holds as `NOTHING_TO_DRAW`. A network's nodes have capacities, not positions, so
 `as_field` declines to invent a continuum and the renderer has no panel to make — the numbers
-are the output. That is also the point: a `lump` would report the motor as one temperature, and
+are the output. **The editor draws them**: with no panel, both editors' viewports are the run's
+readings against time, one plot per unit, a cursor at the frame on screen, on log axes when
+**View → Readings on log axes** (or the browser's `log`) is ticked — where scene `34`'s four days
+end as a straight line falling at its slowest mode. `editor_core::chart` computes every
+coordinate for both. That is also the point: a `lump` would report the motor as one temperature, and
 the winding runs 13 K above the housing at half a time constant in. The thing that fails is not
 the thing you can measure.
 

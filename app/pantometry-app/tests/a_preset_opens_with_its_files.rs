@@ -210,8 +210,11 @@ fn a_preset_that_carries_a_file_runs() {
 ///
 /// - a scene that does not check: the protein, written out without its PDB;
 /// - one that checks and has not run: the protein opened from its tile;
-/// - one that has run and has nothing to draw: a preset with no tile, which is exactly the set
-///   of scenes whose run carries no panel — a network and two windings, reporting readings.
+/// - one that has run and has nothing to place: a preset with no tile, which is exactly the set
+///   of scenes whose run carries no panel — a network, two windings and two bodies of
+///   compartments. It is not empty any more: it is drawn as its readings against time, so what
+///   this holds is that **none** of the three sentences is there and the chart is — its time axis
+///   and a legend entry for every reading.
 #[test]
 fn an_empty_viewport_says_why_it_is_empty() {
     // **Three sentences, not one.** Each check below compares a frame against the function's own
@@ -258,11 +261,29 @@ fn an_empty_viewport_says_why_it_is_empty() {
         .expect("a preset with nothing to draw");
     std::fs::write(dir.join("readings.json"), readings_only.json).expect("the scene");
     let readings = dump_in(&dir, &["readings.json", "--ran"]);
-    let said = editor_core::nothing_to_draw(true, true);
+    for said in [(false, false), (true, false), (true, true)]
+        .map(|(checks, ran)| editor_core::nothing_to_draw(checks, ran))
+    {
+        assert!(
+            !readings.contains(said),
+            "a scene that reports readings says {said:?} after its run:\n{readings}"
+        );
+    }
     assert!(
-        readings.contains(said),
-        "a scene that reports readings, after its run:\n{readings}"
+        readings.contains("time / "),
+        "a scene that reports readings has no time axis after its run:\n{readings}"
     );
+    let run = viewer_core::Run::from_json(
+        &editor_core::run(readings_only.json, &editor_core::OnDisk).expect("the scene runs"),
+    )
+    .expect("the run parses");
+    for r in &run.frames[0].readings {
+        let legend = format!("{} {}", r.domain, r.label);
+        assert!(
+            readings.contains(&legend),
+            "{legend:?} is not on the chart:\n{readings}"
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
