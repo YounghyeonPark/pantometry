@@ -111,6 +111,33 @@ ok('and every stroke inside the canvas it was asked for', inside);
 const logged = call(w.pantometry_draw, JSON.stringify({ ...JSON.parse(CHART), log: true }));
 ok('and asked for log axes, it says so',
    (logged.chart?.texts || []).some(t => t[1].endsWith('(log)')));
+ok('and a thermal network has no discs', (readings.chart?.discs || []).length === 0);
+
+// **A compartment model is drawn as its body above the chart**: a disc per compartment and
+// depot from `editor_core::diagram`, the same call the desktop paints. Held to the scene and the
+// frame: as many discs as the scene has compartments and depots, inside the canvas, each
+// compartment named, and a filled disc for every concentration the frame has above zero.
+const TABLET = readFileSync(
+  join(here, '..', 'pantometry-world', 'scenes', '34-a-tablet-that-meets-the-liver-first.json'),
+  'utf8');
+const tablet = JSON.parse(TABLET).domains[0];
+call(w.pantometry_check, TABLET);
+take(w.pantometry_run());
+const BODY = JSON.stringify({ aspect: 1.6, frame: 40, fit: true, width: 800, height: 600 });
+const body = call(w.pantometry_draw, BODY);
+const discs = body.chart?.discs || [];
+ok('a compartment model is drawn as a disc per compartment and depot',
+   discs.length === tablet.volumes.length + tablet.depots.length,
+   `${discs.length} discs for ${tablet.volumes.length} + ${tablet.depots.length}`);
+ok('every disc inside the canvas',
+   discs.every(([[x, y], r]) => r > 0 && x - r >= 0 && x + r <= 800 && y - r >= 0 && y + r <= 600));
+const bodyTexts = new Set((body.chart?.texts || []).map(t => t[1]));
+ok('every compartment named', tablet.volumes.every(c => bodyTexts.has(c.label)),
+   tablet.volumes.map(c => c.label).filter(l => !bodyTexts.has(l)).join(', '));
+const positive = (body.readings || []).filter(r => r.unit === 'mg/L' && r.value > 0).length;
+const filled = discs.filter(([, , fill]) => typeof fill === 'string').length;
+ok('and a filled disc for every concentration above zero',
+   positive === tablet.volumes.length && filled === positive, `${filled} filled, ${positive} positive`);
 
 // The run is the CLI's run.
 call(w.pantometry_check, HOT);

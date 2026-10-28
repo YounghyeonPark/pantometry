@@ -361,18 +361,27 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
         // own pixels — `editor_core::chart` computes every coordinate, the same one the native
         // shell paints, and the page draws what it is handed.
         let log = req.get("log").and_then(|v| v.as_bool()).unwrap_or(false);
-        if let Some((run, chart)) = s
-            .run
-            .as_ref()
-            .and_then(|run| Some((run, editor_core::chart::chart(run, log)?)))
-        {
-            let cursor = run.frames.get(frame_index).map(|f| f.t);
-            let d = chart.draw(num("width", 800.0), num("height", 600.0), cursor);
+        if let Some((run, d)) = s.run.as_ref().and_then(|run| {
+            let d = editor_core::diagram::view(
+                &s.checked.bodies,
+                run,
+                log,
+                num("width", 800.0),
+                num("height", 600.0),
+                frame_index,
+            )?;
+            Some((run, d))
+        }) {
             let hex = |c: [u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
             let strokes: Vec<serde_json::Value> = d
                 .strokes
                 .iter()
                 .map(|s| serde_json::json!([s.points, hex(s.colour), s.width]))
+                .collect();
+            let discs: Vec<serde_json::Value> = d
+                .discs
+                .iter()
+                .map(|c| serde_json::json!([c.centre, c.radius, c.fill.map(hex), hex(c.outline)]))
                 .collect();
             let texts: Vec<serde_json::Value> = d
                 .texts
@@ -384,6 +393,9 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
                         editor_core::chart::Anchor::Top => "top",
                         editor_core::chart::Anchor::TopLeft => "top-left",
                         editor_core::chart::Anchor::TopRight => "top-right",
+                        editor_core::chart::Anchor::Bottom => "bottom",
+                        editor_core::chart::Anchor::BottomLeft => "bottom-left",
+                        editor_core::chart::Anchor::BottomRight => "bottom-right",
                     };
                     serde_json::json!([t.at, t.text, anchor, hex(t.colour)])
                 })
@@ -406,7 +418,7 @@ pub unsafe extern "C" fn pantometry_draw(ptr: *const u8, len: usize) -> *mut u8 
                 .unwrap_or_default();
             return give(
                 serde_json::json!({
-                    "chart": { "strokes": strokes, "texts": texts },
+                    "chart": { "strokes": strokes, "discs": discs, "texts": texts },
                     "readings": readings,
                     "t": frame.map_or(0.0, |f| f.t),
                 })

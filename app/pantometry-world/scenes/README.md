@@ -220,6 +220,10 @@ coordinate for both. That is also the point: a `lump` would report the motor as 
 the winding runs 13 K above the housing at half a time constant in. The thing that fails is not
 the thing you can measure.
 
+A compartment model, `32` or `34`, is also drawn above its chart as the body it describes — a disc
+per compartment coloured by its concentration, joined by its perfusions — from
+`editor_core::diagram`. The run still carries no panel, so the list is unchanged.
+
 The scene test carries a matching list, so an undrawable scene has to earn its place with an
 explicit check rather than passing by having nothing to check.
 

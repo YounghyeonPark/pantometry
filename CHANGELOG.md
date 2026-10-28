@@ -5407,6 +5407,41 @@ protects nothing.
     browser never charting, and a legend written `domain: label`. The browser's selftest gained
     four claims and the preset test now holds that none of the three sentences is on a readings
     scene's viewport and that its time axis and every legend are.
+- **A compartment model is drawn as the body it describes, above its chart, in both editors.**
+  `editor_core::diagram` lays each `compartments` domain out from the scene: a disc per
+  compartment, the central one in the middle and the rest on a ring, a vessel per perfusion and
+  link with its width going as the flow, each depot outside the compartment it empties into, and
+  an arrow out of every compartment that clears. The run colours it: each disc's concentration on
+  one logarithmic scale for the whole run, through the library's sequential ramp, with a colour bar
+  beside it; a zero is an outline, since it has no logarithm. The layout is turned to whichever of
+  24 angles the viewport holds largest, and each label goes on the compass point furthest from its
+  disc's vessels and arrows.
+  - **Not `Placement::marker`, which was written for this and does not fit it.** A marker is one
+    position per domain, and scene 34's four compartments are one domain. The topology is in the
+    scene and not in the run, so the diagram reads the parsed scene — the editor's authoring half
+    may name a domain — and every value from the readings. Nothing in the library changed.
+  - **Checked against the scene, the frames and a closed form**, in
+    `a_body_is_drawn_from_its_readings.rs`:
+    - every compartment, vessel and depot of both shipped compartment models is drawn once, in
+      the scene's order;
+    - a disc's area over its volume is one number for every compartment, to 1e-12;
+    - every disc's colour is the reading under its own label, looked up in the test and put
+      through the library's ramp there, and the scale is the decades around every frame's
+      concentrations;
+    - and **the discs hold the body**: at every frame, `Σ Cᵢ·Vᵢ` over the discs' concentrations
+      and the scene's volumes is the `in the body` the domain reports, which it sums from amounts
+      rather than products. The bound is the seven figures the run's JSON carries, and the worst
+      of 191 frames sits at 0.586 of it.
+  - The desktop's preset test reads a concentration beside every compartment off the frame, each
+    the last frame's reading to its three figures, and the depot and both clearances named; the
+    browser's selftest gained five claims: discs counted against the scene, inside the canvas, every
+    compartment named, a fill for every concentration above zero, and no disc for a thermal network.
+  - Nine sabotages, each caught: a compartment dropped, each disc reading its neighbour, a radius
+    going as the volume, a linear colour place, a scale renormalised per frame, a perfusion
+    dropped, the desktop never drawing a body, the browser never drawing one, and the browser
+    sending no discs. **What the desktop's test cannot see is a disc**: `--ui-dump` holds text, so
+    a shell that painted every label and no circle would pass it, and the screenshot is what shows
+    the circles.
 
 ### Changed
 

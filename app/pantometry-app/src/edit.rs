@@ -3693,9 +3693,14 @@ impl App {
             // and this is them drawn. `editor_core::chart` decides every coordinate; this paints
             // what it is handed and nothing else.
             if let Some(view) = &self.run {
-                if let Some(chart) = editor_core::chart::chart(&view.run, self.log_readings) {
-                    let cursor = view.run.frames.get(view.frame).map(|f| f.t);
-                    let drawing = chart.draw(rect.width() as f64, rect.height() as f64, cursor);
+                if let Some(drawing) = editor_core::diagram::view(
+                    &self.checked.bodies,
+                    &view.run,
+                    self.log_readings,
+                    rect.width() as f64,
+                    rect.height() as f64,
+                    view.frame,
+                ) {
                     let at = |p: [f64; 2]| {
                         egui::pos2(rect.left() + p[0] as f32, rect.top() + p[1] as f32)
                     };
@@ -3706,6 +3711,15 @@ impl App {
                             egui::Stroke::new(s.width as f32, rgb(s.colour)),
                         ));
                     }
+                    for c in &drawing.discs {
+                        let outline = egui::Stroke::new(1.0, rgb(c.outline));
+                        match c.fill {
+                            Some(fill) => {
+                                painter.circle(at(c.centre), c.radius as f32, rgb(fill), outline)
+                            }
+                            None => painter.circle_stroke(at(c.centre), c.radius as f32, outline),
+                        };
+                    }
                     for t in &drawing.texts {
                         let align = match t.anchor {
                             editor_core::chart::Anchor::Left => egui::Align2::LEFT_CENTER,
@@ -3713,6 +3727,9 @@ impl App {
                             editor_core::chart::Anchor::Top => egui::Align2::CENTER_TOP,
                             editor_core::chart::Anchor::TopLeft => egui::Align2::LEFT_TOP,
                             editor_core::chart::Anchor::TopRight => egui::Align2::RIGHT_TOP,
+                            editor_core::chart::Anchor::Bottom => egui::Align2::CENTER_BOTTOM,
+                            editor_core::chart::Anchor::BottomLeft => egui::Align2::LEFT_BOTTOM,
+                            editor_core::chart::Anchor::BottomRight => egui::Align2::RIGHT_BOTTOM,
                         };
                         painter.text(
                             at(t.at),

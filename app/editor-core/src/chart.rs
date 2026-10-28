@@ -131,7 +131,7 @@ pub fn chart(run: &Run, log: bool) -> Option<Chart> {
 
 /// The whole decades that hold `min..=max`, both positive: `10^⌊log min⌋` to `10^⌈log max⌉`, and
 /// at least one decade apart.
-fn decades(min: f64, max: f64) -> (f64, f64) {
+pub(crate) fn decades(min: f64, max: f64) -> (f64, f64) {
     let mut lo = 1.0;
     while lo > min {
         lo /= 10.0;
@@ -241,6 +241,12 @@ pub enum Anchor {
     TopLeft,
     /// Its top-right corner.
     TopRight,
+    /// Its bottom edge, horizontally centred.
+    Bottom,
+    /// Its bottom-left corner.
+    BottomLeft,
+    /// Its bottom-right corner.
+    BottomRight,
 }
 
 /// A connected run of points, in pixels from the top-left of the drawing.
@@ -267,18 +273,61 @@ pub struct Text {
     pub colour: [u8; 3],
 }
 
-/// Everything a chart puts on the screen, for a shell to paint as it is.
+/// A filled circle, in pixels from the top-left of the drawing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Disc {
+    /// Its centre.
+    pub centre: [f64; 2],
+    /// Its radius, in pixels.
+    pub radius: f64,
+    /// What it is filled with, or `None` for an outline alone: a value the scale cannot place.
+    pub fill: Option<[u8; 3]>,
+    /// The colour of its rim.
+    pub outline: [u8; 3],
+}
+
+/// Everything a chart or a diagram puts on the screen, for a shell to paint as it is.
+///
+/// **Painted in the order of the fields**: every stroke, then every disc over them, then every
+/// text over both. A diagram's vessels run centre to centre and the discs cover their ends.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Drawing {
     /// Lines: the readings, the axes and gridlines, and the cursor.
     pub strokes: Vec<Stroke>,
+    /// Circles: a diagram's compartments. A chart has none.
+    pub discs: Vec<Disc>,
     /// Tick labels, units, the time axis and each line's name.
     pub texts: Vec<Text>,
 }
 
+impl Drawing {
+    /// The same drawing moved down by `dy` pixels, for stacking two in one canvas.
+    pub fn shifted(mut self, dy: f64) -> Drawing {
+        for s in &mut self.strokes {
+            for p in &mut s.points {
+                p[1] += dy;
+            }
+        }
+        for c in &mut self.discs {
+            c.centre[1] += dy;
+        }
+        for t in &mut self.texts {
+            t.at[1] += dy;
+        }
+        self
+    }
+
+    /// Everything in `other` added after everything here, each kind keeping its painting order.
+    pub fn append(&mut self, other: Drawing) {
+        self.strokes.extend(other.strokes);
+        self.discs.extend(other.discs);
+        self.texts.extend(other.texts);
+    }
+}
+
 /// The grey the frame and tick labels are drawn in, and the fainter one of the gridlines.
-const INK: [u8; 3] = [150, 158, 170];
-const GRID: [u8; 3] = [58, 64, 74];
+pub(crate) const INK: [u8; 3] = [150, 158, 170];
+pub(crate) const GRID: [u8; 3] = [58, 64, 74];
 /// Room for the tick labels at the left and the time axis below, in pixels.
 const LEFT: f64 = 70.0;
 const RIGHT: f64 = 14.0;

@@ -179,9 +179,21 @@ function draw() {
       points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
       ctx.stroke();
     }
+    // A compartment model's discs, over the vessels: filled with the concentration's colour, or
+    // an outline alone where the scale has no place for the value.
+    for (const [[x, y], radius, fill, outline] of out.chart.discs || []) {
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, 2 * Math.PI);
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      ctx.strokeStyle = outline;
+      ctx.lineWidth = dpr;
+      ctx.stroke();
+    }
     ctx.font = `${11 * dpr}px ui-monospace, monospace`;
     const align = { left: ['left', 'middle'], right: ['right', 'middle'], top: ['center', 'top'],
-                    'top-left': ['left', 'top'], 'top-right': ['right', 'top'] };
+                    'top-left': ['left', 'top'], 'top-right': ['right', 'top'],
+                    bottom: ['center', 'bottom'], 'bottom-left': ['left', 'bottom'],
+                    'bottom-right': ['right', 'bottom'] };
     for (const [[x, y], text, anchor, colour] of out.chart.texts) {
       ctx.fillStyle = colour;
       [ctx.textAlign, ctx.textBaseline] = align[anchor];

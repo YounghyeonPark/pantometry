@@ -287,6 +287,61 @@ fn an_empty_viewport_says_why_it_is_empty() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **A compartment model's viewport is its body: a concentration beside each compartment, the
+/// frame's own.**
+///
+/// The dump holds text and not discs, so this holds what text can show. Every line ending in
+/// ` mg/L` is a disc's value — the chart's axis and the colour bar say `mg/L` alone — and there is
+/// one per compartment, each the frame's reading to the three figures it is written with. The
+/// frame is the last, which is the one `--ran` opens on. The depot and both clearances are named.
+#[test]
+fn a_compartment_model_is_drawn_as_its_body() {
+    let dir = empty_dir("body");
+    let tablet = PRESETS
+        .iter()
+        .find(|p| p.json.contains("\"perfusions\"") && p.json.contains("\"depots\""))
+        .expect("a preset with perfusions and a depot");
+    std::fs::write(dir.join("body.json"), tablet.json).expect("the scene");
+    let dump = dump_in(&dir, &["body.json", "--ran"]);
+    let run = viewer_core::Run::from_json(
+        &editor_core::run(tablet.json, &editor_core::OnDisk).expect("the scene runs"),
+    )
+    .expect("the run parses");
+    let last = run.frames.last().expect("frames");
+    let want: Vec<f64> = last
+        .readings
+        .iter()
+        .filter(|r| r.unit == "mg/L")
+        .map(|r| r.value)
+        .collect();
+    let shown: Vec<f64> = dump
+        .lines()
+        .filter_map(|l| l.get(TEXT_AT..)?.strip_suffix(" mg/L")?.parse().ok())
+        .collect();
+    assert_eq!(
+        shown.len(),
+        want.len(),
+        "{} concentrations shown for {} compartments:\n{dump}",
+        shown.len(),
+        want.len()
+    );
+    for v in &want {
+        // Three significant figures: within half a unit in the third, which is 5e-3 of a value
+        // whose first figure is 1 and less of any other.
+        assert!(
+            shown.iter().any(|s| (s - v).abs() <= 5e-3 * v.abs()),
+            "{v} mg/L is not beside any compartment: {shown:?}\n{dump}"
+        );
+    }
+    for named in ["gut", "CL 60.0 L/h", "CL 6.00 L/h"] {
+        assert!(
+            at(&dump, named).is_some(),
+            "nothing says {named:?}:\n{dump}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **Saving writes what the preset carried beside the scene, and lets go of it.** From then on
 /// the scene is a file with a directory, and reads its files from there.
 #[test]

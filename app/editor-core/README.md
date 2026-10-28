@@ -114,6 +114,22 @@ anything goes. `tests/readings_have_a_chart.rs` holds it to three things:
   It was written at 1e-9 across two adjacent frames first and failed at 3.2e-6; the file, not the
   chart.
 
+### And a compartment model, as its body above the chart
+
+A chart says how fast; it does not say where the drug is. `editor_core::diagram` draws each
+`compartments` domain as a disc per compartment — area its volume, colour its concentration on one
+logarithmic scale for the whole run — joined by a vessel per perfusion and link, with the depots a
+dose arrives by and an arrow out of every compartment that clears. The diagram takes the top of the
+viewport and the chart the rest, and playing the run moves both.
+
+**Its shape is read from the scene, not from `Placement::marker`.** A marker is one position per
+domain, which is the wrong unit: scene `34`'s blood, liver, lean tissue and fat are one domain. The
+run carries no topology either, so the layout is computed here from `DomainSpec::Compartments` —
+which this crate, as the editor's authoring half, may read — and every value comes from the
+readings. `tests/a_body_is_drawn_from_its_readings.rs` holds it to the scene and to `A = C·V`:
+at every frame, the discs' concentrations times the scene's volumes add to the `in the body` the
+domain reports, to the seven figures the run's JSON carries.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

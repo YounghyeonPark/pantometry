@@ -27,6 +27,8 @@
 //!   and the battery's rendered report.
 //! - **A chart of the readings**, for a run with nothing to place — see [`chart`]. Both shells
 //!   paint the strokes it hands them, so neither computes where a point goes.
+//! - **A diagram of a compartment model** above that chart — see [`diagram`]: each compartment a
+//!   disc whose area is its volume and whose colour is its concentration, joined by its vessels.
 //!
 //! # The two halves, and which one this is
 //!
@@ -42,6 +44,7 @@
 #![deny(missing_docs)]
 
 pub mod chart;
+pub mod diagram;
 pub mod edit;
 
 pub use edit::{
@@ -161,6 +164,9 @@ pub struct Checked {
     /// nothing in the scene has geometry — which the shell must say rather than draw an empty
     /// viewport that reads as "framed on nothing".
     pub bounds: Option<[f64; 6]>,
+    /// Every `compartments` domain, laid out as a diagram for the viewport to colour from a run.
+    /// Empty for a scene with none, and for one that does not parse.
+    pub bodies: Vec<diagram::Body>,
 }
 
 /// Every designed part a scene names, as triangles in its domain's own frame.
@@ -324,6 +330,7 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
     // Parts before the extents, because a part is geometry whether or not its domain states a box
     // to wireframe -- and because an assembly is the picture somebody authoring one is looking at.
     out.meshes = designed(&scene, files);
+    out.bodies = diagram::bodies(&scene);
     for spec in &scene.domains {
         let placement = placed
             .get(spec.name())
