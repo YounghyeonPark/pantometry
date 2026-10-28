@@ -263,3 +263,253 @@ fn a_network_is_still_its_chart() {
     assert!(drawn.discs.is_empty());
     assert_eq!(drawn, chart);
 }
+
+const BOLUS: &str = "32-a-dose-distributing-and-leaving.json";
+
+/// The label the domain documents for each vessel's flow, read off the scene rather than the
+/// diagram: `"blood to tissue"` for a perfusion and `"a to b"` in the declared order for a link.
+/// Scenes 32 and 34 have no link beside a perfusion, so each vessel has its own.
+fn flow_labels(s: &Scene) -> Vec<String> {
+    s.domains
+        .iter()
+        .flat_map(|d| match d {
+            DomainSpec::Compartments {
+                perfusions, links, ..
+            } => perfusions
+                .iter()
+                .map(|p| format!("{} to {}", p.blood, p.tissue))
+                .chain(
+                    links
+                        .iter()
+                        .map(|l| format!("{} to {}", l.between[0], l.between[1])),
+                )
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// The heads of a drawing in the order it draws them: each three-point stroke in
+/// [`editor_core::diagram::FLOW`], as its middle, the unit direction it points, and its length
+/// from middle to tip.
+fn heads(d: &editor_core::chart::Drawing) -> Vec<([f64; 2], [f64; 2], f64)> {
+    d.strokes
+        .iter()
+        .filter(|s| s.colour == editor_core::diagram::FLOW && s.points.len() == 3)
+        .map(|s| {
+            let back = [
+                0.5 * (s.points[0][0] + s.points[2][0]),
+                0.5 * (s.points[0][1] + s.points[2][1]),
+            ];
+            let tip = s.points[1];
+            let v = [tip[0] - back[0], tip[1] - back[1]];
+            let n = v[0].hypot(v[1]);
+            let mid = [0.5 * (tip[0] + back[0]), 0.5 * (tip[1] + back[1])];
+            (mid, [v[0] / n, v[1] / n], 0.5 * n)
+        })
+        .collect()
+}
+
+/// **A head on every vessel that carries drug, on the vessel, pointing the way the domain says
+/// it goes, and longer for more.**
+///
+/// At every frame of both compartment scenes: one head per vessel whose reading is not zero, in
+/// the vessels' order; parallel to the line between its two discs and pointing from the one the
+/// reading's label names first exactly when the reading is positive; its middle halfway between
+/// the two rims. Then the length, over the whole run at once: a larger flow never has a shorter
+/// head, in any two frames, which a scale renormalised per frame would break.
+#[test]
+fn a_vessel_points_the_way_its_drug_goes() {
+    for name in [BOLUS, TABLET] {
+        let s = scene(name);
+        let run = ran(name);
+        let b = &bodies(&s)[0];
+        let labels = flow_labels(&s);
+        assert_eq!(labels.len(), b.vessels.len());
+        let mut sized: Vec<(f64, f64)> = Vec::new();
+        for f in 0..run.frames.len() {
+            let d = b.draw(&run, f, RECT);
+            let flows: Vec<f64> = labels
+                .iter()
+                .map(|l| reading(&run, f, &b.domain, l))
+                .collect();
+            let carrying: Vec<usize> = (0..flows.len()).filter(|&k| flows[k] != 0.0).collect();
+            let drawn = heads(&d);
+            assert_eq!(drawn.len(), carrying.len(), "{name} frame {f}: {flows:?}");
+            for (&k, &(mid, dir, len)) in carrying.iter().zip(&drawn) {
+                let v = &b.vessels[k];
+                let (from, to) = (&d.discs[v.from], &d.discs[v.to]);
+                let along = [to.centre[0] - from.centre[0], to.centre[1] - from.centre[1]];
+                let l = along[0].hypot(along[1]);
+                let cross = dir[0] * along[1] - dir[1] * along[0];
+                let dot = dir[0] * along[0] + dir[1] * along[1];
+                assert!(
+                    cross.abs() <= 1e-9 * l,
+                    "{name} frame {f}: {} is off its vessel",
+                    labels[k]
+                );
+                assert_eq!(
+                    dot > 0.0,
+                    flows[k] > 0.0,
+                    "{name} frame {f}: {} reads {} and its head points the other way",
+                    labels[k],
+                    flows[k]
+                );
+                let halfway = from.radius + 0.5 * (l - from.radius - to.radius);
+                let at = [mid[0] - from.centre[0], mid[1] - from.centre[1]];
+                assert!(
+                    (at[0].hypot(at[1]) - halfway).abs() <= 1e-9 * l,
+                    "{name} frame {f}: {} is not halfway between the rims",
+                    labels[k]
+                );
+                sized.push((flows[k].abs(), len));
+            }
+        }
+        sized.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for w in sized.windows(2) {
+            assert!(
+                w[1].1 >= w[0].1 - 1e-9,
+                "{name}: {} mg/h has a head of {} px and {} mg/h one of {}",
+                w[0].0,
+                w[0].1,
+                w[1].0,
+                w[1].1
+            );
+        }
+        let (short, long) = (sized[0].1, sized[sized.len() - 1].1);
+        assert!(long > short, "{name}: every head is {short} px");
+        eprintln!("{name}: {} heads, {short:.2} to {long:.2} px", sized.len());
+    }
+}
+
+/// **A tissue peaks the frame its head turns.** A compartment joined to nothing but one vessel,
+/// clearing nothing and fed by no depot, changes only by what crosses that vessel; so it rises
+/// while the head points in and falls once it points out, and its largest reading is at the last
+/// frame its head points in or the first it does not. Those two frames bracket the step it turned
+/// at, and nothing finer is in the run.
+///
+/// Read from the drawing, which way each head points frame by frame, against the tissue's own
+/// concentration found here. Three tissues: scene 32's, and scene 34's lean tissue and fat.
+#[test]
+fn a_tissue_peaks_the_frame_its_head_turns() {
+    let mut tissues = 0;
+    for name in [BOLUS, TABLET] {
+        let run = ran(name);
+        let b = &bodies(&scene(name))[0];
+        for (k, v) in b.vessels.iter().enumerate() {
+            let t = &b.organs[v.to];
+            let joined = b
+                .vessels
+                .iter()
+                .filter(|w| w.from == v.to || w.to == v.to)
+                .count();
+            if joined != 1 || t.clearance_l_per_h > 0.0 || b.depots.iter().any(|p| p.into == v.to) {
+                continue;
+            }
+            // Which way vessel `k`'s head points in each frame: in, out, or not drawn. Its place
+            // among the heads is its place among the vessels that carry something.
+            let inward: Vec<Option<bool>> = (0..run.frames.len())
+                .map(|f| {
+                    let d = b.draw(&run, f, RECT);
+                    let flows = b.flows(&run.frames[f]);
+                    let at = (0..b.vessels.len())
+                        .filter(|&j| flows[j].is_some_and(|x| x != 0.0))
+                        .position(|j| j == k)?;
+                    let (_, dir, _) = heads(&d)[at];
+                    let (from, to) = (&d.discs[v.from], &d.discs[v.to]);
+                    let along = [to.centre[0] - from.centre[0], to.centre[1] - from.centre[1]];
+                    Some(dir[0] * along[0] + dir[1] * along[1] > 0.0)
+                })
+                .collect();
+            let filling = inward
+                .iter()
+                .position(|x| *x == Some(true))
+                .unwrap_or_else(|| panic!("{name}: {} never fills", t.label));
+            let turned = filling
+                + inward[filling..]
+                    .iter()
+                    .position(|x| *x != Some(true))
+                    .unwrap_or_else(|| panic!("{name}: {} never turns", t.label));
+            let c: Vec<f64> = (0..run.frames.len())
+                .map(|f| reading(&run, f, &b.domain, &t.label))
+                .collect();
+            let peak = (0..c.len()).max_by(|&a, &b| c[a].total_cmp(&c[b])).unwrap();
+            eprintln!(
+                "{name}: {} peaks at frame {peak} and its head turns at {turned}",
+                t.label
+            );
+            // As values, not indices: seven figures keep the order of two readings and can make
+            // them equal, and a tie would move an index without moving the claim.
+            let bracket = c[turned - 1].max(c[turned]);
+            assert_eq!(
+                bracket.to_bits(),
+                c[peak].to_bits(),
+                "{name}: {} peaks at frame {peak}, and its head turns at frame {turned}",
+                t.label
+            );
+            tissues += 1;
+        }
+    }
+    assert_eq!(
+        tissues, 3,
+        "scene 32's tissue and scene 34's lean tissue and fat"
+    );
+}
+
+/// **A link beside a perfusion is one head, pointing the way the two together carry.** No shipped
+/// scene has one, so this is scene 34 with a 3 L/h link added between the blood and the lean
+/// tissue: four vessels on three pairs. The domain reads the pair once, under the perfusion's
+/// label and as the sum of both, so at every frame there are as many heads as pairs that carry
+/// drug, and the lean tissue's points the way that one reading says.
+#[test]
+fn a_link_beside_a_perfusion_is_one_head() {
+    let mut json: serde_json::Value = serde_json::from_str(&text(TABLET)).expect("parses");
+    json["domains"][0]["links"] = serde_json::json!([
+        { "between": ["blood", "lean tissue"], "clearance_l_per_h": 3.0 }
+    ]);
+    let text = json.to_string();
+    let s: Scene = serde_json::from_str(&text).expect("still a scene");
+    let run = Run::from_json(&editor_core::run(&text, &editor_core::OnDisk).expect("it runs"))
+        .expect("the run parses");
+    let b = &bodies(&s)[0];
+    assert_eq!(b.vessels.len(), 4, "three perfusions and the link");
+    let pairs = ["blood to liver", "blood to lean tissue", "blood to fat"];
+    let lean = 1;
+    let mut weighed = 0;
+    for f in 0..run.frames.len() {
+        let flows: Vec<f64> = pairs
+            .iter()
+            .map(|l| reading(&run, f, &b.domain, l))
+            .collect();
+        assert!(
+            run.frames[f]
+                .readings
+                .iter()
+                .filter(|r| r.unit == "mg/h")
+                .count()
+                == pairs.len(),
+            "frame {f}: one reading per pair"
+        );
+        let d = b.draw(&run, f, RECT);
+        let drawn = heads(&d);
+        let carrying = flows.iter().filter(|j| **j != 0.0).count();
+        assert_eq!(drawn.len(), carrying, "frame {f}: {flows:?}");
+        if carrying == pairs.len() {
+            let v = &b.vessels[lean];
+            let (from, to) = (&d.discs[v.from], &d.discs[v.to]);
+            let along = [to.centre[0] - from.centre[0], to.centre[1] - from.centre[1]];
+            let (_, dir, _) = drawn[lean];
+            assert_eq!(
+                dir[0] * along[0] + dir[1] * along[1] > 0.0,
+                flows[lean] > 0.0,
+                "frame {f}: the lean tissue reads {} and its head points the other way",
+                flows[lean]
+            );
+            weighed += 1;
+        }
+    }
+    assert!(
+        weighed > run.frames.len() / 2,
+        "only {weighed} frames had every pair carrying"
+    );
+}

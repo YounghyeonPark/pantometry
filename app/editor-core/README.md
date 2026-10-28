@@ -130,6 +130,13 @@ readings. `tests/a_body_is_drawn_from_its_readings.rs` holds it to the scene and
 at every frame, the discs' concentrations times the scene's volumes add to the `in the body` the
 domain reports, to the seven figures the run's JSON carries.
 
+**A head on each vessel points the way its drug is going**, and its length goes with the flow. The
+flow is the domain's own reading — `"blood to fat"` in mg/h, `Q·(C_b − C_t/K_p)` — and not
+recomputed here, so there is one copy of the formula and the drawing is checked against it rather
+than against a second. The closed form it answers to is the tissue's: one joined only to its
+blood and clearing nothing rises while its head points in and falls once it points out, so the
+frame a head turns is the frame the tissue peaks, and the test reads both off the run.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

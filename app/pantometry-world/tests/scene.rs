@@ -3757,7 +3757,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
     // would be compared across grids as though it converged to something, and nothing would say.
     // `verify::DIAGNOSTICS` was that list; `Domain::diagnostics` replaced it, so a domain now says
     // which of its own readings describe the solve. This is what stops the drift. It pins all
-    // **81** labels the thirty-four scenes emit, so a new one fails here and has to be decided
+    // **85** labels the thirty-four scenes emit, so a new one fails here and has to be decided
     // about.
     //
     // What the sweep did without it, on `17-a-busbar-with-a-notch`:
@@ -3850,6 +3850,9 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "baseplate [C]",
             "bed temperature [C]",
             "blood [mg/L]",
+            "blood to fat [mg/h]",
+            "blood to lean tissue [mg/h]",
+            "blood to liver [mg/h]",
             "bond stretch [kcal/mol]",
             "bonds []",
             "cleared [mg]",
@@ -3889,6 +3892,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             "peak [Pa]",
             "peak speed [m/s]",
             "plasma [mg/L]",
+            "plasma to tissue [mg/h]",
             "reserve [J]",
             "resistance [ohm]",
             "ring over core []",

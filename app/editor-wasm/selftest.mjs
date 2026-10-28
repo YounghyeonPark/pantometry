@@ -138,6 +138,13 @@ const positive = (body.readings || []).filter(r => r.unit === 'mg/L' && r.value 
 const filled = discs.filter(([, , fill]) => typeof fill === 'string').length;
 ok('and a filled disc for every concentration above zero',
    positive === tablet.volumes.length && filled === positive, `${filled} filled, ${positive} positive`);
+// And a head on every vessel that carries drug: a three-point stroke in the diagram's FLOW colour
+// for every flow the frame reads as not zero, each vessel's own reading.
+const flowing = (body.readings || []).filter(r => r.unit === 'mg/h' && r.value !== 0).length;
+const headed = (body.chart?.strokes || [])
+  .filter(([points, colour]) => colour === '#d66028' && points.length === 3).length;
+ok('and a head on every vessel that carries drug',
+   flowing === tablet.perfusions.length && headed === flowing, `${headed} heads, ${flowing} flows`);
 
 // The run is the CLI's run.
 call(w.pantometry_check, HOT);

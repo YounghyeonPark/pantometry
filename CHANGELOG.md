@@ -5442,6 +5442,41 @@ protects nothing.
     sending no discs. **What the desktop's test cannot see is a disc**: `--ui-dump` holds text, so
     a shell that painted every label and no circle would pass it, and the screenshot is what shows
     the circles.
+- **`pantometry-pharmacokinetic` reads the flow across every vessel, and the diagram points each
+  vessel the way its drug is going.** A compartment model's readings said how much was in each
+  compartment and not which way it was moving, so whether the fat was still filling or already
+  giving drug back was a question no reading answered. `readings()` now ends with one per joined
+  pair in **mg/h**: `"blood to tissue"` for each perfusion, `Q·(C_b − C_t/K_p)`, and `"a to b"` in
+  the declared order for each link, `Q·(C_a − C_b)` — `transfer`, read, so a link beside a
+  perfusion is one reading carrying both. Last, so every reading before it keeps its place. The
+  diagram draws a head halfway between the two rims of every vessel whose flow is not zero, in the
+  direction of its sign and with its length on one logarithmic scale for the run. **The editor does
+  not recompute the flow**: the formula lives in the domain and the diagram reads it, because a
+  second copy of `Q·(C_b − C_t/K_p)` checked against the first would agree with any mistake both
+  made.
+  - **In the library, against the tissue's own amount**, which no reading reports: a tissue
+    joined only by its vessel and clearing nothing changes by exactly the flow times the step,
+    since the step takes the flow once from the snapshot the reading is taken from. Over 11,520
+    steps across three vessels — fat at `K_p = 40`, lean tissue with a link beside its perfusion,
+    and a link declared from the far end — `A' − A = J·h` holds to rounding, the worst at 0.090 of
+    a `4ε` bound, and the fat peaks at exactly the first step its reading is not positive.
+  - **In the editor, against the drawing**: at every frame of scenes 32 and 34 one head per vessel
+    that carries drug, on its vessel and halfway between the rims, pointing the way the reading's
+    sign says; a larger flow never has a shorter head in any two frames; and the frame a head
+    turns is the frame its tissue peaks, read off the picture — scene 32's tissue at frame 2, scene
+    34's lean tissue at 4, its fat at 14 with the head turning at 15, the two frames that bracket
+    the step. No shipped scene has a link beside a perfusion, so a third test adds one to scene
+    34 — four vessels on three pairs — and holds the diagram to one head per pair; a reviewer
+    found that the branch keeping it to one had no input reaching it, and removing it passed every
+    other check.
+  - Twelve sabotages, each caught: in the library a link read from its far end, mg/s for mg/h,
+    every pair read twice, `K_p` on the blood's side, and a perfusion's reading without the link
+    beside it; in the editor a head that ignores the sign, a scale renormalised per frame, a head
+    at the blood's rim, no head on a link, a head where nothing flows, every vessel reading the
+    first one's flow, and a head for each vessel of a pair.
+  - The scene walk's pinned answers gained the four, so `EVIDENCE.md` now counts 85 `(label,
+    unit)` pairs, 74 of them answers; the browser selftest gained a claim that a head is drawn on
+    every vessel carrying drug.
 
 ### Changed
 

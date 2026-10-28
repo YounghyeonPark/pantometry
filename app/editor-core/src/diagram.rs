@@ -32,6 +32,12 @@
 //!   the lowest positive concentration any compartment reaches to the highest, logarithmic,
 //!   through the library's sequential ramp. A scale renormalised per frame would make a body that
 //!   is emptying look the same at every frame. Zero has no logarithm and is drawn as an outline.
+//! - **A head on every vessel points the way its drug is going**: the domain's own reading of the
+//!   net flow across it, `Q·(C_b − C_t/K_p)` for a perfusion and `Q·(C_a − C_b)` for a link, read
+//!   and not recomputed here. Its length goes with the flow on one logarithmic scale for the run,
+//!   as a disc's colour does, and a vessel carrying nothing has none. A tissue joined only to its
+//!   blood fills while its head points in and empties once it points out, so the frame a head
+//!   turns is the frame its tissue peaks.
 
 use crate::chart::{self, Anchor, Disc, Drawing, Stroke, Text, GRID, INK};
 use pantometry_world::{DomainSpec, Scene};
@@ -39,6 +45,15 @@ use viewer_core::{Frame, Run};
 
 /// The unit a compartment's concentration is reported in.
 const CONCENTRATION: &str = "mg/L";
+/// The unit the flow across a vessel is reported in.
+const FLOW_UNIT: &str = "mg/h";
+/// The colour of a vessel's head: warm, so it reads as something moving against the grey of the
+/// vessel and the ink of the arrows a dose arrives and leaves by, which do not change.
+pub const FLOW: [u8; 3] = [214, 96, 40];
+/// A head's length from its middle to its tip, in pixels, at the bottom of the flow scale and at
+/// the top.
+const HEAD_MIN: f64 = 5.0;
+const HEAD_MAX: f64 = 11.0;
 /// The radius of the largest compartment, in the layout's units, where the ring is radius one.
 const R_MAX: f64 = 0.42;
 /// A depot's radius, and how far outside its compartment's rim it sits, in the same units.
@@ -282,25 +297,61 @@ impl Body {
     /// The colour of concentration `v` on `scale`, or `None` when it cannot be placed: not
     /// positive, not finite, or no scale.
     pub fn colour(v: f64, scale: Option<(f64, f64)>) -> Option<[u8; 3]> {
-        let (lo, hi) = scale?;
-        if !v.is_finite() || v <= 0.0 {
-            return None;
-        }
-        let u = (v.log10() - lo.log10()) / (hi.log10() - lo.log10());
-        Some(pantometry::view::ramp::sequential(u.clamp(0.0, 1.0)))
+        place(v, scale).map(pantometry::view::ramp::sequential)
+    }
+
+    /// The net flow across each vessel in `frame`, in mg/h, positive from [`Vessel::from`] to
+    /// [`Vessel::to`], in the order of [`Body::vessels`]: the reading the domain names
+    /// `"from to to"`, or `None` when the frame has none.
+    ///
+    /// A link beside a perfusion on the same pair has none of its own, because the domain reads
+    /// the pair once, under the perfusion; the perfusion comes first in [`Body::vessels`], so its
+    /// head is the pair's and the link draws none.
+    pub fn flows(&self, frame: &Frame) -> Vec<Option<f64>> {
+        self.vessels
+            .iter()
+            .map(|v| {
+                let (a, b) = (&self.organs[v.from].label, &self.organs[v.to].label);
+                let label = format!("{a} to {b}");
+                frame
+                    .readings
+                    .iter()
+                    .find(|r| r.domain == self.domain && r.label == label && r.unit == FLOW_UNIT)
+                    .map(|r| r.value)
+            })
+            .collect()
+    }
+
+    /// The scale a head's length is on, `(lo, hi)` in mg/h: the whole decades holding every
+    /// nonzero flow, by magnitude, across any vessel in any frame. `None` when nothing flows.
+    pub fn flow_scale(&self, run: &Run) -> Option<(f64, f64)> {
+        let (min, max) = run
+            .frames
+            .iter()
+            .flat_map(|f| self.flows(f))
+            .flatten()
+            .map(f64::abs)
+            .filter(|j| j.is_finite() && *j > 0.0)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), j| {
+                (lo.min(j), hi.max(j))
+            });
+        (min <= max).then(|| chart::decades(min, max))
     }
 
     /// The diagram of frame `frame` of `run` in the rectangle `[left, top, right, bottom]`, in
     /// pixels.
     ///
-    /// The discs come in the order of [`Body::organs`] and then of [`Body::depots`], which is what
-    /// a test matches them by.
+    /// The discs come in the order of [`Body::organs`] and then of [`Body::depots`], and the heads
+    /// — three-point strokes in [`FLOW`] — in the order of [`Body::vessels`], one for each pair
+    /// whose flow is not zero, which is what a test matches them by.
     pub fn draw(&self, run: &Run, frame: usize, rect: [f64; 4]) -> Drawing {
         let mut d = Drawing::default();
         let shown = run.frames.get(frame);
         let values =
             shown.map_or_else(|| vec![None; self.organs.len()], |f| self.concentrations(f));
         let scale = self.scale(run);
+        let flows = shown.map_or_else(|| vec![None; self.vessels.len()], |f| self.flows(f));
+        let flow_scale = self.flow_scale(run);
 
         // The layout's extent in its own units, arrows and depots included, fitted to the room
         // left once the labels and the colour bar have theirs — turned to whichever of `TURNS`
@@ -368,6 +419,36 @@ impl Body {
                 points: vec![px(self.organs[v.from].at), px(self.organs[v.to].at)],
                 colour: VESSEL,
                 width,
+            });
+        }
+        // A head on each vessel's run between the two rims, after every vessel so none is drawn
+        // over. One per pair: a link beside a perfusion is one reading and one head.
+        for (k, (v, j)) in self.vessels.iter().zip(&flows).enumerate() {
+            let same =
+                |w: &Vessel| (w.from, w.to) == (v.from, v.to) || (w.from, w.to) == (v.to, v.from);
+            if self.vessels[..k].iter().any(same) {
+                continue;
+            }
+            let Some(j) = j.filter(|j| j.is_finite() && *j != 0.0) else {
+                continue;
+            };
+            let (a, b) = (&self.organs[v.from], &self.organs[v.to]);
+            let u = unit([b.at[0] - a.at[0], b.at[1] - a.at[1]]);
+            let p = px([a.at[0] + a.radius * u[0], a.at[1] + a.radius * u[1]]);
+            let q = px([b.at[0] - b.radius * u[0], b.at[1] - b.radius * u[1]]);
+            let mid = [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1])];
+            let w = unit([j.signum() * (q[0] - p[0]), j.signum() * (q[1] - p[1])]);
+            let len = HEAD_MIN + (HEAD_MAX - HEAD_MIN) * place(j.abs(), flow_scale).unwrap_or(0.0);
+            let tip = [mid[0] + len * w[0], mid[1] + len * w[1]];
+            let back = [mid[0] - len * w[0], mid[1] - len * w[1]];
+            d.strokes.push(Stroke {
+                points: vec![
+                    [back[0] - len * w[1], back[1] + len * w[0]],
+                    tip,
+                    [back[0] + len * w[1], back[1] - len * w[0]],
+                ],
+                colour: FLOW,
+                width: 2.5,
             });
         }
         for p in &self.depots {
@@ -537,6 +618,17 @@ fn label(d: &mut Drawing, c: [f64; 2], r: f64, away: &[[f64; 2]], name: &str, va
             colour,
         });
     }
+}
+
+/// Where `v` falls on the logarithmic `scale`, clamped to `0..=1`; `None` when it cannot be
+/// placed: not positive, not finite, or no scale.
+fn place(v: f64, scale: Option<(f64, f64)>) -> Option<f64> {
+    let (lo, hi) = scale?;
+    if !v.is_finite() || v <= 0.0 {
+        return None;
+    }
+    let u = (v.log10() - lo.log10()) / (hi.log10() - lo.log10());
+    Some(u.clamp(0.0, 1.0))
 }
 
 /// Where a compartment's clearance arrow ends, in the layout's units.

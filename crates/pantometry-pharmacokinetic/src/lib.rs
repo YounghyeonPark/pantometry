@@ -1800,6 +1800,10 @@ impl Domain for CompartmentModel {
     /// Concentrations in **mg/L**, which is the unit a concentration-time curve is drawn in
     /// everywhere the subject is used, and equals µg/mL. SI would be kg/m³, a thousand times
     /// smaller; the label says which and a wrong label would be worse than none.
+    ///
+    /// Then, after the books, the net flow across every vessel in **mg/h** — the unit a
+    /// clearance is quoted per — named `"blood to tissue"` for a perfusion and `"a to b"` for a
+    /// link, positive in the direction named: [`CompartmentModel::transfer`], read.
     fn readings(&self) -> Vec<Reading> {
         let mut out: Vec<Reading> = self
             .handles()
@@ -1852,6 +1856,43 @@ impl Domain for CompartmentModel {
                 "lost before absorption",
                 self.presystemic_loss().to_si() * 1e6,
                 "mg",
+            ));
+        }
+        // What crosses each vessel, in mg/h, last so that every reading above keeps its place.
+        // Each perfusion as `"blood to tissue"`, positive into the tissue; then each link whose
+        // pair no perfusion already joins, as `"a to b"` in the order it was declared. A link
+        // beside a perfusion is not a second reading: `transfer` is the sum of the two, so the
+        // pair is named once and carries both. Without these the run says how much is in each
+        // compartment and not which way it is going — whether the fat is still filling or
+        // already giving drug back is a question about the sign of exactly this number.
+        let mut joined: Vec<(usize, usize)> = Vec::new();
+        for (a, b) in self
+            .perfusions
+            .iter()
+            .map(|p| (p.blood, p.tissue))
+            .chain(self.links.iter().map(|l| (l.a, l.b)))
+        {
+            if joined
+                .iter()
+                .any(|&(x, y)| (x, y) == (a, b) || (x, y) == (b, a))
+            {
+                continue;
+            }
+            joined.push((a, b));
+            let handle = |index: usize| Compartment {
+                index: index as u32,
+                model: self.id,
+            };
+            // `+ 0.0` turns a negative zero positive, for the reason
+            // `an_empty_part_of_the_books_reads_plus_zero` gives.
+            out.push(Reading::new(
+                &self.name,
+                format!(
+                    "{} to {}",
+                    self.compartments[a].label, self.compartments[b].label
+                ),
+                self.transfer(handle(a), handle(b)).to_si() * 3.6e9 + 0.0,
+                "mg/h",
             ));
         }
         out
@@ -2516,7 +2557,11 @@ mod tests {
         assert!(m.as_bodies().is_none(), "and it is not at one either");
 
         let r = m.readings();
-        assert_eq!(r.len(), 4, "two compartments, the burden and the cleared");
+        assert_eq!(
+            r.len(),
+            5,
+            "two compartments, the burden, the cleared and the link"
+        );
         assert_eq!(r[0].label, "central");
         assert_eq!(r[1].label, "peripheral");
         assert_eq!(r[0].unit, "mg/L");
@@ -2527,6 +2572,10 @@ mod tests {
         assert_eq!(r[2].unit, "mg");
         assert!((r[2].value - 100.0).abs() < 1e-9, "{}", r[2].value);
         assert_eq!(r[3].label, "cleared");
+        // All 100 mg in the 5 L and none in the 20 L: 30 L/h times 20 mg/L is 600 mg/h outward.
+        assert_eq!(r[4].label, "central to peripheral");
+        assert_eq!(r[4].unit, "mg/h");
+        assert!((r[4].value - 600.0).abs() < 1e-9, "{}", r[4].value);
         assert!(r.iter().all(|x| x.domain == "subject"));
 
         // A boxed domain still reports them: `Simulation` holds `Box<dyn Domain>` and a box that
@@ -5021,5 +5070,112 @@ mod tests {
         );
         assert_eq!(m.partition(blood), 1.0);
         assert_eq!(m.partition(fat), 1.0);
+    }
+
+    /// **What a vessel reads is what the compartment at its end gained.** A tissue joined to
+    /// nothing else and clearing nothing changes by exactly the flow across its vessel times the
+    /// step, because the step computes that flow once from the same snapshot the reading is taken
+    /// from — so over every step of four days, `A' − A = J·h`. That is the closed form: the
+    /// tissue's own amount, which no reading reports, against the reading.
+    ///
+    /// The bound is the rounding of the step and of the reading: `A + J·h` rounded once, the
+    /// subtraction that recovers it rounded once more, and the reading's conversion to mg/h and
+    /// back two more on `J·h` — `4ε` on each of the three magnitudes, generously, since the point
+    /// is that it is rounding and not first order in `h`.
+    ///
+    /// Three vessels with three ways to be wrong: fat on a perfusion with `K_p = 40`, so `K_p` on
+    /// the wrong side is far out; lean tissue on a perfusion with a link beside it, so a reading
+    /// that left out the link misses by the link's share; and a link declared from the far end,
+    /// so its reading is positive *into the blood* and the tissue loses it. And then the sign:
+    /// the fat's amount peaks at exactly the first step its reading is not positive.
+    #[test]
+    fn a_vessel_reading_is_what_its_tissue_gained() {
+        let mut m = CompartmentModel::new("subject");
+        let blood = m.eliminating("blood", Volume::litres(5.0), Clearance::l_per_h(30.0));
+        let fat = m.compartment("fat", Volume::litres(15.0));
+        let lean = m.compartment("lean", Volume::litres(40.0));
+        let deep = m.compartment("deep", Volume::litres(10.0));
+        let l_h = Clearance::l_per_h;
+        m.perfuse(blood, fat, l_h(18.0), 40.0).unwrap();
+        m.perfuse(blood, lean, l_h(250.0), 1.4).unwrap();
+        m.link(blood, lean, l_h(3.0)).unwrap();
+        m.link(deep, blood, l_h(4.0)).unwrap();
+        m.bolus(blood, Mass::from_si(1e-4)).unwrap();
+
+        // One reading per joined pair, in mg/h, perfusions first: the link beside the lean
+        // tissue's perfusion is in its reading and not a second one.
+        let flows: Vec<(String, &str)> = m
+            .readings()
+            .into_iter()
+            .filter(|r| r.unit == "mg/h")
+            .map(|r| (r.label, r.unit))
+            .collect();
+        let labels: Vec<&str> = flows.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, ["blood to fat", "blood to lean", "deep to blood"]);
+
+        // The blood turns over at (18 + 250 + 3 + 4 + 30)/5 = 61 per hour, so 30 s is 0.51 of
+        // the limit.
+        let h = 30.0;
+        let steps = (96.0 * HOUR / h) as usize;
+        let ends = [
+            (fat, "blood to fat", 1.0),
+            (lean, "blood to lean", 1.0),
+            (deep, "deep to blood", -1.0),
+        ];
+        let mut bus = Exchange::new();
+        let mut worst: f64 = 0.0;
+        let mut fat_amounts = Vec::with_capacity(steps + 1);
+        let mut fat_flows = Vec::with_capacity(steps);
+        for n in 0..steps {
+            let r = m.readings();
+            let flow = |label: &str| {
+                r.iter()
+                    .find(|x| x.label == label)
+                    .unwrap_or_else(|| panic!("no {label} reading"))
+                    .value
+            };
+            let before: Vec<f64> = ends.iter().map(|(c, ..)| m.amount(*c).to_si()).collect();
+            fat_amounts.push(before[0]);
+            fat_flows.push(flow("blood to fat"));
+            m.step(Time::s(n as f64 * h), Time::s(h), &mut bus).unwrap();
+            for (k, (c, label, sign)) in ends.iter().enumerate() {
+                let after = m.amount(*c).to_si();
+                let gained = after - before[k];
+                let want = sign * flow(label) / 3.6e9 * h;
+                let bound = 4.0 * f64::EPSILON * (before[k].abs() + after.abs() + want.abs());
+                assert!(
+                    (gained - want).abs() <= bound,
+                    "{label} at step {n}: gained {gained:e} kg where the reading says {want:e}"
+                );
+                if bound > 0.0 {
+                    worst = worst.max((gained - want).abs() / bound);
+                }
+            }
+        }
+        fat_amounts.push(m.amount(fat).to_si());
+        println!("  worst of {steps} steps x 3 vessels: {worst:.3} of the bound");
+
+        // The fat fills while its reading is positive and empties once it is not.
+        let turn = fat_flows
+            .iter()
+            .position(|&j| j <= 0.0)
+            .expect("the fat gives drug back within four days");
+        assert!(turn > 0, "the fat fills first");
+        assert!(
+            fat_flows[turn..].iter().all(|&j| j <= 0.0),
+            "and turns once"
+        );
+        // The step it turns at loses something the amount can see. A flow of zero, or one under
+        // half an ulp of the amount, would leave a tie for the peak, and the claim below would be
+        // about rounding rather than about the sign.
+        assert!(
+            fat_amounts[turn + 1] < fat_amounts[turn],
+            "the fat's first outflow moves its amount"
+        );
+        let peak = (0..fat_amounts.len())
+            .max_by(|&a, &b| fat_amounts[a].total_cmp(&fat_amounts[b]))
+            .unwrap();
+        println!("  the fat turns at {:.2} h", turn as f64 * h / HOUR);
+        assert_eq!(peak, turn, "the fat peaks the step its inflow stops");
     }
 }
