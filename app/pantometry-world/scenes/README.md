@@ -372,9 +372,9 @@ force field's answer and not a property of the method; the clash threshold is th
 | Scene | What it shows |
 | --- | --- |
 | `32-a-dose-distributing-and-leaving` | A 500 mg intravenous bolus into 5 L of plasma that clears 3 L/h and exchanges 8 L/h with 20 L of tissue: the classical two-compartment model. The last frame's plasma is the slow exponential alone, and `β` is the slow root of the quadratic the scene's own litres and litres per hour give, `0.09584 /h`; `a_dose_leaves_at_the_rate_the_roots_say` measures the step reaching it at first order |
-| `34-a-tablet-that-meets-the-liver-first` | A **400 mg tablet**, its gut depot emptying into the **liver**, and the liver, lean tissue and fat each perfused by blood from one 5.53 L pool — the volumes and flows of a **70 kg reference adult** (Brown et al. 1997, as tabulated in an open-access article, below). The liver eliminates on the blood leaving it — the well-stirred liver, extracting `E = 60/(78.98 + 60)` = 0.432 — so only `F(1 − E)` = **0.511** of the tablet reaches the blood, measured as the ratio of two areas under the blood's curve, oral over intravenous, at **2.2e-16**. Blood peaks at 1.45 mg/L an hour and a half in; fat, the slowest to fill and to empty, peaks at 2.82 mg/L at four hours and by twenty-four holds **17.51 times** the blood against a `K_p` of 6, which its own balance in the terminal phase predicts to 9.5e-7 |
+| `34-a-tablet-that-meets-the-liver-first` | A **400 mg tablet**, its gut depot emptying into the **liver**, and the liver, lean tissue and fat each perfused by blood from one 5.53 L pool — the volumes and flows of a **70 kg reference adult** (Brown et al. 1997, as tabulated in an open-access article, below). The liver eliminates on the blood leaving it — the well-stirred liver, extracting `E = 60/(78.98 + 60)` = 0.432 — so only `F(1 − E)` = **0.511** of the tablet reaches the blood, measured as the ratio of two areas under the blood's curve, oral over intravenous, at **2.0e-15**. **Its partitions are benzene's**, from Rodgers and Rowland's equation and this repository's own simulated log P — octanol 2.14, decane 1.92 — so the fat's `K_p` is **39.38** and the drug stays in the body for days: four of them are run. Blood peaks at 1.07 mg/L an hour and a half in; fat, the slowest to fill and to empty, peaks at 3.71 mg/L at seven hours and by ninety-six holds **123.26 times** the blood, which its own balance in the terminal phase predicts to 1.8e-12 |
 
-**`34`'s body is a reference adult, read from a table; its drug is illustrative.** The volumes and
+**`34`'s body is a reference adult, read from a table; its drug is illustrative, and its partitions are benzene's.** The volumes and
 flows are Table 1 of
 
 > Noorlander A, Zhang M, van Ravenzwaay B, Rietjens IMCM. *Use of physiologically based kinetic
@@ -404,9 +404,9 @@ lumping rather than leaving anything out:
 | organ | rows | volume | blood flow | `K_p` | clearance |
 | --- | --- | --- | --- | --- | --- |
 | blood | blood | 5.53 L | — | — | 6 L/h, renal |
-| liver | liver, portal and arterial together | 1.82 L | 78.98 L/h | 2 | 60 L/h intrinsic, on the venous blood |
-| lean tissue | the rest of the body: kidney, rapidly and slowly perfused | 47.67 L | 250.84 L/h | 0.7 | — |
-| fat | fat | 14.98 L | 18.09 L/h | 6 | — |
+| liver | liver, portal and arterial together | 1.82 L | 78.98 L/h | 2.040 | 60 L/h intrinsic, on the venous blood |
+| lean tissue | the rest of the body: kidney, rapidly and slowly perfused | 47.67 L | 250.84 L/h | 1.426 | — |
+| fat | fat | 14.98 L | 18.09 L/h | 39.38 | — |
 
 - **Kilograms are litres at 1 kg/L**, an assumption: the article states no densities.
 - **The flows close on the cardiac output.** Tissues hang off one blood pool in parallel, so the
@@ -419,8 +419,25 @@ lumping rather than leaving anything out:
   circulation; the gut's own flow is inside the lean tissue's. There is no lung, no
   arterio-venous difference in the blood itself, and no protein binding.
 
-**What stays illustrative is the drug**, and it is nobody's: `K_p` 2 in the liver, 0.7 in lean
-tissue and 6 in fat (a lipophilic molecule), an intrinsic clearance of 60 L/h, renal clearance of
+**The partitions are benzene's.** `pantometry::pharmacokinetic::partition` is Rodgers and Rowland's
+equation for a neutral molecule, with the rat tissue compositions their 2006 paper tabulates, and
+scene `34`'s three `K_p` are what it gives a molecule with benzene's partition coefficients as
+this repository simulated them: log P(octanol/water) **2.14** for the liver, the lean tissue and
+the blood cells, and log P(decane/water) **1.92** for the fat, in the place the equation takes a
+vegetable oil. Olive oil:saline's measured 169 would put the fat at about twice this. `fu` is
+0.39957, httk's predicted value for benzene in human plasma, and the haematocrit 0.45. Lean tissue
+is the volume-weighted mean of rat kidney, for the kidney and the rapidly perfused rows, and rat
+muscle, for the slowly perfused — kidney standing in for heart, brain and gut, which is a proxy.
+Each coefficient is to blood, the plasma value over `B:P` = 0.7226.
+`the_partitions_are_benzenes_by_rodgers_and_rowland` holds the file to the equation. Rat
+composition in a human body is the usual practice and is a choice.
+
+At 6 the fat had turned the drug over in a day, and the scene ran twenty-four hours. At 39.38 the
+slowest mode is 0.0209/h, a half-life of 33.2 h, and twenty-four hours had cleared only 88% of
+what was absorbed and had not reached the terminal phase its checks are about; the scene runs
+four days, 97.4% cleared.
+
+**What stays illustrative is the rest of the drug**, and it is nobody's: an intrinsic clearance of 60 L/h, renal clearance of
 6 L/h, `kₐ = 1/h` after a half-hour lag, and `F = 0.9` — the other 40 mg are `lost before
 absorption`, booked when it is swallowed. The intrinsic clearance was kept at 60 L/h rather than
 re-chosen to hold `E` at 0.4, so the reference liver's 78.98 L/h makes `E` 0.432; none of these is
@@ -436,20 +453,21 @@ each from the scene's own numbers and none against a second implementation:
   same algebra **exactly**, because summing its map over every step is `h Σ xₙ = −M⁻¹(x₀ + Σ b)`, so
   all eleven ratios are checked at the shipped 10 s and at 40 s and come out within 2.0e-15 of the
   closed form, under a bound of `16ε` plus the area still to come — which renal clearance alone
-  bounds at `A_rem/CL_r`, and which 360 hours puts below 1e-15. 240 hours did for the illustrative
-  body and does not for this one: its slowest mode is 0.132/h, a half-life of 5.24 h against 3.77,
-  and 240 hours left 5.0e-14 of the area to come.
+  bounds at `A_rem/CL_r`, and which 1 800 hours puts below 1e-15. 240 hours did for the illustrative
+  body and not for the reference adult, whose slowest mode is 0.132/h; 360 hours did for that, and
+  not once the fat held benzene, at 0.0209/h, where it left 1.2e-3 of the area to come.
 - **The steady state an infusion implies.** Started at `C_b = R/(CL_r + Q_h E)`, each tissue at
   `K_p` times it and the liver at `K_p(1 − E)` times it, under the infusion `R` that holds it, the
-  body does not move: at most 1.1e-16, half an ε, in 8 640 steps, under the library's `(n + 8)ε`. Euler's fixed point
+  body does not move: at most 2.2e-16, one ε, in 8 640 steps, under the library's `(n + 8)ε`. Euler's fixed point
   has no `h` in it.
 - **The gut, the books and the readings.** The depot is integrated exactly, so it holds
-  `F·D·e^{−kₐ(T − t_lag)}` at the end to 3.9e-13; `lost before absorption` is `(1 − F)·D`; and the
+  `F·D·e^{−kₐ(T − t_lag)}` at the end to 1.6e-12; `lost before absorption` is `(1 − F)·D`; and the
   five book readings sum to the dose at every frame.
 - **Each organ's place in the terminal phase.** Once one mode is left, a tissue's balance fixes
-  `C_t/C_b = Q/((Q + CL)/K_p − V(1 − ρ)/h)` from the blood's own fall `ρ` per step. The tolerance
-  is the gut, the one input still feeding the liver at 24 h, at 2.2e-8 of its blood supply; fat
-  departs by 44 times that, the same multiple at 30 h, under 64.
+  `C_t/C_b = Q/((Q + CL)/K_p − V(1 − ρ)/h)` from the blood's own fall `ρ` per step. At 96 h the
+  gut's feed into the liver is 3.1e-39 of its blood supply and the second mode `e^{−61}`, so the
+  tolerance is the rounding in `ρ`, carried through the balance: fat departs by 1.8e-12, 0.21 of
+  its bound. It was the gut's feed at 24 h, and is not any more because the gut is gone.
 - **The body is the table it cites.** Each volume and flow is its rows' fractions of 70 kg and of
   `15·BW^0.74` L/h, to the file's half-hundredth; the tissues' flows sum to the cardiac output and
   the organs to the body weight. `the_body_is_the_reference_adult_it_cites`.

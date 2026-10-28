@@ -425,7 +425,7 @@ pub const PRESETS: [Preset; 34] = [
     Preset {
         file: "34-a-tablet-that-meets-the-liver-first.json",
         area: "medicine",
-        title: "a 400 mg tablet absorbed through the liver and carried by blood into lean tissue and fat, twenty-four hours of it",
+        title: "a 400 mg tablet absorbed through the liver and carried by blood into lean tissue and fat, four days of it",
         kinds: &["compartments"],
         files: &[],
         json: include_str!("../scenes/34-a-tablet-that-meets-the-liver-first.json"),

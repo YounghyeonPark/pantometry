@@ -5333,6 +5333,51 @@ protects nothing.
   - **For 4c-3**, the adipose oil:water is the simulated 1.92 ± 0.15, so P = 83. Olive oil's
     measured 169 is shown beside it, not used.
 
+- **`pantometry_pharmacokinetic::partition`: tissue `K_p` from composition, Rodgers and Rowland's
+  equation for a neutral molecule — and scene `34`'s three partitions are benzene's by it.** Step
+  4c-3. `unbound_tissue_partition` is Eq. 14 of Rodgers and Rowland 2006 at `X = Y = 1`, with its
+  lipoprotein term; `tissue_partition`, `unbound_blood_cell_partition` and `blood_to_plasma` (Eq.
+  B2, B3) are the rest. The constants are rat liver, kidney, muscle and adipose from that paper's
+  Table 1, the plasma lipids 0.0023 and 0.0013 from its text, and blood cells from the 2005 paper's
+  Table 1, each cited to its page. Read from the two papers themselves; Coutinho et al. 2024 (CC BY
+  4.0) has the same lipids and is the open copy.
+  - **What was wrong in the plan.** The research script this started from, and metrum's R code it
+    followed, both left out the plasma-protein term, `(1/fu − 1 − plasma lipid)·[PR]_T/[PR]_P`:
+    4.9% of the liver's value. And the water was going to be the 2005 table's extracellular plus
+    intracellular, as Coutinho et al. take it. **The authors' own predictions said otherwise.** Their
+    Table 5 lists `Kpu` from this equation for four neutral drugs; with the 2006 table's total,
+    residual-blood-adjusted water all fourteen values in these tissues reproduce within the printed
+    digits, and with the 2005 water ftorafur's liver is 0.806 against 0.72.
+  - **The 2006 table prints adipose transposed** — neutral lipid 0.0016, phospholipid 0.853 — and
+    Coutinho et al. copy it. The 2005 table has it the other way round, and so do the authors' own
+    adipose predictions, which come out of the equation with 0.853 as lipid; the other way round,
+    ethoxybenzamide's is 0.878 against the printed 0.48. The constant carries 0.853 as neutral lipid.
+  - **Checked against:** `P → 0`; `Kpu` a straight line in `P` with the lipid slope; plasma
+    partitioning into itself at exactly 1; the protein term's slope in the lipoprotein ratio; `B:P`
+    at haematocrits 0, ½ and 1; every tissue fitting in itself; and the authors' Table 5. That last
+    tolerance is the printed precision of every input and the output, added, and **it was widened
+    after a failure**: written with log P, `fu` and the output only, ftorafur's adipose and muscle
+    missed by 0.0001 and 0.0002; the composition's digits are inputs too, and with them the worst of
+    the fourteen uses 94% of its bound. Thirteen of the fourteen come out low, by up to 4.7%.
+  - Nine sabotages, eight caught. **The plasma lipid constants set to zero pass every test**: their
+    effect on Table 5 is under its rounding, and a test that copies 0.0023 would check nothing.
+  - **Scene `34`'s partitions** are now 2.040 in the liver, 1.426 in lean tissue and 39.38 in fat,
+    where they were an illustrative 2, 0.7 and 6: log P(octanol) 2.14 from 4c-2 for liver, lean
+    tissue and blood cells, log P(decane) 1.92 for fat, `fu` 0.39957 (httk's predicted value for
+    benzene), haematocrit 0.45 (Bartelink et al. 2022, CC BY 4.0), `B:P` 0.7226. Lean tissue is
+    rat kidney and muscle weighted by the reference adult's rows.
+    `the_partitions_are_benzenes_by_rodgers_and_rowland` holds the file to the equation, and failed
+    on the old file.
+  - **That slowed the drug, and two checks said so.** The slowest mode went from 0.132/h to
+    0.0209/h, a half-life of 33.2 h. The area identities' 360-hour horizon left 1.2e-3 of the area
+    to come against the 1e-15 they assert, and is 1 800 hours: all eleven ratios within 2.0e-15, 9ε,
+    the same 9ε at five times the steps. And at twenty-four hours only 88% of what was absorbed had
+    been cleared and the second mode was still 2.2e-7, so the terminal-phase check was no longer
+    about one mode. **The scene is four days now**, 97.4% cleared, and that check's tolerance — the
+    gut's feed into the liver, 64 times it, at 24 h — is the rounding in `ρ` derived through each
+    organ's balance, because at 96 h the feed is 3.1e-39. Fat departs by 1.8e-12, 0.21 of its
+    bound; a frame spacing off by one step is 1.4e8 bounds out, a `K_p` off by its last digit 8.5e11.
+
 ### Changed
 
 - **Scene 34's body is a 70 kg reference adult read from an open-access table, and not round

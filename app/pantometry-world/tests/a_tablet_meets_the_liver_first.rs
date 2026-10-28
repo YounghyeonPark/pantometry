@@ -34,7 +34,10 @@
 //! eliminates more than is there. The test asserts that bound is below 1e-15 of the area, rather
 //! than assuming the horizon is long enough — and it was not, once: 240 hours sufficed for the
 //! illustrative body and left 5.0e-14 of the area to come in the reference adult, whose slowest
-//! mode is 0.132/h against 0.184/h, a half-life of 5.24 h against 3.77. The horizon is 360 hours.
+//! mode is 0.132/h against 0.184/h, a half-life of 5.24 h against 3.77. The horizon became 360
+//! hours, and then benzene's partitions put 39.38 in the fat where 6 had been: the slowest mode
+//! fell to 0.0209/h, a half-life of 33.2 h, and 360 hours left 1.2e-3 of the area to come. That is
+//! about 1 700 hours to 1e-15 at that rate, and the horizon is 1 800.
 //!
 //! # Not under `wasm32`
 //!
@@ -215,28 +218,29 @@ fn areas(scene: Scene, window_s: f64, hours: f64) -> ([f64; 4], usize, f64) {
 /// **The hepatic first pass: `AUC_b(oral)/AUC_b(IV) = F·(1 − E)`, at the shipped step and at four
 /// times it, and every tissue's area is `K_p` times the blood's.**
 ///
-/// Measured, as departures from the closed form, 360 hours at each step, with `E = 60/(78.98 +
+/// Measured, as departures from the closed form, 1 800 hours at each step, with `E = 60/(78.98 +
 /// 60)` = 0.43172:
 ///
-/// | ratio | closed form | 10 s, 129 600 steps | 40 s, 32 400 steps |
+/// | ratio | closed form | 10 s, 648 000 steps | 40 s, 162 000 steps |
 /// | --- | --- | --- | --- |
-/// | `AUC_b` oral / IV | `F(1 − E)` = 0.51145 | 2.2e-16 | 0 |
-/// | liver / blood, IV | `K_p(1 − E)` = 1.13657 | 0 | 2.2e-16 |
-/// | liver / blood, oral | `K_p(Q_h + CL_r)/Q_h` = 2.15194 | 6.7e-16 | 2.2e-16 |
-/// | lean / blood, IV and oral | `K_p` = 0.7 | 0, 1.1e-16 | 0, 2.2e-16 |
-/// | fat / blood, IV and oral | `K_p` = 6 | 4.4e-16, 2.0e-15 | 2.2e-16, 6.7e-16 |
-/// | `AUC_b` after IV | `D/(CL_r + Q_h E)` = 9.97581 mg·h/L | 6.7e-16 | 2.2e-16 |
+/// | `AUC_b` oral / IV | `F(1 − E)` = 0.51145 | 2.0e-15 | 8.9e-16 |
+/// | liver / blood, IV | `K_p(1 − E)` = 1.15930 | 2.2e-16 | 2.2e-16 |
+/// | liver / blood, oral | `K_p(Q_h + CL_r)/Q_h` = 2.19498 | 4.4e-16 | 2.2e-16 |
+/// | lean / blood, IV and oral | `K_p` = 1.426 | 1.1e-16, 1.1e-16 | 2.2e-16, 2.2e-16 |
+/// | fat / blood, IV and oral | `K_p` = 39.38 | 8.9e-16, 1.6e-15 | 1.1e-15, 2.0e-15 |
+/// | `AUC_b` after IV | `D/(CL_r + Q_h E)` = 9.97581 mg·h/L | 1.2e-15 | 3.3e-16 |
 ///
 /// The bound is `16ε` plus the tail. Not `n·ε`: a rounding made at one step is a perturbation the
 /// stable map carries into the area once, as a relative error of its own size, so the roundings
 /// of every step together are a few ε of the area and not `n` of them — eight operations at most
 /// enter one amount's update, and the compensated sum and the ratio add two more. The tail is
-/// bounded above, and is 6.3e-21 of the area at 360 hours. The worst departure, fat after the
-/// tablet at 10 s, is 9ε of the 16.
+/// bounded above, and is 1.1e-16 of the area at 1 800 hours. The worst departures, oral over IV
+/// at 10 s and fat after the tablet at 40 s, are 9ε of the 16 — five times as many steps as
+/// before and the same 9ε, which is the claim that the roundings do not add up by step.
 ///
 /// What it would catch: the depot feeding the blood instead of the liver (the ratio is then `F`,
-/// 0.9), the liver eliminating on `C_t` rather than on its venous `C_t/K_p` (an effective 120 L/h,
-/// `E` = 0.603 and a ratio of 0.357), a perfusion's `K_p` swapped between two tissues or put on the
+/// 0.9), the liver eliminating on `C_t` rather than on its venous `C_t/K_p` (an effective 122.4 L/h,
+/// `E` = 0.608 and a ratio of 0.353), a perfusion's `K_p` swapped between two tissues or put on the
 /// blood's side (the `K_p` ratios), and an IV reference that was not intravenous (1).
 #[test]
 fn the_liver_takes_its_share_before_the_blood_sees_the_tablet() {
@@ -250,7 +254,7 @@ fn the_liver_takes_its_share_before_the_blood_sees_the_tablet() {
     );
 
     for window in [10.0, 40.0] {
-        let hours = 360.0;
+        let hours = 1800.0;
         let (oral, n, oral_left) = areas(shipped(), window, hours);
         let (iv, _, iv_left) = areas(intravenous(shipped(), body.dose), window, hours);
 
@@ -517,6 +521,75 @@ fn the_body_is_the_reference_adult_it_cites() {
         assert!(
             (file - table).abs() <= half,
             "the {what} is {file} in the file and {table:.6} from the row it cites"
+        );
+    }
+}
+
+/// **The partitions are benzene's, by Rodgers and Rowland's equation, from this repository's own
+/// log P.**
+///
+/// The drug stays illustrative — its clearances and its absorption are nobody's — but its three
+/// `K_p` are what [`partition`](pantometry::pharmacokinetic::partition) gives a molecule with
+/// benzene's simulated partition coefficients:
+///
+/// - **log P(octanol/water) 2.14**, step 4c-2 with the staged water leg (CHANGELOG), for the
+///   liver, the lean tissue and the blood cells.
+/// - **log P(decane/water) 1.92**, step 4c-3's decane leg, for adipose, in the place Rodgers and
+///   Rowland give a vegetable oil. Olive oil:saline's measured 169 (log 2.23) would put the fat at
+///   about twice this; the simulated value is the one this repository measured.
+/// - **`fu` 0.39957**, httk's `Linakis2019InhalationReferenced` table, `CALC_FUP` for benzene: a
+///   predicted value for human plasma, cited as one number.
+/// - **Haematocrit 0.45**, the value Bartelink et al., *Pharmaceuticals* 15, 796 (2022),
+///   doi:10.3390/ph15070796, CC BY 4.0, use in the same equation. Neither Rodgers paper prints
+///   one.
+///
+/// Each tissue's coefficient is to plasma, and divided by `B:P` it is to blood, which is what a
+/// perfusion here takes. **Lean tissue is a volume-weighted mean**, because a lumped
+/// perfusion-limited tissue at equilibrium holds `Σ K_p,i V_i` times the blood: the kidney's row
+/// (0.004 of body weight) and the rapidly perfused tissues' (0.064) both take rat kidney, which is
+/// a proxy — heart, brain and gut are not kidney — and the slowly perfused (0.613) take rat muscle.
+/// The rows are the ones [`the_body_is_the_reference_adult_it_cites`] holds the volumes to.
+///
+/// The tolerance is the file's: each `K_p` is written to four significant figures, so it is
+/// within half the last of them of the equation's value.
+#[test]
+fn the_partitions_are_benzenes_by_rodgers_and_rowland() {
+    use pantometry::core::math::exp;
+    use pantometry::pharmacokinetic::partition::{
+        blood_to_plasma, tissue_partition, RAT_ADIPOSE, RAT_BLOOD_CELLS, RAT_KIDNEY, RAT_LIVER,
+        RAT_MUSCLE, RAT_PLASMA_LIPIDS,
+    };
+    const LOG_P_OCTANOL: f64 = 2.14;
+    const LOG_P_DECANE: f64 = 1.92;
+    const FU: f64 = 0.39957;
+    const HAEMATOCRIT: f64 = 0.45;
+    // Fractions of body weight: kidney, rapidly and slowly perfused.
+    const LEAN: [f64; 3] = [0.004, 0.064, 0.613];
+    let antilog = |x: f64| exp(x * std::f64::consts::LN_10);
+    let (octanol, decane) = (antilog(LOG_P_OCTANOL), antilog(LOG_P_DECANE));
+
+    let blood = blood_to_plasma(&RAT_BLOOD_CELLS, octanol, FU, HAEMATOCRIT);
+    let to_blood = |t, p| tissue_partition(t, &RAT_PLASMA_LIPIDS, p, FU) / blood;
+    let kidney = to_blood(&RAT_KIDNEY, octanol);
+    let muscle = to_blood(&RAT_MUSCLE, octanol);
+    let lean = ((LEAN[0] + LEAN[1]) * kidney + LEAN[2] * muscle) / LEAN.iter().sum::<f64>();
+    let want = [
+        ("liver", to_blood(&RAT_LIVER, octanol), 0.0005),
+        ("lean tissue", lean, 0.0005),
+        ("fat", to_blood(&RAT_ADIPOSE, decane), 0.005),
+    ];
+    let body = Body::of(&shipped());
+    let file = [
+        body.liver.partition,
+        body.lean.partition,
+        body.fat.partition,
+    ];
+    println!("  B:P {blood:.6}, kidney {kidney:.6}, muscle {muscle:.6}");
+    for ((organ, equation, half), file) in want.into_iter().zip(file) {
+        println!("  {organ:12} {file:8} in the file, {equation:.6} by the equation");
+        assert!(
+            (file - equation).abs() <= half,
+            "{organ}'s K_p is {file} in the file and {equation:.6} by Rodgers and Rowland"
         );
     }
 }

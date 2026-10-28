@@ -1,6 +1,6 @@
 {
-  "title": "a 400 mg tablet absorbed through the liver and carried by blood into lean tissue and fat, twenty-four hours of it",
-  "duration_s": 86400.0,
+  "title": "a 400 mg tablet absorbed through the liver and carried by blood into lean tissue and fat, four days of it",
+  "duration_s": 345600.0,
   "frames": 48,
   "window_s": 10.0,
   "domains": [
@@ -32,19 +32,19 @@
           "blood": "blood",
           "tissue": "liver",
           "flow_l_per_h": 78.98,
-          "partition": 2.0
+          "partition": 2.040
         },
         {
           "blood": "blood",
           "tissue": "lean tissue",
           "flow_l_per_h": 250.84,
-          "partition": 0.7
+          "partition": 1.426
         },
         {
           "blood": "blood",
           "tissue": "fat",
           "flow_l_per_h": 18.09,
-          "partition": 6.0
+          "partition": 39.38
         }
       ],
       "depots": [

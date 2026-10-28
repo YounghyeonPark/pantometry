@@ -1432,23 +1432,29 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             //   product per step — `1.1nε` is the library's own bound for it.
             // - **The books close**: what is in the body, cleared, still to take, in the gut and
             //   lost is the dose, to the library's 1e-12, at every frame.
-            // - **Fat holds the drug longest, by exactly what its balance says.** Twenty-four
-            //   hours in, every mode but the slowest is `e^{−50}` gone, so each organ falls by one
-            //   factor `ρ` a step. A tissue's balance `V_t(ρ − 1)C_t/h = Q(C_b − C_t/K_p)` then
-            //   fixes `C_t/C_b = Q/(Q/K_p − V_t(1 − ρ)/h)`, and the liver's, with its clearance on
-            //   the venous blood, `Q/((Q + CL)/K_p − V(1 − ρ)/h)`. `ρ` comes from the blood's own
-            //   last two frames. Fat reads 17.5 times the blood against a `K_p` of 6: it is the
-            //   slowest to empty, so it lags. What the tolerance is earned against is the gut, the
-            //   one input still feeding the liver: 2.2e-8 of the liver's blood supply at 24 h, and
-            //   the three organs depart from their balance by 1.008, 0.037 and 44.0 times that. The
-            //   same three multiples came out at 30 h, where the feed is 180 times smaller —
-            //   measured in a throwaway script of the same recurrence, which also gives the 24 h
-            //   figures the run prints — so the departure is the gut and not rounding. 64 times the
-            //   feed is 1.45 times the worst of them. It was eight times the worst in the
-            //   illustrative body (1.01, 0.012, 7.6), and the reference adult's fat, turning over
-            //   at 0.20/h against a slowest mode of 0.13/h, is six times as sensitive to the feed;
-            //   the margin is thin and stays, because the multiple is a property of the body that
-            //   moved by 0.1% between 24 h and 30 h, not a scatter.
+            // - **Fat holds the drug longest, by exactly what its balance says.** Ninety-six hours
+            //   in, every mode but the slowest is gone — the next, at 0.66/h against 0.0209/h, is
+            //   `e^{−61}` of it — so each organ falls by one factor `ρ` a step. A tissue's balance
+            //   `V_t(ρ − 1)C_t/h = Q(C_b − C_t/K_p)` then fixes `C_t/C_b = Q/(Q/K_p −
+            //   V_t(1 − ρ)/h)`, and the liver's, with its clearance on the venous blood,
+            //   `Q/((Q + CL)/K_p − V(1 − ρ)/h)`. `ρ` comes from the blood's own last two frames.
+            //   Fat reads 123.26 times the blood against a `K_p` of 39.38: it is the slowest to
+            //   empty, so it lags, and the drug's last days are the fat giving it back.
+            //
+            //   **The tolerance is rounding, derived, and it was the gut's.** At 24 h the one
+            //   input the single-mode argument left out was the gut still feeding the liver, and
+            //   the tolerance was 64 times that feed. Benzene's partitions slowed the slowest mode
+            //   from 0.13/h to 0.0209/h, so 24 h no longer reached a single mode — the second was
+            //   still 2.2e-7 of it, and only 88% of what was absorbed had been cleared — and the
+            //   scene became four days. There the feed is 3.1e-39 and the second mode `e^{−61}`,
+            //   and what is left is the rounding in `ρ`: the two frames' ratio is good to `(n +
+            //   8)ε` over their `n` steps, the library's bound for a stable map, so `1 − ρ` is off
+            //   by `(n + 8)ε/n`, and the balance carries that through `V_t(1 − ρ)/h` into a
+            //   denominator that, for fat, is 0.146 left of 0.459 — the cancellation that makes it
+            //   123 times the blood multiplies the slip too. Measured: the liver, lean tissue and
+            //   fat depart by 6.7e-16, 4.9e-15 and 1.8e-12, 0.12, 0.19 and 0.21 of their bounds.
+            //   Off by one step in the frame spacing, the liver is 1.4e8 bounds out; with a `K_p`
+            //   off by its last written digit, 8.5e11.
             // - **The note counts the tablet**, which is what `nothing was administered` and the
             //   note's sum were changed to do.
             "34-a-tablet-that-meets-the-liver-first.json" => {
@@ -1571,18 +1577,29 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     .expect("a perfused liver")
                     .flow_l_per_h;
                 let feed = ka * gut / (liver_flow * blood);
-                let tolerance = 64.0 * feed;
+                // The blood's last two frames are `n` steps apart and their ratio is good to
+                // `(n + 8)ε`, the library's own bound for a stable map; `ρ` is its `n`-th root, so
+                // `1 − ρ` is off by `(n + 8)ε/n`, absolutely.
+                let slip = (per_frame + 8.0) * f64::EPSILON / per_frame;
                 for p in perfusions {
                     let v = volume(&p.tissue);
-                    let want = p.flow_l_per_h
-                        / ((p.flow_l_per_h + v.clearance_l_per_h) / p.partition
-                            - v.volume_l * (1.0 - rho) / h);
+                    let draining = v.volume_l * (1.0 - rho) / h;
+                    let denominator =
+                        (p.flow_l_per_h + v.clearance_l_per_h) / p.partition - draining;
+                    let want = p.flow_l_per_h / denominator;
+                    // That slip, carried through `V_t(1 − ρ)/h` into the denominator, plus a
+                    // rounding for each of the ratio, the division and the subtraction.
+                    let tolerance = v.volume_l / h * slip / denominator.abs() + 16.0 * f64::EPSILON;
                     let got = reading(last, &p.tissue) / blood;
                     let off = (got / want - 1.0).abs();
                     println!(
                         "  {name}: {} at {got:.6} times the blood against {want:.6} from its \
-                         balance (K_p {}), off {off:.2e} against {tolerance:.2e}",
-                        p.tissue, p.partition
+                         balance (K_p {}), off {off:.2e} = {:.2} of {tolerance:.2e}; draining \
+                         {draining:.4} of {:.4}",
+                        p.tissue,
+                        p.partition,
+                        off / tolerance,
+                        denominator + draining
                     );
                     assert!(
                         off < tolerance,

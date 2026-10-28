@@ -193,8 +193,13 @@
 //!
 //! **No reference human.** A physiological model is only as good as its organ volumes and blood
 //! flows, and those come from a published table — ICRP Publication 89, or Brown et al. 1997 —
-//! read by somebody who can cite the page. This crate has the mechanism and no data; the tests
-//! use round numbers that say so.
+//! read by somebody who can cite the page. This crate has the mechanism and no such table; the
+//! tests use round numbers that say so.
+//!
+//! **Partition coefficients from composition** are the one place it does carry data, because the
+//! data is printed beside the equation that uses it. [`partition`] is Rodgers and Rowland's `K_p`
+//! for a neutral molecule, with the rat tissue compositions their papers tabulate, each constant
+//! cited to its table and page.
 //!
 //! [`eliminating`]: CompartmentModel::eliminating
 //!
@@ -238,6 +243,8 @@ use std::any::Any;
 use pantometry_core::conserved::quantity;
 use pantometry_core::{Domain, Exchange, Kind, Ledger, Reading, Violation};
 use pantometry_units::{Concentration, Frequency, Mass, MassFlow, Time, Volume};
+
+pub mod partition;
 
 /// A clearance: m³·s⁻¹, a volume of plasma emptied of drug per unit time.
 ///
