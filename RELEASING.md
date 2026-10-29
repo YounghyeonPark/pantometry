@@ -156,6 +156,11 @@ Both are on the index now. **`pantometry-forcefield` is not**: it is new after 0
 is in `crates/pantometry-protein/structures/README.md`: a fixture that has been through a script
 can no longer be checked against what it came from.
 
+**A new crate needs its two licence files copied beside its manifest.** `pantometry-protein` went
+out at 0.21.0 and 0.22.0 without them, so those two packages carry the `license` identifier and no
+text. `every_crate_carries_its_licence` now fails a crate that lacks them, and `cargo package
+--list -p <crate>` is the way to see that a package holds them.
+
 A **new** crate hits crates.io's new-crate rate limit — a burst of five, then roughly one per ten
 minutes. Existing crates do not, so a release that adds no crate goes through in one pass. A release
 where *every* crate is new takes two hours and needs the retry loop under

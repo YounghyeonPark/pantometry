@@ -5681,6 +5681,14 @@ protects nothing.
 
 ### Fixed
 
+- **`pantometry-protein` was published twice without its licence.** Nineteen of the twenty crates
+  carry `LICENSE-MIT` and `LICENSE-APACHE` beside their manifest, which is how a `.crate` comes to
+  hold them. This one never did, so its 0.21.0 and 0.22.0 packages hold no licence text, only the
+  manifest's identifier. A published version cannot be changed, so those two stay as they are. The
+  crate now carries both, and `cargo package --list` shows them.
+  `every_crate_carries_its_licence` holds every crate under `crates/` to both files, byte for byte
+  the root's. Before the copy it failed on exactly these two files. A one-byte change to
+  `pantometry-core`'s copy fails it too.
 - **The editor's colour bar ran its two ends together on the README's protein figure, and the
   check for that was blind sideways.** `docs/editor-protein.png` showed `3.9674e-119.5054e-11`
   under the bar, which reads as one number. The bar's width was a share of the viewport with a
