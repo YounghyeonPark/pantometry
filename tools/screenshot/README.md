@@ -72,5 +72,11 @@ and no GPU. `the_screenshots_show_the_editor_as_it_is` regenerates it and compar
 the interface fails a test instead of ageing a picture in silence. It sees the frame and not the
 pixels: the same strings in the same places, the same viewport rect, the same counts.
 
+**Agreeing is not enough, so the frame must also read `overlap=0` and `cut=0`.** A caption taken
+of a broken frame agrees with a fresh dump of it. `docs/editor-protein.png` showed its colour
+bar's two ends run together as `3.9674e-119.5054e-11` for exactly that reason. Its caption had
+recorded the collision faithfully, as `overlap=0` at the time, because the overlap check shrank
+rects sideways too.
+
 When it fails, retake the picture with the command above. Editing `editor.txt` alone would restore
 the green and leave the PNG exactly as stale as it was, which is why one script writes both.

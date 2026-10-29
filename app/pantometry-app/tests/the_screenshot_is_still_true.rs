@@ -90,6 +90,22 @@ fn holds(file: &str, stem: &str) {
     );
     let fresh = String::from_utf8_lossy(&out.stdout).into_owned();
 
+    // **And the frame is one worth showing.** Stored and fresh agreeing says the picture is
+    // current, not that it is right: `docs/editor-protein.png` showed its colour bar's two ends
+    // run together as `3.9674e-119.5054e-11`, and its caption recorded the collision as faithfully
+    // as the rest. A figure on the README's first screen is held to what every swept width is.
+    for key in ["overlap", "cut"] {
+        let n = fresh
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{key}=")))
+            .and_then(|v| v.parse::<usize>().ok());
+        assert_eq!(
+            n,
+            Some(0),
+            "docs/{stem}.png's frame has {key}={n:?}; the lines marked `=` or `!`:\n{fresh}"
+        );
+    }
+
     // Carriage returns are the checkout's, not the frame's: `core.autocrlf` rewrites the stored
     // file and the binary's own output has none.
     let flat = |s: &str| s.replace('\r', "");

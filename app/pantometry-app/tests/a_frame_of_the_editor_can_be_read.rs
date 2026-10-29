@@ -252,8 +252,8 @@ fn nothing_is_drawn_on_top_of_anything_else() {
     // **Two of the five placements are slack, measured.** Sabotage moved the draw count back to
     // the viewport's bottom edge and halved the transport's reserved rows, and neither made this
     // fail: without the ladder those two only *abut* their neighbours, by a point or two, and
-    // `overlap` shrinks each rect by 2 before intersecting so that two adjacent rows of text are
-    // not a collision. So this holds the reservation and the colour bar's band, and the other two
+    // `overlap` shrinks each rect by 2 above and below before intersecting, so that two adjacent
+    // rows of text are not a collision. So this holds the reservation and the colour bar's band, and the other two
     // lines buy room to read rather than correctness. Saying which is which is cheaper than a
     // reader assuming all four are load-bearing.
     for width in [1500, 1100, 900, 700, 620, 500, 420, 300, 260] {

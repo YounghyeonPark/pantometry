@@ -5681,6 +5681,33 @@ protects nothing.
 
 ### Fixed
 
+- **The editor's colour bar ran its two ends together on the README's protein figure, and the
+  check for that was blind sideways.** `docs/editor-protein.png` showed `3.9674e-119.5054e-11`
+  under the bar, which reads as one number. The bar's width was a share of the viewport with a
+  floor of 120 points. Each label is 60, so the left one ended at x = 1121 exactly where the right
+  one began.
+  - **The bar grows instead:** it is at least as wide as its two ends plus two characters. On that
+    figure it is now 132 points, and the gap is 12.
+  - **The dump's `overlap` could not see this.** It shrank every rect by 2 points on all four sides
+    to absorb a galley's line-height slack, and that slack is only vertical. So two strings on one
+    row could touch, or run into each other by up to four points, at `overlap=0`. It now shrinks
+    above and below only. Measured against the two committed captions, this pair is the only one
+    on any row with a gap of 2 points or less.
+  - **A figure's caption could record the collision faithfully.** The guard compares stored with
+    fresh, and a caption taken of a broken frame agrees with it. Each README figure's frame must
+    now also read `overlap=0` and `cut=0`.
+
+  Before the fix, the tightened guard failed on exactly the two labels, marked `=`. Sabotaged, the
+  bar left unwidened:
+  - is caught against the new caption, and against the old one;
+  - against the old caption, **passes** with the four-sided shrink put back, so the shrink is what
+    sees it;
+  - against a caption retaken of the broken frame, which records `overlap=1` itself, **passes**
+    without the new assertion and is caught with it. That is the state a stored-equals-fresh
+    comparison cannot see, and the reason for the assertion.
+
+  The scene 29 figure's caption is unchanged byte for byte. The protein figure was retaken with the
+  fixed `take.ps1`.
 - **`tools/screenshot/take.ps1` printed `wrote` and exited 0 after a write had failed.**
   PowerShell 5.1 ends only the statement when a .NET method throws, inside `try` as well. A
   picture that failed to save therefore went on to a fresh caption, which left an old picture

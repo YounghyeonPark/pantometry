@@ -452,7 +452,16 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
     //
     // Rects are shrunk first, because egui's galley boxes carry the line height's slack above and
     // below the glyphs and two abutting rows would otherwise count as a collision.
-    let piled = |a: &Drawn, b: &Drawn| a.at.shrink(2.0).intersects(b.at.shrink(2.0));
+    //
+    // **Above and below only.** The slack is vertical, and the shrink was on all four sides, so
+    // two strings on one row could touch or run into each other by up to four points unseen. The
+    // colour bar's two ends did exactly that on `docs/editor-protein.png` — `3.9674e-11` ending at
+    // x=1121 and `9.5054e-11` starting there, read as one number — at `overlap=0`. A galley's
+    // width is its glyphs' advance, so side by side, touching is touching.
+    let piled = |a: &Drawn, b: &Drawn| {
+        let slack = egui::vec2(0.0, 2.0);
+        a.at.shrink2(slack).intersects(b.at.shrink2(slack))
+    };
     let mut over = 0usize;
     for (i, a) in texts.iter().enumerate() {
         for b in texts.iter().skip(i + 1) {
@@ -4453,7 +4462,20 @@ fn colour_bar(
     visuals: &egui::Visuals,
 ) {
     let scale = Some((lo, hi));
-    let w = (rect.width() * 0.28).clamp(120.0, 280.0);
+    let font = egui::FontId::monospace(10.0);
+    let label_of = |u: f64| editor_core::magnitude(editor_core::bar_value(u, scale));
+    let span = |s: &str| {
+        painter
+            .layout_no_wrap(s.to_string(), font.clone(), visuals.weak_text_color())
+            .rect
+            .width()
+    };
+    // **Wide enough for its two ends and two characters between them.** The width was a share of
+    // the viewport and nothing else, with a floor of 120 points — and `3.9674e-11` is 60 of them,
+    // so on `docs/editor-protein.png` the two ends filled the floor exactly and read as
+    // `3.9674e-119.5054e-11`. The middle label can be dropped; the ends cannot, so the bar grows.
+    let ends = span(&label_of(0.0)) + span(&label_of(1.0)) + span("00");
+    let w = (rect.width() * 0.28).clamp(120.0, 280.0).max(ends);
     let x0 = rect.right() - 16.0 - w;
     let y = rect.bottom() - 34.0;
     let steps = w as usize;
@@ -4466,19 +4488,11 @@ fn colour_bar(
             egui::Color32::from_rgb(r, g, b),
         );
     }
-    let font = egui::FontId::monospace(10.0);
     // **The middle label only when all three fit.** They went in at 0, a half and 1 with no
     // regard for how wide they are: `303.58 314.59 325.59` clears on a 120-point bar and
     // `3.9674e-11 6.1364e-11 8.1054e-11` does not — it drew as `3.96746.13648.1054e-11`, three
     // numbers on top of one another, and a reader has no way to tell that from one long number.
     // The ends are what a bar is for and stay; the middle is a convenience and goes.
-    let label_of = |u: f64| editor_core::magnitude(editor_core::bar_value(u, scale));
-    let span = |s: &str| {
-        painter
-            .layout_no_wrap(s.to_string(), font.clone(), visuals.weak_text_color())
-            .rect
-            .width()
-    };
     // **The condition is that they do not overlap, exactly.** The left label starts at the bar's
     // left end, the right one ends at its right, and the middle is centred — so the middle clears
     // both when `w >= 2*max(left, right) + middle`, and not otherwise. A first attempt demanded a
