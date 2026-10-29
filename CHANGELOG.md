@@ -5681,6 +5681,27 @@ protects nothing.
 
 ### Fixed
 
+- **`take.ps1` photographed whatever the window had drawn after fifteen seconds, at whatever size
+  it was, under a caption of a finished run at 1500x950.** Nothing tied the picture to its
+  caption. Run with no wait, the old script saved a run in progress beside the finished run's
+  caption and exited 0. It was at frame 6 of 13 with "streaming — a prefix of the run" on screen.
+  The size agreed only because `[1500.0, 950.0]` was the editor window's size in `edit.rs`, and
+  `1500.0` and `950.0` separately were the dump's default in `main.rs`.
+  - It is one constant now, `edit::WINDOW`.
+  - The editor's title gains `, ran` when a run finishes, and only then: a stopped or failed run
+    leaves `partial` set. `the_title_says_ran_only_once_a_run_has_finished` holds that.
+  - The script dumps the caption first and waits for that title, for up to `-RunSeconds`.
+  - It writes nothing unless the window's client area, in points, equals the dump's `size=`.
+  - Review added three more checks:
+    - the title is read again on both sides of the capture, because the editor watches its file;
+    - the editor must be the foreground window, because a covered one is not painted;
+    - the script is DPI-aware per monitor, as the editor is.
+
+  Sabotaged with an expected size one point off, a title that never says `ran`, and a write to the
+  scene during the wait. Each stopped the script with exit 1 and nothing written. The second also
+  failed the unit test, which also fails with the `busy` half of the condition removed. Both
+  figures were retaken with the new script, the titles in them now say `, ran`, and both
+  captions are unchanged byte for byte.
 - **`--ui-dump` answered questions it was not asked.** Each flag was looked up on its own with
   `position`, so an argument no lookup asked for was never seen. Measured on the binary before
   the fix, every one of these printed a frame and exited 0. `--rann` and a scene written after a

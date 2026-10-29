@@ -46,6 +46,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+/// The editor window's size in points, and the size `--ui-dump` lays a frame out at unless told
+/// otherwise.
+///
+/// **One number in one place.** It was `[1500.0, 950.0]` here and `1500.0` and `950.0` in
+/// `main.rs`, and `docs/editor.png` agrees with `docs/editor.txt` only while those agree: the
+/// picture is this window and the caption is that default, and the guard regenerates the caption
+/// at the default whatever the picture was taken at.
+pub const WINDOW: [f32; 2] = [1500.0, 950.0];
+
+/// What the window is called, before the file and its state are added to it.
+const WINDOW_TITLE: &str = "pantometry editor";
+
 /// `pantometry edit [scene.json] [--run]`.
 pub fn run(args: &[String]) -> i32 {
     match open(args) {
@@ -78,14 +90,14 @@ fn open(passed: &[String]) -> eframe::Result {
         }
     }
     eframe::run_native(
-        "pantometry editor",
+        WINDOW_TITLE,
         eframe::NativeOptions {
             // **Big enough that the viewport exists.** Three side panels have minimum widths, and a
             // side `Panel` is served before the `CentralPanel` is — so on the default 533-point
             // window the outliner, the text and the inspector took all of it and the paint callback
             // was handed a rect of **zero width**. It drew nothing, correctly, and looked exactly
             // like a renderer that did not work.
-            viewport: egui::ViewportBuilder::default().with_inner_size([1500.0, 950.0]),
+            viewport: egui::ViewportBuilder::default().with_inner_size(WINDOW),
             ..eframe::NativeOptions::default()
         },
         Box::new(move |cc| {
@@ -839,6 +851,8 @@ struct App {
     log_readings: bool,
     /// Start a run on the first update. Set by `--run`; cleared once it has fired.
     run_at_once: bool,
+    /// The window title last sent, so it is sent when it changes rather than every frame.
+    title: String,
     /// What the cursor can be over in the shaded view, and the note each field's canvas carries.
     ///
     /// **Built with the meshes, not per paint.** The first version rebuilt every field's surface
@@ -982,6 +996,7 @@ impl App {
             shaded: true,
             log_readings: false,
             run_at_once: false,
+            title: String::new(),
             shaded_probes: Vec::new(),
             shaded_notes: Vec::new(),
             gizmo: Gizmo::Move,
@@ -1411,12 +1426,37 @@ impl App {
         }
         self.poll_jobs();
         self.poll_disk();
+        let title = self.window_title();
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
         if self.busy.is_some() {
             // A stream draws itself; without this, frames wait for a mouse wiggle.
             ctx.request_repaint_after(Duration::from_millis(60));
         } else if self.watch {
             ctx.request_repaint_after(Duration::from_millis(400));
         }
+    }
+
+    /// The file open, and `ran` once a run of it has finished.
+    ///
+    /// **The one thing outside the window that can tell a run has finished.** `take.ps1` waited a
+    /// fixed fifteen seconds and photographed whatever was drawn, under a caption that is a
+    /// finished run; on a slower machine or a heavier scene that was a run in progress under the
+    /// caption of a finished one, and nothing would have said so. It waits for this instead.
+    /// `ran` only for a run that *finished*: a stopped one leaves `partial` set, and so does one
+    /// that ended in an error.
+    fn window_title(&self) -> String {
+        if self.start || self.choosing.is_some() {
+            return String::from(WINDOW_TITLE);
+        }
+        let name = std::path::Path::new(&self.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(self.path.as_str());
+        let ran = self.busy.is_none() && self.run.as_ref().is_some_and(|v| !v.partial);
+        format!("{WINDOW_TITLE} — {name}{}", if ran { ", ran" } else { "" })
     }
 
     /// One frame of interface, from the root `Ui` alone.
@@ -4892,6 +4932,30 @@ mod tests {
     /// middle of a long handle unreachable, and measuring to the infinite line would let a click
     /// far past the tip take hold of it — a handle that grabs from off-screen is worse than one
     /// that does not grab at all, because the thing it moves is somewhere the pointer is not.
+    /// **The title says `ran` for a finished run and for nothing else**, because `take.ps1`
+    /// photographs the window the moment it does. A run in progress, a run that stopped or failed
+    /// — all of which leave `partial` set — and a screen with no scene must not say it.
+    #[test]
+    fn the_title_says_ran_only_once_a_run_has_finished() {
+        let mut app = App::new(None);
+        assert_eq!(app.window_title(), "pantometry editor — scene.json");
+        app.run_here().expect("the built-in scene runs");
+        assert_eq!(app.window_title(), "pantometry editor — scene.json, ran");
+        app.run.as_mut().expect("a run").partial = true;
+        assert_eq!(app.window_title(), "pantometry editor — scene.json");
+        app.run.as_mut().expect("a run").partial = false;
+        // A second run started and not yet streamed: the first is still on screen, finished,
+        // and it is not the run the window is about to show.
+        app.busy = Some(("running", mpsc::channel().1));
+        assert_eq!(app.window_title(), "pantometry editor — scene.json");
+        app.busy = None;
+        app.start = true;
+        assert_eq!(app.window_title(), "pantometry editor");
+        app.start = false;
+        app.choosing = Some(Default::default());
+        assert_eq!(app.window_title(), "pantometry editor");
+    }
+
     #[test]
     fn a_handle_is_grabbed_by_its_length() {
         let a = egui::pos2(100.0, 100.0);

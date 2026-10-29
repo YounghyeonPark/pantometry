@@ -10,9 +10,11 @@ cargo build --release --bin pantometry
 powershell -File ../tools/screenshot/take.ps1
 ```
 
-It opens the editor on `29-a-designed-bracket-becomes-cells.json` with `--run`, waits for the run to
-finish and the shaded pass to draw, captures the window, closes it, and writes two files:
-`docs/editor.png` and `docs/editor.txt`.
+It dumps the frame first and reads the size it was laid out at. Then it opens the editor on
+`29-a-designed-bracket-becomes-cells.json` with `--run` and waits until the window's title says the
+run finished. It gives the shaded pass three seconds to draw and checks the window is the dump's
+size. Only then does it capture the window, close it, and write two files: `docs/editor.png` and
+`docs/editor.txt`.
 
 ## Why it captures the way it does
 
@@ -39,7 +41,9 @@ display scaled to 150% `GetWindowRect` returned the window's size divided by 1.5
 which is DPI-aware, drew at full size: the bitmap was the window's top-left two thirds, enlarged,
 and the script printed `wrote` as for any other picture. Aware, a scaled display gives a larger
 picture of the same frame — both figures are 2272x1481 for that reason, where `docs/editor.png`
-was 1516x989 when it was taken at 100%.
+was 1516x989 when it was taken at 100%. It is aware *per monitor*, as the editor is. System-aware,
+a window on a monitor scaled differently from the primary one would have its rectangle reported at
+the primary's scale, and the size check divides that by the window's own.
 
 **A failure stops it, and `wrote` is measured.** PowerShell 5.1 ends only the *statement* when a
 .NET method throws, inside `try` as well. So a picture that failed to save went on to write a fresh
@@ -61,6 +65,33 @@ change has broken stops at `--ui-dump exited 1` and leaves the caption alone. `-
 **`-Out` may be absolute.** Both paths are resolved against the shell's location once, at the top.
 The caption was `Join-Path (Get-Location) $caption`, and with an absolute `-Out` that is not a
 path, so taking a picture anywhere outside `docs/` failed at the caption.
+
+**The picture is taken of the state and the size the caption is.** Nothing tied the two. The
+script slept fifteen seconds and photographed whatever was drawn, under a caption of a finished
+run. Run with no wait, the old script saved a run in progress, at frame 6 of 13 with "streaming
+— a prefix of the run" on screen, beside that caption, and exited 0. The size agreed only
+because `1500x950` was written twice, once as the window's size and once as the dump's default.
+Now:
+- It is written once, as `edit::WINDOW`.
+- The editor's title gains `, ran` when a run *finishes*, and not when one is stopped or fails.
+  The script waits for that, for up to `-RunSeconds`.
+- Before writing anything, the script measures the window's client area in points and requires it
+  to equal the dump's `size=`.
+- It reads the title again just before and just after the capture. The editor watches its file,
+  and a write to it during the wait drops the run.
+- It requires the editor to be the foreground window. A covered window is not painted, so its
+  title can say `ran` over a frame from mid-run, and the answer to `SetForegroundWindow` used to
+  be thrown away.
+
+Each piece was sabotaged, and each stopped the script with nothing written:
+- an expected size off by one point;
+- a title that never says `ran`;
+- a write to the scene during the wait.
+
+**What the size check cannot see is egui's zoom.** The client area in points is winit's size, and
+egui lays out at that over its zoom factor. A fresh window starts at a zoom of 1, because nothing
+persists it, so the script, which always opens a fresh one, is safe. A window someone had pressed
+Ctrl+= in would pass at the wrong layout.
 
 **The script is ASCII.** PowerShell 5.1 reads a `.ps1` without a byte-order mark as the system code
 page, so an em dash in a comment is a parse error at the line that contains it.

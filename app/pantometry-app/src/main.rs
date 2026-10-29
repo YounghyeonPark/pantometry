@@ -152,8 +152,10 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
     let last = pantometry_world::presets::AREA_COUNT - 1;
     let mut asked = edit::Dump {
         path: None,
-        width: 1500.0,
-        height: 950.0,
+        // The window's own size, from the one place it is stated: `docs/editor.png` is that
+        // window and `docs/editor.txt` is this default.
+        width: edit::WINDOW[0],
+        height: edit::WINDOW[1],
         choosing: None,
         click: Vec::new(),
         drag: Vec::new(),
