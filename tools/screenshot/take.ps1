@@ -17,6 +17,27 @@ param(
     [int]$SettleSeconds = 15
 )
 
+# **A failure stops the script.** PowerShell 5.1 treats an exception from a .NET method as ending
+# that statement and no more, inside `try` as well, so a picture that failed to save went on to a
+# fresh caption, printed `wrote` and exited 0 -- and an old picture under a new caption is the one
+# state `the_screenshots_show_the_editor_as_it_is` exists to catch and cannot.
+$ErrorActionPreference = "Stop"
+
+# Both paths resolved against this shell's location once, here. `Bitmap.Save` resolves a relative
+# path against the process's directory rather than PowerShell's, and `Join-Path` of the location
+# and an absolute `-Out` is a path that does not exist.
+$Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
+$caption = [System.IO.Path]::ChangeExtension($Out, ".txt")
+# A `-Out` ending `.txt` is its own caption: the picture was written, reported, then overwritten.
+if ([System.IO.Path]::GetExtension($Out) -ne ".png") { throw "-Out must end in .png; got $Out" }
+
+# `wrote` only for a file that is there and has something in it, measured after the write.
+function Wrote([string]$path) {
+    $f = Get-Item -LiteralPath $path
+    if ($f.Length -eq 0) { throw "$path is empty" }
+    "wrote $path ($($f.Length) bytes)"
+}
+
 Add-Type -AssemblyName System.Drawing
 
 Add-Type @"
@@ -100,7 +121,7 @@ try {
 
     $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
-    "wrote $Out"
+    Wrote $Out
 }
 finally {
     if (-not $p.HasExited) { $p.Kill(); "closed the editor" }
@@ -121,8 +142,13 @@ $was = [Console]::OutputEncoding
 # **The caption follows -Out.** This wrote `..\docs\editor.txt` whatever -Out said, so taking a
 # picture of any other scene silently replaced the committed caption for this one -- the picture
 # and its caption then described different scenes, and only the guard test would have said so.
-$caption = [System.IO.Path]::ChangeExtension($Out, ".txt")
+# `$caption` is set at the top, from the resolved `-Out`.
 $dump = & $exe --ui-dump $Scene --ran | Out-String
+$code = $LASTEXITCODE
 [Console]::OutputEncoding = $was
-[System.IO.File]::WriteAllText((Join-Path (Get-Location) $caption), $dump, (New-Object System.Text.UTF8Encoding $false))
-"wrote $caption"
+# **The dump's exit code, read.** `Stop` does not reach a native command's exit code in 5.1, and a
+# dump that failed is an empty string: written, it replaced the caption with nothing and said so.
+if ($code -ne 0) { throw "--ui-dump exited $code -- $caption left as it was" }
+if ($dump.Trim().Length -eq 0) { throw "--ui-dump printed nothing -- $caption left as it was" }
+[System.IO.File]::WriteAllText($caption, $dump, (New-Object System.Text.UTF8Encoding $false))
+Wrote $caption

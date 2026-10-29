@@ -180,24 +180,32 @@ fn main() {
                     2
                 }
                 Ok(open) => {
-                    print!(
-                        "{}",
-                        edit::ui_dump(edit::Dump {
-                            path,
-                            width,
-                            height,
-                            choosing,
-                            click,
-                            drag,
-                            ran,
-                            iso,
-                            solo,
-                            open,
-                            custom,
-                            run_after,
-                        })
-                    );
-                    0
+                    let frame = edit::ui_dump(edit::Dump {
+                        path,
+                        width,
+                        height,
+                        choosing,
+                        click,
+                        drag,
+                        ran,
+                        iso,
+                        solo,
+                        open,
+                        custom,
+                        run_after,
+                    });
+                    // **A refused run exits 1.** It printed its refusal as the frame and
+                    // exited 0, so `take.ps1`, reading the exit code, wrote it over a caption.
+                    match frame {
+                        Ok(frame) => {
+                            print!("{frame}");
+                            0
+                        }
+                        Err(refused) => {
+                            eprintln!("{refused}");
+                            1
+                        }
+                    }
                 }
             }
         }

@@ -5681,6 +5681,41 @@ protects nothing.
 
 ### Fixed
 
+- **`tools/screenshot/take.ps1` printed `wrote` and exited 0 after a write had failed.**
+  PowerShell 5.1 ends only the statement when a .NET method throws, inside `try` as well. A
+  picture that failed to save therefore went on to a fresh caption, which left an old picture
+  under a new caption, the one state the guard test cannot see. A dump that failed replaced the
+  caption with nothing. An absolute `-Out` could not be used at all, because the caption path was
+  `Join-Path` of the location and that path. The script now:
+  - runs under `$ErrorActionPreference = "Stop"`;
+  - reads the dump's exit code and refuses an empty dump;
+  - resolves both paths once;
+  - prints `wrote` only for a file that is there and not empty.
+
+  Sabotaged four ways, each now exits 1 with the caption untouched: a missing directory, a caption
+  path that is a directory, a dump that exits 3, and a dump that prints nothing. The old script
+  exited 0 on the two it could reach. On the success path the caption it writes is byte-identical
+  to the committed `docs/editor.txt`.
+
+  **A refused run walked around all of that, and `unearned-pass-hunter` found it.**
+  `--ui-dump --ran` printed `the run refused: …` on stdout *as the frame* and exited 0, so a scene
+  that exists but no longer runs passed both new checks. Its refusal went over the caption with
+  `wrote` printed. The guard comparing that caption with a fresh dump of the same broken scene then
+  agreed with it.
+
+  `ui_dump` now returns a `Result`, and `--ui-dump` exits 1 with the refusal on stderr. That holds
+  for `--ran` and for `--run-after-clicks`, each of which had its own early return.
+  `a_refused_run_exits_one_and_prints_no_frame` holds both, and caught four sabotages:
+  - the refusal exiting 0;
+  - the refusal printed as the frame;
+  - each early return put back.
+
+  Run through the script on a scene with an unknown field, it now exits 1 at `--ui-dump exited 1`
+  and writes no caption. An `-Out` that does not end in `.png` is refused, because one ending
+  `.txt` was its own caption and overwrote the picture.
+
+  Not fixed here: `--ui-dump` exits 0 on an unknown flag, and it draws the empty editor for a
+  scene path that does not exist.
 - **`pantometry-forcefield`: RATTLE could stall on a bond whose atoms move fast together, and
   panic.** `Shake::constrain_velocities` holds a bond tangent when `|r·u| ≤ tol |r| |u|`, relative
   to the bond's own relative velocity `u`, which can be as small as it likes; each velocity is

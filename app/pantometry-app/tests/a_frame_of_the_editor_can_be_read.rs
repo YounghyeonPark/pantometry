@@ -1032,6 +1032,57 @@ fn a_bad_area_is_refused_rather_than_shown_shut() {
     );
 }
 
+/// **A run the scene refuses is an exit code, not a frame.** `--ui-dump --ran` printed
+/// `the run refused: …` on stdout and exited 0, so anything reading the exit code took the refusal
+/// for a frame: `tools/screenshot/take.ps1` would have written it over a figure's caption and
+/// printed `wrote`, and the guard comparing that caption with a fresh dump of the same broken
+/// scene would have agreed with it. Both ways a dump runs a scene are held, because each had its
+/// own early return.
+#[test]
+fn a_refused_run_exits_one_and_prints_no_frame() {
+    let mut p = std::env::current_exe().expect("the test binary knows where it is");
+    p.pop();
+    if p.ends_with("deps") {
+        p.pop();
+    }
+    let bin = p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let dir = std::env::temp_dir().join("pantometry-ui-dump-refused");
+    std::fs::create_dir_all(&dir).expect("a temporary directory");
+    // A file that parses as JSON and is not a scene: it opens, and only running it fails.
+    let bad = dir.join("not-a-scene.json");
+    std::fs::write(&bad, r#"{"not": "a scene"}"#).expect("the scene is written");
+    let bad = bad.to_string_lossy().into_owned();
+    for run in ["--ran", "--run-after-clicks"] {
+        let out = std::process::Command::new(&bin)
+            .args(["--ui-dump", &bad, run])
+            .output()
+            .expect("the binary runs");
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert_eq!(out.status.code(), Some(1), "{run}: {stdout}{stderr}");
+        assert!(stdout.is_empty(), "{run}: a frame was printed: {stdout}");
+        assert!(
+            stderr.starts_with("the run refused: "),
+            "{run}: refused without saying so: {stderr}"
+        );
+    }
+    // And the same flags on a scene that runs still print a frame, or the refusal above is
+    // every scene's.
+    for run in ["--ran", "--run-after-clicks"] {
+        let out = std::process::Command::new(&bin)
+            .args(["--ui-dump", &scene(), run])
+            .output()
+            .expect("the binary runs");
+        assert!(out.status.success(), "{run}: a good scene was refused");
+        assert!(
+            String::from_utf8_lossy(&out.stdout).starts_with("size="),
+            "{run}: a good scene printed no frame"
+        );
+    }
+}
+
 /// **Every string on every screen can actually be drawn by the font that draws it.**
 ///
 /// A codepoint the bundled face does not have comes out as a hollow square, and nothing here could

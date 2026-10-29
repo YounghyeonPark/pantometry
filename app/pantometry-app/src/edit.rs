@@ -250,7 +250,14 @@ pub struct Dump {
 /// a test can hold: **is the control there at this width**, **was the label elided**, **is the
 /// error where a reader will find it**. Elision is exact rather than inferred — egui ends a
 /// truncated galley with `…`, so a label that did not fit says so in its own text.
-pub fn ui_dump(asked: Dump) -> String {
+///
+/// # A refused run is an `Err`, not a frame
+///
+/// It used to be a one-line `String`, printed with exit code 0, so a caller had to know what the
+/// string looked like before it could tell a refusal from a frame. `take.ps1` did not know, and
+/// would have written `the run refused: …` over a figure's caption and printed `wrote`.
+/// `--ui-dump` now prints the refusal to stderr and exits 1.
+pub fn ui_dump(asked: Dump) -> Result<String, String> {
     let Dump {
         path,
         width,
@@ -286,7 +293,7 @@ pub fn ui_dump(asked: Dump) -> String {
     }
     if ran {
         if let Err(e) = app.run_here() {
-            return format!("the run refused: {e}\n");
+            return Err(format!("the run refused: {e}"));
         }
     }
     if iso {
@@ -365,7 +372,7 @@ pub fn ui_dump(asked: Dump) -> String {
     }
     if run_after {
         if let Err(e) = app.run_here() {
-            return format!("the run refused: {e}\n");
+            return Err(format!("the run refused: {e}"));
         }
         ctx.run_ui(input(), |ui| app.ui(ui))
             .drop_without_applying_deltas();
@@ -500,7 +507,7 @@ pub fn ui_dump(asked: Dump) -> String {
             d.text.replace('\n', "\\n")
         ));
     }
-    s
+    Ok(s)
 }
 
 /// A menu on the bar, closing the way it did before egui 0.32.

@@ -41,6 +41,27 @@ and the script printed `wrote` as for any other picture. Aware, a scaled display
 picture of the same frame — both figures are 2272x1481 for that reason, where `docs/editor.png`
 was 1516x989 when it was taken at 100%.
 
+**A failure stops it, and `wrote` is measured.** PowerShell 5.1 ends only the *statement* when a
+.NET method throws, inside `try` as well. So a picture that failed to save went on to write a fresh
+caption, and the script printed `wrote` and exited 0. An old picture under a new caption is the one
+state the guard test cannot see. The script now runs under `$ErrorActionPreference = "Stop"`. It
+reads the dump's exit code, which `Stop` does not reach, and refuses an empty dump rather than
+writing it over the caption. It prints `wrote` only after the file is there and is not empty. Each
+was sabotaged: a picture into a missing directory, a caption path that is a directory, a dump that
+exits 3, and one that prints nothing. Each now exits 1 with the caption left as it was. The old
+script exited 0 on the two it could reach.
+
+**A scene that no longer runs is an exit code too.** `--ui-dump --ran` used to print
+`the run refused: …` as though it were the frame, and exit 0. That walked past both checks above,
+and the guard then agreed with the refusal, because a fresh dump of the same broken scene prints
+the same line. It exits 1 now, with the refusal on stderr. Retaking a figure of a scene a format
+change has broken stops at `--ui-dump exited 1` and leaves the caption alone. `-Out` must end in
+`.png`: one ending `.txt` is its own caption.
+
+**`-Out` may be absolute.** Both paths are resolved against the shell's location once, at the top.
+The caption was `Join-Path (Get-Location) $caption`, and with an absolute `-Out` that is not a
+path, so taking a picture anywhere outside `docs/` failed at the caption.
+
 **The script is ASCII.** PowerShell 5.1 reads a `.ps1` without a byte-order mark as the system code
 page, so an em dash in a comment is a parse error at the line that contains it.
 
