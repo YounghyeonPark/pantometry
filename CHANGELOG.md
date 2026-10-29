@@ -5681,6 +5681,31 @@ protects nothing.
 
 ### Fixed
 
+- **`--ui-dump` answered questions it was not asked.** Each flag was looked up on its own with
+  `position`, so an argument no lookup asked for was never seen. Measured on the binary before
+  the fix, every one of these printed a frame and exited 0. `--rann` and a scene written after a
+  flag gave the shut start screen. `--width 1500px` gave a 1500-point window, and `--click 10;20`
+  gave no click. And a scene path that does not exist opened the built-in scene, which is right
+  for a window, where the status line says so. Here `--ran` then ran the built-in scene, and the
+  frame differed from a real file's run only in the file name and what that name moved: nothing
+  in it said the file was missing. A test with any of these typos checked something it did not
+  ask for.
+  The arguments are now one parser in which every argument is consumed by exactly one rule.
+  Anything left over is refused with exit 2 and the usage. So is a value consumed that could not
+  mean anything:
+  - a malformed or non-finite number;
+  - a point outside the window;
+  - a repeated `--width`, `--height`, `--open` or `--new`;
+  - a kind the chooser does not have, which ticked nothing;
+  - `--open` or `--custom` without `--new`, which drew the editor;
+  - a scene the editor's own `read_to_string` cannot read. A UTF-16 file, which PowerShell 5.1's
+    `>` writes, exists and still opened the built-in scene.
+
+  `an_argument_it_does_not_take_is_refused_rather_than_ignored` has sixteen bad cases. Each comes
+  with its one-word fix, which must still print a frame, and the reason it must be refused for,
+  since every refusal shares an exit code and usage. The old parser fails it at the first case.
+  All 95 tests in `pantometry-app` pass, so none of them relied on an argument being ignored.
+  `take.ps1`'s one call, `$Scene --ran`, was read and is unaffected.
 - **`pantometry-protein` was published twice without its licence.** Nineteen of the twenty crates
   carry `LICENSE-MIT` and `LICENSE-APACHE` beside their manifest, which is how a `.crate` comes to
   hold them. This one never did, so its 0.21.0 and 0.22.0 packages hold no licence text, only the
@@ -5749,8 +5774,8 @@ protects nothing.
   and writes no caption. An `-Out` that does not end in `.png` is refused, because one ending
   `.txt` was its own caption and overwrote the picture.
 
-  Not fixed here: `--ui-dump` exits 0 on an unknown flag, and it draws the empty editor for a
-  scene path that does not exist.
+  Not fixed here, and fixed since: `--ui-dump` exited 0 on an unknown flag, and opened the
+  built-in scene for a scene path that does not exist.
 - **`pantometry-forcefield`: RATTLE could stall on a bond whose atoms move fast together, and
   panic.** `Shake::constrain_velocities` holds a bond tangent when `|r·u| ≤ tol |r| |u|`, relative
   to the bond's own relative velocity `u`, which can be as small as it likes; each velocity is

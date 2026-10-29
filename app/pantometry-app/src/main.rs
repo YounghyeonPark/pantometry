@@ -102,118 +102,230 @@ fn main() {
         // not be looked at except by opening it, which is where the HTML report was before
         // `tools/report-check` — and the viewport-with-no-width bug is what that costs. See
         // `a_frame_of_the_editor_can_be_read`.
-        Some("--ui-dump") => {
-            let mut it = rest.iter();
-            let path = it.next().filter(|p| !p.starts_with('-')).cloned();
-            let width = rest
-                .iter()
-                .position(|a| a == "--width")
-                .and_then(|i| rest.get(i + 1))
-                .and_then(|w| w.parse().ok())
-                .unwrap_or(1500.0);
-            let height = rest
-                .iter()
-                .position(|a| a == "--height")
-                .and_then(|i| rest.get(i + 1))
-                .and_then(|h| h.parse().ok())
-                .unwrap_or(950.0);
-            // `--new` opens on the chooser, and takes the kinds to tick as one comma-separated
-            // word so a test can ask for a pair whose timescales are far apart.
-            let choosing = rest.iter().position(|a| a == "--new").map(|i| {
-                rest.get(i + 1)
-                    .filter(|w| !w.starts_with('-'))
-                    .map(|w| w.split(',').map(str::to_string).collect())
-                    .unwrap_or_default()
-            });
-            // `--click x,y` may be given more than once, and they land in the order written.
-            let click: Vec<(f32, f32)> = rest
-                .iter()
-                .enumerate()
-                .filter(|(_, a)| *a == "--click")
-                .filter_map(|(i, _)| rest.get(i + 1))
-                .filter_map(|w| w.split_once(','))
-                .filter_map(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))
-                .collect();
-            // `--drag x0,y0,x1,y1` may be given more than once too, after the clicks.
-            let drag: Vec<((f32, f32), (f32, f32))> = rest
-                .iter()
-                .enumerate()
-                .filter(|(_, a)| *a == "--drag")
-                .filter_map(|(i, _)| rest.get(i + 1))
-                .filter_map(|w| {
-                    let n: Vec<f32> = w.split(',').filter_map(|v| v.parse().ok()).collect();
-                    (n.len() == 4).then(|| ((n[0], n[1]), (n[2], n[3])))
-                })
-                .collect();
-            // The kinds screen with *nothing* ticked had no door: `--new` alone is the preset
-            // screen and `--new bar` is the kinds screen with `bar` ticked, so the empty chooser —
-            // which is what `Custom…` actually opens on — could not be looked at.
-            let custom = rest.iter().any(|a| a == "--custom");
-            let ran = rest.iter().any(|a| a == "--ran") || rest.iter().any(|a| a == "--iso");
-            let iso = rest.iter().any(|a| a == "--iso");
-            let solo = rest.iter().any(|a| a == "--solo");
-            // `--run-after-clicks` runs whatever the clicks opened. `--ran` runs first, which
-            // cannot reach a preset: a preset exists only once its tile has been clicked.
-            let run_after = rest.iter().any(|a| a == "--run-after-clicks");
-            // **A bad index is refused, not ignored.** `--open 99`, `--open banana`, `--open -1`
-            // and a bare `--open` all used to produce a dump byte-identical to the shut screen
-            // and exit 0 — and the shut screen satisfies every geometric assertion the tests make
-            // about an open one, so a mistyped index bought a green. This door exists only so a
-            // test can see the tiles; it should say when it did not open one.
-            let last = pantometry_world::presets::AREA_COUNT - 1;
-            let open = match rest.iter().position(|a| a == "--open") {
-                None => Ok(None),
-                Some(i) => {
-                    let said = rest.get(i + 1);
-                    match said
-                        .and_then(|n| n.parse::<usize>().ok())
-                        .filter(|n| *n <= last)
-                    {
-                        Some(n) => Ok(Some(n)),
-                        None => Err(said.map_or("nothing", String::as_str).to_string()),
-                    }
-                }
-            };
-            match open {
-                Err(said) => {
-                    eprintln!("--open takes an area from 0 to {last}; got {said}");
-                    2
-                }
-                Ok(open) => {
-                    let frame = edit::ui_dump(edit::Dump {
-                        path,
-                        width,
-                        height,
-                        choosing,
-                        click,
-                        drag,
-                        ran,
-                        iso,
-                        solo,
-                        open,
-                        custom,
-                        run_after,
-                    });
-                    // **A refused run exits 1.** It printed its refusal as the frame and
-                    // exited 0, so `take.ps1`, reading the exit code, wrote it over a caption.
-                    match frame {
-                        Ok(frame) => {
-                            print!("{frame}");
-                            0
-                        }
-                        Err(refused) => {
-                            eprintln!("{refused}");
-                            1
-                        }
-                    }
-                }
+        Some("--ui-dump") => match dump_args(&rest) {
+            Err(said) => {
+                eprintln!("{said}");
+                eprintln!("{DUMP_USAGE}");
+                2
             }
-        }
+            // **A refused run exits 1.** It printed its refusal as the frame and exited 0, so
+            // `take.ps1`, reading the exit code, wrote it over a caption.
+            Ok(asked) => match edit::ui_dump(asked) {
+                Ok(frame) => {
+                    print!("{frame}");
+                    0
+                }
+                Err(refused) => {
+                    eprintln!("{refused}");
+                    1
+                }
+            },
+        },
 
         // `verify`, `fit`, `--check`, `--emit-default`, a bare scene path, or nothing.
         _ => cli::run(&args),
     };
     std::process::exit(code);
+}
+
+const DUMP_USAGE: &str = concat!(
+    "usage: pantometry --ui-dump [scene.json] [--width W] [--height H] [--new [kind,kind]]",
+    " [--open AREA] [--custom] [--click X,Y]... [--drag X0,Y0,X1,Y1]... [--ran] [--iso]",
+    " [--solo] [--run-after-clicks]"
+);
+
+/// **`--ui-dump`'s arguments, every one accounted for.**
+///
+/// Each flag used to be looked up on its own with `position`, so whatever no lookup asked for was
+/// never seen. `--rann`, a scene path written after a flag, `--width 1500px` and `--click 10;20`
+/// all produced a frame and exit 0: the first two the shut start screen, the third a 1500-point
+/// window whatever was meant, the fourth no click. And a scene path that did not exist opened the
+/// built-in scene, which is right for a window — it says so on the status line — and wrong here,
+/// where `--ran` then runs the built-in scene and a test written against a mistyped path passes.
+/// This is a door built for tests, and the one thing it must not do is answer a question it was
+/// not asked. So every argument is consumed by exactly one rule, and anything left over is refused.
+///
+/// So is a value that is consumed and could not mean anything: a kind the chooser does not have,
+/// `--open` or `--custom` without the chooser they act on, and a point that is not finite or not
+/// in the window.
+fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
+    let last = pantometry_world::presets::AREA_COUNT - 1;
+    let mut asked = edit::Dump {
+        path: None,
+        width: 1500.0,
+        height: 950.0,
+        choosing: None,
+        click: Vec::new(),
+        drag: Vec::new(),
+        ran: false,
+        iso: false,
+        solo: false,
+        open: None,
+        custom: false,
+        run_after: false,
+    };
+    // A flag that sets one value is refused the second time, rather than one of the two winning.
+    let mut once: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let a = rest[i].as_str();
+        let said = rest.get(i + 1).map(String::as_str);
+        if matches!(a, "--width" | "--height" | "--open" | "--new") {
+            if once.contains(&a) {
+                return Err(format!("{a} was given twice"));
+            }
+            once.push(a);
+        }
+        let mut took = 1;
+        match a {
+            "--width" | "--height" => {
+                let n = said
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .filter(|n| n.is_finite() && *n > 0.0)
+                    .ok_or_else(|| {
+                        format!(
+                            "{a} takes a positive number of points; got {}",
+                            said.unwrap_or("nothing")
+                        )
+                    })?;
+                if a == "--width" {
+                    asked.width = n;
+                } else {
+                    asked.height = n;
+                }
+                took = 2;
+            }
+            // `--click x,y` may be given more than once, and they land in the order written.
+            "--click" => {
+                match said.and_then(numbers).as_deref() {
+                    Some(&[x, y]) => asked.click.push((x, y)),
+                    _ => {
+                        return Err(format!(
+                            "--click takes x,y; got {}",
+                            said.unwrap_or("nothing")
+                        ))
+                    }
+                }
+                took = 2;
+            }
+            // `--drag x0,y0,x1,y1` may be given more than once too, after the clicks.
+            "--drag" => {
+                match said.and_then(numbers).as_deref() {
+                    Some(&[x0, y0, x1, y1]) => asked.drag.push(((x0, y0), (x1, y1))),
+                    _ => {
+                        return Err(format!(
+                            "--drag takes x0,y0,x1,y1; got {}",
+                            said.unwrap_or("nothing")
+                        ))
+                    }
+                }
+                took = 2;
+            }
+            // **A bad index is refused, not ignored.** `--open 99`, `--open banana`, `--open -1`
+            // and a bare `--open` all used to produce a dump byte-identical to the shut screen and
+            // exit 0 — and the shut screen satisfies every geometric assertion the tests make
+            // about an open one, so a mistyped index bought a green.
+            "--open" => {
+                match said
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| *n <= last)
+                {
+                    Some(n) => asked.open = Some(n),
+                    None => {
+                        return Err(format!(
+                            "--open takes an area from 0 to {last}; got {}",
+                            said.unwrap_or("nothing")
+                        ))
+                    }
+                }
+                took = 2;
+            }
+            // `--new` opens on the chooser, and takes the kinds to tick as one comma-separated
+            // word so a test can ask for a pair whose timescales are far apart.
+            "--new" => match said.filter(|w| !w.starts_with('-')) {
+                Some(w) => {
+                    // **A kind is one the chooser has.** It ticks a box by asking whether the set
+                    // contains that box's kind, so a name that is no kind ticks nothing and says
+                    // nothing: `--new welll,orbit` was the screen with `orbit` alone.
+                    let kinds = pantometry_world::templates::TEMPLATES.map(|t| t.kind);
+                    for k in w.split(',') {
+                        if !kinds.contains(&k) {
+                            return Err(format!(
+                                "--new takes kinds from {}; got {k:?}",
+                                kinds.join(",")
+                            ));
+                        }
+                    }
+                    asked.choosing = Some(w.split(',').map(str::to_string).collect());
+                    took = 2;
+                }
+                None => asked.choosing = Some(Vec::new()),
+            },
+            // The kinds screen with *nothing* ticked had no door: `--new` alone is the preset
+            // screen and `--new bar` is the kinds screen with `bar` ticked, so the empty chooser —
+            // which is what `Custom…` actually opens on — could not be looked at.
+            "--custom" => asked.custom = true,
+            "--ran" => asked.ran = true,
+            "--iso" => {
+                asked.ran = true;
+                asked.iso = true;
+            }
+            "--solo" => asked.solo = true,
+            // `--run-after-clicks` runs whatever the clicks opened. `--ran` runs first, which
+            // cannot reach a preset: a preset exists only once its tile has been clicked.
+            "--run-after-clicks" => asked.run_after = true,
+            _ if i == 0 && !a.starts_with('-') => asked.path = Some(a.to_string()),
+            _ if a.starts_with('-') => return Err(format!("--ui-dump does not take {a}")),
+            _ => {
+                return Err(format!(
+                    "--ui-dump takes a scene only first; got {a} after a flag"
+                ))
+            }
+        }
+        i += took;
+    }
+    // **Two flags that only mean something on the chooser.** The dump reads them only inside
+    // `--new`, so without it `--open 3` and `--custom` were accepted and drew the editor.
+    if asked.choosing.is_none() {
+        if asked.open.is_some() {
+            return Err(String::from("--open takes effect only with --new"));
+        }
+        if asked.custom {
+            return Err(String::from("--custom takes effect only with --new"));
+        }
+    }
+    // **A point outside the window lands on nothing**, which is what a mistyped click used to do.
+    let points = asked
+        .click
+        .iter()
+        .chain(asked.drag.iter().flat_map(|(a, b)| [a, b]));
+    for &(x, y) in points {
+        if !(0.0..=asked.width).contains(&x) || !(0.0..=asked.height).contains(&y) {
+            return Err(format!(
+                "{x},{y} is outside the {}x{} window",
+                asked.width, asked.height
+            ));
+        }
+    }
+    // `read_to_string`, because that is the read the editor opens a scene by: a file that exists
+    // and is not UTF-8 — what PowerShell 5.1's `>` writes — failed it and opened the built-in
+    // scene, and `fs::read` would have let that through.
+    if let Some(p) = &asked.path {
+        if let Err(e) = std::fs::read_to_string(p) {
+            return Err(format!(
+                "{p}: {e}; a dump does not stand the built-in scene in for it"
+            ));
+        }
+    }
+    Ok(asked)
+}
+
+/// Comma-separated finite numbers, or `None`. `f32` parses `NaN` and `inf`, and a click at either
+/// lands nowhere.
+fn numbers(v: &str) -> Option<Vec<f32>> {
+    v.split(',')
+        .map(|n| n.parse::<f32>().ok().filter(|n| n.is_finite()))
+        .collect()
 }
 
 /// `flag` in front of `rest`, which is how the CLI already spells these.

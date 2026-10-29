@@ -1083,6 +1083,127 @@ fn a_refused_run_exits_one_and_prints_no_frame() {
     }
 }
 
+/// **An argument the dump does not understand is refused, not ignored.**
+///
+/// Each flag used to be looked up on its own, so an argument no lookup asked for was never seen.
+/// Every case below produced a frame and exited 0: `--rann` and a scene written after a flag the
+/// shut start screen, `--width 1500px` a 1500-point window, `--click 10;20` no click, and a scene
+/// that does not exist the built-in scene run under the missing file's name — with nothing in the
+/// frame to say so. A test with any of these typos was checking something it did not ask for.
+///
+/// Each bad case is paired with the one-word fix, which must print a frame: without the pair a
+/// dump that refused everything would pass. And each names the reason it must be refused for,
+/// because any refusal prints the same exit code and usage, so without it a case could be caught
+/// by a rule other than the one it is there for.
+///
+/// The second eight came from review of the first: a scene that exists and is not UTF-8, `--open`
+/// and `--custom` without `--new`, a kind the chooser does not have, and a click that cannot land.
+#[test]
+fn an_argument_it_does_not_take_is_refused_rather_than_ignored() {
+    let mut p = std::env::current_exe().expect("the test binary knows where it is");
+    p.pop();
+    if p.ends_with("deps") {
+        p.pop();
+    }
+    let bin = p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let s = scene();
+    let missing = std::env::temp_dir()
+        .join("pantometry-ui-dump-no-such-scene.json")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !std::path::Path::new(&missing).exists(),
+        "{missing} exists, so it cannot stand for a missing scene"
+    );
+    // UTF-16 with its byte-order mark, which is what PowerShell 5.1's `>` writes: a file that
+    // exists, that `fs::read` reads, and that the editor's `read_to_string` does not.
+    let wide = std::env::temp_dir().join("pantometry-ui-dump-utf16-scene.json");
+    let text = std::fs::read_to_string(&s).expect("the scene is readable");
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    std::fs::write(&wide, bytes).expect("the UTF-16 scene is written");
+    let wide = wide.to_string_lossy().into_owned();
+    let cases: [(&[&str], &[&str], &str); 16] = [
+        (&["--rann"], &["--ran"], "does not take --rann"),
+        (&[&s, "--rann"], &[&s, "--ran"], "does not take --rann"),
+        (&["--ran", &s], &[&s, "--ran"], "after a flag"),
+        (&["--width", "1500px"], &["--width", "1500"], "got 1500px"),
+        (
+            &["--width", "800", "--width", "900"],
+            &["--width", "900"],
+            "given twice",
+        ),
+        (&["--click", "10;20"], &["--click", "10,20"], "got 10;20"),
+        (&["--drag", "1,2,3"], &["--drag", "1,2,3,4"], "got 1,2,3"),
+        (
+            &[&missing, "--ran"],
+            &[&s, "--ran"],
+            "does not stand the built-in",
+        ),
+        (
+            &[&wide, "--ran"],
+            &[&s, "--ran"],
+            "does not stand the built-in",
+        ),
+        (
+            &["--open", "0"],
+            &["--new", "--open", "0"],
+            "--open takes effect only",
+        ),
+        (
+            &["--custom"],
+            &["--new", "--custom"],
+            "--custom takes effect only",
+        ),
+        (
+            &["--new", "welll,orbit"],
+            &["--new", "well,orbit"],
+            "got \"welll\"",
+        ),
+        (&["--new", "well,"], &["--new", "well"], "got \"\""),
+        (&["--click", "NaN,10"], &["--click", "10,10"], "got NaN,10"),
+        (
+            &["--click", "5000,10"],
+            &["--click", "500,10"],
+            "outside the 1500x950",
+        ),
+        (
+            &["--drag", "1,2,3,-4"],
+            &["--drag", "1,2,3,4"],
+            "outside the 1500x950",
+        ),
+    ];
+    for (bad, good, why) in cases {
+        let out = std::process::Command::new(&bin)
+            .arg("--ui-dump")
+            .args(bad)
+            .output()
+            .expect("the binary runs");
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{bad:?} was not refused: {stdout}{stderr}"
+        );
+        assert!(stdout.is_empty(), "{bad:?}: a frame was printed: {stdout}");
+        assert!(
+            stderr.contains("usage: pantometry --ui-dump"),
+            "{bad:?}: refused without the usage: {stderr}"
+        );
+        assert!(
+            stderr.contains(why),
+            "{bad:?}: refused, but not for {why:?}: {stderr}"
+        );
+        assert!(
+            dump(good).starts_with("size="),
+            "{good:?}, the fix for {bad:?}, printed no frame"
+        );
+    }
+}
+
 /// **Every string on every screen can actually be drawn by the font that draws it.**
 ///
 /// A codepoint the bundled face does not have comes out as a hollow square, and nothing here could
