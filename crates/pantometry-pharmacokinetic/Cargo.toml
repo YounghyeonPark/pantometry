@@ -1,6 +1,6 @@
 [package]
 name = "pantometry-pharmacokinetic"
-description = "Compartmental pharmacokinetics as a simulation domain: distribution, clearance, boluses and infusions"
+description = "Compartmental pharmacokinetics as a simulation domain: distribution, clearance, boluses, infusions, oral doses and perfused tissues"
 keywords = ["pharmacokinetics", "compartment", "medical", "physics", "simulation"]
 categories = ["science", "simulation"]
 readme = "../../README.md"

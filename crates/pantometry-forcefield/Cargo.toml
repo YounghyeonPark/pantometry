@@ -1,6 +1,6 @@
 [package]
 name = "pantometry-forcefield"
-description = "Small molecules as a simulation domain: a wwPDB chemical component read strictly, typed for the Universal Force Field, and drawn"
+description = "Small molecules as a simulation domain: a wwPDB chemical component typed for the Universal Force Field, in implicit or explicit water, with dynamics and free energies"
 keywords = ["chemistry", "force-field", "molecular-mechanics", "physics", "simulation"]
 categories = ["science", "simulation"]
 readme = "../../README.md"

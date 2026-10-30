@@ -8,8 +8,8 @@ Physics for simulated worlds — a kernel that knows nothing about any particula
 fourteen domains built on it that do: **light, heat, motion, sound, electricity, electromagnetic
 fields, elastic deformation, incompressible flow, flow through a packed bed, matter one atom at a
 time, a quantum wavefunction in a well, the motions a measured protein has, a drug
-distributing through a body, and a drug molecule read atom by atom and typed for a force
-field.** Two layers above them place a simulation in the world and draw it, and neither knows a
+distributing through a body, and a drug molecule read atom by atom and bound to a protein in
+water.** Two layers above them place a simulation in the world and draw it, and neither knows a
 domain either.
 
 Dimensions live in the type system, so `Length + Time` does not compile. Conservation is audited
@@ -89,7 +89,7 @@ pip install pantometry   # or from Python — see bindings/python
 ```
 
 ```toml
-pantometry = "0.22"
+pantometry = "0.23"
 ```
 
 ## Run
@@ -164,7 +164,7 @@ and GitHub renders it as a **Cite this repository** button; the same content as 
 @software{park_pantometry,
   author  = {Park, Younghyeon},
   title   = {pantometry: physics for simulated worlds, checked against closed forms},
-  version = {0.22.0},
+  version = {0.23.0},
   year    = {2026},
   doi     = {10.5281/zenodo.22979609},
   url     = {https://doi.org/10.5281/zenodo.22024817},

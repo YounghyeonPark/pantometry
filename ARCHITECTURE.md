@@ -144,7 +144,7 @@ separately have no way to touch.
 | `pantometry-porous` | Flow through a packed bed: Darcy's law solved as a field, the heat the liquid carries, and the dissolution that rides on both. An espresso puck, and also a filter, a catalyst bed and an aquifer |
 | `pantometry-quantum` | A wavefunction in a well: the time-dependent Schrödinger equation, marched with the same staggered leapfrog family the acoustic domain uses — real part on integer steps, imaginary on halves — so **probability is conserved as an identity of the update**, the way `∇·B` is on the Yee grid. Eigenvalues against the discrete operator's own closed form, Gaussian spreading and Ehrenfest's theorem at second order |
 | `pantometry-protein` | How a protein's fold moves: one node per alpha carbon, one spring per pair inside a cutoff, and the Hessian's eigenvectors are the collective motions. Rigid motions annihilated to `1.5e-17` of the matrix; a straight chain reproduces `4γ sin²(jπ/2N)`; a ligand cannot make a residue more mobile, by a theorem about the Schur complement rather than by observation. Checked against two measurements: deposited B-factors, where one line of geometry does as well, and the open-to-closed motion of adenylate kinase, where the softest mode scores **0.799** against a chance level of `0.039` |
-| `pantometry-forcefield` | A small molecule, atom by atom: one wwPDB Chemical Component Dictionary entry read strictly, every atom typed for the Universal Force Field from its element, bond orders and aromatic flags, and Table I of Rappé et al. (1992) in SI. Checked against the entry's own formula, valence, the hybridisation a chemist reads off the structure, and the tetrahedral, trigonal and linear angles the table's θ₀ must be. All six of UFF's energy terms — bond stretch, angle bend, torsion, inversion, van der Waals, electrostatics — with analytic forces, checked against closed forms and against finite differences; an L-BFGS minimiser checked against minima known exactly and against the paper's own relaxed barriers and structures, and the molecule is drawn, with its bonds, relaxing one minimiser step per frame |
+| `pantometry-forcefield` | A small molecule, atom by atom: one wwPDB Chemical Component Dictionary entry read strictly, every atom typed for the Universal Force Field from its element, bond orders and aromatic flags, and Table I of Rappé et al. (1992) in SI. Checked against the entry's own formula, valence, the hybridisation a chemist reads off the structure, and the tetrahedral, trigonal and linear angles the table's θ₀ must be. All six of UFF's energy terms — bond stretch, angle bend, torsion, inversion, van der Waals, electrostatics — with analytic forces, checked against closed forms and against finite differences; an L-BFGS minimiser checked against minima known exactly and against the paper's own relaxed barriers and structures, and the molecule is drawn, with its bonds, relaxing one minimiser step per frame. Beyond the scene: QEq charges, generalized Born (OBC II) water, BAOAB and velocity-Verlet dynamics, Ewald and smooth PME in a periodic box, rigid TIP3P held by SETTLE and bonds to hydrogen by SHAKE, and alchemical free energies by TI and BAR, each checked against closed forms. The binding and partition free energies they produce are measured once, recorded in the changelog, and asserted by nothing |
 | `pantometry-shape` | Designed geometry as input: an STL read and measured, and rasterised into the cells a domain fills — with a report of what the cells could **not** hold, because a rib finer than the grid does not fail, it disappears. Depends on `pantometry-units` and nothing else |
 | `pantometry-scene` | Where things are and what a run looks like: placement, capture, and the shapes a view can draw. Names no domain |
 | `pantometry-view` | Drawing that: a filmstrip, a self-contained HTML report, CSV, JSON, and **glTF** so Blender, three.js and USD tools can open a result — as shaded surfaces, not a point cloud. The view is chosen by the shape of the data, never by the name of a domain. No dependencies |
@@ -312,12 +312,13 @@ them at all rather than having them inaccurately. Still no scattering geometry a
 nonlinearity, so nothing here shocks up or distorts, and no absorbing wall model beyond an
 impedance boundary.
 
-Molecular dynamics is monatomic, so the crate's name is aspirational by one step: no bonds,
+`pantometry-molecular`'s dynamics is monatomic, so the crate's name is aspirational by one step: no bonds,
 angles or torsions, and therefore no molecules. And no electrostatics, which for a charged
 system is the hard part rather than a missing feature — Coulomb falls off as `1/r` and cannot
 be cut off at all, so it needs Ewald summation or a particle-mesh method, and that is a larger
 piece of work than everything currently in the crate. No constraints, no barostat, no
-free-energy machinery.
+free-energy machinery. Molecules with all of that but the barostat are `pantometry-forcefield`'s:
+bonded UFF, Ewald and smooth PME, SHAKE and SETTLE, and TI and BAR.
 
 Both acoustic domains had a boundary defect until recently, and how it was found is worth
 more than the fix. See [EVIDENCE.md](EVIDENCE.md#a-boundary-defect-and-the-thing-that-found-it).
@@ -397,7 +398,7 @@ The physics layer is fourteen crates deep and dimensionally uneven. This is the 
 | `pantometry-quantum` | **1D** `Well` — a wavefunction between walls | arrived one-dimensional, as every wave here did; higher dimensions are cells and cost, not new physics |
 | `pantometry-pharmacokinetic` | **no space at all** — `CompartmentModel` is a graph, like `ThermalNetwork`. A compartment is an apparent volume, not a place | done, and 3D is not what it is missing |
 | `pantometry-protein` | **3D and no grid** — a `3n`-dimensional eigenproblem over points, so space is the structure rather than a discretisation of it | done; what it is missing is size, not dimension, at `n³` a sweep |
-| `pantometry-forcefield` | **3D and no grid** — atoms at places, joined by the bonds the chemistry has | typed, drawn, given all six of UFF's energy terms with forces, and minimised one step per frame; dynamics is a later step |
+| `pantometry-forcefield` | **3D and no grid** — atoms at places, joined by the bonds the chemistry has | typed, drawn, given all six of UFF's energy terms with forces, and minimised one step per frame; moved by BAOAB and velocity-Verlet dynamics, in generalized Born water or a periodic box of rigid TIP3P with Ewald or smooth PME, with free energies by TI and BAR |
 
 Two observations follow, and they point in opposite directions.
 

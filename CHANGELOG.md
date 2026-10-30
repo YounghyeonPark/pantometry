@@ -21,6 +21,25 @@ protects nothing.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-10-30
+
+Ninety-two commits, and the theme is a small molecule judged as a drug candidate.
+`pantometry-forcefield` is new: it reads a Chemical Component Dictionary entry, types it for UFF,
+computes all six of UFF's terms, QEq charges and generalized Born water, and moves it by molecular
+dynamics. In a periodic box of rigid TIP3P with particle-mesh Ewald it computes absolute free
+energies. Measured against experiment, and nothing asserts these:
+- benzene binds T4 lysozyme L99A at −8.975 ± 0.279 kcal/mol against −5.19 ± 0.16. With
+  benzene's van der Waals made GAFF's, the protein's ff14SB's and its charges AM1-BCC's, it binds
+  at −4.61 ± 0.29;
+- its log P(octanol/water) is 2.14 ± 0.23 with the staged water and 1.92 ± 0.23 from the direct
+  legs, over two seeds, against 2.13;
+- its log P(decane/water) is 1.92 ± 0.15 with the staged water and 1.69 ± 0.14 from the direct
+  legs, set beside hexadecane's 2.14.
+
+`pantometry-pharmacokinetic` takes oral doses, distributes by blood flow and computes tissue
+partitions from composition. The kernel gained an `exp` and an `ln` of its own, the same bits on
+every platform.
+
 ### Added
 
 - **`pantometry-forcefield`, the fourteenth domain: a small molecule, read and typed — and not yet
@@ -5540,7 +5559,9 @@ protects nothing.
   does not satisfy. Its numbers are arguably facts and not a work, but the crate's MIT OR
   Apache-2.0 should not rest on that argument. Both stay in the repository, where every test still
   runs; `cargo package --list` no longer names them. The one test file that uses them goes too,
-  and cargo says so: "ignoring test `benzene_bound_in_tip3p`". FreeSolv's mol2 in
+  and cargo says so: "ignoring test `benzene_bound_in_tip3p`". Later entries grew the list, each
+  in its own entry: at 0.23.0 it is nine paths, four directories and five test files, and
+  `liquid_octanol_with_gaff.rs` uses `tests/amber/` as well. FreeSolv's mol2 in
   `tests/freesolv/` is CC BY 4.0. Its attribution travels in the file (authors, papers, commit,
   SHA-256, licence, unmodified), so it stays.
 
@@ -10400,7 +10421,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.23.0
 [0.22.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.22.0
 [0.21.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.21.0
 [0.20.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.20.0

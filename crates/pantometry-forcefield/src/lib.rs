@@ -155,7 +155,9 @@
 //!   three ways of holding the protein ([`Flexibility`]), step W4 of explicit water. The complex
 //!   leg it is for is written — the protein free and released after a frozen melt
 //!   ([`SolvatedComplex::preparation`]), a window inserted wherever neighbours overlap too little
-//!   ([`free_energy::refine_schedule`]) — and not yet run. See [`solvated`].
+//!   ([`free_energy::refine_schedule`]) — and has been run: benzene binds at −8.975 ± 0.279
+//!   kcal/mol against experiment's −5.19 ± 0.16, recorded in the changelog and asserted by
+//!   nothing. See [`solvated`].
 //! - [`Molecule`] is the kernel [`Domain`]: the atoms as [`Bodies`] with their names and bonds,
 //!   so the scene layer draws a ball-and-stick molecule without knowing what a molecule is, the
 //!   energy terms and the force as readings, and **one minimiser iteration per step** by default,
@@ -409,9 +411,9 @@
 //!   is computed ([`solvation::surface_area`], [`solvation::nonpolar_energy`]) but not added to
 //!   the energy a minimiser sees, because a point-counted surface has no gradient worth the name.
 //!   Not here: Poisson–Boltzmann, GB with a solute dielectric other than 1, and a cutoff.
-//!   **Explicit water is under way**: the periodic box and Ewald ([`periodic`]), rigid TIP3P
+//!   **Explicit water is here**: the periodic box and Ewald ([`periodic`]), rigid TIP3P
 //!   ([`water`]) and benzene's hydration in it ([`shake`]) are here, and smooth PME ([`pme`]) and
-//!   the solvated complex ([`solvated`]), whose complex leg is the next step.
+//!   the solvated complex ([`solvated`]), whose complex leg has been run.
 //!   The radii and scale factors are AMBER's as OpenMM holds them, not read in primary, and Br and
 //!   I are outside the set OBC was fitted with; see [`solvation`]. **With QEq charges, OBC II
 //!   over-solvates** small molecules against experiment — mean −2.1, RMS 3.4 kcal/mol, ethers by

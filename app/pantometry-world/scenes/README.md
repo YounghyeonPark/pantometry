@@ -82,7 +82,7 @@ Nothing counts them: `counts_in_prose.rs` guards the
 *total* half of this sentence and says in its own doc why it leaves the numerator alone — a
 numerator is a different count with a different source, and this one needs every scene exported to
 establish. So it is a **release-time** count now, with the command in `RELEASING.md`, rather than a
-number somebody remembers. Measured again 2026-09-26.
+number somebody remembers. Measured again 2026-10-30.
 
 The recommendation on record is to export into the rendering tools rather than rebuild them. This
 is that, and it cost no dependency: glTF is JSON with the binary base64'd inside it, which is the

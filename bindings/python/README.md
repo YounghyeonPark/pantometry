@@ -124,8 +124,8 @@ HTML report, run the scene from Rust.
 
 ## Building
 
-Its own cargo workspace, deliberately. This one resolves fifteen external crates where the
-library resolves twelve, seven of them pyo3's and appearing nowhere in the library, plus a
+Its own cargo workspace, deliberately. This one resolves nineteen external crates where the
+library resolves twelve, eleven of them pyo3's and appearing nowhere in the library, plus a
 libpython link — and the library's lockfile, licence allow-list and WebAssembly jobs are promises
 that should not have to accommodate a Python extension.
 
