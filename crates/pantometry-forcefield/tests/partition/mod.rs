@@ -5,6 +5,10 @@
 //! digests of the start and of the model, the resumable and headed windows, the lock, the log, the
 //! schedule's refinement and the report.
 //!
+//! **And any other solute's**: each builder that names benzene is the `_of` builder beside it with
+//! benzene's model and volume, so that `p_xylene_partitioned_into_octanol.rs` runs the same boxes,
+//! melts and windows on another molecule and benzene's go through the same lines they did.
+//!
 //! **Kept out of the published crate** (`Cargo.toml`'s `exclude`) with `tests/gaff/`, whose numbers
 //! it uses.
 
@@ -118,7 +122,17 @@ pub fn octanol_rules(
     octanol: &Component,
     octanols: usize,
 ) -> PeriodicForceField {
-    let (b, o) = (Model::benzene(benzene), Model::octanol(octanol));
+    octanol_rules_of(field, &Model::benzene(benzene), octanol, octanols)
+}
+
+/// **A solute's `model` first and then `octanols` octanols**, by [`octanol_rules`]' rules.
+pub fn octanol_rules_of(
+    field: PeriodicForceField,
+    solute: &Model,
+    octanol: &Component,
+    octanols: usize,
+) -> PeriodicForceField {
+    let (b, o) = (solute, Model::octanol(octanol));
     let mut vdw = b.vdw.clone();
     let mut q = b.charges.clone();
     for _ in 0..octanols {
@@ -163,6 +177,34 @@ pub fn octanol_box(
     seed: u64,
     compensate: bool,
 ) -> (Liquid, PeriodicForceField, f64) {
+    let model = Model::benzene(&b.component);
+    octanol_box_of(
+        b,
+        &model,
+        BENZENE_VOLUME,
+        o,
+        counts,
+        cutoff,
+        accuracy,
+        seed,
+        compensate,
+    )
+}
+
+/// [`octanol_box`] for a solute `b` with GAFF/AM1-BCC `model` and volume `volume` in the solvent,
+/// m³ a molecule.
+#[allow(clippy::too_many_arguments)]
+pub fn octanol_box_of(
+    b: &Benzene,
+    model: &Model,
+    volume: f64,
+    o: &Octanol,
+    counts: [usize; 3],
+    cutoff: f64,
+    accuracy: f64,
+    seed: u64,
+    compensate: bool,
+) -> (Liquid, PeriodicForceField, f64) {
     let sites = counts[0] * counts[1] * counts[2];
     let build = |density: f64| {
         let (cell, _, _) = Liquid::cell_of(o, counts, density);
@@ -188,8 +230,7 @@ pub fn octanol_box(
     if compensate {
         let mut settled = false;
         for _ in 0..10 {
-            let want =
-                sites as f64 * o.mass() / (l.octanols as f64 * o.mass() / DENSITY + BENZENE_VOLUME);
+            let want = sites as f64 * o.mass() / (l.octanols as f64 * o.mass() / DENSITY + volume);
             if want.to_bits() == density.to_bits() {
                 settled = true;
                 break;
@@ -199,7 +240,7 @@ pub fn octanol_box(
         }
         assert!(settled, "the number removed did not settle");
     }
-    let field = octanol_rules(l.field.clone(), &b.component, &o.component, l.octanols);
+    let field = octanol_rules_of(l.field.clone(), model, &o.component, l.octanols);
     (l, field, density)
 }
 
@@ -223,8 +264,26 @@ pub fn octanol_system(l: &Liquid, field: PeriodicForceField, melt: &'static [Mel
 /// The production's octanol leg: [`octanol::LIQUID`]'s 192 sites, `r_c` 9 Å, compensated, PME at
 /// δ = 10⁻⁵ with the neighbour list ([`production`]), 4c-1's lattice seed.
 pub fn octanol_leg() -> System {
-    let (b, o) = (benzene(), octanol());
-    let (l, field, _) = octanol_box(&b, &o, octanol::LIQUID, 9.0 * ANGSTROM, 1e-5, 0x0C71, true);
+    let b = benzene();
+    let model = Model::benzene(&b.component);
+    octanol_leg_of(&b, &model, BENZENE_VOLUME)
+}
+
+/// [`octanol_leg`]'s box, cutoff, mesh, list, seed and melt around solute `b`, with its `model`
+/// and `volume`.
+pub fn octanol_leg_of(b: &Benzene, model: &Model, volume: f64) -> System {
+    let o = octanol();
+    let (l, field, _) = octanol_box_of(
+        b,
+        model,
+        volume,
+        &o,
+        octanol::LIQUID,
+        9.0 * ANGSTROM,
+        1e-5,
+        0x0C71,
+        true,
+    );
     let field = production(field, &l);
     octanol_system(&l, field, &OCTANOL_MELT)
 }
@@ -256,11 +315,23 @@ pub fn with_gaff_benzene(mut s: Solvated, b: &Benzene) -> Solvated {
     s
 }
 
+/// `s` with a solute's `model` swapped in ([`gaff::solute_in_water`]).
+pub fn with_model(mut s: Solvated, model: &Model) -> Solvated {
+    s.field = gaff::solute_in_water(s.field.clone(), model.clone());
+    s
+}
+
 /// The production's water leg: W3's box ([`hydration::w3_solvated`]) with benzene's model.
 pub fn water_leg() -> System {
     let b = benzene();
     let s = with_gaff_benzene(hydration::w3_solvated(&b), &b);
     water_system(&b, &s, &WATER_MELT)
+}
+
+/// [`water_leg`]'s box, lattice seed and melt around solute `b`, with its `model`.
+pub fn water_leg_of(b: &Benzene, model: &Model) -> System {
+    let s = with_model(hydration::w3_solvated(b), model);
+    water_system(b, &s, &WATER_MELT)
 }
 
 /// The pressure at `at`, pascals, by the molecular virial: 4c-1's ([`octanol::pressure`]) on any

@@ -32,6 +32,10 @@
 //!   Decane's charges, by position along the chain, are n-hexadecane's in `tests/hexadecane/`, and
 //!   octane's and nonane's are what that construction is held to. Decane's sum to −0.0005 e and
 //!   octane's to +0.0001 as written; nonane's to zero.
+//! - **And p-xylene** ([`MOBLEY_3234716`]), the second solute partitioned into octanol: the same
+//!   archive and commit ([`P_XYLENE_SOURCE`]), its SHA-256 in [`P_XYLENE_SHA256`]. FreeSolv's row
+//!   for it is −0.80 ± 0.60 kcal/mol by experiment (the ± a default, FreeSolv says, not a measured
+//!   uncertainty) and −0.66 ± 0.03 calculated. Its charges sum to +0.0001 e as written.
 
 #![allow(dead_code)]
 
@@ -731,4 +735,70 @@ No Charge or Current Charge
 /// FreeSolv's n-decane, read ([`MOBLEY_2197088`]).
 pub fn decane() -> Mol2 {
     parse(MOBLEY_2197088).expect("FreeSolv's mobley_2197088.mol2")
+}
+
+/// Where [`MOBLEY_3234716`] came from: the archive [`SOURCE`] names, at the same commit.
+pub const P_XYLENE_SOURCE: &str = "github.com/MobleyLab/FreeSolv v0.52, commit \
+    9d8a8097d587a6c084befbb2abde6dd2a0f31ba3, mol2files_gaff.tar.gz \
+    (SHA-256 15ece6114442a8eb5e720c0ad25bb48e4a6a35392da36f72b80a6f2f415fd133) \
+    → mol2files_gaff/mobley_3234716.mol2";
+
+/// The SHA-256 of [`MOBLEY_3234716`]'s bytes, p-xylene, reproduced on 2026-11-02.
+pub const P_XYLENE_SHA256: &str =
+    "f87c244e2259defbaccefdfeabaa059dcb70d20487ad08aad39f7089508aad02";
+
+/// **FreeSolv v0.52's `mobley_3234716.mol2`, p-xylene, byte for byte** ([`P_XYLENE_SOURCE`]):
+/// GAFF's `c3`, `ca`, `hc` and `ha`, and AM1-BCC's charges to four places, as FreeSolv ran them.
+pub const MOBLEY_3234716: &str = r#"@<TRIPOS>MOLECULE
+p-xylene
+   18    18     1     0     0
+SMALL
+No Charge or Current Charge
+
+
+@<TRIPOS>ATOM
+      1 C1          1.9310   -1.0130   -1.6030 c3        1 MOL     -0.052900
+      2 C2          1.8850   -1.0360   -0.1120 ca        1 MOL     -0.081700
+      3 C3          2.9210   -1.6310    0.6080 ca        1 MOL     -0.127300
+      4 C4          2.8780   -1.6520    2.0020 ca        1 MOL     -0.127300
+      5 C5          1.8000   -1.0790    2.6760 ca        1 MOL     -0.081700
+      6 C6          0.7640   -0.4840    1.9550 ca        1 MOL     -0.127300
+      7 C7          0.8070   -0.4630    0.5610 ca        1 MOL     -0.127300
+      8 C8          1.7530   -1.1040    4.1660 c3        1 MOL     -0.052800
+      9 H1          2.4380   -0.1080   -1.9480 hc        1 MOL      0.043200
+     10 H2          2.4630   -1.8880   -1.9910 hc        1 MOL      0.043200
+     11 H3          0.9200   -1.0360   -2.0250 hc        1 MOL      0.043200
+     12 H4          3.7650   -2.0800    0.0920 ha        1 MOL      0.129800
+     13 H5          3.6890   -2.1180    2.5550 ha        1 MOL      0.129800
+     14 H6         -0.0810   -0.0360    2.4720 ha        1 MOL      0.129800
+     15 H7         -0.0050    0.0020    0.0080 ha        1 MOL      0.129800
+     16 H8          2.2380   -0.2110    4.5790 hc        1 MOL      0.043200
+     17 H9          0.7190   -1.1380    4.5320 hc        1 MOL      0.043200
+     18 H10         2.2600   -1.9910    4.5660 hc        1 MOL      0.043200
+@<TRIPOS>BOND
+     1    1    2 1   
+     2    2    7 ar  
+     3    2    3 ar  
+     4    3    4 ar  
+     5    4    5 ar  
+     6    5    6 ar  
+     7    6    7 ar  
+     8    5    8 1   
+     9    1    9 1   
+    10    1   10 1   
+    11    1   11 1   
+    12    3   12 1   
+    13    4   13 1   
+    14    6   14 1   
+    15    7   15 1   
+    16    8   16 1   
+    17    8   17 1   
+    18    8   18 1   
+@<TRIPOS>SUBSTRUCTURE
+     1 MOL         1 TEMP              0 ****  ****    0 ROOT
+"#;
+
+/// FreeSolv's p-xylene, read ([`MOBLEY_3234716`]).
+pub fn p_xylene() -> Mol2 {
+    parse(MOBLEY_3234716).expect("FreeSolv's mobley_3234716.mol2")
 }

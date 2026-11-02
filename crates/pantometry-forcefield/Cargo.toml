@@ -28,6 +28,7 @@ exclude = [
     "tests/hexadecane/",
     "tests/liquid_hexadecane_with_gaff.rs",
     "tests/liquid_octanol_with_gaff.rs",
+    "tests/p_xylene_partitioned_into_octanol.rs",
     "tests/partition/",
 ]
 

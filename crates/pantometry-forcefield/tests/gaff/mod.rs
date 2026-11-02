@@ -1,5 +1,7 @@
 //! **GAFF's van der Waals for octanol's five types and benzene's two**, with where they were read,
 //! GAFF's 1-4 scales, and each molecule's GAFF/AM1-BCC non-bonded model built from FreeSolv's files.
+//! p-xylene's four types are among those seven (`c3`, `hc`, `ca`, `ha`), so its model needs no
+//! value read beyond them.
 //!
 //! **Kept out of the published crate** (`Cargo.toml`'s `exclude`): the numbers are read from
 //! `gaff.dat` in ambermini, which is AmberTools under GPL v3, as `tests/amber/`'s are. The values
@@ -121,6 +123,12 @@ impl Model {
     pub fn octanol(c: &Component) -> Model {
         Model::from(&freesolv::octanol(), c)
     }
+
+    /// p-xylene's: `c3`, `hc`, `ca` and `ha` from `mobley_3234716.mol2`, and its AM1-BCC charges as
+    /// FreeSolv ran them, summing to +0.0001 e.
+    pub fn p_xylene(c: &Component) -> Model {
+        Model::from(&freesolv::p_xylene(), c)
+    }
 }
 
 /// **GAFF/AM1-BCC benzene in TIP3P**: `field` a [`PeriodicForceField::solvated`] whose solute is
@@ -130,12 +138,18 @@ impl Model {
 /// staged run swapped in on W3's UFF leg; but here its own 21 1-4 pairs are scaled and its own
 /// pairs are GAFF's and AM1-BCC's, where the staged run kept UFF's and QEq's.
 pub fn benzene_in_water(field: PeriodicForceField, c: &Component) -> PeriodicForceField {
-    let b = Model::benzene(c);
-    let n = b.vdw.len();
+    solute_in_water(field, Model::benzene(c))
+}
+
+/// **Any solute's GAFF/AM1-BCC `model` in TIP3P**, by the same rules as [`benzene_in_water`],
+/// which is this with benzene's model: `field` a [`PeriodicForceField::solvated`] whose solute's
+/// atoms come first.
+pub fn solute_in_water(field: PeriodicForceField, model: Model) -> PeriodicForceField {
+    let n = model.vdw.len();
     field
-        .with_nonbonded(0..n, b.vdw)
+        .with_nonbonded(0..n, model.vdw)
         .expect("GAFF's values are valid")
-        .with_solute_charges(b.charges)
+        .with_solute_charges(model.charges)
         .with_mixing(Mixing::LorentzBerthelot)
         .with_one_four(ONE_FOUR[0], ONE_FOUR[1])
 }

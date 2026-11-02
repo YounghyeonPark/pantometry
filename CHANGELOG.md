@@ -21,6 +21,91 @@ protects nothing.
 
 ## [Unreleased]
 
+### Added
+
+- **p-xylene through benzene's log P legs, the gate registered before any window runs: written
+  and checked here, not run.** Benzene's log P came out at 1.92 ± 0.23 against 2.13 for one
+  molecule. This asks whether that was the method or the molecule. New
+  `tests/p_xylene_partitioned_into_octanol.rs`, kept out of the published crate with benzene's.
+  Nothing in `src/` changed.
+  - **Why p-xylene.** It is benzene with two methyl groups across the ring, so it brings the two
+    GAFF types benzene does not have, `c3` and `hc`. Both are among the seven `tests/gaff/`
+    already read for octanol, so no new value is read from `gaff.dat`. Its dictionary entry,
+    `PXY`, is the congener series' and is already held to the molecule it names. It binds T4
+    lysozyme L99A (187L), so a binding leg can follow on the same molecule.
+  - **What was read.** FreeSolv v0.52's `mobley_3234716.mol2`, from the archive and commit
+    benzene's came from. The archive's SHA-256 is the one already cited, and benzene's file in it
+    is byte for byte the one in the tree. The new file is kept byte for byte, SHA-256 `f87c244e…`,
+    CC BY 4.0. Its charges sum to +0.0001 e. FreeSolv's row is −0.80 by experiment (its ± 0.60 a
+    default, FreeSolv says) and −0.66 ± 0.03 calculated.
+  - **Experiment's `log K_ow` is 3.15**: Hansch, Leo and Hoekman 1995, p. 43, as PubChem CID
+    7809's HSDB record quotes it, read 2026-11-02. That is benzene's source for 2.13. ICSC also
+    gives 3.15, and Sangster 3.42.
+  - **The volume the octanol box is compensated for** is 106.16 / 0.86104 = 123.3 cm³/mol, from
+    the Merck Index's 20 °C density via the same record. The same computation gives benzene 89.2,
+    which is its 89.
+  - **The legs are benzene's, through the same lines.** `tests/partition/`'s box, rules and leg
+    builders each gained an `_of` form taking the solute's model and volume. Benzene's builders
+    are those with benzene's. `tests/gaff/` gained `Model::p_xylene` and `solute_in_water`, which
+    `benzene_in_water` now is with benzene's model. `tests/hydration/`'s `Benzene` gained
+    `from_ccd`, kept under benzene's name because benzene is what every other test builds.
+  - **Checked by default:**
+    - `benzenes_legs_are_the_bits_they_were` holds benzene's production octanol and water boxes
+      to the digests benzene's own melts wrote into `start.txt` on 2026-10-21: built `6a003b69…`
+      with model `bfd0ccdb…`, and `a16ebf27…` with `b80d6cc9…`. It holds the box the
+      `octanol_box` wrapper builds, which benzene's other tests and the decane leg use, to the
+      first of those. Benzene's small boxes, built by that wrapper at other sizes, are not pinned.
+    - `the_model_is_what_it_says` holds every atom's GAFF type to its place in the molecule, not
+      to FreeSolv's type column, and FreeSolv's types agree. It holds each charge to FreeSolv's
+      for that atom's place, a ring carbon by whether it carries a methyl, and none to QEq's. It
+      holds the 1-4 and own pairs to the 33 and 105 counted on the bond graph. The model is the
+      same in both boxes.
+    - `the_octanol_is_at_its_density_around_p_xylene` finds 188 of 192 octanols kept, 0.8262
+      g/cm³ in the volume left, and 1.68% light uncompensated.
+    - `the_end_states_are_the_systems_they_say` is benzene's check on the second solute, to 10⁻¹²
+      of the parts. The small water box is 64 lattice waters (45 kept) at `r_c` 6.0 Å, where benzene's is 27 at 4.6,
+      since p-xylene is 2 Å longer.
+    - `a_leg_killed_partway_is_not_whole` holds the reseed's whole-leg check: it passes a finished
+      schedule, with an inserted window too, and refuses one missing a window, one stopped short of
+      the decoupled end, and one that is only the charge segment.
+  - **Sabotaged eight ways, each caught by the check it was aimed at:**
+    - benzene's production volume ×1.01, the `octanol_box` wrapper's ×1.01, and benzene's water
+      1-4 Coulomb scale set to 1: the digest test;
+    - p-xylene's charges reversed, and the ring carbons' expected charges swapped between the one
+      carrying a methyl and the rest: the model test;
+    - the compensation's volume term zeroed: the density test;
+    - the vacuum end's 1-4 Coulomb scale set to 1: the end-state test;
+    - the whole-leg check weakened to either clause: the killed-leg test.
+
+    The verdict's ceiling is in the ignored reseed test and was not sabotaged, since that test
+    cannot run without a finished leg.
+
+    Two earlier attempts passed, and each was a sabotage that never reached its guard. One was set
+    in `octanol_box`, which the production leg does not call. The other moved `VOLUME` itself,
+    which the density test both compensates with and checks against, so that test cannot see the
+    value and does not claim to. The value is a quoted constant, and a test copying it would
+    check nothing.
+  - **The gate, registered here before any window runs.** σ is log P's error with the octanol
+    charge segment's two-seed spread in it, as benzene's 1.92 ± 0.23 was taken:
+    - the verdict is **uninformative** if `2σ ≥ 1.02`, whatever log P is. That is experiment's
+      difference from benzene, so a band that wide would pass a method blind to the methyls. σ
+      widens as the seeds disagree, and this is its ceiling;
+    - otherwise **the method carries to p-xylene** if `|log P − 3.15| ≤ 2σ`;
+    - it **does not** if the miss is more than 3σ;
+    - between the two, it is not settled.
+
+    `Δ log P` against benzene's, experiment's 1.02, is reported beside it and not gated. Three
+    things σ leaves out are printed beside the verdict and not added to it:
+    - the van der Waals segment's own seed spread, which is not measured;
+    - a two-seed difference's single degree of freedom;
+    - experiment's 3.15 against Sangster's 3.42.
+
+    Before any window runs, the reseed checks both legs whole: every window of the schedule, and
+    the decoupled end. A leg killed partway reads back cleanly, and benzene's reseed checked only
+    that the leg began right; its long/ happened to be whole.
+    `the_partition_measured` runs both legs at W3's protocol, and
+    `the_octanol_charges_reseeded_measured` runs the second seed and prints the verdict.
+
 ## [0.23.0] — 2026-10-30
 
 Ninety-two commits, and the theme is a small molecule judged as a drug candidate.
