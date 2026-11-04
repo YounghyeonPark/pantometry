@@ -55,6 +55,12 @@ protects nothing.
       with model `bfd0ccdb…`, and `a16ebf27…` with `b80d6cc9…`. It holds the box the
       `octanol_box` wrapper builds, which benzene's other tests and the decane leg use, to the
       first of those. Benzene's small boxes, built by that wrapper at other sizes, are not pinned.
+      **It runs on `x86_64-pc-windows-gnu` only**, the platform benzene's runs were made on. It
+      shipped unrestricted at `6a4f1db` and CI failed it on three jobs: the water box as built
+      was `ba16a354…` on Windows (MSVC) and `47588d36…` on macOS, because the lattice's
+      rotations come from `Rng::gaussian`, which calls the platform's `ln` and `cos`, and
+      SETTLE's frame calls its `cos`. WebAssembly failed one comparison without saying which.
+      The octanol box and both models were the same bits on all three.
     - `the_model_is_what_it_says` holds every atom's GAFF type to its place in the molecule, not
       to FreeSolv's type column, and FreeSolv's types agree. It holds each charge to FreeSolv's
       for that atom's place, a ring carbon by whether it carries a methyl, and none to QEq's. It

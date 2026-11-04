@@ -174,7 +174,20 @@ fn pairs_by_distance(c: &Component) -> (usize, usize) {
 /// and their models, against the digests benzene's own melts wrote into `start.txt` on 2026-10-21
 /// (`C:\pantometry-w4\octanol\{octanol,water}\start.txt`). Benzene's builders are the `_of`
 /// builders with benzene's model and volume now, and this is what says that changed nothing.
+///
+/// **On the platform those runs were made on only**, `x86_64-pc-windows-gnu`. The boxes are not
+/// the same bits elsewhere, and `tests/pinned/` says why: a minimiser and the platform's `cos` are
+/// in them. W3's lattice turns each water by `Rng::gaussian`, which is the platform's `ln` and
+/// `cos`, about SETTLE's frame, which is its `cos`. CI measured this at `6a4f1db`:
+/// - the water box as built was `ba16a354…` on Windows (MSVC) and `47588d36…` on macOS, where it is
+///   `a16ebf27…` here and on Linux;
+/// - the octanol box and both models were the same bits on all three;
+/// - WebAssembly failed one of the comparisons, and its output did not say which.
+///
+/// A pin that holds only where the runs were made is what the claim needs, since the claim is
+/// about those runs' bits.
 #[test]
+#[cfg(all(target_os = "windows", target_env = "gnu"))]
 fn benzenes_legs_are_the_bits_they_were() {
     for (sys, atoms, built, model) in [
         (
