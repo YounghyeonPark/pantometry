@@ -781,7 +781,8 @@ impl PeriodicForceField {
     /// `component`, typed as `types` and with zero charges until
     /// [`PeriodicForceField::with_solute_charges`], followed by `waters` rigid TIP3P waters, as
     /// [`PeriodicForceField::tip3p`] builds them. A water oxygen and a UFF atom combine by UFF's
-    /// geometric rule — a judgement, see [`crate::water`].
+    /// geometric rule — a judgement, see [`crate::water`] — until
+    /// [`PeriodicForceField::with_mixing`] chooses another, which then holds for every pair.
     ///
     /// # Errors
     ///
@@ -1027,7 +1028,8 @@ impl PeriodicForceField {
 
     /// The same force field with `ions` appended after every atom it has, in order: each a point
     /// charge with a UFF-form van der Waals term `[x, D]` ([`crate::solvated::Ion`]), combined with
-    /// every other atom by UFF's geometric rule as a water oxygen is, bonded to nothing, excluded
+    /// every other atom by the field's [`Mixing`] as a water oxygen is (UFF's geometric rule
+    /// unless [`PeriodicForceField::with_mixing`] chose another), bonded to nothing, excluded
     /// from nothing. Counter-ions for a charged solute ([`crate::solvated`]). Every term is the
     /// force field's own — the cell list, Ewald and its background, the long-range correction —
     /// so an ion is one more atom and nothing else changes.

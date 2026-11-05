@@ -23,6 +23,79 @@ protects nothing.
 
 ### Added
 
+- **GAFF/AM1-BCC's non-bonded terms are a library path, `pantometry_forcefield::{mol2, amber}`,
+  and no GAFF value ships.** Until now the reader of FreeSolv's `.mol2` files, the map of their
+  atoms onto a dictionary component, and the assembly of a GAFF model all lived in
+  `tests/freesolv/` and `tests/gaff/`. Every log P here was measured through them, and a consumer
+  could not reach any of it. They moved into `src/` whole, and the tests now call the library.
+  - **What is new:**
+    - `Mol2::parse` reads one molecule strictly, and every refusal is a `Mol2Error` naming what
+      it refused.
+    - `Mol2::onto` puts the file's type and charge columns on a `Component` by graph isomorphism,
+      never by the file's order.
+    - `VanDerWaals::from_parm` reads a parameter file's `MOD4 RE` blocks and a `frcmod`'s `NONBON`.
+      `with_overrides` lays one over the other.
+    - `NonbondedModel::new` builds the model. `apply` sets it on a periodic field's solute with
+      Lorentz-Berthelot and `AMBER_ONE_FOUR`. `repeated` makes it several copies.
+    - The bonded terms stay UFF's, as in every measurement so far.
+  - **Why the caller supplies the parameter file.** `gaff.dat` is AmberTools', GPL v3, and the
+    crate is MIT OR Apache-2.0. The new published test and the doc example use invented values
+    only. A review found that the test's first version had copied `gaff.dat`'s two mass lines,
+    `ca 12.01 0.360` and `ha 1.008 0.135`, word for word, under a comment saying they were invented.
+    They are invented now.
+  - **Read against the real file once, not as a committed check.** `gaff.dat` at ambermini
+    `f7c421c4`, SHA-256 `95e3c655...`, reads as 71 types. The seven that `tests/gaff/` writes out
+    are its values to the bit.
+  - **The move changed no bit.** `benzenes_legs_are_the_bits_they_were` now builds through the
+    library and holds the same four digests. Three sabotages of the library path each fail it:
+    - `AMBER_ONE_FOUR`'s Coulomb scale made `1/1.21`;
+    - `uff_form` scaled by `1 + 1e-12`;
+    - `onto` taking the last match instead of the first.
+  - **What a stranger found, and what was done.** `consumer-advocate` built GAFF methanol and
+    benzene in TIP3P from the public API alone, reading the real `gaff.dat`.
+    - **The search kept every match**, so `onto` held 1 179 648 maps for hexadecane, 504 MB by
+      its measurement. It now visits each match without keeping it. Reproduced here: 1 179 648
+      matches in 0.142 s in release, the test binary's peak working set 5.1 MB.
+    - **`HO`, `CA`, `CL1` and `1H2` were refused as "not an element".** These are the
+      dictionary's own names, and the names PDB-derived files use. The element is now read
+      without regard to case, from the whole letters, then the first two, then the first. A
+      wrong reading is not silent, because `onto` then finds no match.
+    - **Charges that did not add to the molecule's net charge were taken**: Σq = 0.5 on neutral
+      methanol. They are now `ModelError::NetCharge`, beyond 1e-4 e an atom. FreeSolv's
+      rounding is at most 0.0005 e on decane's 32 atoms.
+    - **`apply` panicked** on a model whose columns differed in length (`ModelError::Ragged`).
+      **It refused two copies** without saying what to do (`repeated`, named in the error).
+    - **`NotThisMolecule` named neither side**, and now gives both compositions.
+      **`NoSuchType` gave an index**, and now gives the atom's name and, for a SYBYL type, says
+      the file was perhaps written without GAFF's types.
+    - **Two docs said a water and an ion combine by UFF's geometric rule.** After `apply` they
+      combine by Lorentz-Berthelot, which `PeriodicForceField::solvated` and `with_ions` now say.
+  - **Recorded, not actioned:**
+    - There is no `Component` of several molecules, so the copies `repeated` makes need one built
+      by hand, as `tests/octanol/`'s `joined` does.
+    - A `SolvatedComplex`'s ligand cannot be given a model.
+    - `Mol2Atom::at` is in Å where `Atom::at` is in metres.
+    - The type column is `kind`, `kinds` and `types` in three places.
+    - The search's time still doubles with each CH2.
+  - **What checks it**, in the published `tests/a_mol2_and_a_parameter_file_make_a_model.rs`,
+    with values written for it:
+    - the columns to the bit, and each refusal by its variant;
+    - automorphisms against the symmetry groups' orders: methane 24, ethane 72, benzene 12;
+    - the first match derived by hand from the search's order;
+    - the spread against the charges' range;
+    - two blocks, a `frcmod` and an override;
+    - the model applied and then undone by hand, equal to the field it was applied to in every
+      field.
+
+    Fifteen sabotages of `src/mol2.rs` and `src/amber.rs` each fail it. Three passed its first
+    version and were found by `unearned-pass-hunter`:
+    - the last match taken instead of the first;
+    - only the first block read;
+    - `apply` also moving the cell.
+
+    A fourth, deleting the two-letter element rule, passed because the check's input, `CL12A`,
+    was decided before that rule. It is `CLA1` now, and the sabotage fails it.
+
 - **p-xylene through benzene's log P legs, the gate registered before any window ran: log P
   3.06 ± 0.22 against 3.15, and the method carries.** Benzene's log P came out at 1.92 ± 0.23
   against 2.13 for one molecule. This asks whether that was the method or the molecule. New

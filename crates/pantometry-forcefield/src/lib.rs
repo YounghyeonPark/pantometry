@@ -29,6 +29,13 @@
 //!   charge-dependent orbital iterated as the paper does, and each misprint and ambiguity in the
 //!   paper settled by reproducing its tables. [`ForceField::with_qeq_charges`] puts them in the
 //!   electrostatic term, fixed at that geometry; zero charges stay the default.
+//! - [`Mol2::parse`] reads one molecule of a Tripos `.mol2` strictly, and [`Mol2::onto`] puts its
+//!   type and charge columns on a [`Component`] by graph isomorphism, never by the file's order.
+//!   [`NonbondedModel::new`] gives each atom its type's van der Waals out of an AMBER parameter
+//!   file the caller supplies ([`VanDerWaals::from_parm`]), and [`NonbondedModel::apply`] sets
+//!   the model on a periodic force field's solute with AMBER's mixing and 1-4 scales. That is
+//!   GAFF/AM1-BCC's non-bonded terms on UFF's bonded ones. **No GAFF value ships here**:
+//!   `gaff.dat` is GPL v3. See [`mol2`] and [`amber`].
 //! - [`solvation`] is implicit water: the generalized Born electrostatic solvation energy of
 //!   Onufriev, Bashford and Case (2004), OBC II, with ε = 80 and optional salt, and its analytic
 //!   force through the Born radii at fixed charges. [`ForceField::with_generalized_born`] adds it
@@ -448,6 +455,7 @@
 #![deny(missing_docs)]
 
 pub mod alchemy;
+pub mod amber;
 pub mod angular;
 pub mod binding;
 pub mod boresch;
@@ -458,6 +466,7 @@ pub mod energy;
 pub mod ewald;
 pub mod free_energy;
 pub mod minimise;
+pub mod mol2;
 pub mod neighbours;
 pub mod pdb;
 pub mod periodic;
@@ -472,6 +481,7 @@ pub mod water;
 pub use alchemy::{
     Alchemical, AlchemyError, AtLambda, Coupling, CrossPair, Decoupling, Lambda, SoftCore,
 };
+pub use amber::{ModelError, NonbondedModel, ParmError, VanDerWaals, AMBER_ONE_FOUR};
 pub use angular::{Bend, Inversion, Torsion};
 pub use binding::{
     ApoCavity, Binding, BindingError, Desolvation, HydrogenRelaxation, Interaction, RigidMotion,
@@ -484,6 +494,7 @@ pub use energy::{Energy, Evaluation, ForceField, Unsupported, Variant};
 pub use ewald::{Ewald, EwaldEnergy, EwaldEvaluation, EwaldParameters};
 pub use free_energy::{Bar, FreeEnergy, Insertion, Protocol, Quadrature, Sample, Window, Windows};
 pub use minimise::{DihedralRestraint, Minimiser, Progress, Status};
+pub use mol2::{Mapped, Mol2, Mol2Atom, Mol2Error};
 pub use neighbours::NeighbourListStatus;
 pub use pdb::{Histidine, Part, PdbError, Placement, Residue, Selection, System};
 pub use periodic::{

@@ -17,10 +17,7 @@
 #![allow(dead_code)]
 
 use crate::freesolv;
-use pantometry_forcefield::uff::KCAL_PER_MOL;
-use pantometry_forcefield::{Component, Mixing, PeriodicForceField};
-
-const ANGSTROM: f64 = 1e-10;
+use pantometry_forcefield::{Component, NonbondedModel, PeriodicForceField, VanDerWaals};
 
 /// Where [`GAFF`] was read: ambermini at the commit W4's ff14SB tables cite.
 pub const GAFF_SOURCE: &str = "github.com/choderalab/ambermini \
@@ -59,27 +56,32 @@ pub const GAFF: [(&str, f64, f64); 7] = [
 ];
 
 /// GAFF's and AMBER's 1-4 scales: `SCNB` = 2 and `SCEE` = 1.2, so `½` of the van der Waals and
-/// `1/1.2` of the Coulomb energy.
+/// `1/1.2` of the Coulomb energy. The same values as the library's
+/// [`pantometry_forcefield::AMBER_ONE_FOUR`], which `a_mol2_and_a_parameter_file_make_a_model.rs`
+/// holds to them and which [`solute_in_water`] applies.
 pub const ONE_FOUR: [f64; 2] = [0.5, 1.0 / 1.2];
+
+/// [`GAFF`] as the library's table ([`VanDerWaals::from_entries`]), so that every model here is
+/// built by the library's lines.
+pub fn table() -> VanDerWaals {
+    VanDerWaals::from_entries(
+        GAFF.iter()
+            .map(|&(k, r, e)| (k.to_string(), r, e))
+            .collect(),
+    )
+    .expect("GAFF's values are valid")
+}
 
 /// GAFF's `[x, D]` in UFF's form, `x = 2 (R*/2)` and `D = ε`, for type `kind`.
 pub fn gaff(kind: &str) -> [f64; 2] {
-    let &(_, r, e) = GAFF
-        .iter()
-        .find(|t| t.0 == kind)
-        .unwrap_or_else(|| panic!("no GAFF type {kind} here"));
-    [2.0 * r * ANGSTROM, e * KCAL_PER_MOL]
+    table()
+        .uff_form(kind)
+        .unwrap_or_else(|| panic!("no GAFF type {kind} here"))
 }
 
 /// Each atom of `c`'s GAFF type, from FreeSolv's `mol2` of the same molecule by graph isomorphism.
 pub fn types_onto(mol2: &freesolv::Mol2, c: &Component) -> Vec<String> {
-    let (elements, bonds) = freesolv::component_graph(c);
-    let mapped = freesolv::charges_onto(mol2, &elements, &bonds).expect("the same molecule");
-    mapped
-        .map
-        .iter()
-        .map(|&j| mol2.atoms[j].kind.clone())
-        .collect()
+    mol2.onto(c).expect("the same molecule").kinds
 }
 
 /// Each atom of the dictionary's octanol's GAFF type, from FreeSolv's `mobley_36119.mol2`.
@@ -88,7 +90,8 @@ pub fn gaff_types(c: &Component) -> Vec<String> {
 }
 
 /// **A molecule's GAFF/AM1-BCC non-bonded model**: each atom's GAFF `[x, D]` by its type in
-/// FreeSolv's file, and FreeSolv's AM1-BCC charge, both mapped onto `c` by graph isomorphism.
+/// FreeSolv's file, and FreeSolv's AM1-BCC charge, both mapped onto `c` by graph isomorphism. The
+/// library's [`NonbondedModel`] with [`GAFF`]'s table, under the names this directory's tests use.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub types: Vec<String>,
@@ -98,17 +101,20 @@ pub struct Model {
 
 impl Model {
     fn from(mol2: &freesolv::Mol2, c: &Component) -> Model {
-        let (elements, bonds) = freesolv::component_graph(c);
-        let mapped = freesolv::charges_onto(mol2, &elements, &bonds).expect("the same molecule");
-        let types: Vec<String> = mapped
-            .map
-            .iter()
-            .map(|&j| mol2.atoms[j].kind.clone())
-            .collect();
+        let m = NonbondedModel::new(mol2, c, &table()).expect("the same molecule, GAFF's types");
         Model {
-            vdw: types.iter().map(|k| gaff(k)).collect(),
-            charges: mapped.charges,
-            types,
+            types: m.types,
+            vdw: m.van_der_waals,
+            charges: m.charges,
+        }
+    }
+
+    /// The library's model this is.
+    pub fn library(&self) -> NonbondedModel {
+        NonbondedModel {
+            types: self.types.clone(),
+            van_der_waals: self.vdw.clone(),
+            charges: self.charges.clone(),
         }
     }
 
@@ -145,11 +151,8 @@ pub fn benzene_in_water(field: PeriodicForceField, c: &Component) -> PeriodicFor
 /// which is this with benzene's model: `field` a [`PeriodicForceField::solvated`] whose solute's
 /// atoms come first.
 pub fn solute_in_water(field: PeriodicForceField, model: Model) -> PeriodicForceField {
-    let n = model.vdw.len();
-    field
-        .with_nonbonded(0..n, model.vdw)
-        .expect("GAFF's values are valid")
-        .with_solute_charges(model.charges)
-        .with_mixing(Mixing::LorentzBerthelot)
-        .with_one_four(ONE_FOUR[0], ONE_FOUR[1])
+    model
+        .library()
+        .apply(field)
+        .expect("GAFF's values are valid, one per solute atom")
 }
