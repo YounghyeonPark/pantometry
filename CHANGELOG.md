@@ -130,6 +130,24 @@ protects nothing.
     - **Against benzene:** Δ log P is +1.14 ± 0.32 against experiment's +1.02, reported and not
       gated. Against Sangster's 3.42 the miss would be 1.6σ, still inside 2σ.
 
+### Fixed
+
+- **`pantometry_core::rng` said a scene draws the same numbers on every platform, and only its
+  stream does.** The generator, `unit` and `range` are integer operations and IEEE `+ − × ÷`,
+  pinned by `the_stream_is_pinned`. Six other methods call the platform's C library:
+  - `gaussian` and `normal` call `ln` and `cos`;
+  - `poisson` calls `exp`, and `gaussian` above a mean of 30;
+  - `in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` call `sin` and `cos`.
+
+  CI measured the difference at `6a4f1db`. `pantometry-forcefield`'s water lattice, oriented
+  through `gaussian`, was three digests on Windows (MSVC), on macOS, and on Linux with Windows
+  (GNU). CONTRIBUTING.md already named `gaussian` and `poisson`; it now names all six.
+
+  The module documentation now says which methods are the same bits everywhere and which are
+  not. No method changed and no bit moved. Making them deterministic needs a `sin` and `cos` of
+  the kernel's own, as `math` has `exp` and `ln`. That would move every stochastic result, and
+  it is not done here.
+
 ## [0.23.0] — 2026-10-30
 
 Ninety-two commits, and the theme is a small molecule judged as a drug candidate.

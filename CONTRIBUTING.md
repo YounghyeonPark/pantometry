@@ -373,9 +373,11 @@ built from the first set in a written order, with no fused multiply–add, held 
 ulp of mpmath, and `math::tests::the_bits_are_pinned` pins their bits, which
 the platform matrix, the release job and `wasm32-wasip1` all run. A hot path that needs either
 should call them; generalized Born does. Every other transcendental is still the platform's —
-the kernel's own `Rng::gaussian` (`ln`, `cos`) and `Rng::poisson` (`exp`) among them — and a
-result that passes through one repeats on one machine and is not promised across machines. Say so
-where it happens, as `pantometry-forcefield` does.
+the kernel's own `Rng::gaussian` and `Rng::normal` (`ln`, `cos`), `Rng::poisson` (`exp`), and
+`Rng::in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` (`sin`, `cos`) among them.
+Only the generator's stream, `unit` and `range`, is pinned and the same everywhere. A
+result that passes through any of those methods repeats on one machine and is not promised across
+machines. Say so where it happens, as `pantometry-forcefield` does.
 
 ### The kernel must never depend on a domain
 

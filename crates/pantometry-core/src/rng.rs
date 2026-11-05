@@ -2,8 +2,30 @@
 //!
 //! Every stochastic choice in a simulation has to be reproducible or the results
 //! cannot be compared, so this is a plain seeded generator with no global state
-//! and no entropy source. Two runs of the same scene draw the same numbers, on
-//! every platform and in WebAssembly.
+//! and no entropy source. Two runs of the same scene draw the same numbers.
+//!
+//! # What is the same bits on every platform, and what is not
+//!
+//! **The stream is**: the generator itself, [`Rng::unit`] and [`Rng::range`] are
+//! integer operations and IEEE `+ − × ÷`, so they give the same bits on every
+//! platform and in WebAssembly. `the_stream_is_pinned` holds a digest of ten
+//! thousand draws, and CI runs it on Linux, macOS, Windows and `wasm32-wasip1`.
+//!
+//! **What is sampled from it through a transcendental is not.** These methods call
+//! the platform's C library, which is not required to round correctly and is not the
+//! same code on two operating systems:
+//! - [`Rng::gaussian`] and [`Rng::normal`] call `ln` and `cos`;
+//! - [`Rng::poisson`] calls `exp`, and above a mean of 30 it calls [`Rng::gaussian`];
+//! - [`Rng::in_disc`], [`Rng::on_sphere`], [`Rng::on_hemisphere`] and
+//!   [`Rng::cosine_hemisphere`] call `sin` and `cos`.
+//!
+//! So a run that draws from these repeats bit for bit on one machine, and on
+//! another its draws can differ in the last bits. CI measured it on
+//! `pantometry-forcefield`'s water lattice, whose molecules are oriented through
+//! [`Rng::gaussian`] and built through the platform's `cos`. It came out as three
+//! different digests on Windows (MSVC), on macOS, and on Linux with Windows (GNU). `pantometry_core::math` has `exp` and `ln` that are the same
+//! bits everywhere, but there is no such `sin` or `cos`, and these methods do not
+//! call them yet.
 //!
 //! # Determinism survives parallelism, but only through [`Rng::for_index`]
 //!
@@ -23,8 +45,9 @@ use glam::DVec3;
 
 use crate::vector::basis_for;
 
-/// Deterministic xorshift64* PRNG. Avoids a dependency and keeps scene
-/// generation identical on every platform (important for WASM + tests).
+/// Deterministic xorshift64* PRNG. Avoids a dependency, and its stream is the same
+/// bits on every platform and in WebAssembly. Not every method sampled from it is,
+/// as the module documentation lists.
 ///
 /// `Clone` is deliberate: cloning captures the exact stream position, which is
 /// how a speculative draw can be replayed or a substream forked at a known point.
