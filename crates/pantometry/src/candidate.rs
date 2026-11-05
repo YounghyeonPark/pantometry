@@ -6,13 +6,10 @@
 //!
 //! ```
 //! use pantometry::candidate::{assess, Call, Evidence, Measured, Rule, Thresholds};
-//! use pantometry::forcefield::Component;
+//! use pantometry::forcefield::{components, Component};
 //!
-//! // The dictionary entry's text is the caller's to supply. This path is this repository's.
-//! let benzene = Component::from_ccd(include_str!(
-//!     "../../pantometry-forcefield/components/BNZ.cif"
-//! ))
-//! .unwrap();
+//! // One of the entries `pantometry-forcefield` ships. Any other entry's text works the same way.
+//! let benzene = Component::from_ccd(components::text("BNZ").unwrap()).unwrap();
 //! let evidence = Evidence {
 //!     log_p: Some(Measured::new(1.92, 0.23)),
 //!     ..Evidence::default()

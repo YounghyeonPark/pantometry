@@ -23,6 +23,27 @@ protects nothing.
 
 ### Added
 
+- **`pantometry_forcefield::components`: the 52 dictionary entries the crate ships, by
+  identifier.** They were in the published crate all along, as the tests' fixtures, and nothing
+  reached them. A doc example that read one by a path into the repository compiled here and
+  nowhere else. `components::text("BNZ")` returns the entry's text, byte for byte as RCSB serves
+  it, and `components::ALL` lists every one. wwPDB data is CC0 1.0, so shipping them puts no
+  condition on MIT OR Apache-2.0. `pantometry::candidate`'s doc example and `drug_candidate` now
+  use it.
+  - **The list is written out, and a test holds it to the directory.**
+    `the_shipped_components_are_reachable.rs` reads `components/` and compares names and bytes.
+    It also parses every entry against the identifier it is listed under, and checks that a
+    lookup is exact.
+  - **Five sabotages each fail it**, after the unmodified source was seen to pass:
+    - an entry dropped;
+    - an entry pointed at another file;
+    - two entries swapped;
+    - a case-folded lookup;
+    - a prefix lookup.
+
+    The first never reached the test in its first form: the array's length is part of its type,
+    so deleting a line stopped the build. It is run with the length changed as well.
+
 - **`pantometry::candidate`: one molecule in, one verdict out.** `assess` reads a `Component`
   and takes what was measured about it as evidence, each value with its standard error: log P, the
   standard binding free energy at a stated temperature, and the fraction unbound in plasma. It
@@ -68,8 +89,8 @@ protects nothing.
   - **Recorded, not actioned:**
     - a value in kJ/mol is not detected;
     - `Assessment` has no `Display`;
-    - a component's text is the caller's to supply, because nothing in `pantometry-forcefield`
-      exposes the entries it ships.
+    - a component's text was the caller's to supply, because nothing in `pantometry-forcefield`
+      exposed the entries it ships. It does now: see `components` above.
   - **What checks it**, in `tests/a_molecule_gets_a_verdict.rs`:
     - the descriptors of ten molecules against counts made by hand from their entries, including
       a halogenated benzene, cysteine's S–H, and an H₂ with no heavy atom;

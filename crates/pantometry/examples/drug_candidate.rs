@@ -42,12 +42,8 @@
 use pantometry::candidate::{
     assess, Assessment, BindingFreeEnergy, Call, Distribution, Evidence, Measured, Rule, Thresholds,
 };
-use pantometry::forcefield::Component;
+use pantometry::forcefield::{components, Component};
 use pantometry::units::Temperature;
-
-const AIN: &str = include_str!("../../pantometry-forcefield/components/AIN.cif");
-const BNZ: &str = include_str!("../../pantometry-forcefield/components/BNZ.cif");
-const PXY: &str = include_str!("../../pantometry-forcefield/components/PXY.cif");
 
 /// W3's and W4's temperature, and the experiments'.
 const KELVIN: f64 = 298.15;
@@ -124,9 +120,11 @@ fn report(label: &str, a: &Assessment) {
 }
 
 fn main() {
-    let benzene = Component::from_ccd(BNZ).unwrap();
-    let p_xylene = Component::from_ccd(PXY).unwrap();
-    let aspirin = Component::from_ccd(AIN).unwrap();
+    // The entries `pantometry-forcefield` ships, by their dictionary identifiers.
+    let entry = |id: &str| Component::from_ccd(components::text(id).unwrap()).unwrap();
+    let benzene = entry("BNZ");
+    let p_xylene = entry("PXY");
+    let aspirin = entry("AIN");
 
     let benzene_log_p = Some(Measured::new(1.92, 0.23));
     let uff = assess(

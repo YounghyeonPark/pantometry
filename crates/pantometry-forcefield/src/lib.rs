@@ -461,6 +461,7 @@ pub mod binding;
 pub mod boresch;
 pub mod ccd;
 pub mod complex;
+pub mod components;
 pub mod dynamics;
 pub mod energy;
 pub mod ewald;
