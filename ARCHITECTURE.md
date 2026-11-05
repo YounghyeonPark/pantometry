@@ -507,7 +507,9 @@ These are not style. Each one is what makes some part of the goal reachable.
 4. **Conservation is audited, not assumed.** The audit is what makes an unfamiliar coupling
    trustworthy, which matters more as the number of domains grows, not less.
 5. **Results are bit-for-bit across platforms.** A simulation that gives a different answer on a
-   different machine is not a measurement.
+   different machine is not a measurement. That holds for everything that passes only through
+   `+ − × ÷`, `sqrt` and `pantometry_core::math`. `Rng::gaussian` and the sphere samplers call the
+   platform's `sin`, `cos`, `ln` and `exp`, and are not held to it yet.
 6. **A number in prose is a number under test.** This repository has shipped stale figures
    repeatedly; the ones that stopped recurring are the ones a test now checks.
 

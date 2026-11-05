@@ -14,8 +14,9 @@ domain either.
 
 Dimensions live in the type system, so `Length + Time` does not compile. Conservation is audited
 rather than assumed, and a `Violation` names what went missing and where. Every result is
-reproducible bit for bit — across platforms, across optimisation levels, in WebAssembly, and under
-sixteen threads as readily as one.
+reproducible bit for bit across optimisation levels, and under sixteen threads as readily as one.
+Across platforms and in WebAssembly, so is every result that does not pass through the
+platform's `sin`, `cos`, `ln` or `exp`, which `Rng::gaussian` and the sphere samplers call.
 
 Every claim is checked against a **closed form** or an independent computation, never against
 another implementation that might be wrong in the same direction. Where no closed form exists,

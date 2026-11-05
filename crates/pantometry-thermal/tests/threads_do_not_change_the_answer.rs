@@ -1,8 +1,8 @@
 //! **Rule 3, for the field stencils: the answer does not depend on the core count.**
 //!
-//! `CLAUDE.md` says results are bit-for-bit identical across platforms, optimisation levels,
-//! WebAssembly and thread counts. Until now the last clause was free — the stencils had no
-//! threads. It is not free any more, and this is what holds it.
+//! `CLAUDE.md` says results are bit-for-bit identical across thread counts, among other things.
+//! Until now that clause was free — the stencils had no threads. It is not free any more, and
+//! this is what holds it.
 //!
 //! Compared **bit for bit**, not to a tolerance. A tolerance would pass a version that reordered
 //! the arithmetic, and reordering is exactly the failure a parallel sweep can introduce: the
