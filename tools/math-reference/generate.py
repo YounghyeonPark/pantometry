@@ -1,13 +1,16 @@
-"""The reference values `pantometry_core::math::{exp, ln}` are held to.
+"""The reference values `pantometry_core::math::{exp, ln, sin_cos_turns}` are held to.
 
-    python tools/math-reference/generate.py            # writes the two committed tables
+    python tools/math-reference/generate.py            # writes the four committed tables
     python tools/math-reference/generate.py --scale 10 --out DIR  # ten times the random points
     python tools/math-reference/generate.py --exp-table   # prints math.rs's EXP_TABLE
     python tools/math-reference/generate.py --ln-table    # prints math.rs's LN_TABLE
-    python tools/math-reference/generate.py --constants   # prints math.rs's LN2_HI, LN2_LO, INV_STEP
+    python tools/math-reference/generate.py --constants   # prints math.rs's other constants:
+                                                          # LN2_HI to C4_LO, SIN_TAIL, COS_TAIL
+
+The four tables are exp, ln, and sin and cos of 2 pi t over one list of t, in turns.
 
 The constants in `crates/pantometry-core/src/math.rs` are what the last three print, word for
-word; the reference tables are what the test reads.
+word; the reference tables are what the two tests read.
 
 Needs mpmath (tested with 1.3.0) and nothing else. Every value is computed at 50 significant
 digits, about 166 bits, and rounded to a double here, by integer arithmetic, rather than by
@@ -15,12 +18,14 @@ mpmath's own conversion -- which goes through `math.ldexp` and would round a sub
 
 **The points are not stored.** They are drawn from a recipe of integer operations on bit patterns
 (splitmix64, ranges of bit patterns, a fixed list of bases with their neighbours) which
-`crates/pantometry-core/tests/exp_and_ln_against_mpmath.rs` repeats. Each table starts with an
+`crates/pantometry-core/tests/exp_and_ln_against_mpmath.rs` and `sin_and_cos_against_mpmath.rs`
+repeat. Each table starts with an
 FNV-1a digest of the inputs it was made for, and the test recomputes it: a recipe that drifted on
 one side is a failure that names the digest, not a comparison of the wrong points.
 
 Per point the table holds the correctly rounded value's bits (u64) and where the exact value lies
-from it, `(exact - rounded) / ulp(exact)`, in units of 2^-15 (i16). The ulp is the spacing of
+from it, `(exact - rounded) / ulp(exact)`, in units of 2^-15 (i16), and never 0 unless the
+exact value is the rounded one, so that its sign is always the side. The ulp is the spacing of
 doubles at the exact value, `2^(max(floor(log2 |t|), -1022) - 52)`; the test rebuilds it from the
 rounded value and the sign of that fraction.
 
@@ -148,6 +153,46 @@ def ln_inputs(scale):
     return xs
 
 
+TWO_M53 = 2.0**-53
+
+
+def turn_inputs(scale):
+    """The arguments, in turns, of `sin_cos_turns`: one list for both tables."""
+    xs = []
+    # What the samplers pass: Rng::unit's values, k 2^-53 for k < 2^53.
+    xs += [bits((splitmix(21, i) >> 11) * TWO_M53) for i in range(16384 * scale)]
+    # The whole finite domain, both signs, log-uniform in |t| from 2^-60 to past 2^52, where
+    # every double is an integer and the result is exact.
+    xs += uniform(bits(2.0**-60), bits(2.0**53), 22, 16384 * scale, sign=2)
+    # Every bit pattern that is not a NaN or an infinity.
+    xs += [b for b in uniform(0, MASK, 23, 4096 * scale) if math.isfinite(double(b))]
+    # Every reduction boundary, u = +-1/2, (2m + 1)/8, and every zero of sin and cos, m/4, for
+    # |m| <= 256: four doubles either side. Near a zero the result is small and its relative
+    # accuracy is what an exact reduction is for.
+    for m in range(-256, 257):
+        xs += around(bits((2 * m + 1) / 8), 4)
+        xs += around(bits(m / 4), 4)
+    # The same far out: about 2^e and 2^e + 1/8 for every e that leaves a fraction to reduce.
+    for e in range(0, 52):
+        xs += around(bits(2.0**e), 4, signs=(0, 1))
+        if e < 50:
+            xs += around(bits(2.0**e + 0.125), 4, signs=(0, 1))
+    # The subnormal arguments, where sin's result is subnormal too and is rounded once onto that
+    # grid; where it turns normal, 2^-1022/(2 pi); where sin leaves its main path, |4t| = 2^-500;
+    # and 2^52, where the reduction stops.
+    xs += uniform(1, 0x000FFFFFFFFFFFFF, 24, 2048 * scale, sign=2)
+    # (The division in doubles, which the test repeats bit for bit; within an ulp is near enough.)
+    xs += around(bits(2.0**-1022 / (2 * math.pi)), 64, signs=(0, 1))
+    xs += around(bits(2.0**-502), 64, signs=(0, 1))
+    xs += around(bits(2.0**52), 64, signs=(0, 1))
+    # The worst points of the first run at twenty times the random points, one from each series,
+    # so that the committed table holds them: sin at t = 0.36687 (from cos's series) and cos at
+    # t = 0.10765, both 0.5005 ulp.
+    xs += [0x3FD77AD659A0A538, 0x3FBB8EEDAA51E530]
+    # About 0, `around` steps below +0 into the NaN patterns: drop those.
+    return [b for b in xs if math.isfinite(double(b))]
+
+
 def fnv1a(words):
     h = 0xCBF29CE484222325
     for w in words:
@@ -170,7 +215,11 @@ def rounded(t):
     n = int(mpmath.nint(t / unit))
     hi = math.ldexp(float(n), q)  # n < 2^54, so exact
     assert mpmath.mpf(hi) == n * unit
-    frac = float((t - n * unit) / unit)
+    rest = (t - n * unit) / unit
+    frac = float(rest)
+    if frac == 0.0 and rest != 0:
+        # Too small for a double (exp far below its underflow, cos of a tiny t): keep the side.
+        frac = math.copysign(5e-324, rest)
     assert abs(frac) <= 0.5
     return hi, frac
 
@@ -179,8 +228,20 @@ def table(name, xs, function):
     digest = fnv1a(xs)
     body = []
     for b in xs:
-        hi, frac = rounded(function(mpmath.mpf(double(b))))
-        body.append(struct.pack("<Qh", bits(hi), int(round(frac * 32768.0))))
+        x = double(b)
+        # Below 2^-10 in |x|, carry 2 log2(1/|x|) more bits: 50 digits make exp(-1e-201) exactly
+        # 1, and cos(2 pi t) exactly 1 for a tiny t, which loses the side the exact value is on.
+        e = math.frexp(x)[1] if x != 0 else 0
+        extra = 2 * -e if e < -10 else 0
+        with mpmath.workprec(mpmath.mp.prec + extra):
+            hi, frac = rounded(function(mpmath.mpf(x)))
+        # Keep the side the exact value is on even when it is nearer than 2^-16 ulp: the test
+        # reads the spacing at the exact value from it, and just below a power of two that
+        # spacing is half the rounded value's. Rounded to 0 there, a 1-ulp error measured as 0.5.
+        q = int(round(frac * 32768.0))
+        if q == 0 and frac != 0:
+            q = 1 if frac > 0 else -1
+        body.append(struct.pack("<Qh", bits(hi), q))
     print(f"{name}: {len(xs)} points, input digest {digest:016x}", file=sys.stderr)
     return b"PMREF1\0\0" + struct.pack("<QI", digest, len(xs)) + b"".join(body)
 
@@ -263,8 +324,35 @@ def ln_table():
     return words
 
 
+def hex_word(w):
+    return "0x%04x_%04x_%04x_%04x" % (w >> 48, (w >> 32) & 0xFFFF, (w >> 16) & 0xFFFF, w & 0xFFFF)
+
+
+# sin_cos_turns: t = (n + u)/4, |u| <= 1/2, and the angle is (pi/2)(n + u); sin and cos of
+# (pi/2) u by their Taylor series in u, whose coefficients are
+#   sin: (-1)^k (pi/2)^(2k+1) / (2k+1)!,  k = 0..9
+#   cos: (-1)^k (pi/2)^(2k) / (2k)!,      k = 0..10
+# The first three of sin's (k = 0, 1, 2) and two of cos's (k = 1, 2) are double-doubles,
+# the rest as the nearest double.
+SIN_TERMS = 10
+COS_TERMS = 11
+
+
+def sin_coefficient(k):
+    return (-1) ** k * (mpmath.pi / 2) ** (2 * k + 1) / mpmath.factorial(2 * k + 1)
+
+
+def cos_coefficient(k):
+    return (-1) ** k * (mpmath.pi / 2) ** (2 * k) / mpmath.factorial(2 * k)
+
+
+def double_double(t):
+    hi = rounded(t)[0]
+    return hi, rounded(t - mpmath.mpf(hi))[0]
+
+
 def constants():
-    """`math`'s scalar constants, as `const NAME: u64 = bits;` lines."""
+    """`math`'s scalar constants, as `const NAME: u64 = bits;` lines, and its two short arrays."""
     ln2 = mpmath.log(2)
     hi = to_quantum(ln2, HI_QUANTUM)
     out = [
@@ -272,11 +360,25 @@ def constants():
         ("LN2_LO", bits(rounded(ln2 - mpmath.mpf(hi))[0])),
         ("INV_STEP", bits(rounded(128 / ln2)[0])),
     ]
-    return "\n".join(
-        "const %s: u64 = 0x%04x_%04x_%04x_%04x;"
-        % (name, w >> 48, (w >> 32) & 0xFFFF, (w >> 16) & 0xFFFF, w & 0xFFFF)
-        for name, w in out
-    )
+    for name, c in [
+        ("S1", sin_coefficient(0)),
+        ("S3", sin_coefficient(1)),
+        ("S5", sin_coefficient(2)),
+        ("C2", cos_coefficient(1)),
+        ("C4", cos_coefficient(2)),
+    ]:
+        h, l = double_double(c)
+        out += [(name + "_HI", bits(h)), (name + "_LO", bits(l))]
+    lines = ["const %s: u64 = %s;" % (name, hex_word(w)) for name, w in out]
+    for name, ks, f in [
+        ("SIN_TAIL", range(3, SIN_TERMS), sin_coefficient),
+        ("COS_TAIL", range(3, COS_TERMS), cos_coefficient),
+    ]:
+        words = [bits(rounded(f(k))[0]) for k in ks]
+        lines.append("const %s: [u64; %d] = [" % (name, len(words)))
+        lines += ["    %s," % hex_word(w) for w in words]
+        lines.append("];")
+    return "\n".join(lines)
 
 
 def main():
@@ -308,7 +410,21 @@ def main():
             raise ValueError("ln 0 is not in a table")
         return mpmath.log(t)
 
-    for name, xs, f in [("exp", exp_inputs(args.scale), exp), ("ln", ln_inputs(args.scale), ln)]:
+    # sin 2 pi t and cos 2 pi t, as mpmath's sinpi and cospi of 2t, which reduce exactly: sin of
+    # 2 pi t would round 2 pi t first, and be -1.0e-51 rather than 0 at t = 1/2.
+    def sin(t):
+        return mpmath.sinpi(2 * t)
+
+    def cos(t):
+        return mpmath.cospi(2 * t)
+
+    turns = turn_inputs(args.scale)
+    for name, xs, f in [
+        ("exp", exp_inputs(args.scale), exp),
+        ("ln", ln_inputs(args.scale), ln),
+        ("sin", turns, sin),
+        ("cos", turns, cos),
+    ]:
         with open(os.path.join(out, f"{name}-reference.bin"), "wb") as fh:
             fh.write(table(name, xs, f))
 

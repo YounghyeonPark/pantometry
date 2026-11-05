@@ -367,12 +367,14 @@ fail there rather than quietly producing different physics.
 **The promise is about operations, and only some operations keep it.** IEEE-754 makes `+ − × ÷`
 and `sqrt` correctly rounded, so the same everywhere. It does not do that for `exp`, `ln`, `sin`,
 `cos` or `tanh`: `f64::exp` and the rest call the platform's C library, which is a different
-function on two machines. **`pantometry_core::math::{exp, ln}` are the workspace's own** —
-original code written from the published table-driven method, under the crate's own licence —
-built from the first set in a written order, with no fused multiply–add, held within 0.520 and 0.508
-ulp of mpmath, and `math::tests::the_bits_are_pinned` pins their bits, which
-the platform matrix, the release job and `wasm32-wasip1` all run. A hot path that needs either
-should call them; generalized Born does. Every other transcendental is still the platform's —
+function on two machines. **`pantometry_core::math::{exp, ln, sin_cos_turns}` are the
+workspace's own** — original code written from published methods, under the crate's own licence
+— built from the first set in a written order, with no fused multiply–add, held within 0.520,
+0.508 and 0.503 ulp of mpmath, and `math::tests::the_bits_are_pinned` and
+`the_sin_cos_bits_are_pinned` pin their bits, which the platform matrix, the release job and
+`wasm32-wasip1` all run. `sin_cos_turns(t)` is `(sin 2πt, cos 2πt)`, in turns so that its
+reduction is exact. A hot path that needs any of them should call them; generalized Born calls
+`exp` and `ln`. Every other transcendental is still the platform's —
 the kernel's own `Rng::gaussian` and `Rng::normal` (`ln`, `cos`), `Rng::poisson` (`exp`), and
 `Rng::in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` (`sin`, `cos`) among them.
 Only the generator's stream, `unit` and `range`, is pinned and the same everywhere. A

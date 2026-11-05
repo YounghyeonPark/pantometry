@@ -1,24 +1,25 @@
-//! `exp` and `ln` of the workspace's own, built from `+ − × ÷` alone, so that they give the same
-//! bits on every platform.
+//! `exp`, `ln`, and the sine and cosine of a turn, of the workspace's own, built from `+ − × ÷`
+//! alone, so that they give the same bits on every platform.
 //!
 //! # Why the kernel has these
 //!
 //! The determinism convention says a result is bit-for-bit the same across platforms,
 //! optimisation levels, WebAssembly and thread counts. IEEE-754 makes that true of `+ − × ÷` and
-//! `sqrt`, which it requires to be correctly rounded. It does not make it true of `exp` or `ln`:
-//! `f64::exp` and `f64::ln` call the platform's C library, which is not required to round
-//! correctly and is not the same code on two operating systems. A crate that calls them is
-//! reproducible on one machine and not across machines, and a domain crate that calls them has
+//! `sqrt`, which it requires to be correctly rounded. It does not make it true of `exp`, `ln`,
+//! `sin` or `cos`: `f64::exp` and the rest call the platform's C library, which is not required
+//! to round correctly and is not the same code on two operating systems. A crate that calls them
+//! is reproducible on one machine and not across machines, and a domain crate that calls them has
 //! to say so of itself.
 //!
-//! [`exp`] and [`ln`] here are a fixed sequence of IEEE operations — integer manipulation of the
-//! bit pattern, two tables of constants, and `+ − × ÷` in a written order, with no fused
-//! multiply–add and no call out — so for every non-NaN argument they are the same function on
-//! every target Rust compiles to. A NaN comes back NaN, but Rust does not fix its payload bits.
-//! Rust does not contract `a * b + c` into an FMA, and its `f64` arithmetic on every tier-1 target
+//! [`exp`], [`ln`] and [`sin_cos_turns`] here are a fixed sequence of IEEE operations — integer
+//! manipulation of the bit pattern, tables of constants, and `+ − × ÷` in a written order, with
+//! no fused multiply–add and no call out — so for every non-NaN argument they are the same
+//! function on every target Rust compiles to. A NaN comes back NaN, but Rust does not fix its
+//! payload bits. Rust does not contract `a * b + c` into an FMA, and its `f64` arithmetic on every tier-1 target
 //! and on `wasm32` is IEEE binary64 rounding to nearest, which is all the evaluation below
-//! assumes. `the_bits_are_pinned` holds a digest of both at 8192 points each, and CI runs it on
-//! Linux, macOS on arm64, Windows, release with LTO, and `wasm32-wasip1`.
+//! assumes. `the_bits_are_pinned` holds a digest of [`exp`] and [`ln`] at 8192 points each, and
+//! `the_sin_cos_bits_are_pinned` of [`sin_cos_turns`] at 16 384, and CI runs both on Linux, macOS
+//! on arm64, Windows, release with LTO, and `wasm32-wasip1`.
 //!
 //! They are in the kernel because they know nothing about any physics: they are the maths no
 //! domain owns, as [`crate::vector`] and [`crate::transform`] are, and a second domain that wanted
@@ -27,7 +28,9 @@
 //! They are also faster than the platform's on `x86_64-pc-windows-gnu`, which is why they were
 //! written: in release, over the arguments of a pair-sum hot path, 1.96–2.03 ns a call for [`exp`]
 //! against `f64::exp`'s 33.0–33.7, and 2.86–2.92 ns for [`ln`] against `f64::ln`'s 17.4–17.6
-//! (`tests/exp_and_ln_against_mpmath.rs`, `the_cost`).
+//! (`tests/exp_and_ln_against_mpmath.rs`, `the_cost`). [`sin_cos_turns`] was written for the
+//! determinism alone and costs 23.5–23.8 ns for the pair over `Rng::unit`'s values, against
+//! 31.5–31.6 for `f64::sin_cos` of `2πt` (`tests/sin_and_cos_against_mpmath.rs`, `the_cost`).
 //!
 //! # Where they come from
 //!
@@ -46,14 +49,17 @@
 //! - **Exact transformations**, T. J. Dekker, "A floating-point technique for extending the
 //!   available precision", *Numer. Math.* 18, 224–242 (1971) — the error of a sum recovered
 //!   exactly when one addend dominates — and Sterbenz's lemma, that `a − b` is exact when
-//!   `b/2 ≤ a ≤ 2b`.
+//!   `b/2 ≤ a ≤ 2b`; and, from the same paper, the product of two doubles as a double and its
+//!   error, exactly, by splitting each into halves of 26 bits (Veltkamp's split).
 //! - **The series are Taylor's**: `eʳ − 1 = r + r²/2! + … + r⁵/5!` and
 //!   `ln(1 + r) − r = −r²/2 + r³/3 − … + r⁷/7`, their coefficients `1/n!` and `±1/n` as Rust
-//!   writes them. No coefficient is fitted.
+//!   writes them; `sin((π/2) u)` to `u¹⁹` and `cos((π/2) u)` to `u²⁰`, their coefficients
+//!   `(π/2)ⁿ/n!` with alternating signs. No coefficient is fitted.
 //!
 //! The constants — a table of `2^(j/128)` as a double-double, a table of `c ≈ 1/F` and `−ln c`,
-//! and the split of `ln 2` — are computed by `tools/math-reference/generate.py` with mpmath at 50
-//! digits and are what its `--exp-table`, `--ln-table` and `--constants` print, word for word.
+//! the split of `ln 2`, and the coefficients of the two series in `u` — are computed by
+//! `tools/math-reference/generate.py` with mpmath at 50 digits and are what its `--exp-table`,
+//! `--ln-table` and `--constants` print, word for word.
 //! The tests here check each against a closed form computed in double-double arithmetic in the
 //! test itself, not against the script.
 //!
@@ -65,8 +71,12 @@
 //! `ln x = k ln 2 − ln c + ln(1 + r)` with `r = m c − 1`. Written as `(F c − 1) + (m − F) c`,
 //! every operation in `r` is exact — the table's cells are narrow enough and `c` short enough for
 //! that, which its test checks cell by cell — so nothing is divided and nothing is lost. About 1,
-//! `c = 1` and `r = m − 1`. What each step costs in accuracy is derived where it is done, and the
-//! bounds assembled from them are written beside the tests that hold them.
+//! `c = 1` and `r = m − 1`. **[`sin_cos_turns`]**: `4|t| = n + u` with `n` an integer and `|u| ≤
+//! ½`, both exact, so the angle is `(π/2)(n + u)`; `n mod 4` is the quadrant and picks the series
+//! and the signs, and each series makes its first three terms exact as a double plus an error,
+//! sums them without rounding, and rounds once. What each step costs in accuracy is derived
+//! where it is done, and the bounds assembled from them are written beside the tests that hold
+//! them.
 //!
 //! # How accurate, measured rather than quoted
 //!
@@ -80,7 +90,15 @@
 //! the thresholds of its branches, every binade's boundary of `ln` at `√2` and at `0.703125`,
 //! every edge of its 256 cells at `k = −1, 0, 1`, every power of two, every subnormal, and densely
 //! about 1. That is 64 993 and 76 308 committed points; the same recipe at twenty times the random
-//! points, 804 287 and 737 812, was run once outside the repository:
+//! points, 804 287 and 737 812, was run once outside the repository.
+//!
+//! For [`sin_cos_turns`], **0.501 ulp where the result comes from sin's series and 0.503 where it
+//! comes from cos's**, derived in `tests/sin_and_cos_against_mpmath.rs`, against mpmath's
+//! `sinpi(2t)` and `cospi(2t)` on one list of `t`: what `Rng::unit` returns, the whole finite
+//! domain, every reduction boundary `(2m + 1)/8` and every zero `m/4` for `|m| ≤ 256`, the same
+//! about every power of two that leaves a fraction, the subnormals, and the thresholds of the
+//! small path and of `2⁵²`, and the worst two points of the first run at twenty times the random
+//! points. That is 50 751 committed points, and 790 033 at twenty times:
 //!
 //! | | bound | worst, committed | worst, ×20 | where (×20) | not correctly rounded (×20) |
 //! | --- | --- | --- | --- | --- | --- |
@@ -89,10 +107,20 @@
 //! | [`ln`], `k = 0`, `c ≠ 1` | 0.508 | 0.5000 ulp | 0.5002 ulp | `x = 0.97946` | |
 //! | [`ln`], `k ≠ 0` | 0.501 | 0.5000 ulp | 0.5000 ulp | | |
 //! | [`ln`], all | | | | | 0.001% (6 points) |
+//! | sin, from sin's series | 0.501 | 0.5000 ulp | 0.5000 ulp | `t = 0.56185` | |
+//! | sin, from cos's series | 0.503 | 0.5005 ulp | 0.5005 ulp | `t = 0.36687` | |
+//! | cos, from cos's series | 0.503 | 0.5005 ulp | 0.5005 ulp | `t = 0.10765` | |
+//! | cos, from sin's series | 0.501 | 0.4999 ulp | 0.5000 ulp | `t = 0.37116` | |
+//! | either, `|t| ≥ 2⁵²` | 0 | exact | exact | | |
+//! | sin, all; cos, all | | | | | 0.002% (19 points); 0.002% (13) |
+//!
+//! A rounded result shows the budget beyond ½ only near a tie, so the budgets are held before the
+//! last rounding as well: at most 0.00015 ulp for sin's series and 0.00125 for cos's, against the
+//! 0.0005 and 0.003 derived (`each_series_is_within_its_budget_before_rounding`).
 //!
 //! An ulp here is the spacing of doubles at the exact value; below the smallest normal it is the
-//! subnormal spacing, `2⁻¹⁰⁷⁴`. Neither function is correctly rounded: for the fraction shown the
-//! farther of the two neighbouring doubles is returned.
+//! subnormal spacing, `2⁻¹⁰⁷⁴`. None of the functions is correctly rounded: for the fraction
+//! shown the farther of the two neighbouring doubles is returned.
 //!
 //! # Special values
 //!
@@ -112,6 +140,17 @@
 //!
 //! Between `−745.13…` and `−708.39…` the result of [`exp`] is subnormal and is rounded once onto
 //! the subnormal grid.
+//!
+//! [`sin_cos_turns`] signs its zeros as IEEE-754's `sinPi` and `cosPi` do:
+//!
+//! | `t` | sin | cos |
+//! | --- | --- | --- |
+//! | NaN, `±∞` | NaN | NaN |
+//! | `±0` | `±0` | `1` |
+//! | a whole number `k`, or `k + ½`, of either sign | `±0`, the sign of `t` | `±1`, exactly |
+//! | `k ± ¼` | `±1`, exactly | `+0` |
+//! | `|t| ≥ 2⁵²`, every one a whole number | `±0`, the sign of `t` | `1` |
+//! | subnormal | `2πt` rounded once onto the subnormal grid | `1` |
 
 // The constants below are bit patterns, so that each is the double it says without a decimal
 // conversion in between; `generate.py --constants` prints them.
@@ -735,6 +774,240 @@ pub fn ln(x: f64) -> f64 {
     s + (s_err + (lo + p))
 }
 
+// ---- sin and cos of a turn.
+//
+// The coefficients of sin((π/2) u) and cos((π/2) u) in powers of u: `(−1)ᵏ (π/2)²ᵏ⁺¹/(2k + 1)!`
+// and `(−1)ᵏ (π/2)²ᵏ/(2k)!`, as `generate.py --constants` prints them. `S1`, `S3` and `S5` (the
+// coefficients of u, u³ and u⁵) and `C2` and `C4` (of u² and u⁴) are double-doubles, the high
+// part the nearest double and the low part the nearest double to the rest; `SIN_TAIL` holds the
+// coefficients of u⁷ to u¹⁹ and `COS_TAIL` of u⁶ to u²⁰, each the nearest double.
+const S1_HI: u64 = 0x3ff9_21fb_5444_2d18;
+const S1_LO: u64 = 0x3c91_a626_3314_5c07;
+const S3_HI: u64 = 0xbfe4_abbc_e625_be53;
+const S3_LO: u64 = 0x3c80_5511_c684_76a8;
+const S5_HI: u64 = 0x3fb4_66bc_6775_aae2;
+const S5_LO: u64 = 0xbc46_dc0c_bddb_0fc3;
+const C2_HI: u64 = 0xbff3_bd3c_c9be_45de;
+const C2_LO: u64 = 0xbc96_92b7_1366_cc04;
+const C4_HI: u64 = 0x3fd0_3c1f_081b_5ac4;
+const C4_LO: u64 = 0xbc73_2b33_f87f_c145;
+const SIN_TAIL: [u64; 7] = [
+    0xbf73_2d2c_ce62_bd86,
+    0x3f25_0783_487e_e782,
+    0xbece_3074_fde8_871f,
+    0x3e6e_8f43_4d01_8d63,
+    0xbe06_fadb_9f15_5744,
+    0x3d9a_aec3_2af9_3359,
+    0xbd28_a404_211f_9547,
+];
+const COS_TAIL: [u64; 8] = [
+    0xbf95_5d3c_7e3c_bffa,
+    0x3f4e_1f50_6891_babb,
+    0xbefa_6d1f_2a20_4a8c,
+    0x3e9f_9d38_a376_3cc3,
+    0xbe3b_6e24_f44b_128f,
+    0x3dd2_0c62_c2f2_d7f5,
+    0xbd62_a0c5_91af_8314,
+    0x3cee_f6e3_08d6_d1c4,
+];
+
+/// `|u|` below which [`sin_cos_turns`] takes sin's small path, `2⁻⁵⁰⁰`. There `u³` is `2⁻¹⁰⁰⁰`
+/// of `u`, below anything the result can carry, and the result can be subnormal.
+const SIN_SMALL: u64 = 0x20b0_0000_0000_0000;
+
+/// `2⁶⁰⁰` and `2⁻⁶⁰⁰`, which take the small path's argument up and its result down, exactly.
+const UP_600: u64 = 0x6570_0000_0000_0000;
+const DOWN_600: u64 = 0x1a70_0000_0000_0000;
+
+/// `2⁻⁴²²`, which is `2⁻¹⁰²²` scaled by `2⁶⁰⁰`: below it the small path's result is subnormal.
+const SMALL_NORMAL: u64 = 0x2590_0000_0000_0000;
+
+/// `a` as two halves of 26 bits or fewer each, `a = hi + lo` exactly (Veltkamp's split).
+#[inline(always)]
+fn split(a: f64) -> (f64, f64) {
+    let c = 134_217_729.0 * a;
+    let hi = c - (c - a);
+    (hi, a - hi)
+}
+
+/// `a · b` and its rounding error, exactly, without a fused multiply–add (Dekker 1971), while
+/// nothing underflows. In [`sin_quarter`] the products of `u³` stop being exact below about
+/// `|u| = 2⁻³⁴⁰`, and of `u²` below about `2⁻⁴⁸⁵`; the terms they make are `2⁻⁶⁸⁰` of the result
+/// there, and what they lose is far below any bit it carries.
+#[inline(always)]
+fn two_prod(a: f64, b: f64) -> (f64, f64) {
+    let p = a * b;
+    let ((ah, al), (bh, bl)) = (split(a), split(b));
+    (p, ((ah * bh - p) + ah * bl + al * bh) + al * bl)
+}
+
+/// `c₀ + c₁ z + c₂ z² + …` by Horner's rule, the coefficients from their bits.
+#[inline(always)]
+fn horner(coefficients: &[u64], z: f64) -> f64 {
+    let mut acc = 0.0;
+    for &c in coefficients.iter().rev() {
+        acc = f64::from_bits(c) + z * acc;
+    }
+    acc
+}
+
+/// `sin((π/2) u)` for `|u| ≤ ½`.
+///
+/// The terms in `u`, `u³` and `u⁵` are each formed exactly as a double and its error — the
+/// powers of `u` and their products with the high parts of the coefficients by [`two_prod`] —
+/// and summed by two exact additions, so that the one rounding the sum is left is the last. What
+/// is not exact is small: the coefficients' low parts, the errors of the powers, and the tail
+/// from `u⁷`, at most `5.2 · 10⁻⁵` of the result.
+#[inline(always)]
+fn sin_quarter(u: f64) -> f64 {
+    if u.abs() < f64::from_bits(SIN_SMALL) {
+        return sin_small(u);
+    }
+    let (total, rest) = sin_quarter_parts(u);
+    total + rest
+}
+
+/// [`sin_quarter`]'s main path, `|u| ≥ 2⁻⁵⁰⁰`, before its last rounding: the result is the sum
+/// of the two, rounded once. Apart so that a test can hold what is before that rounding.
+#[inline(always)]
+fn sin_quarter_parts(u: f64) -> (f64, f64) {
+    let (z, z_lo) = two_prod(u, u);
+    let (c, c_err) = two_prod(u, z);
+    let c_lo = c_err + u * z_lo;
+    let (f, f_err) = two_prod(c, z);
+    let f_lo = f_err + (c * z_lo + c_lo * z);
+    let (s1, s3, s5) = (
+        f64::from_bits(S1_HI),
+        f64::from_bits(S3_HI),
+        f64::from_bits(S5_HI),
+    );
+    let (p, p_err) = two_prod(s1, u);
+    let p_lo = p_err + f64::from_bits(S1_LO) * u;
+    let (d, d_err) = two_prod(s3, c);
+    let d_lo = d_err + (s3 * c_lo + f64::from_bits(S3_LO) * c);
+    let (g, g_err) = two_prod(s5, f);
+    let g_lo = g_err + (s5 * f_lo + f64::from_bits(S5_LO) * f);
+    let tail = (f * z) * horner(&SIN_TAIL, z);
+    // |p| > |d| > |g|, so each sum's error is exactly what these give.
+    let sum = p + d;
+    let sum_err = (p - sum) + d;
+    let total = sum + g;
+    let total_err = (sum - total) + g;
+    (
+        total,
+        ((sum_err + total_err) + ((p_lo + d_lo) + g_lo)) + tail,
+    )
+}
+
+/// `sin((π/2) u)` for `|u| < 2⁻⁵⁰⁰`, which is `(π/2) u` to `2⁻¹⁰⁰⁰` of itself: the product with
+/// `π/2` as a double-double, taken up by `2⁶⁰⁰` so that nothing in it underflows, rounded once —
+/// onto the subnormal grid, when that is where the result lies — and brought back down exactly.
+#[inline(never)]
+fn sin_small(u: f64) -> f64 {
+    let (up, down) = (f64::from_bits(UP_600), f64::from_bits(DOWN_600));
+    let big = u.abs() * up;
+    let (p, p_err) = two_prod(f64::from_bits(S1_HI), big);
+    let lo = p_err + f64::from_bits(S1_LO) * big;
+    let normal = f64::from_bits(SMALL_NORMAL);
+    let mut s = p + lo;
+    if s < normal {
+        // Subnormal once scaled down: its grid is 2^-1074, which is 2^-474 here, and the doubles
+        // in [2^-422, 2^-421] are spaced exactly so. Added to 2^-422, p + lo rounds once onto it;
+        // the sum's error is exact, since 2^-422 is at least p, and the subtraction is too.
+        let h = normal + p;
+        let h_err = (normal - h) + p;
+        s = (h + (h_err + lo)) - normal;
+    }
+    let s = s * down;
+    if u < 0.0 {
+        -s
+    } else {
+        s
+    }
+}
+
+/// `cos((π/2) u)` for `|u| ≤ ½`: as [`sin_quarter`], with the terms `1`, `u²` and `u⁴` exact,
+/// and the tail from `u⁶` at most `3.3 · 10⁻⁴`, which is `4.6 · 10⁻⁴` of the result.
+#[inline(always)]
+fn cos_quarter(u: f64) -> f64 {
+    let (total, rest) = cos_quarter_parts(u);
+    total + rest
+}
+
+/// [`cos_quarter`] before its last rounding, as [`sin_quarter_parts`].
+#[inline(always)]
+fn cos_quarter_parts(u: f64) -> (f64, f64) {
+    let (z, z_lo) = two_prod(u, u);
+    let (v, v_err) = two_prod(z, z);
+    let v_lo = v_err + 2.0 * z * z_lo;
+    let (c2, c4) = (f64::from_bits(C2_HI), f64::from_bits(C4_HI));
+    let (w, w_err) = two_prod(c2, z);
+    let w_lo = w_err + (c2 * z_lo + f64::from_bits(C2_LO) * z);
+    let (g, g_err) = two_prod(c4, v);
+    let g_lo = g_err + (c4 * v_lo + f64::from_bits(C4_LO) * v);
+    let tail = (v * z) * horner(&COS_TAIL, z);
+    // 1 > |w| > |g|.
+    let sum = 1.0 + w;
+    let sum_err = (1.0 - sum) + w;
+    let total = sum + g;
+    let total_err = (sum - total) + g;
+    (total, ((sum_err + total_err) + (w_lo + g_lo)) + tail)
+}
+
+/// `(sin 2πt, cos 2πt)`: the sine and cosine of `t` **turns**, within 0.503 ulp, the same bits
+/// on every platform. See the [module](self).
+///
+/// In turns rather than radians because the reduction is then exact: `4t` is `n + u` with `n`
+/// an integer, the quadrant, and `|u| ≤ ½`, and both are found without rounding. Radians would
+/// need `t mod π/2` to some hundreds of bits of `π`. So sin of a whole number of half turns is
+/// exactly zero, of a quarter turn exactly one, and near those the result keeps its relative
+/// accuracy. For an angle in radians `θ`, `sin_cos_turns(θ / TAU)`, at the cost of the
+/// division's rounding.
+///
+/// The zeros are signed as IEEE 754's `sinPi` and `cosPi` sign theirs: an exact zero of the
+/// sine has the sign of `t`, and of the cosine is `+0`. A NaN or an infinity gives NaN for both.
+///
+/// ```
+/// use pantometry_core::math::sin_cos_turns;
+/// assert_eq!(sin_cos_turns(0.25), (1.0, 0.0));
+/// assert_eq!(sin_cos_turns(0.5), (0.0, -1.0));
+/// assert_eq!(sin_cos_turns(-3.0), (-0.0, 1.0));
+/// // √½ correctly rounded, which is what `FRAC_1_SQRT_2` is.
+/// assert_eq!(sin_cos_turns(0.125), (std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2));
+/// ```
+#[inline]
+#[must_use]
+pub fn sin_cos_turns(t: f64) -> (f64, f64) {
+    if !t.is_finite() {
+        return (f64::NAN, f64::NAN);
+    }
+    let a = t.abs();
+    let (s, c) = if a >= TWO_52 {
+        // Every double this large is a whole number of turns.
+        (0.0, 1.0)
+    } else {
+        // 4a is exact, and below 2^54, so truncating it is exact and so is what is left.
+        let x = 4.0 * a;
+        let mut n = x as u64;
+        let mut u = x - n as f64;
+        if u > 0.5 {
+            // Exact by Sterbenz.
+            n += 1;
+            u -= 1.0;
+        }
+        let (s, c) = (sin_quarter(u), cos_quarter(u));
+        match n & 3 {
+            0 => (s, c),
+            1 => (c, -s),
+            2 => (-s, -c),
+            _ => (-c, s),
+        }
+    };
+    // Adding +0 turns −0 into +0 and changes nothing else.
+    let (s, c) = (s + 0.0, c + 0.0);
+    (if t.is_sign_negative() { -s } else { s }, c)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,7 +1029,8 @@ mod tests {
     }
 
     // ---- Double-double arithmetic, Dekker (1971), for checking the tables against their closed
-    // forms to about 2^-104 relatively. Test-only: nothing above uses it.
+    // forms to about 2^-104 relatively. `split` and `two_prod` are the module's, which
+    // `sin_cos_turns` uses; the rest is test-only.
 
     /// `a + b` and its rounding error, exactly, for any `a` and `b` (Knuth's two-sum).
     fn two_sum(a: f64, b: f64) -> (f64, f64) {
@@ -769,20 +1043,6 @@ mod tests {
     fn fast_two_sum(a: f64, b: f64) -> (f64, f64) {
         let s = a + b;
         (s, b - (s - a))
-    }
-
-    /// `a` as two halves of 26 bits or fewer each (Veltkamp's split).
-    fn split(a: f64) -> (f64, f64) {
-        let c = 134_217_729.0 * a;
-        let hi = c - (c - a);
-        (hi, a - hi)
-    }
-
-    /// `a · b` and its rounding error, exactly, without a fused multiply–add.
-    fn two_prod(a: f64, b: f64) -> (f64, f64) {
-        let p = a * b;
-        let ((ah, al), (bh, bl)) = (split(a), split(b));
-        (p, ((ah * bh - p) + ah * bl + al * bh) + al * bl)
     }
 
     /// A double-double: the value is `hi + lo`, `|lo| ≤ ½ ulp(hi)`.
@@ -1355,5 +1615,240 @@ mod tests {
                 .chain(ln_args.chain(specials).map(|x| word(ln(x)))),
         );
         assert_eq!(digest, 0x8453_2fb8_80d9_8a57, "digest {digest:#018x}");
+    }
+
+    // ---- sin_cos_turns.
+
+    /// `atan(1/n) = Σ (−1)ᵏ/((2k + 1) n²ᵏ⁺¹)`, in double-double, for an integer `n ≥ 5`.
+    fn atan_inverse_dd(n: f64) -> Dd {
+        let n2 = Dd::of(n * n);
+        let mut power = Dd::of(1.0).div(Dd::of(n));
+        let mut sum = Dd::of(0.0);
+        for k in 0..40 {
+            let term = power.div(Dd::of((2 * k + 1) as f64));
+            sum = if k % 2 == 0 {
+                sum.add(term)
+            } else {
+                sum.sub(term)
+            };
+            power = power.div(n2);
+        }
+        sum
+    }
+
+    /// `π/2`, by Machin's formula `π/4 = 4 atan(1/5) − atan(1/239)`, in double-double: an
+    /// identity this module does not use, and not the script's number.
+    fn half_pi_dd() -> Dd {
+        atan_inverse_dd(5.0)
+            .scale(4.0)
+            .sub(atan_inverse_dd(239.0))
+            .scale(2.0)
+    }
+
+    /// **The series' coefficients are their closed forms.** From `π/2` by Machin's formula, each
+    /// coefficient of `sin((π/2) u)` is the last times `−(π/2)²/((2k)(2k + 1))`, and of
+    /// `cos((π/2) u)` times `−(π/2)²/((2k − 1)(2k))`, in double-double. Each high part, and each
+    /// tail coefficient, is the nearest double; each high part plus its low part is the
+    /// coefficient to within the low part's own rounding and `2⁻¹⁰⁰` of the coefficient, which is
+    /// as near as a closed form in double-double resolves (Machin's `π/2` is good to `2⁻¹⁰⁵`, and
+    /// `(π/2)⁵/120` from it to `2⁻¹⁰³`) — so a low part tens of its ulps out, `2⁻⁹⁹` of the result,
+    /// would pass. The `2⁻⁴⁰` of an ulp allowed `nearest` is the double-double's error, under
+    /// `2⁻⁴⁸` ulp; the coefficient nearest a tie is 0.054 ulp from it. And the small path's powers
+    /// of two are the powers they say.
+    #[test]
+    fn the_trig_constants_are_their_closed_forms() {
+        let h = half_pi_dd();
+        assert_eq!(
+            h.value(),
+            std::f64::consts::FRAC_PI_2,
+            "Machin's formula is π/2"
+        );
+        let h2 = h.mul(h).neg();
+        let nearest = |name: &str, bits: u64, exact: Dd| {
+            let v = f64::from_bits(bits);
+            assert!(
+                gap(Dd::of(v), exact) <= 0.5 * ulp(v.abs()) * (1.0 + pow2(-40)),
+                "{name} is not the nearest double to {exact:?}"
+            );
+        };
+        let pair = |name: &str, hi: u64, lo: u64, exact: Dd| {
+            nearest(name, hi, exact);
+            let lo_v = f64::from_bits(lo);
+            let off = gap(Dd(f64::from_bits(hi), lo_v), exact);
+            assert!(
+                off <= 0.5 * ulp(lo_v.abs()) + pow2(-100) * exact.0.abs(),
+                "{name}: high plus low is {off:e} from the coefficient"
+            );
+        };
+        let mut sin_c = Vec::new();
+        let mut c = h;
+        for k in 0..10 {
+            if k > 0 {
+                c = c.mul(h2).div(Dd::of(((2 * k) * (2 * k + 1)) as f64));
+            }
+            sin_c.push(c);
+        }
+        let mut cos_c = Vec::new();
+        let mut c = Dd::of(1.0);
+        for k in 0..11 {
+            if k > 0 {
+                c = c.mul(h2).div(Dd::of(((2 * k - 1) * (2 * k)) as f64));
+            }
+            cos_c.push(c);
+        }
+        pair("S1", S1_HI, S1_LO, sin_c[0]);
+        pair("S3", S3_HI, S3_LO, sin_c[1]);
+        pair("S5", S5_HI, S5_LO, sin_c[2]);
+        pair("C2", C2_HI, C2_LO, cos_c[1]);
+        pair("C4", C4_HI, C4_LO, cos_c[2]);
+        for (i, &w) in SIN_TAIL.iter().enumerate() {
+            nearest(&format!("SIN_TAIL[{i}]"), w, sin_c[i + 3]);
+        }
+        for (i, &w) in COS_TAIL.iter().enumerate() {
+            nearest(&format!("COS_TAIL[{i}]"), w, cos_c[i + 3]);
+        }
+        assert_eq!(f64::from_bits(SIN_SMALL), pow2(-500));
+        assert_eq!(f64::from_bits(UP_600), pow2(600));
+        assert_eq!(f64::from_bits(DOWN_600), pow2(-600));
+        assert_eq!(f64::from_bits(SMALL_NORMAL), pow2(-422));
+    }
+
+    /// `sin((π/2) u)` and `cos((π/2) u)` by their Taylor series in double-double, from Machin's
+    /// `π/2`, to 30 terms each: past `2⁻¹⁰⁰` of the result at `|u| ≤ ½`.
+    fn sin_cos_quarter_dd(u: f64) -> (Dd, Dd) {
+        let theta = half_pi_dd().mul(Dd::of(u));
+        let t2 = theta.mul(theta);
+        let (mut term, mut s) = (theta, theta);
+        for k in 1..30 {
+            let d = (2 * k) * (2 * k + 1);
+            term = term.mul(t2).div(Dd::of(d as f64)).neg();
+            s = s.add(term);
+        }
+        let (mut term, mut c) = (Dd::of(1.0), Dd::of(1.0));
+        for k in 1..30 {
+            let d = (2 * k - 1) * (2 * k);
+            term = term.mul(t2).div(Dd::of(d as f64)).neg();
+            c = c.add(term);
+        }
+        (s, c)
+    }
+
+    /// **What each series leaves before its last rounding is within its budget**: the bound less
+    /// that rounding's ½, so 0.0005 ulp for sin's and 0.003 for cos's, as derived beside the
+    /// bounds in `tests/sin_and_cos_against_mpmath.rs`.
+    ///
+    /// The comparison against mpmath there sees the result rounded, so it sees the budget only at
+    /// a point whose exact value lies within the budget of a tie — almost none — and a tail
+    /// coefficient eight ulps out, which takes cos's true worst to 0.5037, passed it. Here the
+    /// pair the last addition rounds, exactly as a double-double, is held against the series
+    /// summed in double-double, at 4096 `u` over `(0, ½)` and 4096 in `[0.45, ½)`, where the tail
+    /// is largest.
+    #[test]
+    fn each_series_is_within_its_budget_before_rounding() {
+        let (mut worst_sin, mut worst_cos) = (0.0f64, 0.0f64);
+        for i in 0..8192u64 {
+            let r = (mix(81, i) >> 11) as f64 * pow2(-53);
+            let u = if i < 4096 { 0.5 * r } else { 0.45 + 0.05 * r };
+            if u < pow2(-500) {
+                continue;
+            }
+            let (s_exact, c_exact) = sin_cos_quarter_dd(u);
+            let off = |(total, rest): (f64, f64), exact: Dd| {
+                let got = Dd::of(total).add(Dd::of(rest));
+                gap(got, exact) / ulp(exact.value().abs())
+            };
+            worst_sin = worst_sin.max(off(sin_quarter_parts(u), s_exact));
+            worst_cos = worst_cos.max(off(cos_quarter_parts(u), c_exact));
+        }
+        println!("before the last rounding: sin's series {worst_sin:.6} ulp, cos's {worst_cos:.6}");
+        assert!(worst_sin <= 0.0005, "sin's series: {worst_sin} ulp");
+        assert!(worst_cos <= 0.003, "cos's series: {worst_cos} ulp");
+    }
+
+    /// **The special values**, each by its bits: NaN and the infinities give NaN; an exact zero
+    /// of sin has `t`'s sign and of cos is `+0`; whole and half turns, quarter turns, and every
+    /// `|t| ≥ 2⁵²` are exact; the smallest subnormal gives `(π/2) · 4 · 2⁻¹⁰⁷⁴` rounded, which
+    /// is 6 · 2⁻¹⁰⁷⁴.
+    #[test]
+    fn sin_cos_of_every_special_value_is_exact() {
+        let bits = |(s, c): (f64, f64)| (s.to_bits(), c.to_bits());
+        for t in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let (s, c) = sin_cos_turns(t);
+            assert!(s.is_nan() && c.is_nan(), "{t}");
+        }
+        let cases: [(f64, f64, f64); 14] = [
+            (0.0, 0.0, 1.0),
+            (-0.0, -0.0, 1.0),
+            (0.25, 1.0, 0.0),
+            (-0.25, -1.0, 0.0),
+            (0.5, 0.0, -1.0),
+            (-0.5, -0.0, -1.0),
+            (0.75, -1.0, 0.0),
+            (1.0, 0.0, 1.0),
+            (-3.0, -0.0, 1.0),
+            (1234.75, -1.0, 0.0),
+            // The largest binade with quarters in it.
+            (pow2(51) - 0.25, -1.0, 0.0),
+            (pow2(52), 0.0, 1.0),
+            (-pow2(60), -0.0, 1.0),
+            (f64::MAX, 0.0, 1.0),
+        ];
+        for (t, s, c) in cases {
+            assert_eq!(
+                bits(sin_cos_turns(t)),
+                (s.to_bits(), c.to_bits()),
+                "sin_cos_turns({t:e})"
+            );
+        }
+        let (s, c) = sin_cos_turns(pow2(-1074));
+        assert_eq!((s.to_bits(), c), (6, 1.0), "2π · 2^-1074 = 6.28 · 2^-1074");
+        let (s, _) = sin_cos_turns(-pow2(-1074));
+        assert_eq!(s.to_bits(), 6 | (1 << 63));
+    }
+
+    /// **The symmetries hold to the bit**, at dyadic `t` where every shift below is exact:
+    /// `sin` is odd and `cos` even; a whole turn changes nothing; half a turn negates both; and
+    /// a quarter turn back, `¼ − t`, swaps them. Each takes a different path through the
+    /// reduction — a quadrant, a sign, a `u` past ½ — to the same series.
+    #[test]
+    fn the_symmetries_hold_to_the_bit() {
+        for i in 0..4096u64 {
+            // t in [0, 1/4) with 40 bits, so t + k, t + 1/2 and 1/4 − t are exact.
+            let t = (mix(61, i) >> 24) as f64 * pow2(-42);
+            let (s, c) = sin_cos_turns(t);
+            assert_eq!(sin_cos_turns(-t), (-s, c), "odd and even at {t}");
+            for k in [1.0, 7.0, -3.0, 1024.0] {
+                assert_eq!(sin_cos_turns(t + k), (s, c), "a whole turn at {t}, k = {k}");
+            }
+            // By value: at t = 0 the zero of sin(½) is +0 and −sin(0) is −0.
+            assert_eq!(sin_cos_turns(t + 0.5), (-s, -c), "half a turn at {t}");
+            assert_eq!(
+                sin_cos_turns(0.25 - t),
+                (c, s),
+                "a quarter turn back at {t}"
+            );
+        }
+    }
+
+    /// **The bits of [`sin_cos_turns`] are pinned**, at 8192 of `Rng::unit`'s values and 8192
+    /// with `|t|` from `2⁻⁶⁰` to `2⁵³`, both signs: the digest CI checks on Linux, macOS, Windows,
+    /// release with LTO and `wasm32-wasip1`. The function is IEEE arithmetic alone, so it is the
+    /// same everywhere by construction; what the digest adds is that a change to any bit of it,
+    /// on any of those, fails by name. It was taken on Windows; that it is the same elsewhere is
+    /// what the other jobs show, each by its own result.
+    #[test]
+    fn the_sin_cos_bits_are_pinned() {
+        let unit = (0..8192u64).map(|i| (mix(71, i) >> 11) as f64 * pow2(-53));
+        // Log-uniform in |t| from 2^-60 to 2^53, both signs: over every bit pattern instead,
+        // nearly half would be past 2^52 and exactly (±0, 1), and a quarter on the small path.
+        let wide = (0..8192u64).map(|i| {
+            let b = between(72, i, pow2(-60).to_bits(), pow2(53).to_bits());
+            f64::from_bits(b | ((i & 1) << 63))
+        });
+        let digest = fnv1a(unit.chain(wide).flat_map(|t| {
+            let (s, c) = sin_cos_turns(t);
+            [s.to_bits(), c.to_bits()]
+        }));
+        assert_eq!(digest, 0xb453_2ff8_f7bf_9aba, "digest {digest:#018x}");
     }
 }

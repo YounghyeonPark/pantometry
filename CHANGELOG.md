@@ -23,6 +23,39 @@ protects nothing.
 
 ### Added
 
+- **`pantometry_core::math::sin_cos_turns`: the sine and cosine of a turn, the same bits on every
+  platform.** `sin_cos_turns(t)` is `(sin 2πt, cos 2πt)`, built from `+ − × ÷` in a written order
+  as `exp` and `ln` are. It is the first half of making `Rng::gaussian` and the sphere samplers
+  deterministic across platforms; nothing calls it yet, so no result moved.
+  - **In turns, so the reduction is exact.** `4|t| = n + u` with `|u| ≤ ½` is found without
+    rounding, `n mod 4` picks the series and the signs, and each series makes its first three
+    terms exact as a double and its error and rounds once. Zeros are signed as IEEE 754's `sinPi`
+    and `cosPi` sign theirs.
+  - **Within 0.501 ulp from sin's series and 0.503 from cos's, derived** in
+    `tests/sin_and_cos_against_mpmath.rs` and held against mpmath's `sinpi(2t)` and `cospi(2t)`
+    at 50 751 committed points. The worst is 0.5005 ulp, there and in a run at twenty times the
+    random points, 790 033; 19 and 13 of those are not correctly rounded.
+  - **The budgets are held before the last rounding too**, at most 0.00015 and 0.00125 ulp
+    against 0.0005 and 0.003. numerics-reviewer found that a rounded result shows the budget only
+    near a tie: a tail coefficient eight ulps out took cos's true worst to 0.5037 and passed.
+  - **23.5–23.8 ns for the pair**, against 31.5–31.6 for `f64::sin_cos` of `2πt`, in release on
+    this machine.
+  - **Fourteen sabotages each fail a test**, after the unmodified source was seen to pass, and
+    the failing tests are recorded by name. Three more of `generate.py`'s side-keeping, below,
+    each fail it.
+- **The reference tables could not see one ulp just below a power of two, and now can.** Found by
+  unearned-pass-hunter. The test reads the spacing at the exact value from the sign of each row's
+  `frac`, and a `frac` within `2⁻¹⁶` ulp of 0 was stored as 0. Just below a power of two that
+  doubled the spacing, so a whole ulp of error measured as half. 2048 of sin's rows and 10 473 of
+  cos's are that close to `±1` from inside. A `frac` like that is now stored as `±2⁻¹⁵`.
+  - **At 50 digits the side was sometimes lost before the rounding**: `exp(−10⁻²⁰¹)` is exactly
+    1 there. Below `|x| = 2⁻¹⁰` mpmath now works at `2 log₂(1/|x|)` more bits.
+  - **2905 rows of the exp table and 169 of ln's moved, every one in `frac` alone**; no
+    reference value changed, and the measured worst cases are the same.
+  - **Each table is checked to mark exactly the exact values**, `table_marks_exact_values`. It
+    caught the second of the two losses above, which the first fix had not reached.
+  - The comparison moved to `tests/reference/mod.rs`, shared by both tests, and counts "not
+    correctly rounded" by value: mpmath has no `−0`.
 - **`pantometry_forcefield::components`: the 52 dictionary entries the crate ships, by
   identifier.** They were in the published crate all along, as the tests' fixtures, and nothing
   reached them. A doc example that read one by a path into the repository compiled here and

@@ -18,42 +18,10 @@
 
 use pantometry_core::math::{exp, ln};
 
+mod reference;
+use reference::*;
+
 const LN_2: f64 = std::f64::consts::LN_2;
-const MASK: u64 = u64::MAX;
-
-fn splitmix(seed: u64, i: u64) -> u64 {
-    let mut z = seed.wrapping_add((i + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// `n` bit patterns uniform in `[lo, hi]`; `sign` 0 or 1 is the sign bit, 2 alternates.
-fn uniform(lo: u64, hi: u64, seed: u64, n: u64, sign: u64) -> Vec<u64> {
-    let span = (hi - lo).wrapping_add(1);
-    (0..n)
-        .map(|i| {
-            let r = splitmix(seed, i);
-            let b = lo + if span == 0 { r } else { r % span };
-            let s = if sign == 2 { i & 1 } else { sign };
-            b | (s << 63)
-        })
-        .collect()
-}
-
-fn around(base: u64, reach: i64, signs: &[u64]) -> Vec<u64> {
-    let mut out = Vec::new();
-    for &s in signs {
-        for j in -reach..=reach {
-            out.push((base.wrapping_add(j as u64) & MASK) | (s << 63));
-        }
-    }
-    out
-}
-
-fn b(x: f64) -> u64 {
-    x.to_bits()
-}
 
 /// `generate.py`'s `exp_inputs`, line for line.
 fn exp_inputs(scale: u64) -> Vec<u64> {
@@ -135,148 +103,6 @@ fn ln_inputs(scale: u64) -> Vec<u64> {
     xs
 }
 
-fn fnv1a(words: &[u64]) -> u64 {
-    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
-    for w in words {
-        for byte in w.to_le_bytes() {
-            h ^= u64::from(byte);
-            h = h.wrapping_mul(0x0000_0100_0000_01B3);
-        }
-    }
-    h
-}
-
-/// The table: its input digest, and per point the correctly rounded bits and the exact value's
-/// offset from them in ulps.
-fn parse(bytes: &[u8]) -> (u64, Vec<(u64, f64)>) {
-    assert_eq!(&bytes[..8], b"PMREF1\0\0", "not a reference table");
-    let digest = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-    let n = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
-    let body = &bytes[20..];
-    assert_eq!(body.len(), n * 10, "the table's length is not its count");
-    // By index rather than `as_chunks`, which is newer than the 1.78 floor.
-    let rows = (0..n)
-        .map(|k| &body[10 * k..10 * k + 10])
-        .map(|c| {
-            let hi = u64::from_le_bytes(c[..8].try_into().unwrap());
-            let frac = f64::from(i16::from_le_bytes([c[8], c[9]])) / 32768.0;
-            (hi, frac)
-        })
-        .collect();
-    (digest, rows)
-}
-
-/// The spacing of doubles at the exact value, rebuilt from the rounded value `hi` and the sign of
-/// `frac = (exact − hi)/ulp`: half `hi`'s own spacing when `hi` is a power of two and the exact
-/// value lies below it in magnitude, where the doubles are twice as dense.
-fn ulp_of_exact(hi: f64, frac: f64) -> f64 {
-    let bits = hi.to_bits() & 0x7FFF_FFFF_FFFF_FFFF;
-    let e = (bits >> 52) as i32;
-    if e <= 1 {
-        // Subnormal, zero, or the smallest normal binade: the spacing is 2^-1074 throughout.
-        return f64::from_bits(1);
-    }
-    // 2^(e − 1075): a normal double's bits above the 53rd binade, a subnormal's below it.
-    let u = if e > 52 {
-        f64::from_bits(((e - 52) as u64) << 52)
-    } else {
-        f64::from_bits(1u64 << (e - 1))
-    };
-    let below = frac != 0.0 && (frac < 0.0) != (hi < 0.0);
-    if bits & 0x000F_FFFF_FFFF_FFFF == 0 && below {
-        0.5 * u
-    } else {
-        u
-    }
-}
-
-/// Where a function's error is bounded, and by how much: a name and a bound in ulps, per input.
-type Bound = fn(f64) -> (&'static str, f64);
-
-/// What a comparison found: per region, its worst error and where; and how many were not
-/// correctly rounded.
-struct Found {
-    worst: Vec<(&'static str, f64, f64)>,
-    incorrect: usize,
-    points: usize,
-}
-
-impl Found {
-    fn worst(&self) -> f64 {
-        self.worst.iter().map(|w| w.1).fold(0.0, f64::max)
-    }
-}
-
-/// `f` at every input against the table. With a `bound`, each point is held to its region's bound;
-/// without one the comparison only measures, for the check that it can see one ulp.
-fn compare(
-    name: &str,
-    f: &dyn Fn(f64) -> f64,
-    inputs: &[u64],
-    table: &[u8],
-    bound: Option<Bound>,
-) -> Found {
-    let (digest, rows) = parse(table);
-    assert_eq!(
-        fnv1a(inputs),
-        digest,
-        "{name}: the inputs drawn here are not the ones the table was made for: \
-         the recipe here and in generate.py have drifted apart"
-    );
-    assert_eq!(rows.len(), inputs.len(), "{name}: one row per input");
-    let strict = bound.is_some();
-    let mut found = Found {
-        worst: Vec::new(),
-        incorrect: 0,
-        points: rows.len(),
-    };
-    for (&x, &(hi_bits, frac)) in inputs.iter().zip(&rows) {
-        let x = f64::from_bits(x);
-        let hi = f64::from_bits(hi_bits);
-        let y = f(x);
-        if hi.is_infinite() {
-            if strict {
-                assert_eq!(y, hi, "{name}({x:e}) overflows to {hi}, and gave {y:e}");
-            }
-            continue;
-        }
-        if !y.is_finite() {
-            assert!(!strict, "{name}({x:e}) = {y}, and exactly it is {hi:e}");
-            continue;
-        }
-        if y.to_bits() != hi_bits {
-            found.incorrect += 1;
-        }
-        // y − hi is exact: the two are within a factor of two of each other, or both subnormal.
-        let error = ((y - hi) / ulp_of_exact(hi, frac) - frac).abs();
-        let (region, limit) = bound.map_or(("all", f64::INFINITY), |b| b(x));
-        match found.worst.iter_mut().find(|w| w.0 == region) {
-            Some(w) if error > w.1 => (w.1, w.2) = (error, x),
-            Some(_) => {}
-            None => found.worst.push((region, error, x)),
-        }
-        assert!(
-            error <= limit,
-            "{name}({x:e} = {:#018x}) = {y:e}, {error:.4} ulp from the exact {hi:e}{frac:+.4}, \
-             over the {limit} ulp bound for {region}",
-            x.to_bits()
-        );
-    }
-    for (region, worst, at) in &found.worst {
-        println!(
-            "{name}, {region}: worst {worst:.4} ulp at x = {at:e} ({:#018x})",
-            at.to_bits()
-        );
-    }
-    println!(
-        "{name}: {} points, {} ({:.3}%) not correctly rounded",
-        found.points,
-        found.incorrect,
-        100.0 * found.incorrect as f64 / found.points as f64,
-    );
-    found
-}
-
 /// **`exp`'s bound, 0.520 ulp everywhere, derived** from the method rather than read off the
 /// measurement. `math::exp` computes `2ᵏ (T_hi + c)`, `c = T_hi p + T_lo`, `p ≈ eʳ − 1`, and
 /// rounds the sum once. Before that rounding, absolutely and with `T_hi` in `[1, 2)`:
@@ -333,31 +159,21 @@ fn ln_bound(x: f64) -> (&'static str, f64) {
     }
 }
 
-/// One step up from `f(x)`, in place of it: the error the comparison must see.
-fn one_ulp_up(f: fn(f64) -> f64) -> impl Fn(f64) -> f64 {
-    move |x| {
-        let y = f(x);
-        if y.is_finite() {
-            f64::from_bits(if y >= 0.0 {
-                y.to_bits() + 1
-            } else {
-                y.to_bits() - 1
-            })
-        } else {
-            y
-        }
-    }
-}
-
 /// **`exp` is within its bound of mpmath at every point**: the whole domain, every reduction
 /// boundary `(k + ½) ln 2` for `k` from −1075 to 1024, every boundary of the table index
 /// `(n + ½) ln 2/128` for `|n| ≤ 512`, the branch thresholds each side, and the subnormal results.
 ///
 /// **And the comparison can see one ulp**: the same values each moved up one double are more than
 /// one ulp from the exact value somewhere, which a comparison that read the wrong row, or rounded
-/// both sides alike, would not report.
+/// both sides alike, would not report. **And the table marks exactly the exact values** — for
+/// `exp` only `x = 0`, which is not among the points, so none — so that every other row says
+/// which side of its double the exact value is on (see [`table_marks_exact_values`]).
 #[test]
 fn exp_is_within_its_bound_of_mpmath() {
+    #[allow(clippy::float_cmp)]
+    fn exp_is_exact(x: f64) -> bool {
+        x == 0.0
+    }
     let (inputs, table) = (exp_inputs(1), include_bytes!("data/exp-reference.bin"));
     compare("exp", &exp, &inputs, table, Some(exp_bound));
     let shifted = compare(
@@ -368,6 +184,7 @@ fn exp_is_within_its_bound_of_mpmath() {
         None,
     );
     assert!(shifted.worst() > 1.0, "one ulp up is still within one ulp");
+    table_marks_exact_values("exp", &inputs, table, exp_is_exact);
 }
 
 /// **`ln` is within its bounds of mpmath at every point**: every positive double, every subnormal,
@@ -376,10 +193,15 @@ fn exp_is_within_its_bound_of_mpmath() {
 /// the comparison can see one ulp, as for `exp`.
 #[test]
 fn ln_is_within_its_bounds_of_mpmath() {
+    #[allow(clippy::float_cmp)]
+    fn ln_is_exact(x: f64) -> bool {
+        x == 1.0
+    }
     let (inputs, table) = (ln_inputs(1), include_bytes!("data/ln-reference.bin"));
     compare("ln", &ln, &inputs, table, Some(ln_bound));
     let shifted = compare("ln moved up one ulp", &one_ulp_up(ln), &inputs, table, None);
     assert!(shifted.worst() > 1.0, "one ulp up is still within one ulp");
+    table_marks_exact_values("ln", &inputs, table, ln_is_exact);
 }
 
 /// The same against a larger table, written outside the repository:
@@ -454,9 +276,17 @@ fn the_cost() {
     );
 }
 
-/// `2^e` for a normal `e`, exactly, from its bits. `f64::powi`'s precision is unspecified by Rust,
-/// and on two CI runners it gave 0 for `2^-1074`, so nothing here relies on it for an input.
-fn pow2(e: i32) -> f64 {
-    assert!((-1022..=1023).contains(&e), "2^{e} is not a normal double");
-    f64::from_bits(((e + 1023) as u64) << 52)
+/// **The spacing at the exact value is read from its side** of the rounded one: half the rounded
+/// value's just below a power of two in magnitude, of either sign, and the subnormal spacing
+/// through the smallest normal binade. This is what a `frac` rounded to 0 would have defeated.
+#[test]
+fn the_spacing_is_read_from_the_side() {
+    assert_eq!(ulp_of_exact(1.0, -0.25), pow2(-53), "just below 1");
+    assert_eq!(ulp_of_exact(1.0, 0.25), pow2(-52), "just above 1");
+    assert_eq!(ulp_of_exact(-1.0, 0.25), pow2(-53), "just inside -1");
+    assert_eq!(ulp_of_exact(-1.0, -0.25), pow2(-52), "just outside -1");
+    assert_eq!(ulp_of_exact(1.0, 0.0), pow2(-52), "exactly 1");
+    assert_eq!(ulp_of_exact(1.5, -0.25), pow2(-52), "not a power of two");
+    assert_eq!(ulp_of_exact(f64::MIN_POSITIVE, -0.25), f64::from_bits(1));
+    assert_eq!(ulp_of_exact(f64::from_bits(1), 0.25), f64::from_bits(1));
 }
