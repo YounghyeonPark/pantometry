@@ -61,62 +61,12 @@ fn binding(kcal: f64, sigma: f64) -> Option<BindingFreeEnergy> {
 }
 
 fn report(label: &str, a: &Assessment) {
-    let d = &a.descriptors;
     println!("{label}");
-    println!(
-        "  molecular weight {:.2}, donors {}, acceptors {}, heavy atoms {}",
-        d.molecular_weight, d.donors, d.acceptors, d.heavy_atoms
-    );
-    for l in &a.absorption.limits {
-        let value = l.value.map_or("not measured".to_string(), |m| {
-            if m.sigma == 0.0 && m.value.fract() == 0.0 {
-                format!("{}", m.value)
-            } else if m.sigma == 0.0 {
-                format!("{:.2}", m.value)
-            } else {
-                format!("{m}")
-            }
-        });
-        println!(
-            "    {:<17} {:>14}  at most {:<5} {}",
-            l.rule.to_string(),
-            value,
-            l.rule.most(),
-            l.call
-        );
+    print!("{a}");
+    if matches!(a.distribution, Distribution::Reported(_)) {
+        println!("  (K_p at f_u = 1, assumed: no fraction unbound was measured)");
     }
-    println!(
-        "  absorption: {} ({} exceeded, {} open)",
-        a.absorption.call, a.absorption.exceeded, a.absorption.open
-    );
-    match &a.affinity {
-        None => println!("  binding: not measured"),
-        Some(b) => println!(
-            "  binding: K_d {:.2e} M ({:.2e} to {:.2e}), ligand efficiency {} kcal/mol per heavy \
-             atom: {}",
-            b.dissociation_constant,
-            b.dissociation_interval[0],
-            b.dissociation_interval[1],
-            b.ligand_efficiency,
-            b.call
-        ),
-    }
-    match &a.distribution {
-        Distribution::Reported(partitions) => {
-            for p in partitions {
-                println!(
-                    "  K_p {:<6} {:.3} ({:.3} to {:.3}) at f_u = 1, assumed",
-                    p.tissue.to_string(),
-                    p.kp,
-                    p.kp_interval[0],
-                    p.kp_interval[1]
-                );
-            }
-        }
-        Distribution::NotMeasured => println!("  distribution: not measured"),
-        Distribution::Charged(q) => println!("  distribution: charge {q}, not computed"),
-    }
-    println!("  verdict: {}\n", a.verdict);
+    println!();
 }
 
 fn main() {

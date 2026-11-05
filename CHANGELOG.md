@@ -91,7 +91,11 @@ protects nothing.
       range that would give it away. `BindingFreeEnergy::from_kcal_per_mol` and
       `from_kj_per_mol` now put the unit where the number is written, and `drug_candidate` uses
       the first. Four sabotages of them each fail `a_binding_free_energy_in_kilojoules_is_the_same_one`;
-    - `Assessment` has no `Display`;
+    - `Assessment` had no `Display`, and `drug_candidate` spent 58 lines printing one. It has one
+      now, a block of indented lines, and the example prints through it. Aspirin's block is
+      pinned whole, written out by hand from its counts, and each other branch by its line.
+      Eight sabotages each fail it. One, `K_d`'s interval printed backwards, passed the first
+      version, which checked only the binding line's ligand efficiency;
     - a component's text was the caller's to supply, because nothing in `pantometry-forcefield`
       exposed the entries it ships. It does now: see `components` above.
   - **What checks it**, in `tests/a_molecule_gets_a_verdict.rs`:

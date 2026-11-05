@@ -508,6 +508,86 @@ pub struct Assessment {
     pub verdict: Call,
 }
 
+impl fmt::Display for Assessment {
+    /// A block of lines, each indented two spaces and each ending in a newline, so a caller can
+    /// print a name above it:
+    ///
+    /// ```text
+    ///   molecular weight 180.16, donors 1, acceptors 4, heavy atoms 13
+    ///     H-bond donors                  1  at most 5     pass
+    ///     ...
+    ///   absorption: pass (0 exceeded, 1 open)
+    ///   binding: not measured
+    ///   distribution: not measured
+    ///   verdict: not measured
+    /// ```
+    ///
+    /// A count prints as an integer, a weight to two places, and a measured value as
+    /// [`Measured`] does. The fraction unbound is not printed, because it is not kept here.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let d = &self.descriptors;
+        writeln!(
+            f,
+            "  molecular weight {:.2}, donors {}, acceptors {}, heavy atoms {}",
+            d.molecular_weight, d.donors, d.acceptors, d.heavy_atoms
+        )?;
+        for l in &self.absorption.limits {
+            let value = match l.value {
+                None => "not measured".to_string(),
+                Some(m) if m.sigma == 0.0 && m.value.fract() == 0.0 => format!("{}", m.value),
+                Some(m) if m.sigma == 0.0 => format!("{:.2}", m.value),
+                Some(m) => m.to_string(),
+            };
+            writeln!(
+                f,
+                "    {:<17} {:>14}  at most {:<5} {}",
+                l.rule.to_string(),
+                value,
+                l.rule.most(),
+                l.call
+            )?;
+        }
+        let a = &self.absorption;
+        writeln!(
+            f,
+            "  absorption: {} ({} exceeded, {} open)",
+            a.call, a.exceeded, a.open
+        )?;
+        match &self.affinity {
+            None => writeln!(f, "  binding: not measured")?,
+            Some(b) => writeln!(
+                f,
+                "  binding: K_d {:.2e} M ({:.2e} to {:.2e}), ligand efficiency {} kcal/mol per \
+                 heavy atom: {}",
+                b.dissociation_constant,
+                b.dissociation_interval[0],
+                b.dissociation_interval[1],
+                b.ligand_efficiency,
+                b.call
+            )?,
+        }
+        match &self.distribution {
+            Distribution::Reported(partitions) => {
+                for p in partitions {
+                    writeln!(
+                        f,
+                        "  K_p {:<6} {:.3} ({:.3} to {:.3})",
+                        p.tissue.to_string(),
+                        p.kp,
+                        p.kp_interval[0],
+                        p.kp_interval[1]
+                    )?;
+                }
+            }
+            Distribution::NotMeasured => writeln!(f, "  distribution: not measured")?,
+            Distribution::Charged(q) => {
+                writeln!(f, "  distribution: net charge {q}, not computed")?
+            }
+        }
+        writeln!(f, "  verdict: {}", self.verdict)
+    }
+}
+
 fn check(what: &'static str, m: Measured) -> Result<Measured, AssessError> {
     if m.value.is_finite() && m.sigma.is_finite() && m.sigma >= 0.0 {
         Ok(m)

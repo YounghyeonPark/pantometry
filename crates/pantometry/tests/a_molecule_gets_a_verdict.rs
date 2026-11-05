@@ -700,3 +700,67 @@ fn a_binding_free_energy_in_kilojoules_is_the_same_one() {
     assert!(close(a.ligand_efficiency.sigma, b.ligand_efficiency.sigma));
     assert_eq!(a.call, b.call);
 }
+
+/// Aspirin with nothing measured, written out by hand from its counts: C9H8O4 is 180.159, one
+/// O-H, four oxygens, thirteen heavy atoms; log P open, so one open limit and a pass at two.
+#[test]
+fn an_assessment_prints_as_a_block() {
+    let a = assess(&component(AIN), &Evidence::default(), &USUAL).unwrap();
+    let want = concat!(
+        "  molecular weight 180.16, donors 1, acceptors 4, heavy atoms 13\n",
+        "    H-bond donors                  1  at most 5     pass\n",
+        "    H-bond acceptors               4  at most 10    pass\n",
+        "    molecular weight          180.16  at most 500   pass\n",
+        "    log P               not measured  at most 5     not measured\n",
+        "  absorption: pass (0 exceeded, 1 open)\n",
+        "  binding: not measured\n",
+        "  distribution: not measured\n",
+        "  verdict: not measured\n",
+    );
+    assert_eq!(a.to_string(), want);
+
+    // Each of the other branches, by the line it prints.
+    let evidence = Evidence {
+        log_p: Some(Measured::new(-4.0, 0.1)),
+        binding: binding(-4.61, 0.29),
+        fraction_unbound: Some(0.5),
+    };
+    let arg = assess(&component(ARG), &evidence, &USUAL)
+        .unwrap()
+        .to_string();
+    assert!(
+        arg.contains("    log P               -4.00 ± 0.10  at most 5     pass\n"),
+        "{arg}"
+    );
+    assert!(
+        arg.contains("  absorption: pass (1 exceeded, 0 open)\n"),
+        "{arg}"
+    );
+    assert!(
+        arg.contains("  distribution: net charge 1, not computed\n"),
+        "{arg}"
+    );
+    // -4.61 ± 0.29 kcal/mol at 298.15 K is K_d 4.177e-4 M, 1.569e-4 to 1.112e-3 over ±2σ,
+    // worked by hand by `physics-checker` for 360a89b, and tighter first.
+    assert!(
+        arg.contains("  binding: K_d 4.18e-4 M (1.57e-4 to 1.11e-3), "),
+        "{arg}"
+    );
+    // Arginine's twelve heavy atoms: 4.61/12 = 0.38 ± 0.02, which passes 0.3.
+    assert!(
+        arg.contains("ligand efficiency 0.38 ± 0.02 kcal/mol per heavy atom: pass\n"),
+        "{arg}"
+    );
+    assert!(arg.ends_with("  verdict: pass\n"), "{arg}");
+    let ala = assess(&component(ALA), &evidence, &USUAL).unwrap();
+    let text = ala.to_string();
+    let kp = reported(ala.distribution);
+    for (p, name) in kp.iter().zip(["liver ", "kidney", "muscle"]) {
+        let line = format!(
+            "  K_p {name} {:.3} ({:.3} to {:.3})\n",
+            p.kp, p.kp_interval[0], p.kp_interval[1]
+        );
+        assert!(text.contains(&line), "{line:?} in {text}");
+    }
+    assert_eq!(text.lines().count(), 11, "{text}");
+}
