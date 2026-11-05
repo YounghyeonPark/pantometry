@@ -214,13 +214,39 @@ pub struct Thresholds {
 }
 
 /// A standard binding free energy and the temperature it was measured at.
+///
+/// Build it with [`from_kcal_per_mol`](BindingFreeEnergy::from_kcal_per_mol) or
+/// [`from_kj_per_mol`](BindingFreeEnergy::from_kj_per_mol), so the unit is written where the
+/// number is. A value in kJ/mol put in kcal/mol's place is 4.184 times too strong, and a binding
+/// free energy has no range that would give it away.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BindingFreeEnergy {
-    /// `ΔG°_bind`, kcal/mol, referred to [`STANDARD_CONCENTRATION`]. Negative binds. A value in
-    /// kJ/mol is 4.184 times too large and is not detected.
+    /// `ΔG°_bind`, kcal/mol, referred to [`STANDARD_CONCENTRATION`]. Negative binds.
     pub kcal_per_mol: Measured,
     /// The temperature, as a type, so 25 °C is `Temperature::celsius(25.0)` and not 25 K.
     pub temperature: Temperature,
+}
+
+/// Kilojoules in one thermochemical kilocalorie: exactly 4.184.
+pub const KJ_PER_KCAL: f64 = 4.184;
+
+impl BindingFreeEnergy {
+    /// `ΔG°_bind` given in kcal/mol, with its standard error in the same unit.
+    pub fn from_kcal_per_mol(dg: Measured, temperature: Temperature) -> BindingFreeEnergy {
+        BindingFreeEnergy {
+            kcal_per_mol: dg,
+            temperature,
+        }
+    }
+
+    /// `ΔG°_bind` given in kJ/mol, with its standard error in the same unit. Both are divided by
+    /// [`KJ_PER_KCAL`].
+    pub fn from_kj_per_mol(dg: Measured, temperature: Temperature) -> BindingFreeEnergy {
+        BindingFreeEnergy {
+            kcal_per_mol: Measured::new(dg.value / KJ_PER_KCAL, dg.sigma / KJ_PER_KCAL),
+            temperature,
+        }
+    }
 }
 
 /// What the caller measured. `Evidence::default()` is nothing measured.

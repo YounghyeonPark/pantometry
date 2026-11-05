@@ -87,7 +87,10 @@ protects nothing.
       now. `Call` is ordered, so the worst of several is their `max`.
     - **A threshold of −1 passed every binder.** It is refused now.
   - **Recorded, not actioned:**
-    - a value in kJ/mol is not detected;
+    - a value in kJ/mol was not detected. It still is not, since a binding free energy has no
+      range that would give it away. `BindingFreeEnergy::from_kcal_per_mol` and
+      `from_kj_per_mol` now put the unit where the number is written, and `drug_candidate` uses
+      the first. Four sabotages of them each fail `a_binding_free_energy_in_kilojoules_is_the_same_one`;
     - `Assessment` has no `Display`;
     - a component's text was the caller's to supply, because nothing in `pantometry-forcefield`
       exposed the entries it ships. It does now: see `components` above.

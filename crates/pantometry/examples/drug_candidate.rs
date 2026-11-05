@@ -54,10 +54,10 @@ const THRESHOLDS: Thresholds = Thresholds {
 };
 
 fn binding(kcal: f64, sigma: f64) -> Option<BindingFreeEnergy> {
-    Some(BindingFreeEnergy {
-        kcal_per_mol: Measured::new(kcal, sigma),
-        temperature: Temperature::kelvin(KELVIN),
-    })
+    Some(BindingFreeEnergy::from_kcal_per_mol(
+        Measured::new(kcal, sigma),
+        Temperature::kelvin(KELVIN),
+    ))
 }
 
 fn report(label: &str, a: &Assessment) {

@@ -663,3 +663,40 @@ fn the_calls_print_as_words() {
         "1.000 ± 0.012"
     );
 }
+
+/// The same binding free energy in either unit is the same evidence. -4.61 kcal/mol is
+/// -19.288 24 kJ/mol, and 0.29 is 1.213 36.
+#[test]
+fn a_binding_free_energy_in_kilojoules_is_the_same_one() {
+    let t = Temperature::kelvin(298.15);
+    let kcal = BindingFreeEnergy::from_kcal_per_mol(Measured::new(-4.61, 0.29), t);
+    assert_eq!(
+        kcal,
+        BindingFreeEnergy {
+            kcal_per_mol: Measured::new(-4.61, 0.29),
+            temperature: t,
+        }
+    );
+    let kj = BindingFreeEnergy::from_kj_per_mol(Measured::new(-19.28824, 1.21336), t);
+    let close = |a: f64, b: f64| (a / b - 1.0).abs() <= 1e-15;
+    assert!(close(kj.kcal_per_mol.value, -4.61), "{:?}", kj.kcal_per_mol);
+    assert!(close(kj.kcal_per_mol.sigma, 0.29), "{:?}", kj.kcal_per_mol);
+    assert_eq!(kj.temperature, t);
+    let judge = |b| {
+        assess(
+            &component(BNZ),
+            &Evidence {
+                binding: Some(b),
+                ..Evidence::default()
+            },
+            &USUAL,
+        )
+        .unwrap()
+        .affinity
+        .unwrap()
+    };
+    let (a, b) = (judge(kcal), judge(kj));
+    assert!(close(a.dissociation_constant, b.dissociation_constant));
+    assert!(close(a.ligand_efficiency.sigma, b.ligand_efficiency.sigma));
+    assert_eq!(a.call, b.call);
+}
