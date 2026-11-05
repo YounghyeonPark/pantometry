@@ -129,6 +129,9 @@ of them commentary.
 ## What is in the box
 
 `pantometry` is a facade; every name below is re-exported through `pantometry::prelude::*`.
+It holds one module of its own, `pantometry::candidate`, which is not in the prelude: one molecule
+and what was measured about it in, one verdict on absorption and binding out, with the tissue
+partitions beside it. `cargo run --release --example drug_candidate` shows it.
 
 | crate | what it holds |
 | --- | --- |

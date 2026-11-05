@@ -1,8 +1,9 @@
 //! pantometry: physics for simulated worlds, in one dependency.
 //!
-//! A facade over the workspace. Nothing is implemented here — the point is that a
-//! consumer writes `pantometry = "0.23"` rather than naming nineteen crates, and that the
-//! integration tests which need two domains at once have somewhere to live.
+//! A facade over the workspace. The point is that a consumer writes `pantometry = "0.23"`
+//! rather than naming nineteen crates, and that the integration tests which need two domains at
+//! once have somewhere to live. One thing is implemented here, [`candidate`], because it reads a molecule
+//! from one domain and a tissue partition from another, and no domain may depend on another.
 //!
 //! ```
 //! use pantometry::prelude::*;
@@ -87,6 +88,8 @@
 // whose `Length::mm` shows a blank summary in rustdoc is documented in the sense that a
 // paragraph exists somewhere, and not in the sense a reader needs.
 #![deny(missing_docs)]
+pub mod candidate;
+
 pub use pantometry_acoustic as acoustic;
 pub use pantometry_core as core;
 pub use pantometry_elastic as elastic;

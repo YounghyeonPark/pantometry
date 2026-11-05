@@ -21,7 +21,7 @@ cargo deny check                       # needs `cargo install cargo-deny`
 # The examples are tests that print.
 for e in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots \
          heat_in_three_dimensions room_in_three_dimensions busbar_rating optical_bench \
-         espresso_shot portafilter_flow ligand_binding aspirin_relaxes agents_quickstart readme_check; do
+         espresso_shot portafilter_flow ligand_binding aspirin_relaxes drug_candidate agents_quickstart readme_check; do
   cargo run --locked --release --example "$e"
 done
 

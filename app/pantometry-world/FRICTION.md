@@ -556,6 +556,12 @@ way to read another's state, and that is the property the crate split defends. A
 have to depend on both crates, which only the facade may do, and a physics-specific solver in
 the facade is a worse precedent than eight lines in a consumer.
 
+**`pantometry::candidate` is in the facade, and it is not this precedent.** It reads two domains,
+a molecule from `pantometry-forcefield` and a tissue partition from `pantometry-pharmacokinetic`,
+which only the facade may do. But it steps nothing and closes no loop between two domains' states.
+It applies published limits to evidence that was finished elsewhere. A coupled solver in the facade
+is still declined.
+
 The general form is a state channel on `Exchange`, which stays undecided — and this entry is
 evidence *against* it. Twice the hand-written loop has agreed with the stepped answer: 99.0 °C
 from the sizing tool's fixed point, 99.02 °C from scene 13's marching. Nothing has yet needed

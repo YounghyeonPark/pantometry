@@ -23,6 +23,80 @@ protects nothing.
 
 ### Added
 
+- **`pantometry::candidate`: one molecule in, one verdict out.** `assess` reads a `Component`
+  and takes what was measured about it as evidence, each value with its standard error: log P, the
+  standard binding free energy at a stated temperature, and the fraction unbound in plasma. It
+  returns:
+  - the **rule of five** for absorption;
+  - **ligand efficiency** and `K_d` for binding;
+  - **Rodgers and Rowland's `K_p`** for rat liver, kidney and muscle, reported and not judged;
+  - a **verdict**, the worse of the two screens.
+
+  It is the first thing the facade implements. It reads two domains, and only the facade may.
+  FRICTION.md #21 declined a coupled solver in the facade, and now says why this is not one. The
+  new example `drug_candidate` judges benzene, p-xylene and aspirin on this repository's own
+  measurements.
+  - **How an uncertain value is called.** A value is its `±2σ` interval. It passes if the whole
+    interval is on the right side of a limit and fails if the whole interval is on the wrong side.
+    A limit inside the interval is `Undecided`. A value not given is `NotMeasured`, never a
+    default.
+  - **What was read and what was not.** The rule's four limits are quoted from the abstract of
+    Lipinski et al. 2001, read from Europe PMC. Three things could not be checked against their
+    papers:
+    - how donors and acceptors are counted (here each H on N or O, and each N and O);
+    - the alert at two violations;
+    - Hopkins et al.'s least ligand efficiency of about 0.3.
+
+    So `Thresholds` has no `Default`, and the example writes both numbers at its call site.
+  - **Benzene's two binding free energies are a factor of 1 583 apart in `K_d` and give the same
+    verdict.** UFF throughout gives −8.975, and GAFF, ff14SB and AM1-BCC give −4.61 kcal/mol.
+    Benzene is small, so both are efficient per heavy atom: 1.50 and 0.77 against 0.3. The
+    verdict cannot know which method made its evidence. The example asserts the factor.
+  - **What a stranger found, and what was done.** `consumer-advocate` screened six components from
+    the public API.
+    - **A component without its hydrogens passed.** Alanine came out at 82.04 g/mol with no
+      donors. The atoms are now checked against `_chem_comp.formula` when the entry states one,
+      and a mismatch is `AssessError::Formula`.
+    - **25 was taken as a temperature**, giving a `K_d` of 4.3e-46 M. The temperature is a
+      `Temperature` now.
+    - **Arginine, +1, went through the equation for a neutral molecule.** A charged component's
+      distribution is now `Distribution::Charged`. An acid with no formal charge, such as aspirin,
+      cannot be recognised from its atoms, and the documentation says so.
+    - **Tissues and limits were found by string and position.** They are `Tissue` and `Rule`
+      now. `Call` is ordered, so the worst of several is their `max`.
+    - **A threshold of −1 passed every binder.** It is refused now.
+  - **Recorded, not actioned:**
+    - a value in kJ/mol is not detected;
+    - `Assessment` has no `Display`;
+    - a component's text is the caller's to supply, because nothing in `pantometry-forcefield`
+      exposes the entries it ships.
+  - **What checks it**, in `tests/a_molecule_gets_a_verdict.rs`:
+    - the descriptors of ten molecules against counts made by hand from their entries, including
+      a halogenated benzene, cysteine's S–H, and an H₂ with no heavy atom;
+    - each call at its boundary, with the interval's ends exact in binary;
+    - `K_d` against `exp(ΔG°/RT)` at 298.15 and 310.15 K;
+    - `K_p` at log P = 0 summed by hand;
+    - the verdict over all sixteen pairs of calls;
+    - every refusal by its variant;
+    - five values pinned to the bit.
+
+    Thirty-seven sabotages of `candidate.rs` each fail it, run after the unmodified source was
+    seen to pass.
+    - **Six survived the first version**, found by `unearned-pass-hunter`:
+      - the temperature fixed at 298.15, since every input was 298.15;
+      - the weight and the acceptors fed to the wrong limits;
+      - the no-heavy-atom refusal deleted;
+      - a halogen counted as polar;
+      - a platform `exp` in place of the kernel's.
+    - **One more survived the second version, a sulfur counted as polar**, because no test
+      molecule had a sulfur.
+    - **A platform `exp` for `K_d` passed the pin at −4.61** because Windows' `exp` agrees with
+      the kernel's there. Of 2 000 binding energies from −1 to −11 kcal/mol, three differed, and
+      one of them, −2.06, is pinned as well.
+    - **One sabotage run counted as caught when it had caught nothing.** The unmodified test was
+      failing on a mis-derived pin, so every sabotage "failed". The harness now runs the
+      unmodified source first and refuses to start if it does not pass.
+
 - **GAFF/AM1-BCC's non-bonded terms are a library path, `pantometry_forcefield::{mol2, amber}`,
   and no GAFF value ships.** Until now the reader of FreeSolv's `.mol2` files, the map of their
   atoms onto a dictionary component, and the assembly of a GAFF model all lived in

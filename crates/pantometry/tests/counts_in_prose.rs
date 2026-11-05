@@ -591,7 +591,8 @@ fn what_is_in_the_box_is_what_is_in_crates() {
         .filter_map(Result::ok)
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        // The facade is what the table is *about*; it does not hold anything of its own.
+        // The facade is what the table is *about*. It holds one module of its own,
+        // `candidate`, which the table's sentence about it names.
         .filter(|n| n.starts_with("pantometry-"))
         .collect();
     assert!(!on_disk.is_empty(), "found no on_disk");
@@ -913,7 +914,14 @@ fn the_benchmark_is_called_by_the_right_ordinal() {
     assert!(examples > 0, "no example files under crates/");
     println!("  {examples} examples");
     let text = std::fs::read_to_string(root().join("EXAMPLES.md")).expect("EXAMPLES.md");
-    let want = format!("A {}, `where_the_time_goes`", ORDINALS[examples]);
+    // "An eighteenth", "A nineteenth": the article follows the ordinal's first letter.
+    let ordinal = ORDINALS[examples];
+    let article = if ordinal.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "An"
+    } else {
+        "A"
+    };
+    let want = format!("{article} {ordinal}, `where_the_time_goes`");
     assert!(
         text.contains(&want),
         "EXAMPLES.md should call the benchmark the {} of {examples} examples: {want:?}",
