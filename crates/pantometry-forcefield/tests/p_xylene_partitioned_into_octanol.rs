@@ -57,6 +57,36 @@
 //! it against experiment's 1.02, the same reading on the same two legs. Dry octanol's and the hybrid
 //! model's errors should partly cancel from it, so it is the sharper of the two, and it is reported,
 //! not gated. Nothing in this file asserts either number.
+//!
+//! # What it measured
+//!
+//! Run on `x86_64-pc-windows-gnu` from the binary built at `6a4f1db`. The two legs took 107 542 s
+//! and finished on 2026-11-03. The second seed took 15 499 s and finished on 2026-11-04. Its first
+//! attempt died in its first window on a failed allocation: the machine had reached its commit
+//! limit, with 11 GB in the kernel's paged pool. It was rerun from that window after a reboot, and
+//! nothing it had written was kept. No window was inserted on either leg. In kcal/mol:
+//!
+//! | | BAR | TI | halves | lowest overlap |
+//! | --- | --- | --- | --- | --- |
+//! | water, decoupled | +1.099 ± 0.188 | +1.273 ± 0.183 | +1.226, +0.956 | 0.198 |
+//! | octanol, decoupled, one seed | +5.364 ± 0.284 | +5.583 ± 0.293 | +5.046, +5.757 | 0.243 |
+//!
+//! - **Hydration:** ΔG_hyd is −1.099 ± 0.188, against FreeSolv's −0.66 ± 0.03 for GAFF/AM1-BCC on
+//!   GAFF's bonded terms and −0.80 ± 0.60 by experiment.
+//! - **One seed:** log P is 3.13 ± 0.25.
+//! - **The charge segment:** +0.726 ± 0.190 at `long/`'s seed, whose candidate 0 has τ = 145
+//!   samples, so about 14 independent ones. It is +0.541 ± 0.138 reseeded. The seeds differ by
+//!   −0.185, 0.79 of their combined quoted error. So the segment's error is BAR's, ±0.117, not
+//!   the half-difference.
+//! - **Both seeds:** the charge segment is +0.633 ± 0.117 and the van der Waals segment
+//!   +4.638 ± 0.210. ΔG_solv,oct is −5.271 ± 0.241.
+//! - **log P is 3.06 ± 0.22 against 3.15**, a miss of 0.41σ. 2σ = 0.44 is under the 1.02 that would
+//!   make it uninformative, so **the method carries to p-xylene**.
+//! - **Δ log P** from benzene's 1.92 ± 0.23 is +1.14 ± 0.32 against experiment's +1.02. It is
+//!   reported, not gated.
+//!
+//! σ still leaves out the three things above. Sangster's 3.42 would be a miss of 1.6σ, which the
+//! gate still calls carried.
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
@@ -544,7 +574,7 @@ fn the_end_states_are_the_systems_they_say() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The measurements: written, costed, not run
+// The measurements: written, costed, the first two run once
 
 /// The production's legs around p-xylene.
 fn legs() -> [System; 2] {
@@ -652,13 +682,13 @@ fn partition_measured(tag: &str, base: Protocol) {
     }
 }
 
-/// **p-xylene's log P at W3's protocol** (release, one core; written, not run). Both legs, each
+/// **p-xylene's log P at W3's protocol** (release, one core; run once, in the module documentation). Both legs, each
 /// window 20 ps discarded and 200 ps sampled ([`LONG`]), into `water/long/` and `octanol/long/`.
 /// `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/p-xylene cargo test --release --locked -p
 /// pantometry-forcefield --test p_xylene_partitioned_into_octanol the_partition_measured --
 /// --ignored --nocapture`.
 #[test]
-#[ignore = "both legs at W3's protocol, thirteen windows each: about a day with --release, not run"]
+#[ignore = "both legs at W3's protocol, thirteen windows each: about a day with --release, run once (2026-11-03)"]
 fn the_partition_measured() {
     partition_measured("long", LONG);
 }
@@ -704,7 +734,8 @@ const CHARGE_SEGMENT: [usize; 3] = [0, 4, 8];
 const RESEED: u64 = 0x4C2_5EED;
 
 /// **The octanol leg's charge segment at a second seed, and log P with both, against the gate**
-/// (release, one core; written, not run). Benzene's reseed, on p-xylene: the same leg, model, start
+/// (release, one core; run once, the verdict in the module documentation). Benzene's reseed, on
+/// p-xylene: the same leg, model, start
 /// and protocol as `octanol/long/`, only the seed changed, the windows at [`CHARGE_SEGMENT`] into
 /// `octanol/reseed/`. Before any window runs, every file it reads back is checked against its
 /// header, and **both legs are checked whole**: every one of [`SCHEDULE`]'s windows there, and the
@@ -717,7 +748,7 @@ const RESEED: u64 = 0x4C2_5EED;
 ///
 /// Nothing is asserted but that the segments add to the leg.
 #[test]
-#[ignore = "three octanol windows at W3's protocol: about 5 h with --release, not run"]
+#[ignore = "three octanol windows at W3's protocol: about 5 h with --release, run once (2026-11-04)"]
 fn the_octanol_charges_reseeded_measured() {
     let root = results_dir();
     let t = std::time::Instant::now();

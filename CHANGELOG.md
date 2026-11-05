@@ -23,9 +23,9 @@ protects nothing.
 
 ### Added
 
-- **p-xylene through benzene's log P legs, the gate registered before any window runs: written
-  and checked here, not run.** Benzene's log P came out at 1.92 ± 0.23 against 2.13 for one
-  molecule. This asks whether that was the method or the molecule. New
+- **p-xylene through benzene's log P legs, the gate registered before any window ran: log P
+  3.06 ± 0.22 against 3.15, and the method carries.** Benzene's log P came out at 1.92 ± 0.23
+  against 2.13 for one molecule. This asks whether that was the method or the molecule. New
   `tests/p_xylene_partitioned_into_octanol.rs`, kept out of the published crate with benzene's.
   Nothing in `src/` changed.
   - **Why p-xylene.** It is benzene with two methyl groups across the ring, so it brings the two
@@ -111,6 +111,24 @@ protects nothing.
     that the leg began right; its long/ happened to be whole.
     `the_partition_measured` runs both legs at W3's protocol, and
     `the_octanol_charges_reseeded_measured` runs the second seed and prints the verdict.
+  - **Measured.** Both legs ran 2026-11-02/03 from the binary built at `6a4f1db`, on
+    `x86_64-pc-windows-gnu`, in 107 542 s. The second seed finished 2026-11-04 in 15 499 s. Its
+    first attempt died in its first window on a failed allocation: the machine had reached its
+    commit limit, with 11 GB in the kernel's paged pool. It was rerun from that window after a
+    reboot. No window was inserted on either leg. In kcal/mol:
+    - **Water:** decoupled +1.099 ± 0.188 by BAR, with TI at +1.273 and halves at +1.226 and
+      +0.956; the lowest overlap was 0.198. So ΔG_hyd is −1.099, against FreeSolv's −0.66 ± 0.03
+      for GAFF/AM1-BCC and −0.80 ± 0.60 by experiment.
+    - **Octanol, one seed:** +5.364 ± 0.284, with TI at +5.583 and the lowest overlap at 0.243.
+      That gives log P 3.13 ± 0.25.
+    - **The charge segment:** +0.726 ± 0.190 at the first seed, whose first window has τ of 145
+      samples, and +0.541 ± 0.138 reseeded. They differ by 0.79 of their combined error, so σ is
+      BAR's and not widened.
+    - **Both seeds:** ΔG_solv,oct is −5.271 ± 0.241, and **log P 3.06 ± 0.22 against 3.15**, a
+      miss of 0.41σ. 2σ = 0.44 is under the 1.02 that would make it uninformative, so **the
+      method carries to p-xylene**.
+    - **Against benzene:** Δ log P is +1.14 ± 0.32 against experiment's +1.02, reported and not
+      gated. Against Sangster's 3.42 the miss would be 1.6σ, still inside 2σ.
 
 ## [0.23.0] — 2026-10-30
 
