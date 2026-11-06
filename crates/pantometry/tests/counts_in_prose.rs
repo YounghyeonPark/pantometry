@@ -15,7 +15,7 @@
 //! The first version scanned for any number-word near a subject word — "N scenes", "N findings" — and
 //! compared every one against the total. It fired three times immediately and **all three were its own
 //! fault**: `scenes/README.md` legitimately says "the first of three scenes with nothing to draw", and
-//! `AGENTS.md` legitimately says "twelve worked problems" about fifteen example files, because three of
+//! `AGENTS.md` legitimately said "twelve worked problems" about fifteen example files, because three of
 //! them are a quickstart, a benchmark and a README checker rather than worked problems. Subset counts and
 //! differently-defined counts are normal prose and a blunt scan cannot tell them from staleness.
 //!
@@ -485,7 +485,8 @@ fn example_files() -> usize {
 /// **`AGENTS.md`'s count of worked problems is deliberately not checked against this.** Three of the
 /// eighteen files are a quickstart, a benchmark and a README checker, and calling them worked problems
 /// would be the wrong sentence rather than the wrong number. A test that insisted they agree would be
-/// asserting a definition, and it fired on exactly that when this file's first draft tried.
+/// asserting a definition, and it fired on exactly that when this file's first draft tried. It is
+/// checked against `EXAMPLES.md`'s table instead, by `the_worked_problems_are_the_rows_of_the_examples_table`.
 #[test]
 fn the_releasing_example_command_counts_every_example() {
     if !repository() {
@@ -1088,4 +1089,120 @@ fn every_example_is_run_and_only_examples_are() {
              {extra:?}"
         );
     }
+}
+
+/// The names in the first column of `EXAMPLES.md`'s table under `## Examples`, in order, and the
+/// paragraphs straight after it that excuse examples from it.
+///
+/// **The table ends at its first line that is not a row.** The first draft collected every line
+/// opening ``| ` `` from the heading to the next `## `, and `EXAMPLES.md` has no heading after this
+/// one, so a row moved into any later table still counted — `unearned-pass-hunter` found it, and
+/// it would have kept fifteen with the table holding fourteen. The excuses are read the same way:
+/// the paragraphs after the table up to the first that names none of [`NOT_IN_THE_TABLE`], so a
+/// name mentioned in a row or in the prose about plotting is not an excuse.
+fn example_table() -> (Vec<String>, String) {
+    let text = read(root().join("EXAMPLES.md")).replace("\r\n", "\n");
+    let section = text
+        .split_once("\n## Examples\n")
+        .map(|(_, rest)| rest)
+        .expect("EXAMPLES.md has a section headed ## Examples");
+    let mut lines = section.lines();
+    lines
+        .find(|line| line.starts_with("| --- |"))
+        .expect("the section under ## Examples has a table");
+    let mut rows = Vec::new();
+    let mut after = Vec::new();
+    for line in lines.by_ref() {
+        if !line.starts_with('|') {
+            after.push(line);
+            break;
+        }
+        let name = line
+            .strip_prefix("| `")
+            .and_then(|rest| rest.split_once('`'))
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_else(|| {
+                panic!("a row of EXAMPLES.md's table does not open with a name: {line:?}")
+            });
+        rows.push(name);
+    }
+    after.extend(lines);
+    let mut excuses = String::new();
+    for paragraph in after.join("\n").trim_start().split("\n\n") {
+        if !NOT_IN_THE_TABLE
+            .iter()
+            .any(|n| paragraph.contains(&format!("`{n}`")))
+        {
+            break;
+        }
+        excuses.push_str(paragraph);
+        excuses.push_str("\n\n");
+    }
+    (rows, excuses)
+}
+
+/// **`AGENTS.md`'s count of worked problems, against the table that lists them.**
+///
+/// `AGENTS.md` said fourteen at 0.23.0, with `drug_candidate` the fifteenth, and nothing compared
+/// it with anything: `the_releasing_example_command_counts_every_example` above explains why it
+/// cannot be held against the *files*, three of which are not worked problems. But `EXAMPLES.md`
+/// already draws that line, as a table of the worked problems and a paragraph naming the three
+/// that are not, so the count is held against the table's rows, and the line itself is held too:
+/// every example file is a row or one of [`NOT_IN_THE_TABLE`], and a new example that is neither
+/// fails here rather than leaving both documents a row short.
+const NOT_IN_THE_TABLE: &[&str] = &["agents_quickstart", "readme_check", "where_the_time_goes"];
+
+#[test]
+fn the_worked_problems_are_the_rows_of_the_examples_table() {
+    if !repository() {
+        return;
+    }
+    let (rows, excuses) = example_table();
+    let set: std::collections::BTreeSet<String> = rows.iter().cloned().collect();
+    assert_eq!(
+        set.len(),
+        rows.len(),
+        "EXAMPLES.md's table names an example twice: {rows:?}"
+    );
+    assert!(
+        rows.len() >= 15,
+        "found only {} rows in EXAMPLES.md's table",
+        rows.len()
+    );
+    println!("  {} worked problems in EXAMPLES.md's table", rows.len());
+
+    let stems = example_stems();
+    let not_files: Vec<_> = set.iter().filter(|r| !stems.contains(*r)).collect();
+    assert!(
+        not_files.is_empty(),
+        "EXAMPLES.md's table names examples that do not exist: {not_files:?}"
+    );
+    for name in NOT_IN_THE_TABLE {
+        assert!(
+            stems.contains(*name),
+            "{name} is excused from the table but is not an example"
+        );
+        assert!(
+            !set.contains(*name),
+            "{name} is excused from the table and is in it"
+        );
+        assert!(
+            excuses.contains(&format!("`{name}`")),
+            "{name} is excused from the table, and the paragraphs straight after it should say why"
+        );
+    }
+    let unlisted: Vec<_> = stems
+        .iter()
+        .filter(|s| !set.contains(*s) && !NOT_IN_THE_TABLE.contains(&s.as_str()))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "examples neither in EXAMPLES.md's table nor excused from it: {unlisted:?}"
+    );
+
+    phrase(
+        "AGENTS.md",
+        "**`examples/`** — {} worked problems that print their numbers",
+        rows.len(),
+    );
 }
