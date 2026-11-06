@@ -468,25 +468,11 @@ fn the_scene_count_agrees_everywhere_it_is_written() {
 
 /// Every example file in `crates/`, wherever it lives — one is in `pantometry-optics`, and a glob
 /// over the facade's directory missed it once.
+///
+/// Counted by [`example_stems`], which holds the one rule for what an example is. This was a
+/// second walk of its own, which skipped a directory it could not read.
 fn example_files() -> usize {
-    let mut examples = 0;
-    let mut stack = vec![root().join("crates")];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|x| x == "rs")
-                && path.parent().is_some_and(|p| p.ends_with("examples"))
-            {
-                examples += 1;
-            }
-        }
-    }
-    examples
+    example_stems().len()
 }
 
 /// **The example count in `RELEASING.md`'s own counting command is the number of example files.**
@@ -1008,22 +994,59 @@ fn the_panel_shapes_are_counted_where_they_are_named() {
     );
 }
 
-/// Every example file's name: the stem of each `.rs` directly under an `examples` directory in
-/// `crates/`, which is what `cargo run --example` takes.
+/// Every example's name, which is what `cargo run --example` takes, found by cargo's own rule.
+///
+/// Cargo discovers an example as `examples/NAME.rs` or as `examples/NAME/main.rs` in a crate's
+/// directory, and a manifest can add one anywhere with `[[example]] path = ...` or turn discovery
+/// off with `autoexamples`. This used to find only the first form, so an example written as a
+/// directory was invisible here and to the three tests that read this, `unearned-pass-hunter`
+/// found; there are none today. The directory form is now found, and a manifest that declares
+/// examples itself is refused rather than half-read: the day one does, this has to learn to read
+/// it, and should say so instead of counting around it.
+///
+/// A directory under `examples/` with no `main.rs` is not an example: `common/` is how the
+/// examples share code, and cargo does not build it on its own.
+///
+/// **One name, one example.** Two crates may each have an example of the same name, and a set
+/// would count them once; nothing here could run both by that name, so it is refused.
 fn example_stems() -> std::collections::BTreeSet<String> {
     let mut stems = std::collections::BTreeSet::new();
-    let mut stack = vec![root().join("crates")];
-    while let Some(dir) = stack.pop() {
-        for entry in list(&dir).filter_map(Result::ok) {
+    for krate in list(root().join("crates")).filter_map(Result::ok) {
+        let krate = krate.path();
+        let manifest = krate.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let toml = read(&manifest);
+        for declared in ["[[example]]", "autoexamples"] {
+            assert!(
+                !toml.contains(declared),
+                "{} uses {declared}; example_stems finds examples by cargo's discovery rule only, \
+                 and has to be taught to read the manifest before this count can be trusted",
+                manifest.display()
+            );
+        }
+        let examples = krate.join("examples");
+        if !examples.is_dir() {
+            continue;
+        }
+        for entry in list(&examples).filter_map(Result::ok) {
             let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|x| x == "rs")
-                && path.parent().is_some_and(|p| p.ends_with("examples"))
-            {
-                let stem = path.file_stem().expect("a file has a stem");
-                stems.insert(stem.to_string_lossy().into_owned());
-            }
+            let name = if path.is_dir() {
+                if !path.join("main.rs").is_file() {
+                    continue;
+                }
+                path.file_name().expect("a directory has a name")
+            } else if path.extension().is_some_and(|x| x == "rs") {
+                path.file_stem().expect("a file has a stem")
+            } else {
+                continue;
+            };
+            let name = name.to_string_lossy().into_owned();
+            assert!(
+                stems.insert(name.clone()),
+                "two crates have an example named {name}"
+            );
         }
     }
     stems
