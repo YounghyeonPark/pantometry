@@ -23,7 +23,8 @@
 //!
 //! They are in the kernel because they know nothing about any physics: they are the maths no
 //! domain owns, as [`crate::vector`] and [`crate::transform`] are, and a second domain that wanted
-//! them should not have to depend on the first. Nothing in the kernel calls them yet.
+//! them should not have to depend on the first. In the kernel, [`crate::rng`]'s samplers call
+//! all three, which is what makes them the same bits on every platform.
 //!
 //! They are also faster than the platform's on `x86_64-pc-windows-gnu`, which is why they were
 //! written: in release, over the arguments of a pair-sum hot path, 1.96–2.03 ns a call for [`exp`]

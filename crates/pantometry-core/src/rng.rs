@@ -4,28 +4,29 @@
 //! cannot be compared, so this is a plain seeded generator with no global state
 //! and no entropy source. Two runs of the same scene draw the same numbers.
 //!
-//! # What is the same bits on every platform, and what is not
+//! # The same bits on every platform
 //!
 //! **The stream is**: the generator itself, [`Rng::unit`] and [`Rng::range`] are
 //! integer operations and IEEE `+ − × ÷`, so they give the same bits on every
 //! platform and in WebAssembly. `the_stream_is_pinned` holds a digest of ten
 //! thousand draws, and CI runs it on Linux, macOS, Windows and `wasm32-wasip1`.
 //!
-//! **What is sampled from it through a transcendental is not.** These methods call
-//! the platform's C library, which is not required to round correctly and is not the
-//! same code on two operating systems:
-//! - [`Rng::gaussian`] and [`Rng::normal`] call `ln` and `cos`;
-//! - [`Rng::poisson`] calls `exp`, and above a mean of 30 it calls [`Rng::gaussian`];
+//! **So is what is sampled from it.** Every method that needs a transcendental
+//! calls [`crate::math`]'s, which are built from `+ − × ÷` in a written order:
+//! - [`Rng::gaussian`] and [`Rng::normal`] call [`math::ln`] and
+//!   [`math::sin_cos_turns`];
+//! - [`Rng::poisson`] calls [`math::exp`], and above a mean of 30 it calls
+//!   [`Rng::gaussian`];
 //! - [`Rng::in_disc`], [`Rng::on_sphere`], [`Rng::on_hemisphere`] and
-//!   [`Rng::cosine_hemisphere`] call `sin` and `cos`.
+//!   [`Rng::cosine_hemisphere`] call [`math::sin_cos_turns`], and `sqrt`.
 //!
-//! So a run that draws from these repeats bit for bit on one machine, and on
-//! another its draws can differ in the last bits. CI measured it on
-//! `pantometry-forcefield`'s water lattice, whose molecules are oriented through
-//! [`Rng::gaussian`] and built through the platform's `cos`. It came out as three
-//! different digests on Windows (MSVC), on macOS, and on Linux with Windows (GNU). `pantometry_core::math` has `exp` and `ln` that are the same
-//! bits everywhere, but there is no such `sin` or `cos`, and these methods do not
-//! call them yet.
+//! `the_samplers_are_pinned` holds a digest of all seven, on the same four
+//! platforms. Through 0.23 they called the platform's C library instead, and CI
+//! measured the difference on `pantometry-forcefield`'s water lattice, whose
+//! molecules are oriented through [`Rng::gaussian`]: three different digests, on
+//! Windows (MSVC), on macOS, and on Linux with Windows (GNU). A result recorded
+//! before that drew different numbers, and is reproducible only on the machine,
+//! and at the version, that recorded it.
 //!
 //! # Determinism survives parallelism, but only through [`Rng::for_index`]
 //!
@@ -43,11 +44,12 @@
 
 use glam::DVec3;
 
+use crate::math;
 use crate::vector::basis_for;
 
 /// Deterministic xorshift64* PRNG. Avoids a dependency, and its stream is the same
-/// bits on every platform and in WebAssembly. Not every method sampled from it is,
-/// as the module documentation lists.
+/// bits on every platform and in WebAssembly, and so is every method sampled from
+/// it, as the module documentation says.
 ///
 /// `Clone` is deliberate: cloning captures the exact stream position, which is
 /// how a speculative draw can be replayed or a substream forked at a known point.
@@ -122,16 +124,16 @@ impl Rng {
     /// Uniform point inside a disc of the given radius.
     pub fn in_disc(&mut self, radius: f64) -> (f64, f64) {
         let r = radius * self.unit().sqrt();
-        let phi = std::f64::consts::TAU * self.unit();
-        (r * phi.cos(), r * phi.sin())
+        let (sin, cos) = math::sin_cos_turns(self.unit());
+        (r * cos, r * sin)
     }
 
     /// Uniform direction on the unit sphere.
     pub fn on_sphere(&mut self) -> DVec3 {
         let z = self.range(-1.0, 1.0);
-        let phi = std::f64::consts::TAU * self.unit();
+        let (sin, cos) = math::sin_cos_turns(self.unit());
         let r = (1.0 - z * z).max(0.0).sqrt();
-        DVec3::new(r * phi.cos(), r * phi.sin(), z)
+        DVec3::new(r * cos, r * sin, z)
     }
 
     /// Uniform direction on the hemisphere about `normal`.
@@ -171,7 +173,7 @@ impl Rng {
         // Guard the log against an exact zero, which `unit` can return.
         let u1 = self.unit().max(f64::MIN_POSITIVE);
         let u2 = self.unit();
-        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+        (-2.0 * math::ln(u1)).sqrt() * math::sin_cos_turns(u2).1
     }
 
     /// A normal deviate with the given mean and standard deviation.
@@ -207,7 +209,7 @@ impl Rng {
         if mean < 30.0 {
             let u = self.unit();
             // p is P(k) and cumulative is P(X <= k), stepped up together.
-            let mut p = (-mean).exp();
+            let mut p = math::exp(-mean);
             let mut cumulative = p;
             let mut k = 0u64;
             // A generous cap: at mean 30 the distribution is spent by 100, and this only
@@ -329,6 +331,54 @@ mod tests {
     /// Changing this constant is never the fix. If this test fails, the stream
     /// moved, and every result recorded against the old one is now unreproducible.
     const PINNED_DIGEST: u64 = 6_777_642_030_472_145_829;
+
+    /// What is sampled from the stream is fixed too, and the same bits on every platform: every
+    /// method that draws through a transcendental, through `pantometry_core::math`, folded into
+    /// one digest that CI runs on Linux, macOS, Windows and `wasm32-wasip1`. Both of
+    /// [`Rng::poisson`]'s methods are in it, the exact one at a mean drawn anew each time below 30,
+    /// and the rounded normal at 200.
+    ///
+    /// **Sized to see the platform's `ln` in place of the kernel's, measured here** over four
+    /// million of `unit`'s pairs: the two `ln`s differ at 950, and a Gaussian shows it at 450 of
+    /// those, since `sqrt` halves the difference; `normal(−3, 0.25)` shows 25 and `poisson(200)`
+    /// none. At 2048 rounds of one Gaussian each the digest saw no difference, and a Box–Muller on
+    /// the platform's `ln` passed. At 16 384 rounds of eight about 15 are expected.
+    ///
+    /// **A count almost never sees [`Rng::poisson`]'s `exp`**, and this does not claim to: the
+    /// platform's differs from [`math::exp`] at 7.4% of means `k/4096` below 30, but a last-bit
+    /// change in `P(0)` moves a count only when the uniform falls within a few ulps of a
+    /// cumulative sum, about `10⁻¹⁵` of draws. The platform's `exp` there passes this test.
+    #[test]
+    fn the_samplers_are_pinned() {
+        let mut r = Rng::new(0x5A4D_9E15);
+        let n = DVec3::new(1.0, 2.0, -0.5).normalize();
+        let mut hash = 0xCBF2_9CE4_8422_2325u64;
+        let mut fold = |x: f64| {
+            hash = (hash ^ x.to_bits()).wrapping_mul(0x0000_0100_0000_01B3);
+        };
+        for _ in 0..16_384 {
+            for _ in 0..8 {
+                fold(r.gaussian());
+            }
+            fold(r.normal(-3.0, 0.25));
+            let mean = 0.5 + 29.0 * r.unit();
+            fold(r.poisson(mean) as f64);
+            fold(r.poisson(200.0) as f64);
+            let (x, y) = r.in_disc(2.0);
+            fold(x);
+            fold(y);
+            for d in [r.on_sphere(), r.on_hemisphere(n), r.cosine_hemisphere(n)] {
+                fold(d.x);
+                fold(d.y);
+                fold(d.z);
+            }
+        }
+        assert_eq!(hash, SAMPLER_DIGEST, "a sampler's output has changed");
+    }
+
+    /// Like [`PINNED_DIGEST`], changing this is never the fix: it is every recorded result that
+    /// drew a Gaussian or a direction.
+    const SAMPLER_DIGEST: u64 = 1_280_833_278_511_547_787;
 
     /// Box-Muller has to actually be normal: zero mean, unit variance, and a
     /// tail that reaches past three sigma without running away.

@@ -97,8 +97,9 @@
 //! a caller who passes one seed to both does not get its first kicks equal to its velocities.
 //!
 //! **Determinism, and where it stops**, is the crate's: bit-identical on one machine, not across
-//! platforms. The Gaussian deviates call the platform's `ln` and `cos` (Box–Muller), `c₁` calls
-//! `exp`, and the force field calls more.
+//! platforms. The Gaussian deviates are the same bits everywhere, since `Rng::gaussian` calls the
+//! kernel's `ln` and `sin_cos_turns`; but `c₁` calls the platform's `exp`, and the force field
+//! calls more.
 //!
 //! # Frozen atoms
 //!

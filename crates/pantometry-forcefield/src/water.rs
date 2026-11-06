@@ -116,7 +116,7 @@ use crate::dynamics::{Bath, MolecularDynamics};
 use crate::ewald::EwaldParameters;
 use crate::periodic::{PeriodicBox, PeriodicForceField};
 use crate::uff::KCAL_PER_MOL;
-use pantometry_core::Rng;
+use pantometry_core::{math, Rng};
 
 /// The oxygen's charge, elementary charges (Table I).
 pub const OXYGEN_CHARGE: f64 = -0.834;
@@ -144,9 +144,15 @@ pub fn hoh_angle() -> f64 {
     HOH_ANGLE_DEGREES.to_radians()
 }
 
+/// `(sin θ/2, cos θ/2)` from the angle in degrees, as turns, `θ/2 = 104.52/720` of one: the
+/// kernel's sine and cosine, so the geometry is the same bits on every platform.
+fn half_angle() -> (f64, f64) {
+    math::sin_cos_turns(HOH_ANGLE_DEGREES / 720.0)
+}
+
 /// The H–H distance, metres: `2 r_OH sin(θ/2)`, 1.5139 Å.
 pub fn hh_length() -> f64 {
-    2.0 * OH_LENGTH * (0.5 * hoh_angle()).sin()
+    2.0 * OH_LENGTH * half_angle().0
 }
 
 /// The O–O Lennard-Jones well depth `ε = C²/(4A)`, joules per molecule: 0.152 07 kcal/mol.
@@ -169,7 +175,7 @@ pub fn oxygen_vdw() -> [f64; 2] {
 
 /// The dipole moment, the closed form `2 q_H r_OH cos(θ/2)`, elementary charges × metres.
 pub fn dipole_moment() -> f64 {
-    2.0 * HYDROGEN_CHARGE * OH_LENGTH * (0.5 * hoh_angle()).cos()
+    2.0 * HYDROGEN_CHARGE * OH_LENGTH * half_angle().1
 }
 
 /// One water's charges, oxygen first.
@@ -255,12 +261,27 @@ impl Settle {
     /// index appears twice.
     pub fn new(waters: Vec<[usize; 3]>, oh: f64, angle: f64, m_o: f64, m_h: f64) -> Settle {
         assert!(
-            [oh, m_o, m_h].iter().all(|x| x.is_finite() && *x > 0.0),
-            "SETTLE's distance and masses must be positive and finite"
-        );
-        assert!(
             angle > 0.0 && angle < std::f64::consts::PI,
             "SETTLE's angle must be in (0, π)"
+        );
+        // In turns, `θ / 4π`, for the kernel's sine and cosine: the same bits everywhere. The
+        // division rounds once, which `cos` amplifies by `(θ/2) tan(θ/2)`: 1.2 at water's angle,
+        // and without bound as the molecule approaches a line.
+        let half = math::sin_cos_turns(angle / (4.0 * std::f64::consts::PI));
+        Settle::of_half_angle(waters, oh, half, m_o, m_h)
+    }
+
+    /// [`Settle::new`] from `(sin θ/2, cos θ/2)`, with every check but the angle's.
+    fn of_half_angle(
+        waters: Vec<[usize; 3]>,
+        oh: f64,
+        (sin, cos): (f64, f64),
+        m_o: f64,
+        m_h: f64,
+    ) -> Settle {
+        assert!(
+            [oh, m_o, m_h].iter().all(|x| x.is_finite() && *x > 0.0),
+            "SETTLE's distance and masses must be positive and finite"
         );
         let mut seen: Vec<usize> = waters.iter().flatten().copied().collect();
         seen.sort_unstable();
@@ -268,7 +289,7 @@ impl Settle {
             seen.windows(2).all(|w| w[0] != w[1]),
             "an atom is in two rigid molecules, or twice in one"
         );
-        let height = oh * (0.5 * angle).cos();
+        let height = oh * cos;
         let ra = 2.0 * m_h * height / (m_o + 2.0 * m_h);
         Settle {
             waters,
@@ -276,17 +297,18 @@ impl Settle {
             m_h,
             ra,
             rb: height - ra,
-            rc: oh * (0.5 * angle).sin(),
+            rc: oh * sin,
         }
     }
 
-    /// SETTLE for TIP3P waters: [`OH_LENGTH`], [`hoh_angle`] and the crate's oxygen and hydrogen
-    /// masses.
+    /// SETTLE for TIP3P waters: [`OH_LENGTH`], [`HOH_ANGLE_DEGREES`] and the crate's oxygen and
+    /// hydrogen masses. The half angle is taken in turns, as [`hh_length`]'s is, rather than
+    /// through [`hoh_angle`]'s radians, so the two are the same bits.
     pub fn tip3p(waters: Vec<[usize; 3]>) -> Settle {
-        Settle::new(
+        Settle::of_half_angle(
             waters,
             OH_LENGTH,
-            hoh_angle(),
+            half_angle(),
             Element::O.mass(),
             Element::H.mass(),
         )

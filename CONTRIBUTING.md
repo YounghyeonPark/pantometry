@@ -374,12 +374,12 @@ workspace's own** — original code written from published methods, under the cr
 `the_sin_cos_bits_are_pinned` pin their bits, which the platform matrix, the release job and
 `wasm32-wasip1` all run. `sin_cos_turns(t)` is `(sin 2πt, cos 2πt)`, in turns so that its
 reduction is exact. A hot path that needs any of them should call them; generalized Born calls
-`exp` and `ln`. Every other transcendental is still the platform's —
-the kernel's own `Rng::gaussian` and `Rng::normal` (`ln`, `cos`), `Rng::poisson` (`exp`), and
-`Rng::in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` (`sin`, `cos`) among them.
-Only the generator's stream, `unit` and `range`, is pinned and the same everywhere. A
-result that passes through any of those methods repeats on one machine and is not promised across
-machines. Say so where it happens, as `pantometry-forcefield` does.
+`exp` and `ln`, and every sampler on `Rng` calls them: `gaussian`, `normal` and `poisson`,
+`in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere`, with
+`rng::tests::the_samplers_are_pinned` holding all seven beside the stream's own digest. Every
+other transcendental is still the platform's, and a result that passes through one repeats on one
+machine and is not promised across machines. Say so where it happens, as `pantometry-forcefield`
+does.
 
 ### The kernel must never depend on a domain
 

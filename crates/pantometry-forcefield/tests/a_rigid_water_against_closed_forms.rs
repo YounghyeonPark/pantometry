@@ -52,6 +52,59 @@ fn uniform(seed: u64, i: u64) -> f64 {
 // ---------------------------------------------------------------------------------------------
 // The model
 
+/// **The triangle is the same bits on every platform**: `sin θ/2` and `cos θ/2` are the kernel's,
+/// of `104.52/720` of a turn, so the H–H distance, the dipole and the body frame SETTLE builds
+/// every water from are pinned here, and every CI job runs it. On this machine the platform's
+/// `sin_cos` of `θ/2` in radians gives the same two doubles, measured, so a change back to it
+/// passes here; the pin is for any runner where it does not.
+#[test]
+fn the_triangle_is_the_same_bits_everywhere() {
+    let bits = [
+        water::hh_length().to_bits(),
+        water::dipole_moment().to_bits(),
+    ];
+    println!("H–H {:#018x}, dipole {:#018x}", bits[0], bits[1]);
+    assert_eq!(bits, [0x3de4_ce90_7c16_ad95, 0x3dca_dccc_0b44_99a8]);
+    let frame = digest(water::body_frame().iter().flatten().copied());
+    println!("body frame {frame:#018x}");
+    assert_eq!(frame, 0x0214_ea47_2eb7_e1e3);
+}
+
+/// **A lattice is the same bits on every platform**: 64 waters, each turned by four of
+/// `Rng::gaussian`'s deviates about the body frame, on sites from the kernel-free cube root. The
+/// production boxes are held to their runs' bits on the platform those were made on only
+/// (`p_xylene_partitioned_into_octanol.rs`); this is the one every CI job holds.
+#[test]
+fn a_lattice_is_the_same_bits_everywhere() {
+    let b = WaterBox::lattice(4, 0x1A77);
+    let d = digest(b.positions().iter().flatten().copied());
+    println!("lattice {d:#018x}");
+    assert_eq!(b.count(), 64);
+    assert_eq!(d, 0x7933_9b39_dd11_12b2);
+}
+
+/// **`Settle::new` from the angle in radians is `tip3p`'s, to the bit**: `θ/4π` of a turn rounds
+/// to the double `104.52/720` does. Every SETTLE in the crate is `tip3p`, so nothing else runs
+/// the conversion.
+#[test]
+fn settle_new_is_tip3p_from_the_angle() {
+    let m = water::masses();
+    let new = Settle::new(Vec::new(), water::OH_LENGTH, water::hoh_angle(), m[0], m[1]);
+    let tip3p = Settle::tip3p(Vec::new());
+    assert_eq!(
+        new.lengths().map(f64::to_bits),
+        tip3p.lengths().map(f64::to_bits)
+    );
+    assert_eq!(new.lengths()[2].to_bits(), water::hh_length().to_bits());
+}
+
+/// FNV-1a over the bits of `values`.
+fn digest(values: impl Iterator<Item = f64>) -> u64 {
+    values.fold(0xCBF2_9CE4_8422_2325, |h, x| {
+        (h ^ x.to_bits()).wrapping_mul(0x0000_0100_0000_01B3)
+    })
+}
+
 /// Table I as it stands, and what follows from it: ε, σ, the charges' sum, the geometry of the
 /// rigid triangle and the dipole.
 #[test]

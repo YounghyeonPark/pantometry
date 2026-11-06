@@ -205,10 +205,19 @@ fn pairs_by_distance(c: &Component) -> (usize, usize) {
 /// (`C:\pantometry-w4\octanol\{octanol,water}\start.txt`). Benzene's builders are the `_of`
 /// builders with benzene's model and volume now, and this is what says that changed nothing.
 ///
+/// **Except the water box, which moved when the samplers did.** Its lattice turns each water by
+/// `Rng::gaussian`, and from the change after 0.23 that is the kernel's `ln` and `sin_cos_turns`
+/// where it was the platform's, with SETTLE's frame the kernel's too. The box benzene's runs
+/// started from, `a16ebf27…`, is now built as `f0082c05…`, and that is the pin. The runs' results
+/// stand as measured; a run resumed from their `start.txt` is refused by its digest rather than
+/// continued in a different box. The octanol box and both models do not draw a Gaussian and are
+/// the runs' bits still.
+///
 /// **On the platform those runs were made on only**, `x86_64-pc-windows-gnu`. The boxes are not
-/// the same bits elsewhere, and `tests/pinned/` says why: a minimiser and the platform's `cos` are
-/// in them. W3's lattice turns each water by `Rng::gaussian`, which is the platform's `ln` and
-/// `cos`, about SETTLE's frame, which is its `cos`. CI measured this at `6a4f1db`:
+/// promised the same bits elsewhere, and `tests/pinned/` says why: the solute in each was relaxed
+/// by a minimiser on an energy with the platform's `cos` in it. At `6a4f1db` the water box had two
+/// causes more, since gone: W3's lattice turned each water by `Rng::gaussian`, which was the
+/// platform's `ln` and `cos`, about SETTLE's frame, which was its `cos`. CI measured it then:
 /// - the water box as built was `ba16a354…` on Windows (MSVC) and `47588d36…` on macOS, where it is
 ///   `a16ebf27…` here and on Linux;
 /// - the octanol box and both models were the same bits on all three;
@@ -229,7 +238,7 @@ fn benzenes_legs_are_the_bits_they_were() {
         (
             water_leg(),
             1533,
-            0xa16e_bf27_64c1_48cf,
+            0xf008_2c05_ea6d_8109,
             0xb80d_6cc9_c032_7aff,
         ),
     ] {

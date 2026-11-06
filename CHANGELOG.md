@@ -25,8 +25,7 @@ protects nothing.
 
 - **`pantometry_core::math::sin_cos_turns`: the sine and cosine of a turn, the same bits on every
   platform.** `sin_cos_turns(t)` is `(sin 2πt, cos 2πt)`, built from `+ − × ÷` in a written order
-  as `exp` and `ln` are. It is the first half of making `Rng::gaussian` and the sphere samplers
-  deterministic across platforms; nothing calls it yet, so no result moved.
+  as `exp` and `ln` are. `Rng`'s samplers call it now, under Changed below.
   - **In turns, so the reduction is exact.** `4|t| = n + u` with `|u| ≤ ½` is found without
     rounding, `n mod 4` picks the series and the signs, and each series makes its first three
     terms exact as a double and its error and rounds once. Zeros are signed as IEEE 754's `sinPi`
@@ -266,8 +265,8 @@ protects nothing.
       **It runs on `x86_64-pc-windows-gnu` only**, the platform benzene's runs were made on. It
       shipped unrestricted at `6a4f1db` and CI failed it on three jobs: the water box as built
       was `ba16a354…` on Windows (MSVC) and `47588d36…` on macOS, because the lattice's
-      rotations come from `Rng::gaussian`, which calls the platform's `ln` and `cos`, and
-      SETTLE's frame calls its `cos`. WebAssembly failed one comparison without saying which.
+      rotations came from `Rng::gaussian`, which then called the platform's `ln` and `cos`, and
+      SETTLE's frame called its `cos`. WebAssembly failed one comparison without saying which.
       The octanol box and both models were the same bits on all three.
     - `the_model_is_what_it_says` holds every atom's GAFF type to its place in the molecule, not
       to FreeSolv's type column, and FreeSolv's types agree. It holds each charge to FreeSolv's
@@ -338,11 +337,50 @@ protects nothing.
     - **Against benzene:** Δ log P is +1.14 ± 0.32 against experiment's +1.02, reported and not
       gated. Against Sangster's 3.42 the miss would be 1.6σ, still inside 2σ.
 
+### Changed
+
+- **Every sampler on `Rng` is the same bits on every platform, and every result drawn through
+  one has moved.** `gaussian`, `normal`, `poisson`, `in_disc`, `on_sphere`, `on_hemisphere` and
+  `cosine_hemisphere` called the platform's `ln`, `exp`, `sin` and `cos`, so a run repeated on one
+  machine and not on another: `pantometry-forcefield`'s water lattice, oriented through
+  `Rng::gaussian`, had three digests on CI's runners. They call `pantometry_core::math`'s now.
+  - **`rng::tests::the_samplers_are_pinned`** folds all seven into one digest, run on the four
+    platforms CI runs. It was first sized at 2048 rounds of one Gaussian, and a Box–Muller on the
+    platform's `ln` passed it. The two `ln`s differ at 950 of four million of `unit`'s values,
+    measured, and a Gaussian shows 450 of those; `normal(−3, 0.25)` shows 25 and `poisson(200)`
+    none. numerics-reviewer found that the first count, about 12 expected, had taken every
+    logarithm as visible: it was about 2. At 16 384 rounds of eight Gaussians it is about 15, and
+    the sabotage fails.
+  - **A count almost never sees `poisson`'s `exp`**, and the test does not claim to. The
+    platform's differs from the kernel's at 7.4% of means below 30, but a last bit of `P(0)`
+    moves a count only when the uniform lands within a few ulps of a cumulative sum, about
+    `10⁻¹⁵` of draws.
+  - **`pantometry_forcefield::water`'s triangle is the kernel's `sin_cos_turns` of
+    `104.52/720` of a turn**: `hh_length`, `dipole_moment` and `Settle::tip3p`, which took it
+    through radians. `the_triangle_is_the_same_bits_everywhere` pins the first two and the body
+    frame SETTLE builds every water from, and `a_lattice_is_the_same_bits_everywhere` a 64-water
+    box, both on every CI job. On this machine the platform's half angle gives the same two
+    doubles, so going back to it passes here; the pin is for any runner where it does not.
+    `Settle::new` turns its angle as `θ/4π` of a turn, one rounding, and gives `tip3p`'s bits
+    from `hoh_angle()`, held by `settle_new_is_tip3p_from_the_angle`.
+  - **Moved:** every water box, since each water is turned by four Gaussians, and every
+    thermalised velocity and Langevin kick. Benzene's production water box was `a16ebf27…` and is
+    built as `f0082c05…`; that is the pin in `p_xylene_partitioned_into_octanol.rs` now, held on
+    `x86_64-pc-windows-gnu` alone as before, which no CI job is: the lattice pin above is the one
+    CI holds. The
+    octanol box and the models draw no Gaussian and did not move. No closed-form or statistical
+    test moved past its tolerance: of the workspace's tests, that pin was the one that failed.
+  - **The long runs stand as they were measured, and were not rerun**: benzene in T4 lysozyme's
+    ΔG°_bind −9.04 ± 0.29 kcal/mol, the log P runs in octanol and decane, and p-xylene's
+    3.06 ± 0.22. Each drew from the samplers as they were, on `x86_64-pc-windows-gnu`, and is
+    reproducible at its own commit there. A log P leg resumed from its `start.txt` is refused by
+    the header's digest of the box as built, rather than continued in a different box.
+
 ### Fixed
 
 - **`pantometry_core::rng` said a scene draws the same numbers on every platform, and only its
   stream does.** The generator, `unit` and `range` are integer operations and IEEE `+ − × ÷`,
-  pinned by `the_stream_is_pinned`. Six other methods call the platform's C library:
+  pinned by `the_stream_is_pinned`. Six other methods called the platform's C library:
   - `gaussian` and `normal` call `ln` and `cos`;
   - `poisson` calls `exp`, and `gaussian` above a mean of 30;
   - `in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` call `sin` and `cos`.
@@ -351,10 +389,10 @@ protects nothing.
   through `gaussian`, was three digests on Windows (MSVC), on macOS, and on Linux with Windows
   (GNU). CONTRIBUTING.md already named `gaussian` and `poisson`; it now names all six.
 
-  The module documentation now says which methods are the same bits everywhere and which are
-  not. No method changed and no bit moved. Making them deterministic needs a `sin` and `cos` of
-  the kernel's own, as `math` has `exp` and `ln`. That would move every stochastic result, and
-  it is not done here.
+  The module documentation said which methods were the same bits everywhere and which were
+  not, and no method changed. Making them deterministic needed a `sin` and `cos` of the
+  kernel's own, as `math` had `exp` and `ln`; both came later in this release, under Added and
+  Changed above, and moved every stochastic result.
 
 ## [0.23.0] — 2026-10-30
 
