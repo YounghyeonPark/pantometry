@@ -8,6 +8,14 @@
 //! A release bumps `Cargo.toml` and has no reason to touch a markdown file, so this is the
 //! failure mode with the least friction of all of them: nothing goes wrong, the number is simply
 //! a release behind, and the first person to notice is someone who copied it.
+//!
+//! # Not under `wasm32`
+//!
+//! Every test here reads the repository, and a `wasm32` target has no filesystem. This file had no
+//! `cfg` for it, so under wasmtime all three tests read "packaged" and passed over nothing, on
+//! every commit; the assert that a crate directory exists made that a failure, in CI's
+//! `test (wasm32-wasip1, wasmtime)` job, which is how it was found.
+#![cfg(not(target_family = "wasm"))]
 
 /// Where the repository root is, relative to this crate.
 ///
