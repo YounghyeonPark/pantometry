@@ -135,8 +135,8 @@ Stated in full in CONTRIBUTING.md. The compressed version:
 3. **Nothing is random and nothing consults a clock.** `Rng::for_index(seed, index)`. Results
    are bit-for-bit identical across optimisation levels and thread counts, and across platforms
    and WebAssembly wherever they pass only through `+ − × ÷`, `sqrt` and `pantometry_core::math`
-   — not through the platform's `sin`, `cos`, `ln` or `exp`, which `Rng::gaussian` and the sphere
-   samplers call. There is a pinned digest of the stream that says so.
+   — not through the platform's `sin`, `cos`, `ln` or `exp`. Every sampler on `Rng` calls the
+   kernel's, and pinned digests of the stream and of the samplers say so on every CI runner.
 4. **The kernel must never depend on a domain**, and no domain may depend on another. That
    claim is the reason for the crate split and has now been held through fourteen domains.
 5. **Every public item is documented.** `#![deny(missing_docs)]` in all **twenty-five** crates:
