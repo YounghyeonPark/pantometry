@@ -13,7 +13,7 @@ Everything below describes the Rust API.
 
 ```toml
 [dependencies]
-pantometry = "0.23"
+pantometry = "0.24"
 ```
 
 API docs: <https://docs.rs/pantometry>. Source: <https://github.com/YounghyeonPark/pantometry>.
@@ -217,7 +217,10 @@ These are enforced by CI and by the audit, so breaking them fails loudly rather 
 They are listed here so it does not have to be loudly.
 
 - **No wall clock, no unseeded randomness.** Results are bit-for-bit reproducible across
-  platforms, optimisation levels, WebAssembly and thread counts. Use `Rng::for_index(seed, i)`,
+  optimisation levels and thread counts, and across platforms and WebAssembly wherever they pass
+  only through `+ − × ÷`, `sqrt` and `pantometry_core::math`, which every sampler on `Rng` does.
+  `pantometry-forcefield` calls the platform's `sin`, `cos` and more, and says where. Use
+  `Rng::for_index(seed, i)`,
   which gives the same value for the same index no matter what order you ask in. `Date::now`,
   `rand::thread_rng`, and reductions over unordered collections all break this.
 - **Domains do not depend on each other.** If your new physics needs to `use pantometry_thermal`,
@@ -258,8 +261,8 @@ also pass it, then go and check *that*.
 
 ## Where to look next
 
-- **`examples/`** — fourteen worked problems that print their numbers and assert every one of
-  them. `cargo run --example melting`. Give any of them a path and it writes an SVG. Two are
+- **`examples/`** — fifteen worked problems that print their numbers and assert every one of
+  them. `cargo run --example melting`. Give most of them a path and it writes an SVG. Two are
   specifically about three dimensions: `heat_in_three_dimensions` and `room_in_three_dimensions`.
   `ligand_binding` is the one whose data somebody measured: two crystal structures of one enzyme,
   open and closed on its inhibitor, and the model is shown only the open one. `aspirin_relaxes`

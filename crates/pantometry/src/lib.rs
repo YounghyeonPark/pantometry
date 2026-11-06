@@ -1,6 +1,6 @@
 //! pantometry: physics for simulated worlds, in one dependency.
 //!
-//! A facade over the workspace. The point is that a consumer writes `pantometry = "0.23"`
+//! A facade over the workspace. The point is that a consumer writes `pantometry = "0.24"`
 //! rather than naming nineteen crates, and that the integration tests which need two domains at
 //! once have somewhere to live. One thing is implemented here, [`candidate`], because it reads a molecule
 //! from one domain and a tissue partition from another, and no domain may depend on another.

@@ -21,6 +21,21 @@ protects nothing.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-11-06
+
+Fifteen commits, and the theme is one molecule in, one verdict out, and the same bits on every
+platform. `pantometry::candidate` reads a molecule and what was measured about it and returns an
+`Assessment`, with a binding free energy given in kcal/mol or kJ/mol by name.
+`pantometry_forcefield::{mol2, amber}` make GAFF/AM1-BCC's non-bonded terms a library path
+without shipping a GAFF value, and `components` names the 52 dictionary entries the crate ships.
+p-xylene's log P is 3.06 ± 0.22 against 3.15, by a gate registered before any window ran, so the
+method benzene's 1.92 came from carries to a second solute.
+
+The kernel gained `math::sin_cos_turns`, and every sampler on `Rng` calls the kernel's `ln`,
+`exp` and `sin_cos_turns` now, so a water box is one box on every platform where it was three.
+That moved every stochastic result. The long runs stand as they were measured, each at its own
+commit.
+
 ### Added
 
 - **`pantometry_core::math::sin_cos_turns`: the sine and cosine of a turn, the same bits on every
@@ -181,7 +196,9 @@ protects nothing.
     `f7c421c4`, SHA-256 `95e3c655...`, reads as 71 types. The seven that `tests/gaff/` writes out
     are its values to the bit.
   - **The move changed no bit.** `benzenes_legs_are_the_bits_they_were` now builds through the
-    library and holds the same four digests. Three sabotages of the library path each fail it:
+    library and holds the same four digests, three of them since the samplers changed, under
+    Changed: the water box is built as `f0082c05…` now. Three sabotages of the library path each
+    fail it:
     - `AMBER_ONE_FOUR`'s Coulomb scale made `1/1.21`;
     - `uff_form` scaled by `1 + 1e-12`;
     - `onto` taking the last match instead of the first.
@@ -259,7 +276,8 @@ protects nothing.
   - **Checked by default:**
     - `benzenes_legs_are_the_bits_they_were` holds benzene's production octanol and water boxes
       to the digests benzene's own melts wrote into `start.txt` on 2026-10-21: built `6a003b69…`
-      with model `bfd0ccdb…`, and `a16ebf27…` with `b80d6cc9…`. It holds the box the
+      with model `bfd0ccdb…`, and `a16ebf27…` with `b80d6cc9…`; the water box is built as
+      `f0082c05…` since the samplers changed, under Changed. It holds the box the
       `octanol_box` wrapper builds, which benzene's other tests and the decane leg use, to the
       first of those. Benzene's small boxes, built by that wrapper at other sizes, are not pinned.
       **It runs on `x86_64-pc-windows-gnu` only**, the platform benzene's runs were made on. It
@@ -371,7 +389,8 @@ protects nothing.
     octanol box and the models draw no Gaussian and did not move. No closed-form or statistical
     test moved past its tolerance: of the workspace's tests, that pin was the one that failed.
   - **The long runs stand as they were measured, and were not rerun**: benzene in T4 lysozyme's
-    ΔG°_bind −9.04 ± 0.29 kcal/mol, the log P runs in octanol and decane, and p-xylene's
+    ΔG°_bind −8.975 ± 0.279 kcal/mol and −4.61 ± 0.29 with GAFF, ff14SB and AM1-BCC, the log P
+    runs in octanol and decane, and p-xylene's
     3.06 ± 0.22. Each drew from the samplers as they were, on `x86_64-pc-windows-gnu`, and is
     reproducible at its own commit there. A log P leg resumed from its `start.txt` is refused by
     the header's digest of the box as built, rather than continued in a different box.
@@ -380,14 +399,15 @@ protects nothing.
 
 - **`pantometry_core::rng` said a scene draws the same numbers on every platform, and only its
   stream does.** The generator, `unit` and `range` are integer operations and IEEE `+ − × ÷`,
-  pinned by `the_stream_is_pinned`. Six other methods called the platform's C library:
-  - `gaussian` and `normal` call `ln` and `cos`;
-  - `poisson` calls `exp`, and `gaussian` above a mean of 30;
-  - `in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` call `sin` and `cos`.
+  pinned by `the_stream_is_pinned`. Seven other methods called the platform's C library:
+  - `gaussian` and `normal` called `ln` and `cos`;
+  - `poisson` called `exp`, and `gaussian` above a mean of 30;
+  - `in_disc`, `on_sphere`, `on_hemisphere` and `cosine_hemisphere` called `sin` and `cos`.
 
   CI measured the difference at `6a4f1db`. `pantometry-forcefield`'s water lattice, oriented
-  through `gaussian`, was three digests on Windows (MSVC), on macOS, and on Linux with Windows
-  (GNU). CONTRIBUTING.md already named `gaussian` and `poisson`; it now names all six.
+  through `gaussian`, was one digest on Linux, another on Windows (MSVC) and a third on macOS;
+  this machine's Windows (GNU), which no CI job runs, gave Linux's. CONTRIBUTING.md already named
+  `gaussian` and `poisson`, and that change named all seven.
 
   The module documentation said which methods were the same bits everywhere and which were
   not, and no method changed. Making them deterministic needed a `sin` and `cos` of the
@@ -10794,7 +10814,8 @@ and are not obvious from the outside:
 - A `compile_fail` doctest proving `Length + Time` does not build — the workspace's reason for
   existing, previously asserted only in prose.
 
-[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/YounghyeonPark/pantometry/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.24.0
 [0.23.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.23.0
 [0.22.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.22.0
 [0.21.0]: https://github.com/YounghyeonPark/pantometry/releases/tag/v0.21.0

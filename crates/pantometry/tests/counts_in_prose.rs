@@ -482,8 +482,8 @@ fn example_files() -> usize {
 /// there globbed `crates/pantometry/examples/*.rs` and missed the one example that lives in `pantometry-optics`,
 /// so a release following it would have counted fourteen of fifteen and had no way to know.
 ///
-/// **`AGENTS.md`'s "twelve worked problems" is deliberately not checked against this.** Three of the
-/// fifteen files are a quickstart, a benchmark and a README checker, and calling them worked problems
+/// **`AGENTS.md`'s count of worked problems is deliberately not checked against this.** Three of the
+/// eighteen files are a quickstart, a benchmark and a README checker, and calling them worked problems
 /// would be the wrong sentence rather than the wrong number. A test that insisted they agree would be
 /// asserting a definition, and it fired on exactly that when this file's first draft tried.
 #[test]

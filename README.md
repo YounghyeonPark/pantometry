@@ -90,7 +90,7 @@ pip install pantometry   # or from Python — see bindings/python
 ```
 
 ```toml
-pantometry = "0.23"
+pantometry = "0.24"
 ```
 
 ## Run
@@ -165,7 +165,7 @@ and GitHub renders it as a **Cite this repository** button; the same content as 
 @software{park_pantometry,
   author  = {Park, Younghyeon},
   title   = {pantometry: physics for simulated worlds, checked against closed forms},
-  version = {0.23.0},
+  version = {0.24.0},
   year    = {2026},
   doi     = {10.5281/zenodo.23790132},
   url     = {https://doi.org/10.5281/zenodo.22024817},

@@ -92,11 +92,11 @@ source, and for `app/deny.toml` the union over the three targets it lists.
 ```sh
 for d in . bindings/python app; do (cd $d && cargo metadata --locked --format-version 1 \
   | python -c "import json,sys; print(sum(p['source'] is not None for p in json.load(sys.stdin)['packages']))"); done
-                                                     # 12, 19, 432 at 0.22.0
+                                                     # 12, 19, 381 at 0.24.0
 cd app && for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc wasm32-unknown-unknown; do
   cargo metadata --locked --format-version 1 --filter-platform $t \
   | python -c "import json,sys; [print(p['id']) for p in json.load(sys.stdin)['packages'] if p['source']]"
-done | sort -u | wc -l                               # 332 at 0.22.0: what app/deny.toml gates
+done | sort -u | wc -l                               # 277 at 0.24.0: what app/deny.toml gates
 ```
 
 And the two **numerators** in `scenes/README.md`, which nothing guards and which were wrong by three
@@ -114,12 +114,12 @@ for f in pantometry-world/scenes/*.json; do
   then echo refused
   else echo "FAILED $n"
   fi
-done | sort | uniq -c            # 24 export, 8 refused, 0 otherwise
+done | sort | uniq -c            # 25 export, 9 refused, 0 otherwise, at 0.24.0
 
 for f in pantometry-world/scenes/*.json; do
   cargo run --locked -q --release --bin pantometry -- run "$f" /tmp/one.svg 2>&1 \
     | grep -q "not drawn" && echo undrawable
-done | wc -l                     # 13 have a domain the filmstrip cannot draw
+done | wc -l                     # 14 at 0.24.0 have a domain the filmstrip cannot draw
 ```
 
 The second number was already right. The first was not, which is the argument for counting both

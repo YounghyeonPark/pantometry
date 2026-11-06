@@ -23,8 +23,9 @@
 //! `the_samplers_are_pinned` holds a digest of all seven, on the same four
 //! platforms. Through 0.23 they called the platform's C library instead, and CI
 //! measured the difference on `pantometry-forcefield`'s water lattice, whose
-//! molecules are oriented through [`Rng::gaussian`]: three different digests, on
-//! Windows (MSVC), on macOS, and on Linux with Windows (GNU). A result recorded
+//! molecules are oriented through [`Rng::gaussian`]: one digest on Linux, another
+//! on Windows (MSVC) and a third on macOS; this machine's Windows (GNU), which no
+//! CI job runs, gave Linux's. A result recorded
 //! before that drew different numbers, and is reproducible only on the machine,
 //! and at the version, that recorded it.
 //!
