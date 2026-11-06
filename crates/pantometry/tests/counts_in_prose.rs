@@ -105,7 +105,20 @@ fn root() -> PathBuf {
 
 /// Whether these tests are running in a checkout. A published crate's tests run from a registry
 /// directory with no documents beside it, and that is the one place a missing file is not a defect.
+///
+/// **A crate directory that is not there at all is not that place.** `CARGO_MANIFEST_DIR` is
+/// written in at compile time, so a binary built before a checkout moved still names the old
+/// tree: when the old tree is gone, every test here used to skip and print `ok`, thirteen of them
+/// over nothing. A package's directory exists, with no repository around it; a moved checkout's
+/// does not exist. The first is a skip and the second a failure.
 fn repository() -> bool {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        manifest.is_dir(),
+        "{} is not there: this test binary was compiled from a tree that has moved or gone. \
+         Run cargo clean and test again",
+        manifest.display()
+    );
     root().join("Cargo.toml").is_file() && root().join("crates").is_dir()
 }
 

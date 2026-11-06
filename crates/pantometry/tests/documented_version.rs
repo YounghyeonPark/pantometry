@@ -34,8 +34,19 @@ fn repo_file(name: &str) -> Option<String> {
 }
 
 /// Whether this crate sits in the repository rather than in a package.
+///
+/// A crate directory that does not exist is neither: `CARGO_MANIFEST_DIR` is fixed at compile
+/// time, so a binary built before a checkout moved names a tree that may be gone, and this used to
+/// read that as "packaged" and pass. A package's directory exists; a moved checkout's does not.
 fn in_checkout() -> bool {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        manifest.is_dir(),
+        "{} is not there: this test binary was compiled from a tree that has moved or gone. \
+         Run cargo clean and test again",
+        manifest.display()
+    );
+    let root = manifest.join("../..");
     root.join("Cargo.toml").is_file() && root.join("crates").is_dir()
 }
 
