@@ -15,11 +15,39 @@ Entries record what was *found* as well as what was added, because several of th
 changes here were corrections to a mistaken assumption rather than new features. The commit
 messages carry the full account.
 
-`CONTRIBUTING.md` holds the gate and indexes the sixteen times it has reported a pass it had not
+`CONTRIBUTING.md` holds the gate and indexes the seventeen times it has reported a pass it had not
 earned; `CLAUDE.md` carries the kinds they were, and why a `set -euo pipefail` pasted into a shell
 protects nothing.
 
 ## [Unreleased]
+
+### Added
+
+- **AGENTS.md's count of worked problems is held against EXAMPLES.md's table.** It said fourteen
+  with fifteen rows in the table, and nothing compared the two. `counts_in_prose` now reads the
+  table to its first line that is not a row, and the examples kept out of it have to be excused
+  in the paragraphs right after it, by name.
+
+### Fixed
+
+- **A moved checkout's test binaries passed `counts_in_prose` and `documented_version` over
+  nothing.** `CARGO_MANIFEST_DIR` is fixed at compile time, and a crate directory that was gone
+  read as "packaged" and skipped: with a copy of the tree removed after building, 13 and 3 tests
+  passed. A missing crate directory is now a failure that says to run `cargo clean`; a package,
+  whose directory exists, still skips.
+- **`documented_version` passed over nothing under wasmtime on every commit.** It read the
+  repository with no `#![cfg(not(target_family = "wasm"))]`, so under wasm32-wasip1 it found no
+  repository and skipped; the fix above made that a failure in CI's
+  `test (wasm32-wasip1, wasmtime)`. It carries the `cfg` now.
+- **An example written as a directory was invisible to the four tests that count examples.**
+  `example_stems` follows cargo's discovery rule now, `NAME.rs` and `NAME/main.rs`, refuses a
+  manifest that uses `[[example]]` or `autoexamples` rather than counting around it, and refuses
+  one name used by two crates.
+- **The gate compiled the wasm32-wasip1 tests and never ran them**, and CLAUDE.md and
+  CONTRIBUTING.md said compiling catches a missing wasm `cfg`. It does not: a missing `cfg`
+  always compiles. Both now run the suite under wasmtime v49.0.0, CI's pinned release, at CI's
+  opt-level: 1427 passed and 85 ignored, 312 s with the build cold. It is the seventeenth entry in
+  CONTRIBUTING.md's table, and the second to reach `main`.
 
 ## [0.24.0] — 2026-11-06
 
