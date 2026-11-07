@@ -432,6 +432,8 @@ jobs:
           # runner and 2580 s on another, every test binary about twice as slow on the second,
           # and it was the longest job in CI. Measured on one machine with the wasmtime pinned
           # above: 1018 s at opt-level 0 and 164 s at opt-level 2, 857 tests passing in both.
+          # Measured again on 2026-11-07, Windows, the same wasmtime: 1427 passed and 85 ignored,
+          # 312 s at opt-level 2 with the build cold. The local gate runs this step now as well.
           #
           # Only the optimisation level moves. rustc is still passed `-C debug-assertions=on`,
           # read off `cargo build -v` at this setting, and overflow checks follow debug

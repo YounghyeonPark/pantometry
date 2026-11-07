@@ -79,7 +79,7 @@ held to them. The application lives in [`app/`](app/README.md) now, which is its
 which cargo keeps out of this one, so there is nothing left to exclude and every member here is
 published and held to all three.
 
-### This gate has reported a result it had not earned, sixteen times
+### This gate has reported a result it had not earned, seventeen times
 
 **This table is the index, and it is the only place the count is kept.** It used to say eight while
 holding six rows, with eight more instances described in the prose below it and one described only
@@ -109,6 +109,7 @@ and the rest are the ways that is not the only one.
 | 14 | the library gate alone, with `app/` unrun | `native viewer` and `gpu accelerator` sat red on `main` over `cargo fmt`, twenty steps passing on every commit in between |
 | 15 | a change *inside* the library that broke a workspace outside it | `extent_m` on `PanelData::Field` made the viewer's `deny_unknown_fields` reader refuse every run file, with the gate green |
 | 16 | two gate runs writing one log | a stopped run's child kept going, the new one truncated the log under it, and a twenty-four-step gate produced forty-four markers and both verdicts |
+| 17 | the `wasm32-wasip1` tests compiled with `--no-run` and not run | `documented_version` had no wasm `cfg` and compiled, as a missing `cfg` always does; under wasmtime it had passed over nothing on every commit, and when `81c7dae` made that a failure CI went red with every step here green |
 
 ### Run it **once**, and make a second run refuse
 
@@ -160,7 +161,7 @@ command and read its exit code. The last is what caught the sixth one after thre
 not. And a doubled command is caught by none of them — running each check **once** is the only fix for
 that.
 
-**The one that reached `main`.** `cargo test --locked --workspace` takes long enough here to be
+**The first that reached `main`** (entry 17 is the second, and is below). `cargo test --locked --workspace` takes long enough here to be
 moved to the background, and its output file is then a transcript that is still being written — so
 a `grep` over it for `FAILED` finds nothing, because the failing binary has not run yet. Commit
 `4a3654f` shipped `heat_crosses_a_join_and_not_a_gap` failing on that reading, and it was found a
@@ -214,23 +215,33 @@ is decoration — see below.
 ### The two targets, and the `cfg` a document test needs
 
 ```sh
-cargo test --locked --workspace --target wasm32-wasip1 --no-run
+CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime CARGO_PROFILE_DEV_OPT_LEVEL=2 \
+  cargo test --locked --workspace --target wasm32-wasip1
 cargo build --locked --workspace --target wasm32-unknown-unknown
 ```
 
-Compiled here, run by CI: the `test (wasm32-wasip1, wasmtime)` job installs wasmtime and this block
-does not ask you to. Compiling is enough to catch what the gate missed once — a test that reads a
-document off a disk and has no `#![cfg(not(target_family = "wasm"))]`. A `wasm32` target has no
-repository, so the walk finds nothing, and the "a check that stopped finding things would pass
-forever" assertion fires about the wrong thing. `counts_in_prose` and `citation_is_valid` carry
-that line; `the_documents_link_to_things_that_exist` shipped without it, twenty-seven checks green.
+**Run, not compiled.** This block used to say `--no-run` and leave the running to CI's
+`test (wasm32-wasip1, wasmtime)` job, on the grounds that compiling catches a test that reads a
+document off a disk and has no `#![cfg(not(target_family = "wasm"))]`. It does not: a missing `cfg`
+compiles, always, and what it does is decided only when the binary runs with no repository to read.
+Sometimes the "a check that stopped finding things would pass forever" assertion fires —
+`the_documents_link_to_things_that_exist` shipped without the line, twenty-seven checks green — and
+sometimes nothing fires at all: `documented_version` read the missing repository as "packaged" and
+passed over nothing under wasmtime on every commit, until `81c7dae` made that a failure and CI was
+the first to run it (entry 17 above). `counts_in_prose` and `citation_is_valid` carry the line.
 
-**Compiling is not all of it, and the second miss was a different mechanism.** `rustc --print cfg
+Use the wasmtime release CI pins — the version and the hash are in `.github/workflows/ci.yml` — and the
+same `opt-level`, which is CI's for the reason given there. `CARGO_TARGET_WASM32_WASIP1_RUNNER` takes
+a full path if wasmtime is not on `PATH`. Measured on 2026-11-07 on Windows with v49.0.0's zip,
+checked against the digest the release API reports for it: 1427 passed and 85 ignored, 312 s with
+the build cold.
+
+**The second kind of miss is a different mechanism.** `rustc --print cfg
 --target wasm32-wasip1` says `panic="abort"`, so `catch_unwind` compiles there and catches nothing:
 a test that used it to check that a constructor refuses bad input compiled clean under `--no-run`
 and trapped in CI with `wasm trap: unreachable` and exit 134 — the assertion firing as designed and
 taking the process with it. The guard is `#[cfg(panic = "unwind")]` on the part that needs
-unwinding, not on the test. Both misses can be checked without wasmtime: `rustc --print cfg` gives
+unwinding, not on the test. This one can also be checked without wasmtime: `rustc --print cfg` gives
 the target's panic strategy, and the panic message's absence from the `wasm32-wasip1` binary —
 beside the strings either side of it, which are present — says the block was compiled out.
 

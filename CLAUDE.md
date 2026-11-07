@@ -16,7 +16,7 @@ works in a fresh `bash -c`, so the option is right and the paste is what defeats
 
 The surest thing is one check per command with its exit code read — three shell guards had not
 caught the one that needed it. [CONTRIBUTING.md](CONTRIBUTING.md#run-what-ci-runs) is the authority
-and its table is the index: **sixteen** instances with what each cost, numbered there and nowhere
+and its table is the index: **seventeen** instances with what each cost, numbered there and nowhere
 else, because this file used to number them too and the two sets had drifted apart by two.
 
 What is worth carrying every session is which *kind* of thing each was, since none of them is a
@@ -74,13 +74,17 @@ none — `counts_in_prose` and `citation_is_valid` both carry that line. A new o
 it, passed twenty-seven checks here and turned CI's `test (wasm32-wasip1, wasmtime)` job red. Add:
 
 ```sh
-cargo test --locked --workspace --target wasm32-wasip1 --no-run
+CARGO_TARGET_WASM32_WASIP1_RUNNER=/c/dev/tools/wasmtime-v49.0.0-x86_64-windows/wasmtime.exe \
+  CARGO_PROFILE_DEV_OPT_LEVEL=2 cargo test --locked --workspace --target wasm32-wasip1
 cargo build --locked --workspace --target wasm32-unknown-unknown
 ```
 
-`--no-run` because *running* needs wasmtime, which the CI job installs and this machine does not.
-That is the half CI keeps; compiling is the half that catches the missing `cfg`, and it is the
-half that was missing here.
+**Run it, do not only compile it.** This said `--no-run`, because running needs wasmtime and this
+machine had none, and it claimed compiling was the half that catches a missing `cfg`. A missing
+`cfg` always compiles. `documented_version` had none, passed over nothing under wasmtime on every
+commit, and when `81c7dae` made that a failure CI was the first thing to run it — entry 17. The
+wasmtime above is CI's pinned release, checked against the release API's digest, at CI's
+opt-level: 1427 passed, 312 s cold. If CI moves wasmtime, move this one with it.
 
 CI does **not** cover `bindings/python` or `app/` from this gate — each has its own job and its own
 procedure.
@@ -116,7 +120,7 @@ The device tests there skip loudly on a machine with no adapter. A skip that say
 result; a skip that says nothing is the shape of a suite that has stopped testing anything.
 
 **Read a result from the thing that produced it, and read whether the check *ran* rather than what it
-printed.** Sixteen times this gate has said `ok` while failing, and once that reached `main` — indexed in
+printed.** Seventeen times this gate has said `ok` while failing, and twice that reached `main` — indexed in
 CONTRIBUTING.md, counted nowhere else. A CI run's
 roll-up has said `success` with a job still `queued`; ask each job for its own `conclusion`. A script
 that edits several files can write the first and raise on the next, so check every anchor before
