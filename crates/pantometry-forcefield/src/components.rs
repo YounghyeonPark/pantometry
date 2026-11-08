@@ -21,7 +21,7 @@
 //! fails if a `.cif` there is missing here, or listed here and missing there.
 
 /// Every entry, as `(identifier, text)`, in the identifiers' byte order.
-pub const ALL: [(&str, &str); 52] = [
+pub const ALL: [(&str, &str); 53] = [
     ("16R", include_str!("../components/16R.cif")),
     ("2F2", include_str!("../components/2F2.cif")),
     ("2ME", include_str!("../components/2ME.cif")),
@@ -51,6 +51,7 @@ pub const ALL: [(&str, &str); 52] = [
     ("I4B", include_str!("../components/I4B.cif")),
     ("ILE", include_str!("../components/ILE.cif")),
     ("IND", include_str!("../components/IND.cif")),
+    ("IPH", include_str!("../components/IPH.cif")),
     ("KEN", include_str!("../components/KEN.cif")),
     ("LEU", include_str!("../components/LEU.cif")),
     ("LYS", include_str!("../components/LYS.cif")),

@@ -30,6 +30,10 @@
 //!   archive and commit ([`P_XYLENE_SOURCE`]), its SHA-256 in [`P_XYLENE_SHA256`]. FreeSolv's row
 //!   for it is −0.80 ± 0.60 kcal/mol by experiment (the ± a default, FreeSolv says, not a measured
 //!   uncertainty) and −0.66 ± 0.03 calculated. Its charges sum to +0.0001 e as written.
+//! - **And phenol** ([`MOBLEY_20524`]), the third solute partitioned into octanol and the first
+//!   with a hydrogen to give and an oxygen to take one: the same archive and commit
+//!   ([`PHENOL_SOURCE`]), its SHA-256 in [`PHENOL_SHA256`]. FreeSolv's row for it is −6.60 ± 0.20
+//!   kcal/mol by experiment and −5.71 ± 0.03 calculated. Its charges sum to zero as written.
 
 #![allow(dead_code)]
 
@@ -535,4 +539,59 @@ No Charge or Current Charge
 /// FreeSolv's p-xylene, read ([`MOBLEY_3234716`]).
 pub fn p_xylene() -> Mol2 {
     parse(MOBLEY_3234716).expect("FreeSolv's mobley_3234716.mol2")
+}
+
+/// Where [`MOBLEY_20524`] came from: the archive [`SOURCE`] names, at the same commit.
+pub const PHENOL_SOURCE: &str = "github.com/MobleyLab/FreeSolv v0.52, commit \
+    9d8a8097d587a6c084befbb2abde6dd2a0f31ba3, mol2files_gaff.tar.gz \
+    (SHA-256 15ece6114442a8eb5e720c0ad25bb48e4a6a35392da36f72b80a6f2f415fd133) \
+    → mol2files_gaff/mobley_20524.mol2";
+
+/// The SHA-256 of [`MOBLEY_20524`]'s bytes, phenol, reproduced on 2026-11-08.
+pub const PHENOL_SHA256: &str = "f505a87f03dc6b3053efa53be516e1410156e222ecafa6d1aac1b98350d81394";
+
+/// **FreeSolv v0.52's `mobley_20524.mol2`, phenol, byte for byte** ([`PHENOL_SOURCE`]): GAFF's
+/// `ca`, `ha`, `oh` and `ho`, and AM1-BCC's charges to four places, as FreeSolv ran them.
+pub const MOBLEY_20524: &str = r#"@<TRIPOS>MOLECULE
+phenol
+   13    13     1     0     0
+SMALL
+No Charge or Current Charge
+
+
+@<TRIPOS>ATOM
+      1 C1          1.8850   -1.0360   -0.1120 ca        1 MOL     -0.165900
+      2 C2          2.9210   -1.6310    0.6080 ca        1 MOL     -0.094000
+      3 C3          2.8780   -1.6520    2.0020 ca        1 MOL     -0.185200
+      4 C4          1.8000   -1.0790    2.6760 ca        1 MOL      0.123000
+      5 C5          0.7640   -0.4840    1.9550 ca        1 MOL     -0.185200
+      6 C6          0.8070   -0.4630    0.5610 ca        1 MOL     -0.094000
+      7 O1          1.7590   -1.0980    4.0360 oh        1 MOL     -0.498900
+      8 H1          1.9180   -1.0210   -1.1980 ha        1 MOL      0.132400
+      9 H2          3.7600   -2.0770    0.0830 ha        1 MOL      0.133700
+     10 H3          3.6890   -2.1150    2.5580 ha        1 MOL      0.140900
+     11 H4         -0.0790   -0.0350    2.4740 ha        1 MOL      0.140900
+     12 H5         -0.0000    0.0000    0.0000 ha        1 MOL      0.133700
+     13 H6          0.9520   -0.6630    4.3550 ho        1 MOL      0.418600
+@<TRIPOS>BOND
+     1    1    6 ar  
+     2    1    2 ar  
+     3    2    3 ar  
+     4    3    4 ar  
+     5    4    5 ar  
+     6    5    6 ar  
+     7    4    7 1   
+     8    1    8 1   
+     9    2    9 1   
+    10    3   10 1   
+    11    5   11 1   
+    12    6   12 1   
+    13    7   13 1   
+@<TRIPOS>SUBSTRUCTURE
+     1 MOL         1 TEMP              0 ****  ****    0 ROOT
+"#;
+
+/// FreeSolv's phenol, read ([`MOBLEY_20524`]).
+pub fn phenol() -> Mol2 {
+    parse(MOBLEY_20524).expect("FreeSolv's mobley_20524.mol2")
 }

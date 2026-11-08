@@ -17,7 +17,7 @@ fn every_shipped_component_is_listed() {
         .filter_map(|n| n.strip_suffix(".cif").map(str::to_owned))
         .collect();
     on_disk.sort();
-    assert!(on_disk.len() >= 52, "only {} entries found", on_disk.len());
+    assert!(on_disk.len() >= 53, "only {} entries found", on_disk.len());
     let listed: Vec<String> = components::ALL
         .iter()
         .map(|(id, _)| id.to_string())

@@ -1,7 +1,7 @@
 //! **GAFF's van der Waals for octanol's five types and benzene's two**, with where they were read,
 //! GAFF's 1-4 scales, and each molecule's GAFF/AM1-BCC non-bonded model built from FreeSolv's files.
 //! p-xylene's four types are among those seven (`c3`, `hc`, `ca`, `ha`), so its model needs no
-//! value read beyond them.
+//! value read beyond them, and so are phenol's (`ca`, `ha`, `oh`, `ho`).
 //!
 //! **Kept out of the published crate** (`Cargo.toml`'s `exclude`): the numbers are read from
 //! `gaff.dat` in ambermini, which is AmberTools under GPL v3, as `tests/amber/`'s are. The values
@@ -134,6 +134,12 @@ impl Model {
     /// FreeSolv ran them, summing to +0.0001 e.
     pub fn p_xylene(c: &Component) -> Model {
         Model::from(&freesolv::p_xylene(), c)
+    }
+
+    /// Phenol's: `ca`, `ha`, `oh` and `ho` from `mobley_20524.mol2`, and its AM1-BCC charges as
+    /// FreeSolv ran them, summing to zero.
+    pub fn phenol(c: &Component) -> Model {
+        Model::from(&freesolv::phenol(), c)
     }
 }
 

@@ -60,6 +60,7 @@ time, and assert the edit's anchor occurs exactly once before making it.
 | `OC9.cif` | OCTAN-1-OL — 1-octanol, the solvent of log P (`OCT` is n-octane) | C8 H18 O | 2011-06-04 | 2026-10-21 | `6591016df1b408d992edf91841057b4474e5f1acc09c174ae01d1b0bb8af8b6c` |
 | `R16.cif` | HEXADECANE — n-hexadecane, the oil of benzene's oil:water partition | C16 H34 | 2011-06-04 | 2026-10-24 | `1438ae72b9b358efeea7a6dfd4473eb6b35863dd622182227f0e7b889ba99281` |
 | `D10.cif` | DECANE — n-decane, the oil if hexadecane will not stay liquid | C10 H22 | 2011-06-04 | 2026-10-24 | `bdcfa84887428ea5dc748e25fb19a4abd57e2639e73244474c90e6371fb57149` |
+| `IPH.cif` | PHENOL — the third solute partitioned into octanol, and the first polar one | C6 H6 O | 2011-06-04 | 2026-11-08 | `655cf2501519666d5fdeb2cc2fada3ef7b1cc0202a3121947ac9cb940a407a0b` |
 
 **How each entry was found and checked.** By exact name or by formula through RCSB's search API,
 then read: its name, its formula, and its bond table, which must be the molecule's — every heavy

@@ -96,6 +96,7 @@ fn every_component_is_the_molecule_it_says() {
         ("OC9", include_str!("../components/OC9.cif")),
         ("R16", include_str!("../components/R16.cif")),
         ("D10", include_str!("../components/D10.cif")),
+        ("IPH", include_str!("../components/IPH.cif")),
     ] {
         let c = Component::from_ccd(text).expect("parses");
         let stated = c

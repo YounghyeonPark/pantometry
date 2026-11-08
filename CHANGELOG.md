@@ -23,10 +23,66 @@ protects nothing.
 
 ### Added
 
+- **Phenol through benzene's log P legs, the first polar solute, with the gate registered before
+  any window runs** (`pantometry-forcefield`'s `tests/phenol_partitioned_into_octanol.rs`, kept out
+  of the published crate with the other files that read `gaff.dat`). Benzene's 1.92 against 2.13
+  and p-xylene's 3.06 ± 0.22 against 3.15 are both hydrocarbons, whose legs are mostly the van der
+  Waals segment; phenol's hydration free energy is −6.60 kcal/mol where benzene's is −0.90, so its
+  answer is in its charges.
+  - **Read for it, each from its source:** FreeSolv v0.52's `mobley_20524.mol2`, kept byte for
+    byte (SHA-256 `f505a87f…`), from the archive and commit benzene's and p-xylene's came from,
+    whose SHA-256 matched the one already cited; log K_ow **1.46**, Hansch, Leo and Hoekman 1995
+    p. 20, via PubChem CID 996's HSDB record, the source of benzene's 2.13 and p-xylene's 3.15 (its
+    ICSC and HMDB entries are 1.46, Sangster's 1.6); and 87.9 cm³/mol from the Merck Index's
+    density, 1.071, which is most likely the crystal's (the liquid's 1.0545 at 45 °C would be 1.6%
+    more).
+  - **No new GAFF value:** phenol's `ca`, `ha`, `oh` and `ho` are benzene's and octanol's own.
+  - **`IPH`, PHENOL, joins `components/`**, fetched twice and identical, so
+    `pantometry_forcefield::components::ALL` holds 53 entries.
+  - **FreeSolv's GAFF/AM1-BCC hydrates phenol 0.89 kcal/mol too weakly** (−5.71 ± 0.03 against
+    −6.60 ± 0.20), which alone would put log P 0.65 high; whether octanol's leg carries the same
+    error is what the run says.
+  - **The gate**, before any window: with `σ` log P's error including **both** legs' charge
+    segments' two-seed spread, the verdict is **uninformative** if `2σ ≥ 0.46`; otherwise the
+    method **carries to phenol** if `|log P − 1.46| ≤ 2σ`, **does not** if the miss is over `3σ`,
+    and is not settled between. Δ log P against benzene is reported against experiment's −0.67,
+    with whether it is below benzene's by more than twice its error, and not gated.
+  - **The ceiling was 0.67 as first written, experiment's benzene less phenol, and that let a
+    method blind to the hydroxyl pass.** Such a method gives this method's benzene, 1.92, not
+    experiment's 2.13, and 1.92 is only 0.46 from 1.46: at `σ = 0.30`, `2σ = 0.60` is under 0.67
+    and a result of 1.92 is within it. For p-xylene the experimental difference was the smaller
+    (3.15 − 1.92 = 1.23 against 1.02), so copying its rule reversed which one bound.
+  - **The water leg's charge segment is reseeded too.** Benzene's and p-xylene's reseeded the
+    octanol's alone, which for a hydrocarbon was most of what was uncertain; phenol's hydration
+    free energy is mostly its water charge segment. About 2 h more, at the 2,300 s a window
+    p-xylene's water leg took.
+  - **The charge segment is read from each leg's schedule**, as the candidates up to 8, not
+    written as `[0, 4, 8]`: an insertion between 0 and 8, likeliest for phenol, would have made
+    the reseed refuse a day into the run. And the reseed refuses a leg whose `long.lock` is still
+    there, since a leg in its insertion rounds already has all thirteen windows and passed the
+    check for a finished one. p-xylene's file has the same two gaps.
+  - **The checks hold each charge to its atom's place**, ipso, ortho, meta and para, their
+    hydrogens and the hydroxyl, and each type to the structure rather than to the file's column.
+    Ten sabotages each fail a test. The sixth, relaxing the geometry with QEq's charges in place
+    of the model's, passed every check until one was added for it: the field's charges are swapped
+    in after the relaxation, so nothing downstream sees which were used. The first check added for
+    it read the solute's own copy of the charges, which a seventh, QEq's on the minimiser's field
+    alone, would have passed; it reads the field now, and the seventh fails. The other three are
+    the gate's ceiling put back to 0.67 and the charge segment's end moved either way. Benzene's
+    and p-xylene's files have no check of their relaxation's charges.
+  - Not run here. The long runs (both legs, then both second seeds) are about a day and a half.
+
 - **AGENTS.md's count of worked problems is held against EXAMPLES.md's table.** It said fourteen
   with fifteen rows in the table, and nothing compared the two. `counts_in_prose` now reads the
   table to its first line that is not a row, and the examples kept out of it have to be excused
   in the paragraphs right after it, by name.
+
+### Changed — breaking
+
+- **`pantometry_forcefield::components::ALL` is `[(&str, &str); 53]`, was `; 52`.** It is an
+  array, so its length is in its type, and code that names the type stops compiling; code that
+  iterates it or takes `.len()` does not. `IPH`, phenol, is the fifty-third. The next release is
+  0.25.0, not 0.24.1.
 
 ### Fixed
 

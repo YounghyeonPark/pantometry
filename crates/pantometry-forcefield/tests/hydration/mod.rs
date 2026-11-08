@@ -38,7 +38,8 @@ impl Benzene {
     /// **Another small molecule built benzene's way**, from its dictionary entry `ccd`: typed,
     /// relaxed in UFF's vacuum with `charges` (or QEq's), and every X–H put on its constraint.
     /// The type keeps benzene's name because benzene is what every test sharing it builds;
-    /// `p_xylene_partitioned_into_octanol.rs` is the one that builds something else.
+    /// `p_xylene_partitioned_into_octanol.rs` and `phenol_partitioned_into_octanol.rs` are the ones
+    /// that build something else.
     pub fn from_ccd(ccd: &str, charges: Option<Vec<f64>>) -> Benzene {
         let component = Component::from_ccd(ccd).expect("a dictionary entry");
         let types = uff::assign(&component);
