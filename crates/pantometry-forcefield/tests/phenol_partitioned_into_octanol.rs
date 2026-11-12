@@ -70,7 +70,52 @@
 //!
 //! # What it measured
 //!
-//! Not run yet.
+//! Run on `x86_64-pc-windows-gnu` from the binary built at `697dbef`. The two legs took 108 327 s
+//! and finished on 2026-11-10. The second seeds took 53 121 s and finished on 2026-11-11. Of that,
+//! the water's first two reseeded windows ran under Windows' power throttling, 18 895 s and 8 362 s
+//! against 2 310 to 2 348 s for each of `long/`'s. That changed the speed and not the numbers.
+//! **Both legs inserted candidate 2**, between 0 and 4, where the overlaps were 0.064 (water) and
+//! 0.078 (octanol). So both charge segments are 0, 2, 4 and 8: the `[0, 4, 8]` benzene's and
+//! p-xylene's files write would have refused this run. In kcal/mol:
+//!
+//! | | BAR | TI | halves | lowest overlap |
+//! | --- | --- | --- | --- | --- |
+//! | water, decoupled, one seed | +6.768 ± 0.170 | +7.062 ± 0.172 | +6.864, +6.672 | 0.182 |
+//! | octanol, decoupled, one seed | +9.112 ± 0.316 | +9.491 ± 0.344 | +9.311, +8.900 | 0.281 |
+//!
+//! - **One seed:** log P is 1.72 ± 0.26. Under the 0.67 ceiling this gate was first written with,
+//!   that would have read as a method that carries, since the miss of 0.26 is inside 2σ = 0.52.
+//! - **The water's charge segment:** +7.782 ± 0.085 at `long/`'s seed and +7.940 ± 0.078
+//!   reseeded, every window's τ under 4 samples. The seeds differ by +0.158, 1.37 of their combined
+//!   quoted error, so the segment's error is the half-difference, ±0.079. With the van der Waals
+//!   segment's −1.015 ± 0.148, ΔG_hyd is −6.847 ± 0.168.
+//! - **The octanol's charge segment:** +5.128 ± 0.258 at `long/`'s seed, its candidates 2 and 4
+//!   at τ = 47.5 and 54.0 samples. Reseeded it is +6.285 ± 0.460: at candidates 2 and 4, τ is 102.8
+//!   and 112.1, so about 18 independent samples of 2000, and its halves are +5.468 and +7.146. The
+//!   seeds differ by +1.157, 2.20 of their combined quoted error. So the segment is +5.707 ± 0.578,
+//!   the half-difference. With the van der Waals segment's +3.983 ± 0.183, ΔG_solv,oct is
+//!   −9.690 ± 0.607.
+//! - **log P is 2.08 ± 0.46 against 1.46**, a miss of 1.35σ. 2σ = 0.92 is over the 0.46 ceiling, so
+//!   the verdict is **uninformative**. It is over the first draft's 0.67 too. The ceiling's change
+//!   did not decide this verdict; the second seed did.
+//! - **Δ log P** from benzene's 1.92 ± 0.23 is +0.16 ± 0.52 against experiment's −0.67. That is
+//!   within 2σ of benzene, so this run does not see the hydroxyl at all. It is reported, not gated.
+//!
+//! **Where σ came from.** σ is almost all the octanol's charge segment: 0.578 of ΔG_solv,oct's 0.607
+//! kcal/mol. At 200 ps a window, that segment is not converged for this solute: one seed's halves
+//! differ by 1.68 kcal/mol, and the two seeds differ by more than twice their quoted errors. Seeds
+//! disagreeing is not new: benzene's were +0.793 and +0.410, 2.9 of their quoted errors apart. What
+//! is new is the size. Benzene's two seeds were 0.384 kcal/mol apart, p-xylene's 0.185 and phenol's
+//! 1.157, because phenol's segment is +5 to +6 kcal/mol where theirs were under +0.8.
+//!
+//! **The expectation registered above did not hold.** This model's ΔG_hyd, −6.847 ± 0.168, agrees
+//! with experiment's −6.60 ± 0.20 to 0.95σ. It is 1.14 kcal/mol stronger than FreeSolv's −5.71 ±
+//! 0.03 for GAFF/AM1-BCC on GAFF's bonded terms. So the water leg did not measure FreeSolv's error
+//! again. p-xylene's was stronger than FreeSolv's too, by 0.44. The model here is a hybrid: UFF's
+//! bonded terms, with every X–H held, under GAFF's non-bonded ones. Whether that is the difference
+//! is not tested here.
+//!
+//! σ still leaves out the three things above.
 
 // The sums over atoms and axes are written as the formulas' index loops.
 #![allow(clippy::needless_range_loop)]
@@ -529,7 +574,7 @@ fn the_end_states_are_the_systems_they_say() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The measurements: written and costed, not run here
+// The measurements: written, costed, the first two run once
 
 /// The production's legs around phenol.
 fn legs() -> [System; 2] {
@@ -637,13 +682,14 @@ fn partition_measured(tag: &str, base: Protocol) {
     }
 }
 
-/// **Phenol's log P at W3's protocol** (release, one core). Both legs, each window 20 ps discarded
+/// **Phenol's log P at W3's protocol** (release, one core; run once, in the module documentation).
+/// Both legs, each window 20 ps discarded
 /// and 200 ps sampled ([`LONG`]), into `water/long/` and `octanol/long/`.
 /// `PANTOMETRY_OCTANOL_DIR=C:/pantometry-w4/phenol cargo test --release --locked -p
 /// pantometry-forcefield --test phenol_partitioned_into_octanol the_partition_measured --
 /// --ignored --nocapture`.
 #[test]
-#[ignore = "both legs at W3's protocol, thirteen windows each: about a day with --release"]
+#[ignore = "both legs at W3's protocol, thirteen windows each: about a day with --release, run once (2026-11-10)"]
 fn the_partition_measured() {
     partition_measured("long", LONG);
 }
@@ -898,7 +944,8 @@ fn with_both_seeds(f: &Finished, again: &[Recorded], seed: u64) -> (f64, f64) {
 }
 
 /// **Both legs' charge segments at a second seed, and log P with both, against the gate**
-/// (release, one core). p-xylene's reseed, on phenol, and on the water leg too: phenol's hydration
+/// (release, one core; run once, the verdict in the module documentation). p-xylene's reseed, on
+/// phenol, and on the water leg too: phenol's hydration
 /// free energy is mostly its charge segment, where benzene's and p-xylene's were mostly not, so
 /// that segment's seed spread is in `σ` rather than beside it. Before any window runs, **both legs
 /// are checked finished** ([`finished`]), so neither's hours are spent on a run the other would
@@ -909,7 +956,7 @@ fn with_both_seeds(f: &Finished, again: &[Recorded], seed: u64) -> (f64, f64) {
 ///
 /// Nothing is asserted but that the segments add to each leg.
 #[test]
-#[ignore = "three octanol windows and three water windows at W3's protocol: about 7 h with --release"]
+#[ignore = "both legs' charge segments at W3's protocol: 6 to 8 h with --release, run once (2026-11-11)"]
 fn the_charges_reseeded_measured() {
     let root = results_dir();
     let t = std::time::Instant::now();

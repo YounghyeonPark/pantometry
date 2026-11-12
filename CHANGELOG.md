@@ -23,8 +23,9 @@ protects nothing.
 
 ### Added
 
-- **Phenol through benzene's log P legs, the first polar solute, with the gate registered before
-  any window runs** (`pantometry-forcefield`'s `tests/phenol_partitioned_into_octanol.rs`, kept out
+- **Phenol through benzene's log P legs, the first polar solute, the gate registered before any
+  window ran: log P 2.08 ± 0.46 against 1.46, and the gate calls it uninformative**
+  (`pantometry-forcefield`'s `tests/phenol_partitioned_into_octanol.rs`, kept out
   of the published crate with the other files that read `gaff.dat`). Benzene's 1.92 against 2.13
   and p-xylene's 3.06 ± 0.22 against 3.15 are both hydrocarbons, whose legs are mostly the van der
   Waals segment; phenol's hydration free energy is −6.60 kcal/mol where benzene's is −0.90, so its
@@ -70,7 +71,31 @@ protects nothing.
     alone, would have passed; it reads the field now, and the seventh fails. The other three are
     the gate's ceiling put back to 0.67 and the charge segment's end moved either way. Benzene's
     and p-xylene's files have no check of their relaxation's charges.
-  - Not run here. The long runs (both legs, then both second seeds) are about a day and a half.
+  - **Measured.** Both legs ran 2026-11-09/10 from the binary built at `697dbef`, on
+    `x86_64-pc-windows-gnu`, in 108 327 s. The second seeds finished 2026-11-11 in 53 121 s. Of
+    that, the water's first two reseeded windows ran under Windows' power throttling, which changed
+    the speed and not the numbers. **Both legs inserted candidate 2**, between 0 and 4, at overlaps
+    of 0.064 (water) and 0.078 (octanol). So both charge segments are 0, 2, 4 and 8, and a reseed
+    written as `[0, 4, 8]` would have refused the run. In kcal/mol:
+    - **One seed:** water decoupled +6.768 ± 0.170 and octanol +9.112 ± 0.316, log P 1.72 ± 0.26.
+      Under the first draft's 0.67 ceiling that would have read as a method that carries.
+    - **The water's charge segment:** +7.782 ± 0.085 and +7.940 ± 0.078 at the two seeds, 1.37 of
+      their combined error apart. ΔG_hyd is −6.847 ± 0.168.
+    - **The octanol's charge segment:** +5.128 ± 0.258 and +6.285 ± 0.460, 2.20 of their combined
+      error apart. The second seed's halves are +5.468 and +7.146, and its τ at candidates 2 and 4
+      is 103 and 112 samples, so about 18 independent ones of 2000. ΔG_solv,oct is −9.690 ± 0.607.
+    - **Both seeds:** log P is 2.08 ± 0.46 against 1.46, a miss of 1.35σ. 2σ = 0.92 is over the
+      0.46 ceiling, and over the first draft's 0.67 too, so **the verdict is uninformative**: the
+      second seed decided it, not the ceiling's change. Δ log P is +0.16 ± 0.52 against
+      experiment's −0.67, within 2σ of benzene, so this run does not see the hydroxyl at all.
+    - **σ is almost all the octanol's charge segment**, 0.578 of ΔG_solv,oct's 0.607. At 200 ps a
+      window it is not converged for phenol. Benzene's seeds disagreed too, by 2.9 of their errors,
+      but its segment was under +0.8 kcal/mol and phenol's is +5 to +6.
+    - **The expectation registered with the gate did not hold.** ΔG_hyd agrees with experiment's
+      −6.60 ± 0.20 to 0.95σ. It is 1.14 kcal/mol stronger than FreeSolv's −5.71, so the water leg
+      did not measure FreeSolv's error again. p-xylene's was 0.44 stronger than FreeSolv's too. The
+      model is a hybrid, UFF's bonded terms under GAFF's non-bonded ones, and whether that is the
+      difference is not tested.
 
 - **AGENTS.md's count of worked problems is held against EXAMPLES.md's table.** It said fourteen
   with fifteen rows in the table, and nothing compared the two. `counts_in_prose` now reads the
