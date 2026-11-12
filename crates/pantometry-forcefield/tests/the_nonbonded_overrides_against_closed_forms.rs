@@ -1440,3 +1440,308 @@ fn the_default_path_is_heads_bits() {
     assert_eq!(tails.len(), 1024);
     assert_eq!(pinned::digest(&tails), HEAD_TAILS);
 }
+
+/// The bits HEAD `8b58114` gave [`pinned::waters_and_an_ion_at`] where `HEAD_WATER` does not
+/// reach, case by case as `the_paths_the_first_pins_miss_are_heads_bits` lists them: each
+/// [`pinned::all_bits`], then, with the first two waters decoupled, the dynamics' energy and the
+/// forces on atoms 0, 1, 2, 100 and the ion at two states.
+const HEAD_FURTHER: [([u64; 36], [u64; 32]); 3] = [
+    (
+        [
+            0x3c5e8b348112bd01,
+            0xbc0f4580495f192a,
+            0xbc5557868249616e,
+            0xbc395a7d5416a7d9,
+            0x3c4848a5e90229cc,
+            0xbc91b01f801f0772,
+            0x3c8ffc3b7487d10d,
+            0xbbb477104b76b7f2,
+            0xbc5557868249616e,
+            0xbc0f4580495f192a,
+            0xc1ac1b80e9e48c78,
+            0x3c407303f8fcc594,
+            0xbe212d3401b32d4e,
+            0xbe1a6c04b530f5a3,
+            0xbe22c5373ec6f006,
+            0x3e1167978238030e,
+            0x3e11941d14f1c9ec,
+            0x3e061f958080bce5,
+            0x3e12afa037dfb91c,
+            0x3e10cd5669ea0723,
+            0x3e070f9f13239f89,
+            0x3e125131f789c362,
+            0x3e020d947ffe155d,
+            0xbde9daa86a07a914,
+            0xbe2c0cc89a613bc8,
+            0x3e5b3a2fb909af7f,
+            0x3e4d9d6c3665d5b9,
+            0x3c8819612bffb6f2,
+            0xbc3d87579b18bab1,
+            0x3c4955ea85d0a9da,
+            0xbc3d87579b18baa7,
+            0x3c845eeed3557dde,
+            0xbc4c4e5feb564080,
+            0x3c4955ea85d0a9da,
+            0xbc4c4e5feb564080,
+            0x3c60c6cb08a26713,
+        ],
+        [
+            0x3c42ddd2df1002b4,
+            0xbe1037e5620a961b,
+            0xbdedc059bea5da7e,
+            0xbe1e4c3a1245c9a9,
+            0x3dfc5fad608e2cfb,
+            0x3dfdf832050a4244,
+            0x3df8647883aa9a82,
+            0x3e01580ce17f8c53,
+            0x3dfa6df8deaa2583,
+            0x3df7fd8373caf0ee,
+            0x3e116e78ae98a2f4,
+            0x3e031c9eb4c0ff39,
+            0xbde8f71c9a74c715,
+            0xbe2814e9c6941bd2,
+            0x3e5be8c85a60ed04,
+            0x3e4e21f4fcb0696b,
+            0x3c31434bb76c7130,
+            0x3dd48105060fb34d,
+            0x3df832e8f2f1f0fc,
+            0xbe17fe87187d57e5,
+            0xbde84e9fc2524b06,
+            0xbde2e997cc584af3,
+            0x3dd1fda4e56d47c8,
+            0xbdd1c026ac621547,
+            0xbdeb47a413b981fb,
+            0x3dbcc4bd3fe85620,
+            0x3e108bbf65a78283,
+            0x3e042ba8e983e912,
+            0xbde81390cae1e520,
+            0xbe6d8575dbf8fca4,
+            0xbe5f5157cc1e3adb,
+            0x3e44cdc91a07e3b9,
+        ],
+    ),
+    (
+        [
+            0x3c61dd6aa20eba85,
+            0xbc02d4b63598f6c9,
+            0xbc556a09dfac89c6,
+            0xbc4402d0f0084155,
+            0x3c35364f640f0d8f,
+            0xbc8d96509e75111b,
+            0x3c8b807403d4b370,
+            0xbbbd41aea4fc597c,
+            0xbc556a09dfac89c6,
+            0xbc02d4b63598f6c9,
+            0xc1a15fe66a42bdd0,
+            0x3c4b744b6588471c,
+            0xbe2149e46c82341d,
+            0xbe1ac045b10e5016,
+            0xbe22dca55739b570,
+            0x3e116e61fc5c9e89,
+            0x3e11a47ad390642c,
+            0x3e061f9ae3b58969,
+            0x3e12acb4ade6d93c,
+            0x3e10da4fd337c49f,
+            0x3e070d5eabaf1058,
+            0x3e124b4f8d4c047b,
+            0x3e020cd6eec93950,
+            0xbde9b8e85679a70f,
+            0xbe30a1f2a269b849,
+            0x3e6079309693f45e,
+            0x3e51cc7deb86f124,
+            0x3c8cb3e9c4340c99,
+            0xbc46a1fced05d493,
+            0x3c4edeccf3a62731,
+            0xbc46a1fced05d483,
+            0x3c87f9bfb0289bd5,
+            0xbc51027421d21dcf,
+            0x3c4edeccf3a62731,
+            0xbc51027421d21dcf,
+            0x3c612529e68f7db0,
+        ],
+        [
+            0x3c4ddf9fa4b06c0a,
+            0xbe104da7cf5ba819,
+            0xbdeeb0e9e8665eb2,
+            0xbe1e89f4b798ad59,
+            0x3dfc6153eef06e99,
+            0x3dfe0b5f8f138492,
+            0x3df8657a244d1212,
+            0x3e0156a915a85def,
+            0x3dfa5cc0328be533,
+            0x3df7fa33383ad5fa,
+            0x3e1167e3ee3fb5f8,
+            0x3e031c04d9ce0ebc,
+            0xbde8d573187bf74c,
+            0xbe2d4d374588ef86,
+            0x3e60d05adae275b2,
+            0x3e520e97456e996a,
+            0x3c41060c15ded628,
+            0x3dd47e90faffdb79,
+            0x3df8327e94581058,
+            0xbe18094a62c42523,
+            0xbde84e9fc2524b02,
+            0xbde2e997cc584aed,
+            0x3dd1fda4e56d47c8,
+            0xbdd1c026ac621541,
+            0xbdeb47a413b981f5,
+            0x3dbcc4bd3fe85600,
+            0x3e1084784f336775,
+            0x3e042b32c4d2e422,
+            0xbde7f1fdda7e4772,
+            0xbe71d0faa119b887,
+            0xbe62ee45fa58449e,
+            0x3e48c35147158a07,
+        ],
+    ),
+    (
+        [
+            0x3c620231f22fb857,
+            0xbc0f5ff7c6e932cd,
+            0xbc5557868249616e,
+            0xbc395a7d5416a7d9,
+            0x3c4848a5e90229cc,
+            0xbc91b01f801f0772,
+            0x3c8ffc3b7487d10d,
+            0xbbb477104b76b7f2,
+            0xbc5557868249616e,
+            0xbc0f5ff7c6e932cd,
+            0xc1ac2dc8f883f9ca,
+            0x3c4b63bb47bd8b54,
+            0xbe213ae1e483ee5d,
+            0xbe1a850d3a6b311e,
+            0xbe22dafd1db4380c,
+            0x3e1167978238030e,
+            0x3e11941d14f1c9ec,
+            0x3e061f958080bce5,
+            0x3e12afa037dfb91c,
+            0x3e10cd5669ea0723,
+            0x3e070f9f13239f89,
+            0x3e125131f789c362,
+            0x3e020d947ffe155d,
+            0xbde9daa86a07a914,
+            0xbe30a292c03047b1,
+            0x3e6078776d2a0588,
+            0x3e51cbc9e104c253,
+            0x3c8cb1fddcf904d1,
+            0xbc469b654b541f7e,
+            0x3c4edd38572339c0,
+            0xbc469b654b541f7a,
+            0x3c87f6197fe63f2a,
+            0xbc5102f5d445fd5b,
+            0x3c4edd38572339c0,
+            0xbc5102f5d445fd5a,
+            0x3c61300ad951c725,
+        ],
+        [
+            0x3c4dce8a2dd0c876,
+            0xbe10534127ac1839,
+            0xbdee889de877b65a,
+            0xbe1e77c5d02059b5,
+            0x3dfc5fad608e2cfb,
+            0x3dfdf832050a4244,
+            0x3df8647883aa9a82,
+            0x3e01580ce17f8c53,
+            0x3dfa6df8deaa2583,
+            0x3df7fd8373caf0ee,
+            0x3e116e78ae98a2f4,
+            0x3e031c9eb4c0ff39,
+            0xbde8f71c9a74c715,
+            0xbe2d4d46ac936f6d,
+            0x3e60cfc3bdd5a449,
+            0x3e520e0e442a0c2c,
+            0x3c40f6e1b5193506,
+            0x3dd45625f5dda95d,
+            0x3df8291a6050e641,
+            0xbe1802cae48d6347,
+            0xbde84e9fc2524b06,
+            0xbde2e997cc584af3,
+            0x3dd1fda4e56d47c8,
+            0xbdd1c026ac621547,
+            0xbdeb47a413b981fb,
+            0x3dbcc4bd3fe85620,
+            0x3e108bbf65a78283,
+            0x3e042ba8e983e912,
+            0xbde81390cae1e520,
+            0xbe71d0f195adf792,
+            0xbe62eebb0b07f8a2,
+            0x3e48c2955707b2b2,
+        ],
+    ),
+];
+
+/// **The paths `HEAD_WATER` does not reach are HEAD's bits too**, computed by HEAD `8b58114`
+/// before the pair term stopped at the Coulomb term of a pair with no well and stopped looking up
+/// the exclusions the neighbour list had left out. The 64 waters and the chloride at 4.6 Å, where
+/// 12 Å holds five cells of half the cutoff an axis and the search is by cells rather than over
+/// every pair; and under Lorentz–Berthelot at 5.5 and 4.6 Å, where a hydrogen's pairs have no well
+/// and `x = x_j/2 ≠ 0`, so that the van der Waals skipped for them is `−0` past 1.58 Å from an
+/// oxygen, not the `+0` that geometric mixing's `x = 0` gives. Each by the cell list and by the
+/// neighbour list, and each with two waters decoupled, through the dynamics' forces.
+#[test]
+fn the_paths_the_first_pins_miss_are_heads_bits() {
+    assert_eq!((2.0 * 12.0 / 4.6f64).floor(), 5.0, "by cells");
+    assert_eq!((2.0 * 12.0 / 5.5f64).floor(), 4.0, "every pair");
+    let cases = [
+        (Mixing::Geometric, 4.6),
+        (Mixing::LorentzBerthelot, 5.5),
+        (Mixing::LorentzBerthelot, 4.6),
+    ];
+    for (&(mixing, cutoff), (whole, decoupled)) in cases.iter().zip(&HEAD_FURTHER) {
+        let (water, at) = pinned::waters_and_an_ion_at(cutoff * ANGSTROM);
+        let plain = water.with_mixing(mixing);
+        let listed = plain
+            .clone()
+            .with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
+        let last = at.len() - 1;
+        let mut group = vec![false; at.len()];
+        group[..6].fill(true);
+        for (name, f) in [("plain", &plain), ("listed", &listed)] {
+            let label = format!("{mixing:?} at {cutoff} Å, {name}");
+            assert_eq!(pinned::all_bits(f, &f.evaluate(&at)), whole, "{label}");
+            let d = PeriodicDecoupling::new(f, &group).expect("two waters decouple");
+            let mut out = Vec::new();
+            for l in [Lambda::new(0.0, 0.5, 1.0), Lambda::new(0.0, 0.0, 0.4)] {
+                let mut forces = vec![[0.0; 3]; at.len()];
+                out.push(d.energy_and_forces(&at, l, &mut forces).to_bits());
+                for i in [0, 1, 2, 100, last] {
+                    out.extend(forces[i].map(f64::to_bits));
+                }
+            }
+            assert_eq!(out, decoupled, "{label}, decoupled");
+        }
+    }
+}
+
+/// **The dynamics' forces are the evaluation's to the bit with every rule on**, which reaches the
+/// scaled 1-4 pairs' forces where the virial is not wanted: nine octanols at the dictionary's ideal
+/// coordinates, charged, under Lorentz–Berthelot with GAFF's 1-4 scales, by the cell list and by
+/// the neighbour list. `Potential::energy_and_forces`' energy and forces against `evaluate`'s, and
+/// `energy`'s every term too.
+#[test]
+fn the_dynamics_forces_are_the_evaluations_with_every_rule_on() {
+    let (octanols, at) = pinned::ideal_octanols();
+    let ruled = octanols
+        .with_mixing(Mixing::LorentzBerthelot)
+        .with_one_four(0.5, 1.0 / 1.2);
+    let fours = ruled.one_four_pairs().len();
+    assert!(fours >= 9, "{fours} 1-4 pairs");
+    let listed = ruled
+        .clone()
+        .with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
+    for (name, f) in [("plain", &ruled), ("listed", &listed)] {
+        let ev = f.evaluate(&at);
+        let (terms, want, _) = evaluation_bits(&ev);
+        let mut forces = vec![[0.0; 3]; at.len()];
+        let e = Potential::energy_and_forces(f, &at, &mut forces);
+        assert_eq!(e.to_bits(), ev.energy.total.to_bits(), "{name}");
+        let got: Vec<[u64; 3]> = forces.iter().map(|p| p.map(f64::to_bits)).collect();
+        assert_eq!(got, want, "{name}");
+        let alone = PeriodicEvaluation {
+            energy: f.energy(&at),
+            forces: ev.forces.clone(),
+            virial: ev.virial,
+        };
+        assert_eq!(evaluation_bits(&alone).0, terms, "{name}");
+    }
+}

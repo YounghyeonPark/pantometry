@@ -231,7 +231,7 @@ use crate::boresch::Boresch;
 use crate::ccd::Component;
 use crate::dynamics::Potential;
 use crate::energy::{coulomb, ForceField, Pair, Unsupported};
-use crate::ewald::{add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters};
+use crate::ewald::{add_force, add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters};
 use crate::neighbours::NeighbourList;
 use crate::uff::UffType;
 use crate::water;
@@ -730,9 +730,41 @@ struct Split<'a> {
     own_scale: &'a [[f64; 2]],
 }
 
+/// What the shared evaluation is asked for besides the energy. No energy's bits depend on it, and
+/// no force's on whether the virial is wanted: a pair's force is added by the same operations
+/// either way ([`add_force`]), and the virial is read by nothing else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wanted {
+    /// The energy alone: neither forces nor the virial are accumulated, the bonded terms' and the
+    /// reciprocal sum's own aside.
+    Energy,
+    /// The energy and the forces, which is all the dynamics read.
+    Forces,
+    /// The energy, the forces and the virial.
+    Virial,
+}
+
+/// Adds a pair term's force, and its virial when that is wanted ([`Wanted`]).
+#[inline(always)]
+fn accumulate(
+    wanted: Wanted,
+    forces: &mut [[f64; 3]],
+    virial: &mut [[f64; 3]; 3],
+    [i, j]: [usize; 2],
+    d: [f64; 3],
+    de_dr_over_r: f64,
+) {
+    match wanted {
+        Wanted::Energy => {}
+        Wanted::Forces => add_force(forces, i, j, d, de_dr_over_r),
+        Wanted::Virial => add_pair(forces, virial, i, j, d, de_dr_over_r),
+    }
+}
+
 /// The shared evaluation's result.
 struct Core {
     energy: PeriodicEnergy,
+    /// Whole only when they were wanted ([`Wanted`]), and the virial likewise.
     forces: Vec<[f64; 3]>,
     virial: [[f64; 3]; 3],
     /// The λ-dependent part, the restraint aside, summed in the evaluation's own order: what the
@@ -1217,7 +1249,7 @@ impl PeriodicForceField {
     ///
     /// If `at` is not one position per atom.
     pub fn energy(&self, at: &[[f64; 3]]) -> PeriodicEnergy {
-        self.core(at, None, false).energy
+        self.core(at, None, Wanted::Energy).energy
     }
 
     /// The energy at `at` (metres, any image), the force on every atom and the virial.
@@ -1226,7 +1258,7 @@ impl PeriodicForceField {
     ///
     /// If `at` is not one position per atom.
     pub fn evaluate(&self, at: &[[f64; 3]]) -> PeriodicEvaluation {
-        let c = self.core(at, None, true);
+        let c = self.core(at, None, Wanted::Virial);
         PeriodicEvaluation {
             energy: c.energy,
             forces: c.forces,
@@ -1235,7 +1267,7 @@ impl PeriodicForceField {
     }
 
     /// The whole evaluation, with or without a decoupled group.
-    fn core(&self, at: &[[f64; 3]], split: Option<&Split>, forces_wanted: bool) -> Core {
+    fn core(&self, at: &[[f64; 3]], split: Option<&Split>, wanted: Wanted) -> Core {
         let n = self.charges.len();
         assert_eq!(at.len(), n, "one position per atom");
         let cell = self.cell();
@@ -1267,10 +1299,12 @@ impl PeriodicForceField {
             e.total += b.energy.inversion;
             forces[..self.solute].copy_from_slice(&b.forces);
         }
-        for (r, f) in whole.iter().zip(&forces) {
-            for a in 0..3 {
-                for c in 0..3 {
-                    virial[a][c] += r[a] * f[c];
+        if wanted == Wanted::Virial {
+            for (r, f) in whole.iter().zip(&forces) {
+                for a in 0..3 {
+                    for c in 0..3 {
+                        virial[a][c] += r[a] * f[c];
+                    }
                 }
             }
         }
@@ -1279,36 +1313,31 @@ impl PeriodicForceField {
         // list's order. The excluded pairs, and any scaled 1-4 pairs, are left out.
         let q = &self.charges;
         let skip = self.skipped();
+        // The neighbour list never gives a pair of `skip` — it is built again whenever the pairs it
+        // is given to leave out differ from its build's ([`crate::neighbours`]) — so only the cell
+        // list's pairs are looked up.
+        let searched = self.neighbours.is_none();
         let pair_term = |i: usize, j: usize, d: [f64; 3], r2: f64| {
-            if skip.contains(i, j) {
+            if searched && skip.contains(i, j) {
                 return;
             }
             let (gi, gj) = (marked(i), marked(j));
             if gi && gj {
                 return;
             }
-            let across = gi != gj;
             let r = r2.sqrt();
             let pair = self.pair(i, j);
-            let mut radial;
-            if across {
+            let qq = q[i] * q[j];
+            let radial = if gi != gj {
                 let s = split.expect("a pair across needs a group");
                 let sc = s.soft_core.at(&pair, r, lv);
                 e.van_der_waals += sc.energy;
                 e.total += sc.energy;
                 coupling.energy += sc.energy;
                 coupling.gradient[2] += sc.de_dlambda;
-                radial = sc.de_dr_over_r;
-            } else {
-                let (v, dv) = pair.at(r);
-                e.van_der_waals += v;
-                e.total += v;
-                radial = dv / r;
-            }
-            let qq = q[i] * q[j];
-            if qq != 0.0 {
-                let (c, dc) = self.ewald.real_pair(qq, r);
-                if across {
+                let mut radial = sc.de_dr_over_r;
+                if qq != 0.0 {
+                    let (c, dc) = self.ewald.real_pair(qq, r);
                     coupling.gradient[1] += c;
                     if le != 0.0 {
                         e.ewald.real += le * c;
@@ -1316,13 +1345,43 @@ impl PeriodicForceField {
                         coupling.energy += le * c;
                         radial += le * dc / r;
                     }
-                } else {
+                }
+                radial
+            } else {
+                // The Coulomb pair first, so that a pair with no well can stop at it. Its van der
+                // Waals is `±0` then, `D_ij = 0` times a finite number, and adding `±0` leaves a
+                // sum that began at `+0` as it was, since such a sum is never `−0`; and its force
+                // is `±0 + c = c` for the Coulomb force `c ≠ 0`. So the skip moves no bit. A pair
+                // whose Coulomb force is zero, uncharged or underflowed, keeps its van der Waals and
+                // the sign of zero that comes with it. (Not where `(x_ij/r)¹²` overflows, past
+                // `x_ij/r` ≈ 4.9 × 10²⁵ — atoms 10⁻³⁵ m apart, or an `x` set absurdly large by
+                // `with_nonbonded`, which takes any finite one — and the skipped term would have
+                // been `0 · ∞`, NaN.) Each sum takes this pair's terms in the order it did:
+                // `e.van_der_waals` and `e.total` only van der Waals here, and the Ewald parts only
+                // Coulomb. Measured on phenol's water leg with the neighbour list: 0.6 of 12.7 ms,
+                // the waters' hydrogens being in about eight of every nine of its pairs.
+                let mut coulomb = 0.0;
+                if qq != 0.0 {
+                    let (c, dc) = self.ewald.real_pair(qq, r);
                     e.ewald.real += c;
                     e.ewald.total += c;
-                    radial += dc / r;
+                    coulomb = dc / r;
                 }
-            }
-            add_pair(&mut forces, &mut virial, i, j, d, radial);
+                if pair.well == 0.0 && coulomb != 0.0 {
+                    coulomb
+                } else {
+                    let (v, dv) = pair.at(r);
+                    e.van_der_waals += v;
+                    e.total += v;
+                    // `dv/r + dc/r` as HEAD summed it, and addition commutes to the bit.
+                    if qq != 0.0 {
+                        dv / r + coulomb
+                    } else {
+                        dv / r
+                    }
+                }
+            };
+            accumulate(wanted, &mut forces, &mut virial, [i, j], d, radial);
         };
         match &self.neighbours {
             Some(list) => list.for_each_pair(&cell, at, cutoff, skip, pair_term),
@@ -1340,7 +1399,7 @@ impl PeriodicForceField {
             let (c, dc) = self.ewald.excluded_pair(qq, r);
             e.ewald.excluded += c;
             e.ewald.total += c;
-            add_pair(&mut forces, &mut virial, i, j, d, dc / r);
+            accumulate(wanted, &mut forces, &mut virial, [i, j], d, dc / r);
         }
 
         // The scaled 1-4 pairs outside the group, wherever they are: `s_v` of the van der Waals,
@@ -1368,7 +1427,7 @@ impl PeriodicForceField {
                     e.ewald.total += real + excluded;
                     radial += (sc * dc + (1.0 - sc) * dx) / r;
                 }
-                add_pair(&mut forces, &mut virial, i, j, d, radial);
+                accumulate(wanted, &mut forces, &mut virial, [i, j], d, radial);
             }
         }
 
@@ -1378,7 +1437,7 @@ impl PeriodicForceField {
                 q,
                 split.map(|s| (s.group, le)),
                 at,
-                forces_wanted.then_some(&mut forces[..]),
+                (wanted != Wanted::Energy).then_some(&mut forces[..]),
                 &mut virial,
             );
             e.ewald.reciprocal = rest + le * cross;
@@ -1430,7 +1489,7 @@ impl PeriodicForceField {
                     e.electrostatic += c;
                     radial -= c / (r * r);
                 }
-                add_pair(&mut forces, &mut virial, i, j, d, radial);
+                accumulate(wanted, &mut forces, &mut virial, [i, j], d, radial);
             }
         }
         e.total += e.electrostatic;
@@ -1444,10 +1503,11 @@ impl PeriodicForceField {
 }
 
 impl Potential for PeriodicForceField {
+    /// [`PeriodicForceField::evaluate`]'s energy and forces, to the bit, without its virial.
     fn energy_and_forces(&self, at: &[[f64; 3]], forces: &mut [[f64; 3]]) -> f64 {
-        let ev = self.evaluate(at);
-        forces.copy_from_slice(&ev.forces);
-        ev.energy.total
+        let c = self.core(at, None, Wanted::Forces);
+        forces.copy_from_slice(&c.forces);
+        c.energy.total
     }
 }
 
@@ -1568,10 +1628,10 @@ impl PeriodicDecoupling {
     ///
     /// If `at` is not one position per atom, or a λ is outside [0, 1].
     pub fn energy(&self, at: &[[f64; 3]], lambda: Lambda) -> PeriodicEnergy {
-        self.core(at, lambda, false).energy
+        self.core(at, lambda, Wanted::Energy).energy
     }
 
-    fn core(&self, at: &[[f64; 3]], lambda: Lambda, forces: bool) -> Core {
+    fn core(&self, at: &[[f64; 3]], lambda: Lambda, wanted: Wanted) -> Core {
         assert!(lambda.is_valid(), "every λ must be in [0, 1]: {lambda:?}");
         let split = Split {
             group: &self.group,
@@ -1580,7 +1640,7 @@ impl PeriodicDecoupling {
             own: &self.own,
             own_scale: &self.own_scale,
         };
-        self.field.core(at, Some(&split), forces)
+        self.field.core(at, Some(&split), wanted)
     }
 
     /// What the coupling at any state is made of, at `at`: the group's van der Waals pairs with the
@@ -1682,7 +1742,7 @@ impl Alchemical for PeriodicDecoupling {
 
     fn energy_and_forces(&self, at: &[[f64; 3]], lambda: Lambda, forces: &mut [[f64; 3]]) -> f64 {
         assert_eq!(forces.len(), self.group.len(), "one force per atom");
-        let c = self.core(at, lambda, true);
+        let c = self.core(at, lambda, Wanted::Forces);
         forces.copy_from_slice(&c.forces);
         let mut energy = c.energy.total;
         if let Some(b) = &self.restraint {
@@ -1761,6 +1821,100 @@ mod tests {
         }));
     }
 
+    fn energy_bits(e: &PeriodicEnergy) -> [u64; 14] {
+        let w = &e.ewald;
+        [
+            e.bond,
+            e.angle,
+            e.torsion,
+            e.inversion,
+            e.van_der_waals,
+            e.dispersion_correction,
+            e.electrostatic,
+            e.total,
+            w.real,
+            w.reciprocal,
+            w.self_energy,
+            w.excluded,
+            w.background,
+            w.total,
+        ]
+        .map(f64::to_bits)
+    }
+
+    fn force_bits(f: &[[f64; 3]]) -> Vec<[u64; 3]> {
+        f.iter().map(|p| p.map(f64::to_bits)).collect()
+    }
+
+    /// **What an evaluation is asked for moves no bit of what it gives**: every energy term is the
+    /// same bits asked for the energy alone, with the forces, and with the virial too; the forces
+    /// are the same bits with the virial and without; and the dynamics' `energy_and_forces`, plain
+    /// and decoupled, is the evaluation's energy and forces. On 27 waters, by the cell list's
+    /// search and by the neighbour list, under both mixing rules — under Lorentz–Berthelot a
+    /// hydrogen's pairs have no well and a nonzero `x`, the pairs the van der Waals is skipped
+    /// for — plain and with two waters decoupled at three states.
+    #[test]
+    fn what_is_wanted_moves_no_bit() {
+        let water = WaterBox::lattice(3, 0x3C0);
+        let base = water.force_field(4.6 * ANGSTROM, 1e-8);
+        let at = water.positions();
+        let mut group = vec![false; at.len()];
+        group[..6].fill(true);
+        let wanted = [Wanted::Energy, Wanted::Forces, Wanted::Virial];
+        let same = |c: &[Core; 3], label: &str| {
+            assert_eq!(
+                energy_bits(&c[0].energy),
+                energy_bits(&c[1].energy),
+                "{label}"
+            );
+            assert_eq!(
+                energy_bits(&c[1].energy),
+                energy_bits(&c[2].energy),
+                "{label}"
+            );
+            assert_eq!(
+                force_bits(&c[1].forces),
+                force_bits(&c[2].forces),
+                "{label}"
+            );
+            assert!(c[2].forces.iter().any(|f| f[0] != 0.0), "{label}");
+            assert!(c[2].virial[0][0] != 0.0, "{label}");
+        };
+        let mut checked = 0;
+        for mixing in [Mixing::Geometric, Mixing::LorentzBerthelot] {
+            for listed in [false, true] {
+                let mut field = base.clone().with_mixing(mixing);
+                if listed {
+                    field = field.with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
+                }
+                let label = format!("{mixing:?}, listed {listed}");
+                same(&wanted.map(|w| field.core(at, None, w)), &label);
+                let ev = field.evaluate(at);
+                let mut f = vec![[0.0; 3]; at.len()];
+                let e = Potential::energy_and_forces(&field, at, &mut f);
+                assert_eq!(e.to_bits(), ev.energy.total.to_bits(), "{label}");
+                assert_eq!(force_bits(&f), force_bits(&ev.forces), "{label}");
+                assert_eq!(energy_bits(&field.energy(at)), energy_bits(&ev.energy));
+                let d = PeriodicDecoupling::new(&field, &group).unwrap();
+                for l in [
+                    Lambda::COUPLED,
+                    Lambda::new(0.0, 0.5, 1.0),
+                    Lambda::new(0.0, 0.0, 0.4),
+                ] {
+                    let label = format!("{label}, {l:?}");
+                    let c = wanted.map(|w| d.core(at, l, w));
+                    let e = Alchemical::energy_and_forces(&d, at, l, &mut f);
+                    assert_eq!(e.to_bits(), c[2].energy.total.to_bits(), "{label}");
+                    assert_eq!(force_bits(&f), force_bits(&c[2].forces), "{label}");
+                    assert_eq!(energy_bits(&d.energy(at, l)), energy_bits(&c[2].energy));
+                    same(&c, &label);
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 12);
+    }
+
     fn cross_terms_against_the_evaluation(mesh: Option<crate::pme::PmeParameters>) {
         let water = WaterBox::lattice(3, 0x3C0);
         let mut field = water.force_field(4.6 * ANGSTROM, 1e-8);
@@ -1789,7 +1943,7 @@ mod tests {
         ];
         let fast = d.couplings(at, &states);
         for (l, c) in states.iter().zip(&fast) {
-            let slow = d.core(at, *l, false).coupling;
+            let slow = d.core(at, *l, Wanted::Energy).coupling;
             assert!(
                 (c.energy - slow.energy).abs() <= 64.0 * f64::EPSILON * scale,
                 "{l:?}"
@@ -1824,7 +1978,7 @@ mod tests {
             Lambda::new(0.0, 0.5, 1.0),
             Lambda::new(0.0, 0.0, 1.0),
         ] {
-            let e = d.core(at, l, false).energy.ewald.reciprocal;
+            let e = d.core(at, l, Wanted::Energy).energy.ewald.reciprocal;
             let want = rest + l.electrostatics * (all - rest - own);
             assert!(
                 (e - want).abs() <= 64.0 * f64::EPSILON * scale,

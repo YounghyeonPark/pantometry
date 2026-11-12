@@ -8,14 +8,20 @@
 //!
 //! At a build, every pair `i < j` that is not excluded and whose minimum-image separation is
 //! shorter than `R = (r_c + s)(1 + 10⁻⁹)`, found by the cell list's own search at `R`; the
-//! positions as they were given; and the box and cutoff they were built for. Each atom's partners
-//! are a run of one array. An evaluation then visits only those pairs, which for `s` = 2 Å at
-//! `r_c` = 9 Å is `(11/9)³` = 1.83 times the cutoff sphere, against the 125 half-cutoff cells' 3.7.
+//! positions as they were given; and the box, the cutoff and the excluded pairs they were built
+//! for. Each atom's partners are a run of one array. An evaluation then visits only those pairs,
+//! which for `s` = 2 Å at `r_c` = 9 Å is `(11/9)³` = 1.83 times the cutoff sphere, against the
+//! 125 half-cutoff cells' 3.7.
 //!
 //! # When it is rebuilt, and why that is enough
 //!
 //! **Rebuilt when any atom's displacement since the build, by minimum image, is longer than
-//! `s/2`**, or when the atom count, the box or the cutoff differs from the build's. The proof:
+//! `s/2`**, or when the atom count, the box, the cutoff or the excluded pairs differ from the
+//! build's. The last is what makes **no excluded pair ever reach the evaluation**, so that
+//! [`PeriodicForceField`]'s pair term does not look each pair up again: that lookup, a binary
+//! search of the atom's exclusions, measured 2.5 ms of the 38.7 ms the forces of a 5 089-atom
+//! octanol box took with it, and comparing the exclusions is one pass over them. The proof of the
+//! first:
 //!
 //! - Let `u_i = mi(r_i(t) − r_i(0))`, the minimum image of atom `i`'s displacement. Then
 //!   `r_i(t) = r_i(0) + u_i + n L` for some whole `n`, whatever path the atom took and however many
@@ -151,6 +157,9 @@ struct State {
     /// The box edges and cutoff of the build.
     lengths: [f64; 3],
     cutoff: f64,
+    /// The pairs the build left out, which every evaluation's must be: what lets the pair term
+    /// skip its own check of each pair.
+    excluded: Vec<[usize; 2]>,
     /// The positions as given at the build; empty before the first.
     reference: Vec<[f64; 3]>,
     /// Atom `i`'s partners are `entries[start[i]..start[i + 1]]`, each `key << 32 | j`.
@@ -217,10 +226,21 @@ impl NeighbourList {
         }
     }
 
-    /// Whether the list must be built again before an evaluation at `at`: see the module
-    /// documentation.
-    fn stale(&self, s: &State, cell: &PeriodicBox, at: &[[f64; 3]], cutoff: f64) -> bool {
-        if s.reference.len() != at.len() || s.lengths != cell.lengths() || s.cutoff != cutoff {
+    /// Whether the list must be built again before an evaluation at `at` leaving out `ex`: see the
+    /// module documentation.
+    fn stale(
+        &self,
+        s: &State,
+        cell: &PeriodicBox,
+        at: &[[f64; 3]],
+        cutoff: f64,
+        ex: &Exclusions,
+    ) -> bool {
+        if s.reference.len() != at.len()
+            || s.lengths != cell.lengths()
+            || s.cutoff != cutoff
+            || s.excluded != ex.pairs()
+        {
             return true;
         }
         let limit = 0.25 * self.skin * self.skin;
@@ -267,12 +287,16 @@ impl NeighbourList {
         s.reference.extend_from_slice(at);
         s.lengths = cell.lengths();
         s.cutoff = cutoff;
+        s.excluded.clear();
+        s.excluded.extend_from_slice(ex.pairs());
         s.unsorted = true;
         s.builds += 1;
     }
 
     /// Calls `f(i, j, d, r²)` for exactly the pairs, and in exactly the order, that the cell list
-    /// at `cutoff` calls it for, excluded pairs aside — building the list first if it is stale.
+    /// at `cutoff` calls it for, the pairs `exclusions` holds aside — building the list first if it
+    /// is stale, which it is whenever `exclusions` differs from its build's. So **no pair of
+    /// `exclusions` reaches `f`**, and the caller need not check.
     pub(crate) fn for_each_pair(
         &self,
         cell: &PeriodicBox,
@@ -284,7 +308,7 @@ impl NeighbourList {
         let mut guard = self.state.borrow_mut();
         let s = &mut *guard;
         s.evaluations += 1;
-        if self.stale(s, cell, at, cutoff) {
+        if self.stale(s, cell, at, cutoff, exclusions) {
             self.build(s, cell, at, cutoff, exclusions);
         }
         let n = at.len();
@@ -817,6 +841,42 @@ mod tests {
         assert_ne!(copy, plain);
         assert_eq!(listed.clone().without_neighbour_list(), plain);
         assert!(plain.neighbour_list().is_none());
+    }
+
+    /// **No pair the list is told to leave out reaches the evaluation, whatever it was built
+    /// with**, which is what lets the force field's pair term skip its own lookup: two waters'
+    /// six intramolecular pairs, the only pairs inside the cutoff, listed with nothing excluded;
+    /// then asked to leave out one of them, the list is built again and does; then another one
+    /// instead, as many exclusions as before, so that comparing their number would not do; then
+    /// asked with nothing excluded again, built again, and gives them back. The same exclusions
+    /// twice build nothing.
+    #[test]
+    fn other_exclusions_build_the_list_again() {
+        let (plain, at) = two_waters(6.0 * ANGSTROM);
+        let (cell, rc) = (plain.cell(), plain.ewald().parameters().cutoff);
+        let list = NeighbourList::new(ANGSTROM);
+        let calls = |ex: &Exclusions| {
+            let mut v = Vec::new();
+            list.for_each_pair(&cell, &at, rc, ex, |i, j, _, _| v.push((i, j)));
+            v.sort_unstable();
+            v
+        };
+        let none = Exclusions::from_pairs(at.len(), &[]);
+        let one = Exclusions::from_pairs(at.len(), &[[0, 1]]);
+        let all = calls(&none);
+        assert_eq!(all, [(0, 1), (0, 2), (1, 2), (3, 4), (3, 5), (4, 5)]);
+        assert_eq!(list.status().builds, 1);
+        let other = Exclusions::from_pairs(at.len(), &[[0, 2]]);
+        let fewer = calls(&one);
+        assert_eq!(fewer, all[1..]);
+        assert_eq!(list.status().builds, 2);
+        let instead = calls(&other);
+        assert_eq!(instead, [all[0], all[2], all[3], all[4], all[5]]);
+        assert_eq!(list.status().builds, 3);
+        assert_eq!(calls(&none), all);
+        assert_eq!(list.status().builds, 4);
+        assert_eq!(calls(&none), all);
+        assert_eq!(list.status().builds, 4);
     }
 
     /// **A cutoff far below an atom's spacing is searched, not aborted**: 0.01 Å in a 9.3 Å box

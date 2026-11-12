@@ -109,6 +109,55 @@ protects nothing.
   iterates it or takes `.len()` does not. `IPH`, phenol, is the fifty-third. The next release is
   0.25.0, not 0.24.1.
 
+### Changed
+
+- **The periodic force field's forces are 12–14% faster with the neighbour list, and every bit is
+  as it was** (`pantometry-forcefield`). Profiled first, on phenol's two legs from their real
+  starts, release, pinned to one P-core of an i9-13900HX: the real-space pairs are 80% of a step,
+  and of the octanol box's forces, 38.6 ms partway through these changes, the Ewald pair alone,
+  erfc and its kernel, is 16.3 ms, 20 ns a pair. None of that arithmetic can change without moving
+  bits, so what changed is around it, each change measured by undoing it alone:
+  - **The dynamics no longer sum a virial they never read.** `Potential::energy_and_forces` and
+    `Alchemical::energy_and_forces` add the forces alone, by the operations `evaluate` uses, and
+    `energy` adds neither: 6% of the forces with the list.
+  - **erfcx's interval midpoints and `2/(b − a)` are tables**, computed once by the same
+    operations, which takes a division out of every Ewald pair: 3.5–5%.
+  - **The neighbour list is built again when the exclusions it is given are not its build's**, so
+    no excluded pair reaches the pair term, which no longer looks every pair up: 4–7%, the binary
+    search having been 2.5 of the octanol box's 38.7 ms.
+  - **A pair with no well stops at its Coulomb term**: its van der Waals is `±0`, which leaves a
+    sum that began at `+0` as it was, and its force `±0 + c = c`. TIP3P's hydrogens are in about
+    eight of every nine of a water box's pairs: 4.7% of the water leg's forces with the list,
+    nothing in octanol.
+  - **Measured and not kept:** a table of the mixed `[x, D]` by atom class, 0.7–1.7% for 120
+    lines; and erfcx summing each coefficient row whole, its zeros included, for a loop of fixed
+    length, 2% in water and nothing in octanol.
+  - **What it gave**, the mean of three runs each, milliseconds: the octanol box's forces 42.2 →
+    36.1 and its step 47.9 → 42.2; the water box's forces 13.9 → 12.2 with the list and 21.5 →
+    20.3 by the cell list, whose own search is most of what is left there, and its step, by the
+    cell list as the water leg runs, 21.6 → 21.1.
+  - **Every bit is HEAD's**: on both legs, the energy by term, forces and virial by both pair
+    searches, the decoupling at seven states and its couplings at 29, and twenty steps' positions
+    and velocities at two states, 298 431 values; and `b6558df`'s pins.
+  - **But `b6558df`'s pins could not see two of the paths changed.** They are geometric mixing
+    over every pair, so nothing committed held Lorentz–Berthelot to HEAD, where a hydrogen's
+    skipped van der Waals is `−0` rather than the `+0` of `x = 0` (both reviewers found this one),
+    nor the search by cells. `HEAD_FURTHER` pins the bits HEAD `8b58114` gave for both, plain,
+    listed and decoupled through the dynamics' forces.
+  - **Four other tests are new**: the three things an evaluation can be asked for give the same
+    bits of what they share, plain and decoupled, and so do the dynamics' forces and
+    `evaluate`'s with every rule on; a list told other exclusions is built again; the tables are
+    their arithmetic.
+  - **Eleven sabotages each fail a test.** Four show what the first tests missed:
+    - Lorentz–Berthelot's `x_ij` off by one part in 10¹⁵, and the cells taken in another order,
+      both pass `b6558df`'s pins.
+    - The 1-4 pairs' forces dropped from the dynamics' request alone passes the test of the
+      three requests, whose waters have no 1-4 pair.
+    - A list comparing only how many exclusions it was given would have passed the first
+      version of its test, whose exclusions changed in number at every step.
+    - A `2/(b − a)` off by one part in 10¹⁵ passes `the_ewald_sum_against_closed_forms`, which
+      holds erfc to 3.5 ulp at its 438 reference points, and fails only the table test.
+
 ### Fixed
 
 - **A moved checkout's test binaries passed `counts_in_prose` and `documented_version` over

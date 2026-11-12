@@ -172,6 +172,29 @@ const UNDERFLOW: f64 = 27.3;
 /// The intervals the Chebyshev series of `erfcx` cover, `[EDGES[i], EDGES[i + 1])`.
 const EDGES: [f64; 10] = [0.4375, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0];
 
+/// `(a + b)/2` of each interval `[a, b)` of [`EDGES`], computed once: the same operations, so the
+/// same bits, as at each call, where they cost a division of every Ewald pair.
+const MIDPOINTS: [f64; 9] = {
+    let mut m = [0.0; 9];
+    let mut i = 0;
+    while i < 9 {
+        m[i] = 0.5 * (EDGES[i] + EDGES[i + 1]);
+        i += 1;
+    }
+    m
+};
+
+/// `2/(b − a)` of each interval of [`EDGES`], as [`MIDPOINTS`] is.
+const HALF_WIDTHS_INVERSE: [f64; 9] = {
+    let mut s = [0.0; 9];
+    let mut i = 0;
+    while i < 9 {
+        s[i] = 2.0 / (EDGES[i + 1] - EDGES[i]);
+        i += 1;
+    }
+    s
+};
+
 /// erf's Taylor coefficients, `(2/√π) (−1)ⁿ / (n! (2n + 1))`, `generate.py --tables`.
 /// The first is `2/√π`, as the script computes it.
 #[allow(clippy::approx_constant)]
@@ -423,8 +446,7 @@ fn erfcx(x: f64) -> f64 {
     } else {
         8
     };
-    let (a, b) = (EDGES[i], EDGES[i + 1]);
-    let t = (x - 0.5 * (a + b)) * (2.0 / (b - a));
+    let t = (x - MIDPOINTS[i]) * HALF_WIDTHS_INVERSE[i];
     clenshaw(&ERFCX_TABLE[i][..ERFCX_TERMS[i]], t)
 }
 
@@ -1007,10 +1029,46 @@ pub(crate) fn add_pair(
     }
 }
 
+/// [`add_pair`]'s forces alone, the same operations in the same order, so the same bits: for an
+/// evaluation that does not want the virial.
+pub(crate) fn add_force(
+    forces: &mut [[f64; 3]],
+    i: usize,
+    j: usize,
+    d: [f64; 3],
+    de_dr_over_r: f64,
+) {
+    let g = -de_dr_over_r;
+    for a in 0..3 {
+        forces[i][a] += g * d[a];
+        forces[j][a] -= g * d[a];
+    }
+}
+
 pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 pub(crate) fn norm(d: [f64; 3]) -> f64 {
     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The intervals' tables are the arithmetic `erfcx` did at each call**, to the bit, so that
+    /// reading them changes no `t`: each midpoint `(a + b)/2` and each `2/(b − a)` of [`EDGES`].
+    #[test]
+    fn the_intervals_tables_are_their_arithmetic() {
+        for i in 0..9 {
+            let (a, b) = (EDGES[i], EDGES[i + 1]);
+            assert_eq!(MIDPOINTS[i].to_bits(), (0.5 * (a + b)).to_bits(), "{i}");
+            assert_eq!(
+                HALF_WIDTHS_INVERSE[i].to_bits(),
+                (2.0 / (b - a)).to_bits(),
+                "{i}"
+            );
+        }
+    }
 }
