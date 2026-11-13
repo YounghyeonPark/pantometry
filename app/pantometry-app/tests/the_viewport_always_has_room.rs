@@ -36,16 +36,10 @@
 /// crate, and the alternative — a `lib.rs` for one function — would be a crate boundary invented to
 /// let a test in.
 fn layout_at(width: f32) -> String {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    let out =
-        std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(["--layout-at", &width.to_string()])
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(["--layout-at", &width.to_string()])
+        .output()
+        .expect("the binary runs");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 

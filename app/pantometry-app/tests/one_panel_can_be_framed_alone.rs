@@ -28,14 +28,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// The `pantometry` binary beside this test.
+/// The `pantometry` binary, as cargo built it for this test.
 fn binary() -> PathBuf {
-    let mut bin = std::env::current_exe().expect("the test binary knows where it is");
-    bin.pop();
-    if bin.ends_with("deps") {
-        bin.pop();
-    }
-    bin.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX))
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_pantometry"))
 }
 
 /// Scene 14, run into a run file named for the test asking, so two tests running at once do not

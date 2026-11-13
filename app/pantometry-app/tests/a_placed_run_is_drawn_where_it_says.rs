@@ -36,19 +36,13 @@
 
 /// The binary, asked what it would draw for a run.
 fn drawn(run: &str) -> String {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/runs")
         .join(run);
-    let out =
-        std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(["--drawn-extent", &fixture.to_string_lossy()])
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(["--drawn-extent", &fixture.to_string_lossy()])
+        .output()
+        .expect("the binary runs");
     assert!(
         out.status.success(),
         "--drawn-extent failed: {}",

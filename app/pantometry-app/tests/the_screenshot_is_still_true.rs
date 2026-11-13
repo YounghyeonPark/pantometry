@@ -73,16 +73,10 @@ fn holds(file: &str, stem: &str) {
         "docs/{stem}.txt is here and docs/{stem}.png is not — the caption outlived its picture"
     );
 
-    let mut bin = std::env::current_exe().expect("the test binary knows where it is");
-    bin.pop();
-    if bin.ends_with("deps") {
-        bin.pop();
-    }
-    let out =
-        std::process::Command::new(bin.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(["--ui-dump", &scene(file).to_string_lossy(), "--ran"])
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(["--ui-dump", &scene(file).to_string_lossy(), "--ran"])
+        .output()
+        .expect("the binary runs");
     assert!(
         out.status.success(),
         "--ui-dump refused: {}",

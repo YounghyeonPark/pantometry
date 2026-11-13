@@ -26,12 +26,7 @@
 
 /// The binary, and a place to put what it writes.
 fn tools() -> (std::path::PathBuf, std::path::PathBuf) {
-    let mut exe = std::env::current_exe().expect("the test binary knows where it is");
-    exe.pop();
-    if exe.ends_with("deps") {
-        exe.pop();
-    }
-    let bin = exe.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_pantometry"));
     let dir = std::env::temp_dir().join("pantometry-draws-every-scene");
     std::fs::create_dir_all(&dir).expect("a temp dir");
     (bin, dir)

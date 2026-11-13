@@ -20,20 +20,14 @@
 /// `PANTOMETRY_RECENT` for the reason it gives: without it the start screen reads whichever list
 /// belongs to whoever is running the suite.
 fn dump(args: &[&str]) -> String {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
     let mut argv = vec!["--ui-dump".to_string()];
     argv.extend(args.iter().map(|a| (*a).to_string()));
     let none = std::env::temp_dir().join("pantometry-no-such-recent-list.json");
-    let out =
-        std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(&argv)
-            .env("PANTOMETRY_RECENT", none.to_string_lossy().into_owned())
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(&argv)
+        .env("PANTOMETRY_RECENT", none.to_string_lossy().into_owned())
+        .output()
+        .expect("the binary runs");
     assert!(
         out.status.success(),
         "--ui-dump {argv:?} failed: {}",
@@ -44,16 +38,10 @@ fn dump(args: &[&str]) -> String {
 
 /// `--layout-at`, which is a subcommand of its own and not a flag of `--ui-dump`.
 fn layout_at(width: u32) -> String {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    let out =
-        std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(["--layout-at", &width.to_string()])
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(["--layout-at", &width.to_string()])
+        .output()
+        .expect("the binary runs");
     assert!(out.status.success(), "--layout-at {width} failed");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }

@@ -17,14 +17,9 @@
 
 use std::process::Command;
 
-/// The binary under test, as cargo built it beside this test.
+/// The binary under test, as cargo built it for this test.
 fn binary() -> std::path::PathBuf {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop(); // the test's own file name
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX))
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_pantometry"))
 }
 
 /// Run the binary with these arguments and give back `(stdout + stderr, success)`.

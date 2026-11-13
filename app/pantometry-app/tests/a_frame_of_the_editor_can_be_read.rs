@@ -36,27 +36,21 @@ fn dump(args: &[&str]) -> String {
 /// the machine it runs on is not a test. The default is a path that does not exist, which the
 /// editor reads as an empty list.
 fn dump_listing(recent: &str, args: &[&str]) -> String {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
     let mut argv = vec!["--ui-dump".to_string()];
     argv.extend(args.iter().map(|a| (*a).to_string()));
     let none = std::env::temp_dir().join("pantometry-no-such-recent-list.json");
-    let out =
-        std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(&argv)
-            .env(
-                "PANTOMETRY_RECENT",
-                if recent.is_empty() {
-                    none.to_string_lossy().into_owned()
-                } else {
-                    recent.to_string()
-                },
-            )
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(&argv)
+        .env(
+            "PANTOMETRY_RECENT",
+            if recent.is_empty() {
+                none.to_string_lossy().into_owned()
+            } else {
+                recent.to_string()
+            },
+        )
+        .output()
+        .expect("the binary runs");
     assert!(
         out.status.success(),
         "--ui-dump {argv:?} failed: {}",
@@ -74,20 +68,13 @@ fn dump_listing(recent: &str, args: &[&str]) -> String {
 fn scene() -> String {
     static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
-        let mut p = std::env::current_exe().expect("the test binary knows where it is");
-        p.pop();
-        if p.ends_with("deps") {
-            p.pop();
-        }
         let dir = std::env::temp_dir().join("pantometry-ui-dump-scene");
         std::fs::create_dir_all(&dir).expect("a temp dir");
         let out = dir.join("built-in.json");
-        let done = std::process::Command::new(
-            p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)),
-        )
-        .args(["emit", &out.to_string_lossy()])
-        .output()
-        .expect("the binary runs");
+        let done = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+            .args(["emit", &out.to_string_lossy()])
+            .output()
+            .expect("the binary runs");
         assert!(
             done.status.success() && out.is_file(),
             "emit did not write a scene: {}",
@@ -992,12 +979,7 @@ fn an_open_area_shows_its_scenes_and_a_shut_one_does_not() {
 /// one thing a door built for tests must not do.
 #[test]
 fn a_bad_area_is_refused_rather_than_shown_shut() {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    let bin = p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_pantometry"));
     let last = pantometry_world::presets::AREA_COUNT - 1;
     for bad in [
         last.saturating_add(1).to_string(),
@@ -1040,12 +1022,7 @@ fn a_bad_area_is_refused_rather_than_shown_shut() {
 /// own early return.
 #[test]
 fn a_refused_run_exits_one_and_prints_no_frame() {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    let bin = p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_pantometry"));
     let dir = std::env::temp_dir().join("pantometry-ui-dump-refused");
     std::fs::create_dir_all(&dir).expect("a temporary directory");
     // A file that parses as JSON and is not a scene: it opens, and only running it fails.
@@ -1100,12 +1077,7 @@ fn a_refused_run_exits_one_and_prints_no_frame() {
 /// and `--custom` without `--new`, a kind the chooser does not have, and a click that cannot land.
 #[test]
 fn an_argument_it_does_not_take_is_refused_rather_than_ignored() {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    let bin = p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX));
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_pantometry"));
     let s = scene();
     let missing = std::env::temp_dir()
         .join("pantometry-ui-dump-no-such-scene.json")

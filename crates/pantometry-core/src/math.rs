@@ -112,7 +112,7 @@
 //! | sin, from cos's series | 0.503 | 0.5005 ulp | 0.5005 ulp | `t = 0.36687` | |
 //! | cos, from cos's series | 0.503 | 0.5005 ulp | 0.5005 ulp | `t = 0.10765` | |
 //! | cos, from sin's series | 0.501 | 0.4999 ulp | 0.5000 ulp | `t = 0.37116` | |
-//! | either, `|t| ≥ 2⁵²` | 0 | exact | exact | | |
+//! | either, `\|t\| ≥ 2⁵²` | 0 | exact | exact | | |
 //! | sin, all; cos, all | | | | | 0.002% (19 points); 0.002% (13) |
 //!
 //! A rounded result shows the budget beyond ½ only near a tie, so the budgets are held before the
@@ -150,7 +150,7 @@
 //! | `±0` | `±0` | `1` |
 //! | a whole number `k`, or `k + ½`, of either sign | `±0`, the sign of `t` | `±1`, exactly |
 //! | `k ± ¼` | `±1`, exactly | `+0` |
-//! | `|t| ≥ 2⁵²`, every one a whole number | `±0`, the sign of `t` | `1` |
+//! | `\|t\| ≥ 2⁵²`, every one a whole number | `±0`, the sign of `t` | `1` |
 //! | subnormal | `2πt` rounded once onto the subnormal grid | `1` |
 
 // The constants below are bit patterns, so that each is the double it says without a decimal

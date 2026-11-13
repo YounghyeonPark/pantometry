@@ -129,21 +129,15 @@ fn render(dir: &std::path::Path, name: &str, body: &str) -> Option<Vec<u8>> {
     let shot = dir.join(format!("{name}.ppm"));
     std::fs::write(&run, body).expect("the run writes");
 
-    let mut bin = std::env::current_exe().expect("the test binary knows where it is");
-    bin.pop();
-    if bin.ends_with("deps") {
-        bin.pop();
-    }
-    let out =
-        std::process::Command::new(bin.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args([
-                "view",
-                &run.to_string_lossy(),
-                "--snapshot",
-                &shot.to_string_lossy(),
-            ])
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args([
+            "view",
+            &run.to_string_lossy(),
+            "--snapshot",
+            &shot.to_string_lossy(),
+        ])
+        .output()
+        .expect("the binary runs");
     let said =
         String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     if said.contains("no adapter") || said.contains("no GPU") {

@@ -29,21 +29,15 @@ use std::path::{Path, PathBuf};
 
 /// The binary, asked for one frame from `dir`, with an empty recent list.
 fn dump_in(dir: &Path, args: &[&str]) -> String {
-    let mut p = std::env::current_exe().expect("the test binary knows where it is");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
     let mut argv = vec!["--ui-dump".to_string()];
     argv.extend(args.iter().map(|a| (*a).to_string()));
     let none = std::env::temp_dir().join("pantometry-no-such-recent-list.json");
-    let out =
-        std::process::Command::new(p.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args(&argv)
-            .current_dir(dir)
-            .env("PANTOMETRY_RECENT", none)
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args(&argv)
+        .current_dir(dir)
+        .env("PANTOMETRY_RECENT", none)
+        .output()
+        .expect("the binary runs");
     assert!(
         out.status.success(),
         "--ui-dump {argv:?} failed: {}",

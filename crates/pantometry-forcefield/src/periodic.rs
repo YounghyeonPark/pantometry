@@ -1664,8 +1664,8 @@ impl PeriodicDecoupling {
         let mut pairs = Vec::new();
         let mut real = 0.0;
         for &g in &members {
-            for j in 0..n {
-                if self.group[j] {
+            for (j, &in_group) in self.group.iter().enumerate() {
+                if in_group {
                     continue;
                 }
                 let (a, b) = (g.min(j), g.max(j));

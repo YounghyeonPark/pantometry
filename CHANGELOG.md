@@ -179,6 +179,22 @@ protects nothing.
   opt-level: 1427 passed and 85 ignored, 312 s with the build cold. It is the seventeenth entry in
   CONTRIBUTING.md's table, and the second to reach `main`.
 
+- **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
+  been wrong in the published documentation since 0.24.0.**
+  - **Cargo 1.100 builds a test in `target/<profile>/build/<package>/<hash>/out/`**, not in
+    `target/<profile>/deps/`, and seventeen helpers in twelve of `app/pantometry-app`'s test files
+    found the `pantometry` binary from the test's own path. All 27 tests of the first file failed
+    on a file not found, and cargo stopped there, before the package's other fifteen test files
+    and every package after it. They take `env!("CARGO_BIN_EXE_pantometry")`, the path cargo gives
+    an integration test for the purpose.
+  - **Rustdoc's new `invalid-markdown-table` lint found two rows of `pantometry_core::math`'s
+    tables with a `|` in a code span**, which a table splits on. Since `d01fe74` the error table's
+    `|t| ≥ 2⁵²` row has shown each value two columns right of its heading, and the special values'
+    row has shown neither its sin nor its cos. Both are escaped, `\|`.
+  - **Clippy 1.100's `needless_range_loop` reached `PeriodicDecoupling`'s `cross_terms`**, which
+    indexed the group by the loop's index. It iterates over the group now: the same indices, in
+    the same order.
+
 ## [0.24.0] — 2026-11-06
 
 Fifteen commits, and the theme is one molecule in, one verdict out, and the same bits on every

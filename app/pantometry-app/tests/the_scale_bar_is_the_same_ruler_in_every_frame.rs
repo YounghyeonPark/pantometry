@@ -141,23 +141,17 @@ fn a_run_with_one_value_still_gets_a_ruler() {
 
 /// One frame rendered headless, as the bytes of a binary PPM. `None` when there is no adapter.
 fn render(run: &std::path::Path, shot: &std::path::Path, at: usize) -> Option<Vec<u8>> {
-    let mut bin = std::env::current_exe().expect("the test binary knows where it is");
-    bin.pop();
-    if bin.ends_with("deps") {
-        bin.pop();
-    }
-    let out =
-        std::process::Command::new(bin.join(format!("pantometry{}", std::env::consts::EXE_SUFFIX)))
-            .args([
-                "view",
-                &run.to_string_lossy(),
-                "--snapshot",
-                &shot.to_string_lossy(),
-                "--frame",
-                &at.to_string(),
-            ])
-            .output()
-            .expect("the binary runs");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pantometry"))
+        .args([
+            "view",
+            &run.to_string_lossy(),
+            "--snapshot",
+            &shot.to_string_lossy(),
+            "--frame",
+            &at.to_string(),
+        ])
+        .output()
+        .expect("the binary runs");
     let said =
         String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     if said.contains("no adapter") || said.contains("no GPU") {
