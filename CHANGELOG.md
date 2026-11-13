@@ -261,6 +261,11 @@ protects nothing.
   - **Clippy 1.100's `needless_range_loop` reached `PeriodicDecoupling`'s `cross_terms`**, which
     indexed the group by the loop's index. It iterates over the group now: the same indices, in
     the same order.
+  - **Cargo 1.100's new manifest lints found three lines in `app/` that nothing used**:
+    `workspace.package`'s `publish = false`, which no member inherits (five set it themselves and
+    `viewer-core` sets `publish = true`), so it had never kept anything from being published;
+    `workspace.dependencies`' `pantometry-view`; and `pantometry-world`'s `serde_json`, which only
+    its tests use and is a dev-dependency now.
 
 ## [0.24.0] — 2026-11-06
 

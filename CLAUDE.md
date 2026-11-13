@@ -84,7 +84,9 @@ machine had none, and it claimed compiling was the half that catches a missing `
 `cfg` always compiles. `documented_version` had none, passed over nothing under wasmtime on every
 commit, and when `81c7dae` made that a failure CI was the first thing to run it — entry 17. The
 wasmtime above is CI's pinned release, checked against the release API's digest, at CI's
-opt-level: 1427 passed, 312 s cold. If CI moves wasmtime, move this one with it.
+opt-level: on 2026-11-07, 1427 passed, 312 s cold; at `b71fd77`, 1443 passed and 88 ignored. The
+count grows with the suite, so it carries a date: this line gave it none, and by `b71fd77` it was
+sixteen short. If CI moves wasmtime, move this one with it.
 
 CI does **not** cover `bindings/python` or `app/` from this gate — each has its own job and its own
 procedure.
