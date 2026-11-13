@@ -38,7 +38,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Younghyeon Park and pantometry contributors"]
 repository = "https://github.com/YounghyeonPark/pantometry"
-publish = false
 
 [workspace.dependencies]
 # The library, by path. Every one of these is a normal dependency in one direction only.
@@ -46,7 +45,6 @@ pantometry = { path = "../crates/pantometry" }
 pantometry-core = { path = "../crates/pantometry-core" }
 pantometry-thermal = { path = "../crates/pantometry-thermal" }
 pantometry-units = { path = "../crates/pantometry-units" }
-pantometry-view = { path = "../crates/pantometry-view" }
 
 # This workspace's own.
 pantometry-world = { path = "pantometry-world" }

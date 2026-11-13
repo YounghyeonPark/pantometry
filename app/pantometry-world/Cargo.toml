@@ -14,6 +14,9 @@ publish = false
 [dev-dependencies]
 # Only to decode the tiles a test reads. The crate itself hands them out as bytes.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Only for the tests, which build and take apart scenes as JSON. The crate derives `serde`'s traits
+# and leaves the format to whoever reads a scene; it was a normal dependency that nothing used.
+serde_json = { workspace = true }
 
 [dependencies]
 pantometry = { workspace = true }
@@ -21,5 +24,4 @@ pantometry = { workspace = true }
 # reduced-unit helpers, which the facade does not re-export.
 glam = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 
