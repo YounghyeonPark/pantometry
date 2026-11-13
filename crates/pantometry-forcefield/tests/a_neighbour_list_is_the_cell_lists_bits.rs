@@ -592,7 +592,8 @@ fn the_cost_on_w4s_box_measured() {
             .map(|x| (x / ANGSTROM * 100.0).round() / 100.0),
         clock.elapsed().as_secs_f64()
     );
-    let plain = s.field().clone();
+    // One thread, as the table in `neighbours`' documentation was measured.
+    let plain = s.field().clone().with_threads(1);
     let template = s.dynamics(Flexibility::Frozen);
     let mut at = s.positions().to_vec();
     let melt_field = plain.clone().with_neighbour_list(1.5 * ANGSTROM);

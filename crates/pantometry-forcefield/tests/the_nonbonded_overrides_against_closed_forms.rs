@@ -1398,7 +1398,8 @@ const HEAD_TAILS: u64 = 0x4d6c09f9ff9f11b9;
 /// octanols at the dictionary's ideal coordinates with AM1-BCC's charges, their non-bonded terms;
 /// and both systems' long-range corrections at 256 cutoffs each, since one cutoff's rounding can
 /// hide a rearranged tail: two did, and sixteen caught it once in 64.
-/// The plain field, the field with every rule set to its default explicitly, and the neighbour list.
+/// The plain field, the field with every rule set to its default explicitly, and the neighbour list,
+/// each on three threads and on sixteen as well as on one ([`PeriodicForceField::with_threads`]).
 /// A test that compares the new code with itself cannot see a refactor of what the two share; this
 /// can.
 #[test]
@@ -1419,22 +1420,28 @@ fn the_default_path_is_heads_bits() {
         ("explicit", &explicit),
         ("listed", &listed),
     ] {
-        assert_eq!(
-            pinned::all_bits(f, &f.evaluate(&at)),
-            HEAD_WATER,
-            "water, {name}"
-        );
+        for t in [1, 3, 16] {
+            let f = f.clone().with_threads(t);
+            assert_eq!(
+                pinned::all_bits(&f, &f.evaluate(&at)),
+                HEAD_WATER,
+                "water, {name}, {t} threads"
+            );
+        }
     }
     let (octanols, at) = pinned::ideal_octanols();
     let listed = octanols
         .clone()
         .with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
     for (name, f) in [("plain", &octanols), ("listed", &listed)] {
-        assert_eq!(
-            pinned::nonbonded_bits(f, &f.energy(&at)),
-            HEAD_OCTANOL,
-            "octanol, {name}"
-        );
+        for t in [1, 3, 16] {
+            let f = f.clone().with_threads(t);
+            assert_eq!(
+                pinned::nonbonded_bits(&f, &f.energy(&at)),
+                HEAD_OCTANOL,
+                "octanol, {name}, {t} threads"
+            );
+        }
     }
     let tails = pinned::tails_over_cutoffs();
     assert_eq!(tails.len(), 1024);
@@ -1677,7 +1684,8 @@ const HEAD_FURTHER: [([u64; 36], [u64; 32]); 3] = [
 /// every pair; and under Lorentz–Berthelot at 5.5 and 4.6 Å, where a hydrogen's pairs have no well
 /// and `x = x_j/2 ≠ 0`, so that the van der Waals skipped for them is `−0` past 1.58 Å from an
 /// oxygen, not the `+0` that geometric mixing's `x = 0` gives. Each by the cell list and by the
-/// neighbour list, and each with two waters decoupled, through the dynamics' forces.
+/// neighbour list, and each with two waters decoupled, through the dynamics' forces; and each on
+/// one thread, three and sixteen.
 #[test]
 fn the_paths_the_first_pins_miss_are_heads_bits() {
     assert_eq!((2.0 * 12.0 / 4.6f64).floor(), 5.0, "by cells");
@@ -1696,8 +1704,12 @@ fn the_paths_the_first_pins_miss_are_heads_bits() {
         let last = at.len() - 1;
         let mut group = vec![false; at.len()];
         group[..6].fill(true);
-        for (name, f) in [("plain", &plain), ("listed", &listed)] {
-            let label = format!("{mixing:?} at {cutoff} Å, {name}");
+        for (name, f, t) in [("plain", &plain), ("listed", &listed)]
+            .into_iter()
+            .flat_map(|(name, f)| [1, 3, 16].map(|t| (name, f, t)))
+        {
+            let f = &f.clone().with_threads(t);
+            let label = format!("{mixing:?} at {cutoff} Å, {name}, {t} threads");
             assert_eq!(pinned::all_bits(f, &f.evaluate(&at)), whole, "{label}");
             let d = PeriodicDecoupling::new(f, &group).expect("two waters decouple");
             let mut out = Vec::new();
@@ -1716,8 +1728,8 @@ fn the_paths_the_first_pins_miss_are_heads_bits() {
 /// **The dynamics' forces are the evaluation's to the bit with every rule on**, which reaches the
 /// scaled 1-4 pairs' forces where the virial is not wanted: nine octanols at the dictionary's ideal
 /// coordinates, charged, under Lorentz–Berthelot with GAFF's 1-4 scales, by the cell list and by
-/// the neighbour list. `Potential::energy_and_forces`' energy and forces against `evaluate`'s, and
-/// `energy`'s every term too.
+/// the neighbour list, on one thread and on seven. `Potential::energy_and_forces`' energy and
+/// forces against `evaluate`'s, and `energy`'s every term too, and each against one thread's.
 #[test]
 fn the_dynamics_forces_are_the_evaluations_with_every_rule_on() {
     let (octanols, at) = pinned::ideal_octanols();
@@ -1729,8 +1741,15 @@ fn the_dynamics_forces_are_the_evaluations_with_every_rule_on() {
     let listed = ruled
         .clone()
         .with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
-    for (name, f) in [("plain", &ruled), ("listed", &listed)] {
+    let one = evaluation_bits(&ruled.clone().with_threads(1).evaluate(&at));
+    for (name, f, t) in [("plain", &ruled), ("listed", &listed)]
+        .into_iter()
+        .flat_map(|(name, f)| [1, 7].map(|t| (name, f, t)))
+    {
+        let f = &f.clone().with_threads(t);
+        let name = format!("{name}, {t} threads");
         let ev = f.evaluate(&at);
+        assert_eq!(evaluation_bits(&ev), one, "{name}");
         let (terms, want, _) = evaluation_bits(&ev);
         let mut forces = vec![[0.0; 3]; at.len()];
         let e = Potential::energy_and_forces(f, &at, &mut forces);

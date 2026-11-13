@@ -191,6 +191,48 @@
 //! 1 533-atom box. Its sums are the evaluation's λ-dependent terms in another order, which a unit
 //! test holds to 64 ε of the evaluation's parts.
 //!
+//! # Threads, with the same bits on any number
+//!
+//! The real-space pairs, and the neighbour list's builds, are computed on several threads
+//! ([`PeriodicForceField::with_threads`]) and summed on the calling one, in the one-thread order.
+//! The atoms are cut into spans. A thread turns a span's pairs into what each adds — its force
+//! `g d`, its Ewald real part and its van der Waals, each a function of the positions and the
+//! parameters alone and so the same bits on any thread — and the calling thread adds every span's
+//! in the spans' order, whatever order the threads finished them in. Every sum then takes the
+//! additions it takes on one thread, in the same order: **the same bits on any number of
+//! threads**, which the tests hold against one thread and against the bits `b6558df` and `8b58114`
+//! gave before there were any. A pair with none of a term adds `+0`, which leaves a sum begun at
+//! `+0` as it was, since such a sum is never `−0`. That every thread rounds alike is assumed: a new
+//! thread starts in the default floating-point environment, and a host that had set flush-to-zero
+//! on the calling thread would see a term with a subnormal in it computed differently there.
+//!
+//! Without `with_threads` an evaluation takes `√(pairs / 800)` threads, `pairs` the number inside
+//! the cutoff its box's density gives, at most the machine's, and one below 20 000. Phenol's two
+//! legs, release, `x86_64-pc-windows-gnu`, an i9-13900HX's 32 logical processors, unpinned, the
+//! mean of three runs each of `8dd3316` and of this, at the 17 and 31 threads it takes, ms:
+//!
+//! | | `8dd3316` | threads |
+//! | --- | --- | --- |
+//! | water, 1 534 atoms: forces by the cell list | 19.5 | 6.5 |
+//! | the same by the neighbour list | 11.6 | 5.5 |
+//! | a step of the dynamics, by the cell list | 20.3 | 7.0 |
+//! | octanol, 5 089 atoms: forces by the cell list | 52.7 | 12.1 |
+//! | the same by the neighbour list | 34.6 | 10.6 |
+//! | a step of the dynamics, by the neighbour list | 40.4 | 13.0 |
+//!
+//! **On one thread** — which every evaluation below 20 000 pairs takes, and every one on
+//! WebAssembly — it is `8dd3316`'s time to 2%: pinned to one P-core, the mean of three runs each,
+//! the forces 20.10 → 20.11 ms by the cell list and 11.94 → 12.16 by the neighbour list in the
+//! water box, 54.37 → 54.01 and 35.56 → 35.91 in the octanol box, and the steps 20.84 → 20.72 and
+//! 41.15 → 41.26.
+//!
+//! What is left runs on one thread: the particle mesh, 4.3 to 4.9 ms of either step; the excluded
+//! and 1-4 pairs, the bonded terms and the dynamics; and adding the spans' terms, which kept the
+//! calling thread busy about 2 ms of the octanol box's 5.2 to 5.8 ms of pairs at eight and sixteen
+//! threads, while the threads computed. The threads are spawned at each evaluation, since a pool
+//! that outlived one could not be written without `unsafe` or a dependency; WebAssembly takes one,
+//! and so does a machine that refuses a spawn.
+//!
 //! # The cost, measured
 //!
 //! `tests/a_molecule_in_a_periodic_box.rs`, `the_cost`: release, one core,
@@ -233,8 +275,10 @@ use crate::dynamics::Potential;
 use crate::energy::{coulomb, ForceField, Pair, Unsupported};
 use crate::ewald::{add_force, add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters};
 use crate::neighbours::NeighbourList;
+use crate::ordered;
 use crate::uff::UffType;
 use crate::water;
+use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::fmt;
 use std::ops::Range;
@@ -580,45 +624,93 @@ pub(crate) fn for_each_pair(
     cutoff: f64,
     mut f: impl FnMut(usize, usize, [f64; 3], f64),
 ) {
-    let n = at.len();
-    let l = cell.lengths();
-    let half = l.map(|x| 0.5 * x);
-    let w: Vec<[f64; 3]> = at.iter().map(|p| cell.wrap(*p)).collect();
-    let rc2 = cutoff * cutoff;
-    let mut visit = |i: usize, j: usize| {
-        let (d, r2) = separation(w[i], w[j], l, half);
-        if r2 < rc2 {
-            f(i, j, d, r2);
-        }
-    };
-    let reach = REACH;
-    let Some(cells) = cell_grid(l, cutoff) else {
-        for i in 0..n {
-            for j in i + 1..n {
-                visit(i, j);
+    let search = CellSearch::new(cell, at, cutoff);
+    for i in 0..at.len() {
+        search.atom(i, &mut f);
+    }
+}
+
+/// [`for_each_pair`]'s search, prepared: the wrapped positions, and each cell's members when the
+/// box is cut into cells. Read-only once made, so each atom's pairs can be visited on any thread
+/// ([`CellSearch::atom`]); [`for_each_pair`] is every atom's in turn.
+pub(crate) struct CellSearch {
+    w: Vec<[f64; 3]>,
+    l: [f64; 3],
+    half: [f64; 3],
+    rc2: f64,
+    grid: Option<Grid>,
+}
+
+/// The cells of a [`CellSearch`]: each atom's, and each cell's members in order of index.
+struct Grid {
+    cells: [usize; 3],
+    home: Vec<[usize; 3]>,
+    start: Vec<usize>,
+    members: Vec<usize>,
+}
+
+impl CellSearch {
+    pub(crate) fn new(cell: &PeriodicBox, at: &[[f64; 3]], cutoff: f64) -> CellSearch {
+        let n = at.len();
+        let l = cell.lengths();
+        let half = l.map(|x| 0.5 * x);
+        let w: Vec<[f64; 3]> = at.iter().map(|p| cell.wrap(*p)).collect();
+        let rc2 = cutoff * cutoff;
+        let grid = cell_grid(l, cutoff).map(|cells| {
+            let flat = |c: [usize; 3]| (c[0] * cells[1] + c[1]) * cells[2] + c[2];
+            let total = cells[0] * cells[1] * cells[2];
+            let home: Vec<[usize; 3]> = w.iter().map(|p| cell_of(*p, l, cells)).collect();
+            let mut start = vec![0usize; total + 1];
+            for c in &home {
+                start[flat(*c) + 1] += 1;
             }
+            for k in 0..total {
+                start[k + 1] += start[k];
+            }
+            let mut fill = start.clone();
+            let mut members = vec![0usize; n];
+            for (i, c) in home.iter().enumerate() {
+                let k = flat(*c);
+                members[fill[k]] = i;
+                fill[k] += 1;
+            }
+            Grid {
+                cells,
+                home,
+                start,
+                members,
+            }
+        });
+        CellSearch {
+            w,
+            l,
+            half,
+            rc2,
+            grid,
         }
-        return;
-    };
-    let flat = |c: [usize; 3]| (c[0] * cells[1] + c[1]) * cells[2] + c[2];
-    let total = cells[0] * cells[1] * cells[2];
-    let home: Vec<[usize; 3]> = w.iter().map(|p| cell_of(*p, l, cells)).collect();
-    let mut start = vec![0usize; total + 1];
-    for c in &home {
-        start[flat(*c) + 1] += 1;
     }
-    for k in 0..total {
-        start[k + 1] += start[k];
-    }
-    let mut fill = start.clone();
-    let mut members = vec![0usize; n];
-    for (i, c) in home.iter().enumerate() {
-        let k = flat(*c);
-        members[fill[k]] = i;
-        fill[k] += 1;
-    }
-    let span = 2 * reach + 1;
-    for (i, &c) in home.iter().enumerate() {
+
+    /// Calls `f(i, j, d, r²)` for atom `i`'s pairs with every `j > i` inside the cutoff, in
+    /// [`for_each_pair`]'s order.
+    #[inline]
+    pub(crate) fn atom(&self, i: usize, f: &mut impl FnMut(usize, usize, [f64; 3], f64)) {
+        let (w, l, half, rc2) = (&self.w, self.l, self.half, self.rc2);
+        let mut visit = |j: usize| {
+            let (d, r2) = separation(w[i], w[j], l, half);
+            if r2 < rc2 {
+                f(i, j, d, r2);
+            }
+        };
+        let Some(g) = &self.grid else {
+            for j in i + 1..w.len() {
+                visit(j);
+            }
+            return;
+        };
+        let (cells, reach) = (g.cells, REACH);
+        let flat = |c: [usize; 3]| (c[0] * cells[1] + c[1]) * cells[2] + c[2];
+        let span = 2 * reach + 1;
+        let c = g.home[i];
         for dx in 0..span {
             for dy in 0..span {
                 for dz in 0..span {
@@ -628,9 +720,9 @@ pub(crate) fn for_each_pair(
                         (c[2] + cells[2] + dz - reach) % cells[2],
                     ];
                     let k = flat(nb);
-                    for &j in &members[start[k]..start[k + 1]] {
+                    for &j in &g.members[g.start[k]..g.start[k + 1]] {
                         if j > i {
-                            visit(i, j);
+                            visit(j);
                         }
                     }
                 }
@@ -718,6 +810,39 @@ pub struct PeriodicForceField {
     tree: Vec<[usize; 2]>,
     /// The real-space pairs' Verlet list, when one is asked for ([`crate::neighbours`]).
     pub(crate) neighbours: Option<NeighbourList>,
+    /// How many threads an evaluation's real-space pairs take, or `None` for the machine's
+    /// ([`PeriodicForceField::with_threads`]).
+    threads: Option<usize>,
+    /// The buffers a threaded evaluation hands its spans' terms through.
+    spare: Spare,
+}
+
+/// The buffers a threaded evaluation hands its spans' terms through, kept between evaluations so
+/// that each is allocated about once, and how many threads the last evaluation spawned, which the
+/// tests read: a cache, not a parameter, so two force fields that differ only in it compare equal,
+/// and a clone starts without.
+#[derive(Default)]
+struct Spare {
+    buffers: RefCell<Vec<Terms>>,
+    spawned: std::cell::Cell<usize>,
+}
+
+impl Clone for Spare {
+    fn clone(&self) -> Spare {
+        Spare::default()
+    }
+}
+
+impl PartialEq for Spare {
+    fn eq(&self, _: &Spare) -> bool {
+        true
+    }
+}
+
+impl fmt::Debug for Spare {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Spare")
+    }
 }
 
 /// What a [`PeriodicDecoupling`] gives the shared evaluation.
@@ -759,6 +884,333 @@ fn accumulate(
         Wanted::Forces => add_force(forces, i, j, d, de_dr_over_r),
         Wanted::Virial => add_pair(forces, virial, i, j, d, de_dr_over_r),
     }
+}
+
+/// What one real-space pair `i < j` adds, computed on any thread ([`crate::ordered`]): the force
+/// `g d` on `i` and `−g d` on `j`, `g = −(∂U/∂r)/r` as [`add_pair`] has it, the Ewald real part for
+/// `ewald.real` and `ewald.total`, and the van der Waals for `van_der_waals` and `total`. A term the
+/// pair has none of is `+0`, and adding `+0` to a sum that began at `+0` leaves it as it was, since
+/// such a sum is never `−0`.
+#[derive(Clone, Copy, Debug)]
+struct Term {
+    force: [f64; 3],
+    ewald: f64,
+    vdw: f64,
+}
+
+/// What a pair across a [`PeriodicDecoupling`]'s group adds to the coupling, besides its [`Term`]:
+/// `energy` the soft core's and then the Coulomb pair's at `λ_e`, `gradient` its `∂/∂λ_e` and
+/// `∂/∂λ_v`.
+#[derive(Clone, Copy, Debug)]
+struct Across {
+    energy: [f64; 2],
+    gradient: [f64; 2],
+}
+
+/// Where a pair's terms go: into the sums at once, on one thread ([`Totals`]), or into a span's
+/// buffer to be added there later, in order ([`Terms`]).
+trait Sink {
+    /// Pair `i < j`'s term; `d` is its separation, which only the virial reads.
+    fn term(&mut self, i: usize, j: usize, d: [f64; 3], t: Term);
+    fn across(&mut self, a: Across);
+}
+
+/// A [`Term`] as a span's buffer keeps it, 48 bytes: what the evaluation on several threads costs is
+/// mostly these crossing from the thread that computed them to the one that adds them.
+#[derive(Clone, Copy, Debug)]
+struct Kept {
+    /// Fewer than 2³² atoms are split across threads ([`PeriodicForceField::threads_for`]).
+    atoms: [u32; 2],
+    term: Term,
+}
+
+/// A span of atoms' pairs' terms, in the order they were found, with each term's separation when
+/// the virial is wanted.
+#[derive(Default)]
+struct Terms {
+    terms: Vec<Kept>,
+    separations: Vec<[f64; 3]>,
+    across: Vec<Across>,
+    virial: bool,
+}
+
+impl Sink for Terms {
+    #[inline(always)]
+    fn term(&mut self, i: usize, j: usize, d: [f64; 3], t: Term) {
+        debug_assert!(u32::try_from(j).is_ok(), "atom {j} past 2³²");
+        self.terms.push(Kept {
+            atoms: [i as u32, j as u32],
+            term: t,
+        });
+        if self.virial {
+            self.separations.push(d);
+        }
+    }
+
+    #[inline(always)]
+    fn across(&mut self, a: Across) {
+        self.across.push(a);
+    }
+}
+
+/// The evaluation's sums: each pair's terms added in the order the pairs come.
+struct Totals<'a> {
+    wanted: Wanted,
+    energy: &'a mut PeriodicEnergy,
+    forces: &'a mut [[f64; 3]],
+    virial: &'a mut [[f64; 3]; 3],
+    coupling: &'a mut Coupling,
+}
+
+impl Totals<'_> {
+    /// Adds a span's terms in their order, and leaves the span's buffer empty: what
+    /// [`Sink::term`] does for each, with the sums held in locals and atom `i`'s force held while
+    /// its run of terms lasts. No term of that run adds to `i` as its second atom, every partner
+    /// being `j > i`, so each sum takes the same additions in the same order. Measured on
+    /// phenol's octanol box at sixteen threads: adding through memory term by term, a load, an
+    /// add and a store on `i`'s force that the next term waits for, kept the calling thread busy
+    /// 3.8 ms of the pairs' 6.1 ms; held, 2.9.
+    fn add(&mut self, span: &mut Terms) {
+        let wanted = self.wanted;
+        let (forces, virial) = (&mut *self.forces, &mut *self.virial);
+        let e = &mut *self.energy;
+        let (mut real, mut coulomb, mut vdw, mut total) =
+            (e.ewald.real, e.ewald.total, e.van_der_waals, e.total);
+        let mut held: Option<usize> = None;
+        let mut fi = [0.0; 3];
+        for (k, kept) in span.terms.iter().enumerate() {
+            let t = kept.term;
+            real += t.ewald;
+            coulomb += t.ewald;
+            vdw += t.vdw;
+            total += t.vdw;
+            if wanted == Wanted::Energy {
+                continue;
+            }
+            let (i, j) = (kept.atoms[0] as usize, kept.atoms[1] as usize);
+            if held != Some(i) {
+                if let Some(h) = held {
+                    forces[h] = fi;
+                }
+                held = Some(i);
+                fi = forces[i];
+            }
+            for a in 0..3 {
+                fi[a] += t.force[a];
+                forces[j][a] -= t.force[a];
+            }
+            if wanted == Wanted::Virial {
+                let d = span.separations[k];
+                for (a, row) in virial.iter_mut().enumerate() {
+                    for (w, db) in row.iter_mut().zip(d) {
+                        *w += t.force[a] * db;
+                    }
+                }
+            }
+        }
+        if let Some(h) = held {
+            forces[h] = fi;
+        }
+        (e.ewald.real, e.ewald.total, e.van_der_waals, e.total) = (real, coulomb, vdw, total);
+        for a in &span.across {
+            self.across(*a);
+        }
+        span.terms.clear();
+        span.separations.clear();
+        span.across.clear();
+    }
+}
+
+impl Sink for Totals<'_> {
+    /// [`add_pair`]'s operations, on the force it would compute: `g d_a` added on `i` and taken
+    /// off `j`, and `(g d_a) d_b` on the virial.
+    #[inline(always)]
+    fn term(&mut self, i: usize, j: usize, d: [f64; 3], t: Term) {
+        let e = &mut *self.energy;
+        e.ewald.real += t.ewald;
+        e.ewald.total += t.ewald;
+        e.van_der_waals += t.vdw;
+        e.total += t.vdw;
+        if self.wanted == Wanted::Energy {
+            return;
+        }
+        for a in 0..3 {
+            self.forces[i][a] += t.force[a];
+            self.forces[j][a] -= t.force[a];
+            if self.wanted == Wanted::Virial {
+                for (w, db) in self.virial[a].iter_mut().zip(d) {
+                    *w += t.force[a] * db;
+                }
+            }
+        }
+    }
+
+    /// Only a pair across adds to the coupling, so these sums see the pairs across alone, and in
+    /// their order whichever span's buffer they come from.
+    #[inline(always)]
+    fn across(&mut self, a: Across) {
+        let c = &mut *self.coupling;
+        c.energy += a.energy[0];
+        c.energy += a.energy[1];
+        c.gradient[1] += a.gradient[0];
+        c.gradient[2] += a.gradient[1];
+    }
+}
+
+/// How many spans of atoms an evaluation on several threads is cut into, a thread: enough that a
+/// thread finishing early takes another, few enough that handing one out costs nothing.
+const PIECES_A_THREAD: usize = 8;
+
+/// The fewest pairs inside the cutoff an evaluation is split across threads for: below it a fixed
+/// cost the square-root rule leaves out — the buffers, the handing out, the adding — is most of
+/// what threads would save. Measured on TIP3P lattices with the particle mesh, `r_c` half the box,
+/// release, `x86_64-pc-windows-gnu`, an i9-13900HX, unpinned, the mean of three runs: 192 atoms,
+/// about 9 700 pairs, were 9% faster on four threads than on one by the cell list (2.05 ms against
+/// 2.26) and 5 to 25% slower on two to six by the neighbour list (1.93 against 2.02 to 2.42); 375
+/// atoms, about 36 800, were 13 and 16% faster on the six the rule takes (2.63 against 3.03, and
+/// 2.41 against 2.87).
+const FEWEST_PAIRS_THREADED: f64 = 20_000.0;
+
+/// How many pairs inside the cutoff a thread's spawn costs as much as. Measured as the marginal cost
+/// of a thread past sixteen on this CPU — whose threads past sixteen are hyperthreads and
+/// efficiency cores — 20 to 34 µs on the 648-atom lattice, the mean of three runs at sixteen and
+/// thirty-two threads, against 36 to 59 ns a pair, phenol's octanol box's forces on one thread by
+/// the neighbour list and by the cell list, less its mesh, bonded terms and excluded pairs, for
+/// 796 123 pairs: 340 to 940 pairs a spawn. Through the square root those would take half again as
+/// many threads as this or a tenth fewer, and the times at eight to sixteen threads differ by less
+/// than the runs do.
+const PAIRS_A_SPAWN: f64 = 800.0;
+
+/// The threads an evaluation of about `pairs` pairs inside the cutoff takes by default, of
+/// `available`: one below [`FEWEST_PAIRS_THREADED`], and above it the `T` that makes `T` spawns and
+/// `1/T` of the pairs' time least, `√(pairs / PAIRS_A_SPAWN)`.
+fn default_threads(pairs: f64, available: usize) -> usize {
+    if pairs < FEWEST_PAIRS_THREADED {
+        return 1;
+    }
+    ((pairs / PAIRS_A_SPAWN).sqrt() as usize).clamp(1, available.max(1))
+}
+
+/// The van der Waals pair of atoms `i` and `j` of `vdw`, combined by `mixing`.
+#[inline(always)]
+fn mixed(vdw: &[[f64; 2]], mixing: Mixing, i: usize, j: usize) -> Pair {
+    let ([xi, di], [xj, dj]) = (vdw[i], vdw[j]);
+    Pair {
+        atoms: [i, j],
+        distance: match mixing {
+            Mixing::Geometric => (xi * xj).sqrt(),
+            Mixing::LorentzBerthelot => 0.5 * (xi + xj),
+        },
+        well: (di * dj).sqrt(),
+    }
+}
+
+/// Everything a real-space pair's terms are computed from, which is read-only and `Sync`: so a
+/// pair's terms are the same bits on any thread.
+struct PairTerms<'a> {
+    charges: &'a [f64],
+    vdw: &'a [[f64; 2]],
+    mixing: Mixing,
+    ewald: &'a Ewald,
+    skip: &'a Exclusions,
+    /// Whether the pairs come from the cell list, which gives the excluded ones too.
+    searched: bool,
+    split: Option<&'a Split<'a>>,
+    /// `λ_e` and `λ_v`, or 1 and 1 without a group.
+    le: f64,
+    lv: f64,
+}
+
+impl PairTerms<'_> {
+    #[inline(always)]
+    fn marked(&self, i: usize) -> bool {
+        self.split.is_some_and(|s| s.group[i])
+    }
+
+    /// The terms of pair `i < j` at separation `d`, `r2 = |d|²`, into `sink`; nothing for an
+    /// excluded pair or one inside the group.
+    #[inline(always)]
+    fn add<S: Sink>(&self, i: usize, j: usize, d: [f64; 3], r2: f64, sink: &mut S) {
+        if self.searched && self.skip.contains(i, j) {
+            return;
+        }
+        let (gi, gj) = (self.marked(i), self.marked(j));
+        if gi && gj {
+            return;
+        }
+        let r = r2.sqrt();
+        let pair = mixed(self.vdw, self.mixing, i, j);
+        let qq = self.charges[i] * self.charges[j];
+        if gi != gj {
+            let s = self.split.expect("a pair across needs a group");
+            let sc = s.soft_core.at(&pair, r, self.lv);
+            let mut radial = sc.de_dr_over_r;
+            let (mut real, mut ewald) = (0.0, 0.0);
+            if qq != 0.0 {
+                let (c, dc) = self.ewald.real_pair(qq, r);
+                real = c;
+                if self.le != 0.0 {
+                    ewald = self.le * c;
+                    radial += self.le * dc / r;
+                }
+            }
+            sink.term(
+                i,
+                j,
+                d,
+                Term {
+                    force: force(radial, d),
+                    ewald,
+                    vdw: sc.energy,
+                },
+            );
+            sink.across(Across {
+                energy: [sc.energy, ewald],
+                gradient: [real, sc.de_dlambda],
+            });
+            return;
+        }
+        // The Coulomb pair first, so that a pair with no well can stop at it. Its van der Waals is
+        // `±0` then, `D_ij = 0` times a finite number, and adding `±0` leaves a sum that began at
+        // `+0` as it was, since such a sum is never `−0`; and its force is `±0 + c = c` for the
+        // Coulomb force `c ≠ 0`. So the skip moves no bit. A pair whose Coulomb force is zero,
+        // uncharged or underflowed, keeps its van der Waals and the sign of zero that comes with
+        // it. (Not where `(x_ij/r)¹²` overflows, past `x_ij/r` ≈ 4.9 × 10²⁵ — atoms 10⁻³⁵ m apart,
+        // or an `x` set absurdly large by `with_nonbonded`, which takes any finite one — and the
+        // skipped term would have been `0 · ∞`, NaN.) Measured on phenol's water leg with the
+        // neighbour list: 0.6 of 12.7 ms, the waters' hydrogens being in about eight of every
+        // nine of its pairs.
+        let (mut ewald, mut coulomb) = (0.0, 0.0);
+        if qq != 0.0 {
+            let (c, dc) = self.ewald.real_pair(qq, r);
+            ewald = c;
+            coulomb = dc / r;
+        }
+        let (vdw, radial) = if pair.well == 0.0 && coulomb != 0.0 {
+            (0.0, coulomb)
+        } else {
+            let (v, dv) = pair.at(r);
+            // `dv/r + dc/r` as it was first summed, and addition commutes to the bit.
+            (v, if qq != 0.0 { dv / r + coulomb } else { dv / r })
+        };
+        sink.term(
+            i,
+            j,
+            d,
+            Term {
+                force: force(radial, d),
+                ewald,
+                vdw,
+            },
+        );
+    }
+}
+
+/// `g d` with `g = −(∂U/∂r)/r` for `radial = (∂U/∂r)/r`: [`add_pair`]'s force on `i`.
+#[inline(always)]
+fn force(radial: f64, d: [f64; 3]) -> [f64; 3] {
+    let g = -radial;
+    [g * d[0], g * d[1], g * d[2]]
 }
 
 /// The shared evaluation's result.
@@ -915,6 +1367,8 @@ impl PeriodicForceField {
             one_four: None,
             tree,
             neighbours: None,
+            threads: None,
+            spare: Spare::default(),
         })
     }
 
@@ -977,6 +1431,40 @@ impl PeriodicForceField {
     /// How the pairs' van der Waals combine.
     pub fn mixing(&self) -> Mixing {
         self.mixing
+    }
+
+    /// The same force field computing its real-space pairs, and its neighbour list's builds, on
+    /// `threads` threads, **with the same bits on any number**: each pair's terms are computed on
+    /// some thread and added on the calling one, in the one-thread order (see the module
+    /// documentation). `1`, or `0`, is the calling thread alone; more threads than atoms are as
+    /// many as the atoms; and WebAssembly, or a machine that refuses a spawn, takes one. Without it
+    /// an evaluation takes `√(pairs / 800)` threads, `pairs` the number inside the cutoff that the
+    /// box's density gives, at most the machine's — `PANTOMETRY_THREADS` when that is set and
+    /// [`std::thread::available_parallelism`] otherwise — and one below 20 000.
+    pub fn with_threads(mut self, threads: usize) -> PeriodicForceField {
+        self.threads = Some(threads.max(1));
+        self
+    }
+
+    /// The threads [`PeriodicForceField::with_threads`] set, or `None` for the machine's.
+    pub fn threads(&self) -> Option<usize> {
+        self.threads
+    }
+
+    /// How many threads an evaluation of `n` atoms at `cutoff` in `volume` takes.
+    fn threads_for(&self, n: usize, cutoff: f64, volume: f64) -> usize {
+        // A span's buffer keeps its atoms in 32 bits ([`Kept`]).
+        if cfg!(target_family = "wasm") || u32::try_from(n).is_err() {
+            return 1;
+        }
+        if let Some(t) = self.threads {
+            return t.min(n.max(1));
+        }
+        // About how many pairs are inside the cutoff: `N²/2` pairs, each with a chance `(4π/3)
+        // r_c³/V` of being inside it.
+        let nf = n as f64;
+        let pairs = 0.5 * nf * nf * (4.0 * PI / 3.0) * cutoff * cutoff * cutoff / volume;
+        default_threads(pairs, ordered::available())
     }
 
     /// The same force field with every 1-4 pair's van der Waals scaled by `van_der_waals` and its
@@ -1232,15 +1720,7 @@ impl PeriodicForceField {
     /// The van der Waals pair of atoms `i` and `j`, combined by the field's [`Mixing`]: under the
     /// default, as [`Pair::new`] combines two types.
     fn pair(&self, i: usize, j: usize) -> Pair {
-        let ([xi, di], [xj, dj]) = (self.vdw[i], self.vdw[j]);
-        Pair {
-            atoms: [i, j],
-            distance: match self.mixing {
-                Mixing::Geometric => (xi * xj).sqrt(),
-                Mixing::LorentzBerthelot => 0.5 * (xi + xj),
-            },
-            well: (di * dj).sqrt(),
-        }
+        mixed(&self.vdw, self.mixing, i, j)
     }
 
     /// The energy at `at` (metres, any image), without the forces' use.
@@ -1313,80 +1793,82 @@ impl PeriodicForceField {
         // list's order. The excluded pairs, and any scaled 1-4 pairs, are left out.
         let q = &self.charges;
         let skip = self.skipped();
-        // The neighbour list never gives a pair of `skip` — it is built again whenever the pairs it
-        // is given to leave out differ from its build's ([`crate::neighbours`]) — so only the cell
-        // list's pairs are looked up.
-        let searched = self.neighbours.is_none();
-        let pair_term = |i: usize, j: usize, d: [f64; 3], r2: f64| {
-            if searched && skip.contains(i, j) {
-                return;
-            }
-            let (gi, gj) = (marked(i), marked(j));
-            if gi && gj {
-                return;
-            }
-            let r = r2.sqrt();
-            let pair = self.pair(i, j);
-            let qq = q[i] * q[j];
-            let radial = if gi != gj {
-                let s = split.expect("a pair across needs a group");
-                let sc = s.soft_core.at(&pair, r, lv);
-                e.van_der_waals += sc.energy;
-                e.total += sc.energy;
-                coupling.energy += sc.energy;
-                coupling.gradient[2] += sc.de_dlambda;
-                let mut radial = sc.de_dr_over_r;
-                if qq != 0.0 {
-                    let (c, dc) = self.ewald.real_pair(qq, r);
-                    coupling.gradient[1] += c;
-                    if le != 0.0 {
-                        e.ewald.real += le * c;
-                        e.ewald.total += le * c;
-                        coupling.energy += le * c;
-                        radial += le * dc / r;
-                    }
-                }
-                radial
-            } else {
-                // The Coulomb pair first, so that a pair with no well can stop at it. Its van der
-                // Waals is `±0` then, `D_ij = 0` times a finite number, and adding `±0` leaves a
-                // sum that began at `+0` as it was, since such a sum is never `−0`; and its force
-                // is `±0 + c = c` for the Coulomb force `c ≠ 0`. So the skip moves no bit. A pair
-                // whose Coulomb force is zero, uncharged or underflowed, keeps its van der Waals and
-                // the sign of zero that comes with it. (Not where `(x_ij/r)¹²` overflows, past
-                // `x_ij/r` ≈ 4.9 × 10²⁵ — atoms 10⁻³⁵ m apart, or an `x` set absurdly large by
-                // `with_nonbonded`, which takes any finite one — and the skipped term would have
-                // been `0 · ∞`, NaN.) Each sum takes this pair's terms in the order it did:
-                // `e.van_der_waals` and `e.total` only van der Waals here, and the Ewald parts only
-                // Coulomb. Measured on phenol's water leg with the neighbour list: 0.6 of 12.7 ms,
-                // the waters' hydrogens being in about eight of every nine of its pairs.
-                let mut coulomb = 0.0;
-                if qq != 0.0 {
-                    let (c, dc) = self.ewald.real_pair(qq, r);
-                    e.ewald.real += c;
-                    e.ewald.total += c;
-                    coulomb = dc / r;
-                }
-                if pair.well == 0.0 && coulomb != 0.0 {
-                    coulomb
-                } else {
-                    let (v, dv) = pair.at(r);
-                    e.van_der_waals += v;
-                    e.total += v;
-                    // `dv/r + dc/r` as HEAD summed it, and addition commutes to the bit.
-                    if qq != 0.0 {
-                        dv / r + coulomb
-                    } else {
-                        dv / r
-                    }
-                }
-            };
-            accumulate(wanted, &mut forces, &mut virial, [i, j], d, radial);
+        let terms = PairTerms {
+            charges: q,
+            vdw: &self.vdw,
+            mixing: self.mixing,
+            ewald: &self.ewald,
+            skip,
+            // The neighbour list never gives a pair of `skip` — it is built again whenever the
+            // pairs it is given to leave out differ from its build's ([`crate::neighbours`]) — so
+            // only the cell list's pairs are looked up.
+            searched: self.neighbours.is_none(),
+            split,
+            le,
+            lv,
+        };
+        // On one thread each pair's terms go into the sums as they are computed; on several, each
+        // span of atoms' into a buffer, added here in the spans' order ([`crate::ordered`]). Either
+        // way the sums take the same terms in the same order.
+        let threads = self.threads_for(n, cutoff, volume);
+        let pieces = if threads <= 1 {
+            1
+        } else {
+            PIECES_A_THREAD.saturating_mul(threads)
+        };
+        let mut spare = self.spare.buffers.take();
+        let mut spawned = 0;
+        let mut totals = Totals {
+            wanted,
+            energy: &mut e,
+            forces: &mut forces,
+            virial: &mut virial,
+            coupling: &mut coupling,
         };
         match &self.neighbours {
-            Some(list) => list.for_each_pair(&cell, at, cutoff, skip, pair_term),
-            None => for_each_pair(&cell, at, cutoff, pair_term),
+            Some(list) => list.for_each_span(&cell, at, cutoff, skip, threads, pieces, |spans| {
+                if threads <= 1 {
+                    for span in spans {
+                        span.visit(&mut |i, j, d, r2| terms.add(i, j, d, r2, &mut totals));
+                    }
+                } else {
+                    spawned = ordered::in_order(
+                        threads,
+                        spans,
+                        &mut spare,
+                        |span, out: &mut Terms| {
+                            out.virial = wanted == Wanted::Virial;
+                            span.visit(&mut |i, j, d, r2| terms.add(i, j, d, r2, out));
+                        },
+                        |out| totals.add(out),
+                    );
+                }
+            }),
+            None => {
+                let search = CellSearch::new(&cell, at, cutoff);
+                if threads <= 1 {
+                    for i in 0..n {
+                        search.atom(i, &mut |i, j, d, r2| terms.add(i, j, d, r2, &mut totals));
+                    }
+                } else {
+                    spawned = ordered::in_order(
+                        threads,
+                        ordered::ranges(n, pieces),
+                        &mut spare,
+                        |atoms, out: &mut Terms| {
+                            out.virial = wanted == Wanted::Virial;
+                            for i in atoms {
+                                search.atom(i, &mut |i, j, d, r2| terms.add(i, j, d, r2, out));
+                            }
+                        },
+                        |out| totals.add(out),
+                    );
+                }
+            }
         }
+
+        self.spare.buffers.replace(spare);
+        self.spare.spawned.set(spawned);
 
         // The excluded pairs' correction, outside the group.
         for &[i, j] in self.exclusions.pairs() {
@@ -1596,6 +2078,13 @@ impl PeriodicDecoupling {
     /// The same decoupling with another soft core.
     pub fn with_soft_core(mut self, soft_core: SoftCore) -> PeriodicDecoupling {
         self.soft_core = soft_core;
+        self
+    }
+
+    /// The same decoupling with its field's real-space pairs on `threads` threads
+    /// ([`PeriodicForceField::with_threads`]): the same bits on any number.
+    pub fn with_threads(mut self, threads: usize) -> PeriodicDecoupling {
+        self.field = self.field.with_threads(threads);
         self
     }
 
@@ -1913,6 +2402,176 @@ mod tests {
             }
         }
         assert_eq!(checked, 12);
+    }
+
+    /// **The threads move no bit**: every energy term, every force, the virial and a decoupling's
+    /// coupling are the one-thread evaluation's bits on 2, 3, 7, 16 and 64 threads, asked for the
+    /// energy, the forces and the virial. On 27 waters at 4.6 Å, fewer than five cells of half the
+    /// cutoff across, where both searches visit every pair, and at 3.5 Å, five across, where both
+    /// go by cells; under both mixing rules; plain and with two waters decoupled at three states;
+    /// and at a second configuration, each atom moved less than half the skin, so that the
+    /// neighbour list is not built again and the atoms that changed cell are keyed and sorted again
+    /// on the threads. Each count's field and decoupling are made afresh, so their lists are built
+    /// on their threads. **Every evaluation is asserted to have spawned more than one thread**, so
+    /// that no comparison is one thread's against itself; on WebAssembly every count takes the
+    /// calling thread, which is asserted instead, and there the test says nothing. At 64 threads
+    /// the cell list's spans are single atoms.
+    #[test]
+    fn the_threads_move_no_bit() {
+        let water = WaterBox::lattice(3, 0x3C0);
+        let start = water.positions().to_vec();
+        let n = start.len();
+        // Each atom moved by up to 0.4 Å an axis, 0.7 Å in all, against half a 2 Å skin.
+        let moved: Vec<[f64; 3]> = start
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let s = [(i * 7) % 5, (i * 11) % 5, (i * 13) % 5]
+                    .map(|k| (k as f64 - 2.0) * 0.2 * ANGSTROM);
+                [p[0] + s[0], p[1] + s[1], p[2] + s[2]]
+            })
+            .collect();
+        let configurations = [&start[..], &moved[..]];
+        let mut group = vec![false; n];
+        group[..6].fill(true);
+        let wanted = [Wanted::Energy, Wanted::Forces, Wanted::Virial];
+        let lambdas = [
+            Lambda::COUPLED,
+            Lambda::new(0.0, 0.5, 1.0),
+            Lambda::new(0.0, 0.0, 0.4),
+        ];
+        type Bits = ([u64; 14], Vec<[u64; 3]>, [[u64; 3]; 3], [u64; 4]);
+        let bits = |c: &Core| -> Bits {
+            let k = &c.coupling;
+            (
+                energy_bits(&c.energy),
+                force_bits(&c.forces),
+                c.virial.map(|r| r.map(f64::to_bits)),
+                [k.energy, k.gradient[0], k.gradient[1], k.gradient[2]].map(f64::to_bits),
+            )
+        };
+        let wasm = cfg!(target_family = "wasm");
+        let mut checked = 0;
+        for cutoff in [4.6 * ANGSTROM, 3.5 * ANGSTROM] {
+            let base = water.force_field(cutoff, 1e-8);
+            let grid = cell_grid(base.cell().lengths(), cutoff);
+            assert_eq!(grid.is_some(), cutoff < 4.0 * ANGSTROM, "{grid:?}");
+            if let Some(cells) = grid {
+                let l = base.cell().lengths();
+                let home = |p: &[f64; 3]| cell_of(base.cell().wrap(*p), l, cells);
+                let crossed = start.iter().zip(&moved).filter(|(a, b)| home(a) != home(b));
+                assert!(crossed.count() > 10, "too few atoms changed cell");
+            }
+            for mixing in [Mixing::Geometric, Mixing::LorentzBerthelot] {
+                for listed in [false, true] {
+                    let mut field = base.clone().with_mixing(mixing);
+                    if listed {
+                        field = field.with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
+                    }
+                    // Every evaluation at both configurations in turn, its bits and how many
+                    // threads it spawned, and the threads each list's build spawned.
+                    let run = |t: usize| {
+                        let f = field.clone().with_threads(t);
+                        let d = PeriodicDecoupling::new(&field, &group)
+                            .unwrap()
+                            .with_threads(t);
+                        assert_eq!(f.threads(), Some(t));
+                        assert_eq!(d.field().threads(), Some(t));
+                        let (mut out, mut spawned) = (Vec::new(), Vec::new());
+                        for at in configurations {
+                            for w in wanted {
+                                out.push(bits(&f.core(at, None, w)));
+                                spawned.push(f.spare.spawned.get());
+                            }
+                            for l in lambdas {
+                                for w in wanted {
+                                    out.push(bits(&d.core(at, l, w)));
+                                    spawned.push(d.field().spare.spawned.get());
+                                }
+                            }
+                        }
+                        for g in [&f, d.field()] {
+                            if let Some(list) = &g.neighbours {
+                                assert_eq!(list.status().builds, 1, "moved past half the skin");
+                                spawned.push(list.spawned_at_build());
+                            }
+                        }
+                        (out, spawned)
+                    };
+                    let (reference, none) = run(1);
+                    assert!(none.iter().all(|&s| s == 0), "{none:?}");
+                    // The pairs across are there to be added: the coupling's energy and its `λ_e`
+                    // and `λ_v` gradients are not zero. (There is no restraint, so `λ_r`'s is.)
+                    // Evaluation 7 is the decoupling's at the second state, asked for the forces.
+                    let k = reference[7].3;
+                    assert!(k[0] != 0 && k[2] != 0 && k[3] != 0, "{mixing:?}: {k:x?}");
+                    for t in [2usize, 3, 7, 16, 64] {
+                        let label = format!(
+                            "{:.1} Å, {mixing:?}, listed {listed}, {t} threads",
+                            cutoff / ANGSTROM
+                        );
+                        let (got, spawned) = run(t);
+                        assert_eq!(got.len(), reference.len(), "{label}");
+                        for (m, (a, b)) in got.iter().zip(&reference).enumerate() {
+                            assert_eq!(a, b, "{label}, evaluation {m}");
+                        }
+                        for s in spawned {
+                            if wasm {
+                                assert_eq!(s, 0, "{label}");
+                            } else {
+                                assert!(s > 1 && s <= t, "{label}: {s} spawned");
+                            }
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 40);
+    }
+
+    /// **Without `with_threads` the threads follow the pairs**: the rule is one below 20 000 pairs
+    /// inside the cutoff and `⌊√(pairs / 800)⌋` above, at most what the machine gives, checked
+    /// exactly for a machine of 64; and an evaluation takes it of this machine's, the pairs being
+    /// those the box's density gives. With `with_threads` it takes what it was given, as many as
+    /// the atoms at most, whatever the size; one past 2³² atoms, which a span's buffer cannot name;
+    /// and one on WebAssembly.
+    #[test]
+    fn the_default_threads_follow_the_pairs() {
+        for (pairs, t) in [
+            (0.0, 1),
+            (19_999.0, 1),
+            (20_000.0, 5),
+            (152_681.0, 13),
+            (796_123.0, 31),
+            (1e6, 35),
+            (1e7, 64),
+            (1e12, 64),
+        ] {
+            assert_eq!(default_threads(pairs, 64), t, "{pairs} pairs");
+        }
+        assert_eq!(default_threads(1e6, 1), 1);
+        assert_eq!(default_threads(1e6, 0), 1);
+
+        let field = WaterBox::lattice(3, 0x3C0).force_field(4.6 * ANGSTROM, 1e-8);
+        let cutoff = 9.0 * ANGSTROM;
+        // Atoms at 0.1 Å⁻³, so `0.5 · 0.1 · (4π/3) 9³ = 152.68` pairs an atom.
+        let volume = |n: usize| n as f64 / 0.1 * ANGSTROM * ANGSTROM * ANGSTROM;
+        let at = |f: &PeriodicForceField, n: usize| f.threads_for(n, cutoff, volume(n));
+        let wasm = cfg!(target_family = "wasm");
+        let cores = ordered::available();
+        for (n, t) in [(1, 1), (130, 1), (131, 5), (1_000, 13), (5_214, 31)] {
+            let want = if wasm { 1 } else { t.min(cores) };
+            assert_eq!(at(&field, n), want, "{n} atoms of {cores} threads");
+        }
+        for t in [1usize, 2, 5, 64] {
+            let one = |n: usize| if wasm { 1 } else { t.min(n) };
+            assert_eq!(at(&field.clone().with_threads(t), 30_000), one(30_000));
+            assert_eq!(at(&field.clone().with_threads(t), 3), one(3));
+        }
+        assert_eq!(at(&field.clone().with_threads(0), 30_000), 1);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(at(&field.clone().with_threads(8), 1 << 33), 1);
     }
 
     fn cross_terms_against_the_evaluation(mesh: Option<crate::pme::PmeParameters>) {

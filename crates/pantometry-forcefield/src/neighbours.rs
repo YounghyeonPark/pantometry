@@ -108,16 +108,19 @@
 //!
 //! # Not here
 //!
-//! **No threads, no sharing across fields**: a [`RefCell`] is not `Sync`, and nothing in this crate
-//! shares a force field between threads. **No rebuild by the two largest displacements**
-//! (`|u|₁ + |u|₂ > s`), which is the tight form of the same bound and would rebuild less often; the
-//! rule here is the one whose proof needs nothing about which atoms moved. **No list of the
+//! **No sharing across fields**: a [`RefCell`] is not `Sync`, and nothing in this crate shares a
+//! force field between threads. An evaluation's spans of atoms are visited on several threads,
+//! and a build's searched on several, but only the calling thread borrows the list from its cell,
+//! and it adds the spans' pairs in order (see [`crate::periodic`]'s module documentation). **No
+//! rebuild by the two largest displacements** (`|u|₁ + |u|₂ > s`), which is the tight form of the
+//! same bound and would rebuild less often; the rule here is the one whose proof needs nothing
+//! about which atoms moved. **No list of the
 //! excluded or decoupled pairs**: those are the evaluation's own, by atom.
 
 use crate::ewald::sub;
+use crate::ordered;
 use crate::periodic::{
-    cell_grid, cell_of, for_each_pair, separation, Exclusions, PeriodicBox, PeriodicForceField,
-    REACH,
+    cell_grid, cell_of, separation, CellSearch, Exclusions, PeriodicBox, PeriodicForceField, REACH,
 };
 use std::cell::RefCell;
 use std::fmt;
@@ -169,10 +172,10 @@ struct State {
     unsorted: bool,
     /// Each atom's cell at the last evaluation, when the box is cut into cells.
     home: Vec<[usize; 3]>,
-    /// Room for [`by_key`].
-    scratch: Vec<u64>,
     builds: u64,
     evaluations: u64,
+    /// How many threads the last build spawned, which the tests read.
+    spawned: usize,
 }
 
 impl PartialEq for NeighbourList {
@@ -216,6 +219,12 @@ impl NeighbourList {
         NeighbourList::new(self.skin)
     }
 
+    /// How many threads the last build spawned.
+    #[cfg(test)]
+    pub(crate) fn spawned_at_build(&self) -> usize {
+        self.state.borrow().spawned
+    }
+
     pub(crate) fn status(&self) -> NeighbourListStatus {
         let s = self.state.borrow();
         NeighbourListStatus {
@@ -250,6 +259,10 @@ impl NeighbourList {
         })
     }
 
+    /// Builds the list by the cell list's search at the larger radius, each span of atoms' partners
+    /// found on any of `threads` threads and kept in the spans' order, so the entries are the same
+    /// on any number.
+    #[allow(clippy::too_many_arguments)]
     fn build(
         &self,
         s: &mut State,
@@ -257,6 +270,8 @@ impl NeighbourList {
         at: &[[f64; 3]],
         cutoff: f64,
         ex: &Exclusions,
+        threads: usize,
+        pieces: usize,
     ) {
         let n = at.len();
         assert!(
@@ -264,25 +279,35 @@ impl NeighbourList {
             "a neighbour list holds at most 2³² atoms"
         );
         let radius = (cutoff + self.skin) * (1.0 + MARGIN);
-        let mut count = vec![0usize; n];
-        let mut last = 0;
+        let search = CellSearch::new(cell, at, radius);
         s.entries.clear();
-        for_each_pair(cell, at, radius, |i, j, _, _| {
-            // The search goes by `i`, so each atom's partners are one run.
-            assert!(i >= last, "the pair search went back to atom {i}");
-            last = i;
-            if !ex.contains(i, j) {
-                s.entries.push(j as u64);
-                count[i] += 1;
-            }
-        });
         s.start.clear();
         s.start.push(0);
-        let mut total = 0;
-        for c in count {
-            total += c;
-            s.start.push(total);
-        }
+        let (entries, start) = (&mut s.entries, &mut s.start);
+        // Each atom's partners are one run, and a span's are its atoms' runs in order:
+        // `ends[k]` is where atom `k` of the span ends among them.
+        let spawned = ordered::in_order(
+            threads,
+            ordered::ranges(n, pieces),
+            &mut Vec::new(),
+            |atoms, out: &mut Found| {
+                for i in atoms {
+                    search.atom(i, &mut |i, j, _, _| {
+                        if !ex.contains(i, j) {
+                            out.partners.push(j as u64);
+                        }
+                    });
+                    out.ends.push(out.partners.len());
+                }
+            },
+            |out| {
+                let base = entries.len();
+                entries.extend_from_slice(&out.partners);
+                start.extend(out.ends.iter().map(|e| base + e));
+                out.partners.clear();
+                out.ends.clear();
+            },
+        );
         s.reference.clear();
         s.reference.extend_from_slice(at);
         s.lengths = cell.lengths();
@@ -291,12 +316,16 @@ impl NeighbourList {
         s.excluded.extend_from_slice(ex.pairs());
         s.unsorted = true;
         s.builds += 1;
+        s.spawned = spawned;
     }
 
     /// Calls `f(i, j, d, r²)` for exactly the pairs, and in exactly the order, that the cell list
     /// at `cutoff` calls it for, the pairs `exclusions` holds aside — building the list first if it
     /// is stale, which it is whenever `exclusions` differs from its build's. So **no pair of
-    /// `exclusions` reaches `f`**, and the caller need not check.
+    /// `exclusions` reaches `f`**, and the caller need not check. The evaluation's own way through
+    /// it is [`NeighbourList::for_each_span`]; this is that on one thread, which the tests hold to
+    /// the cell list.
+    #[cfg(test)]
     pub(crate) fn for_each_pair(
         &self,
         cell: &PeriodicBox,
@@ -305,19 +334,41 @@ impl NeighbourList {
         exclusions: &Exclusions,
         mut f: impl FnMut(usize, usize, [f64; 3], f64),
     ) {
+        self.for_each_span(cell, at, cutoff, exclusions, 1, 1, |spans| {
+            for span in spans {
+                span.visit(&mut f);
+            }
+        });
+    }
+
+    /// The pairs of `for_each_pair` in spans of atoms: prepares the evaluation — building the list
+    /// on `threads` threads if it is stale, and placing every atom in the cutoff's cells — and
+    /// hands `visit` the atoms cut into at most `pieces` spans of about equal numbers of entries, in
+    /// order. Visiting every span once, in order, is `for_each_pair`; each span
+    /// writes only its own atoms' runs and reads only what every span reads, so the spans may be
+    /// visited on any threads, and each gives the same pairs and separations.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_each_span(
+        &self,
+        cell: &PeriodicBox,
+        at: &[[f64; 3]],
+        cutoff: f64,
+        exclusions: &Exclusions,
+        threads: usize,
+        pieces: usize,
+        visit: impl FnOnce(Vec<Span<'_>>),
+    ) {
         let mut guard = self.state.borrow_mut();
         let s = &mut *guard;
         s.evaluations += 1;
         if self.stale(s, cell, at, cutoff, exclusions) {
-            self.build(s, cell, at, cutoff, exclusions);
+            self.build(s, cell, at, cutoff, exclusions, threads, pieces);
         }
         let n = at.len();
         let l = cell.lengths();
-        let half = l.map(|x| 0.5 * x);
-        let w: Vec<[f64; 3]> = at.iter().map(|p| cell.wrap(*p)).collect();
-        let rc2 = cutoff * cutoff;
         let fresh = s.unsorted;
-        if let Some(cells) = cell_grid(l, cutoff) {
+        let w: Vec<[f64; 3]> = at.iter().map(|p| cell.wrap(*p)).collect();
+        let order = cell_grid(l, cutoff).map(|cells| {
             // Per axis, the index among the five cells about `i`'s of the cell `k − cells` from
             // it, or past them: the cell list's `(c_i + cells + dx − reach) % cells = c_j` solved
             // for `dx`.
@@ -341,33 +392,138 @@ impl NeighbourList {
             } else {
                 home.iter().zip(&s.home).map(|(a, b)| a != b).collect()
             };
-            let span = (2 * REACH + 1) as u64;
-            let key = |ci: [usize; 3], cj: [usize; 3]| -> u64 {
-                let ox = offsets[0][cj[0] + cells[0] - ci[0]];
-                let oy = offsets[1][cj[1] + cells[1] - ci[1]];
-                let oz = offsets[2][cj[2] + cells[2] - ci[2]];
-                if ox == OUTSIDE || oy == OUTSIDE || oz == OUTSIDE {
-                    OUTSIDE
-                } else {
-                    (ox * span + oy) * span + oz
-                }
-            };
-            for i in 0..n {
-                let run = &mut s.entries[s.start[i]..s.start[i + 1]];
+            Order {
+                cells,
+                offsets,
+                home,
+                moved,
+            }
+        });
+        let view = View {
+            w,
+            l,
+            half: l.map(|x| 0.5 * x),
+            rc2: cutoff * cutoff,
+            fresh,
+            order,
+        };
+        visit(spans(&s.start, &mut s.entries, pieces, &view));
+        s.home = view.order.map_or_else(Vec::new, |o| o.home);
+        s.unsorted = false;
+    }
+}
+
+/// What every span of an evaluation reads: the wrapped positions and, when the box is cut into
+/// cells, each atom's cell and the keys' tables.
+pub(crate) struct View {
+    w: Vec<[f64; 3]>,
+    l: [f64; 3],
+    half: [f64; 3],
+    rc2: f64,
+    /// Whether the runs have not been put in order since the build.
+    fresh: bool,
+    order: Option<Order>,
+}
+
+/// The cell list's order, re-derived at an evaluation: see the module documentation.
+struct Order {
+    cells: [usize; 3],
+    offsets: [Vec<u64>; 3],
+    home: Vec<[usize; 3]>,
+    /// Whether each atom's cell is not the last evaluation's.
+    moved: Vec<bool>,
+}
+
+impl Order {
+    /// The key of a partner in cell `cj` of an atom in cell `ci`: the index of `cj` among the 125
+    /// cells about `ci`, in the cell list's order, or [`OUTSIDE`].
+    #[inline(always)]
+    fn key(&self, ci: [usize; 3], cj: [usize; 3]) -> u64 {
+        let (cells, span) = (self.cells, (2 * REACH + 1) as u64);
+        let ox = self.offsets[0][cj[0] + cells[0] - ci[0]];
+        let oy = self.offsets[1][cj[1] + cells[1] - ci[1]];
+        let oz = self.offsets[2][cj[2] + cells[2] - ci[2]];
+        if ox == OUTSIDE || oy == OUTSIDE || oz == OUTSIDE {
+            OUTSIDE
+        } else {
+            (ox * span + oy) * span + oz
+        }
+    }
+}
+
+/// A run of atoms and their entries, which a span alone writes ([`NeighbourList::for_each_span`]).
+pub(crate) struct Span<'a> {
+    atoms: std::ops::Range<usize>,
+    /// The whole list's starts, so `entries` begins at `start[atoms.start]`.
+    start: &'a [usize],
+    entries: &'a mut [u64],
+    view: &'a View,
+}
+
+/// The atoms cut into at most `pieces` spans of about equal numbers of entries, in order.
+fn spans<'a>(
+    start: &'a [usize],
+    entries: &'a mut [u64],
+    pieces: usize,
+    view: &'a View,
+) -> Vec<Span<'a>> {
+    let n = start.len() - 1;
+    let per = start[n].div_ceil(pieces.max(1)).max(1);
+    let mut out = Vec::new();
+    let mut rest = entries;
+    let mut a = 0;
+    while a < n {
+        let mut b = a + 1;
+        while b < n && start[b] - start[a] < per {
+            b += 1;
+        }
+        // The atoms after `b` have no entries — the last atom never has a partner `j > i` — so
+        // this span takes them rather than leaving them one of their own past `pieces`.
+        if start[b] == start[n] {
+            b = n;
+        }
+        let (head, tail) = std::mem::take(&mut rest).split_at_mut(start[b] - start[a]);
+        out.push(Span {
+            atoms: a..b,
+            start,
+            entries: head,
+            view,
+        });
+        rest = tail;
+        a = b;
+    }
+    out
+}
+
+impl Span<'_> {
+    /// Puts each of the span's atoms' runs in the cell list's order and calls `f(i, j, d, r²)` for
+    /// its pairs inside the cutoff, in that order.
+    pub(crate) fn visit(self, f: &mut impl FnMut(usize, usize, [f64; 3], f64)) {
+        let Span {
+            atoms,
+            start,
+            entries,
+            view: v,
+        } = self;
+        let base = start[atoms.start];
+        let mut scratch = Vec::new();
+        for i in atoms {
+            let run = &mut entries[start[i] - base..start[i + 1] - base];
+            if let Some(o) = &v.order {
                 if run.is_empty() {
                     continue;
                 }
-                let ci = home[i];
+                let ci = o.home[i];
                 let mut changed = false;
                 for e in run.iter_mut() {
                     let j = (*e & ATOM) as usize;
-                    if moved[i] || moved[j] {
-                        *e = key(ci, home[j]) << 32 | j as u64;
+                    if o.moved[i] || o.moved[j] {
+                        *e = o.key(ci, o.home[j]) << 32 | j as u64;
                         changed = true;
                     }
                 }
-                if fresh {
-                    by_key(run, &mut s.scratch);
+                if v.fresh {
+                    by_key(run, &mut scratch);
                 }
                 if changed {
                     insertion_sort(run);
@@ -377,33 +533,34 @@ impl NeighbourList {
                         break;
                     }
                     let j = (e & ATOM) as usize;
-                    let (d, r2) = separation(w[i], w[j], l, half);
-                    if r2 < rc2 {
+                    let (d, r2) = separation(v.w[i], v.w[j], v.l, v.half);
+                    if r2 < v.rc2 {
                         f(i, j, d, r2);
                     }
                 }
-            }
-            s.home = home;
-        } else {
-            // Every pair, by `j`: the build's search at the larger radius is every pair too, by
-            // `j`, so the runs are in order, and the sort only says so.
-            for i in 0..n {
-                let run = &mut s.entries[s.start[i]..s.start[i + 1]];
-                if fresh {
+            } else {
+                // Every pair, by `j`: the build's search at the larger radius is every pair too,
+                // by `j`, so the runs are in order, and the sort only says so.
+                if v.fresh {
                     insertion_sort(run);
                 }
                 for &e in run.iter() {
                     let j = (e & ATOM) as usize;
-                    let (d, r2) = separation(w[i], w[j], l, half);
-                    if r2 < rc2 {
+                    let (d, r2) = separation(v.w[i], v.w[j], v.l, v.half);
+                    if r2 < v.rc2 {
                         f(i, j, d, r2);
                     }
                 }
             }
-            s.home.clear();
         }
-        s.unsorted = false;
     }
+}
+
+/// A span of atoms' partners found by a build, and where each atom's run ends among them.
+#[derive(Default)]
+struct Found {
+    partners: Vec<u64>,
+    ends: Vec<usize>,
 }
 
 /// Puts a run in order of its keys alone by counting, through `scratch`: what is left for
@@ -482,6 +639,7 @@ mod tests {
     use crate::ccd::ANGSTROM;
     use crate::dynamics::{Bath, Potential};
     use crate::ewald::EwaldParameters;
+    use crate::periodic::for_each_pair;
     use crate::water::WaterBox;
 
     type Call = (usize, usize, [u64; 3], u64);
@@ -996,5 +1154,114 @@ mod tests {
             assert!(crossed > 100, "{crossed} points changed cell");
         }
         assert_eq!(list.status().builds, 1);
+    }
+
+    /// **A build on threads is the build on one, and any cut of the atoms visits the same pairs**:
+    /// the entries and their starts, and every call `(i, j, d, r²)` in order, the same bits on 2,
+    /// 3, 7 and 16 threads cut into 2 to 10 000 spans as on one thread in one span — the cuts past
+    /// the atoms giving spans of one atom or a few. Each build is asserted to have spawned more
+    /// than one thread, but on WebAssembly. Three boxes: 27 waters at 3.5 Å, visited by cells and
+    /// built over every pair, the build's radius of 5.5 Å being too wide for five cells across; at
+    /// 4.6 Å, both over every pair; and 64 waters at 3.5 Å with a 0.6 Å skin, both by cells.
+    #[test]
+    fn a_build_on_threads_is_the_build_on_one() {
+        let wasm = cfg!(target_family = "wasm");
+        for (per_side, cutoff, skin, visit_by_cells, build_by_cells) in [
+            (3, 3.5, 2.0, true, false),
+            (3, 4.6, 2.0, false, false),
+            (4, 3.5, 0.6, true, true),
+        ] {
+            let (cutoff, skin) = (cutoff * ANGSTROM, skin * ANGSTROM);
+            let water = WaterBox::lattice(per_side, 0x3C0);
+            let field = water.force_field(cutoff, 1e-8);
+            let (cell, at, ex) = (field.cell(), water.positions(), field.skipped());
+            let radius = (cutoff + skin) * (1.0 + MARGIN);
+            assert_eq!(cell_grid(cell.lengths(), cutoff).is_some(), visit_by_cells);
+            assert_eq!(cell_grid(cell.lengths(), radius).is_some(), build_by_cells);
+            type Calls = Vec<(usize, usize, [u64; 3], u64)>;
+            let run = |threads: usize, pieces: usize| -> (Calls, Vec<usize>, Vec<u64>, usize) {
+                let list = NeighbourList::new(skin);
+                let mut calls = Vec::new();
+                let mut spans = 0;
+                list.for_each_span(&cell, at, cutoff, ex, threads, pieces, |cut| {
+                    spans = cut.len();
+                    for span in cut {
+                        span.visit(&mut |i, j, d, r2| {
+                            calls.push((i, j, d.map(f64::to_bits), r2.to_bits()));
+                        });
+                    }
+                });
+                let s = list.state.borrow();
+                assert_eq!(s.builds, 1);
+                if threads > 1 && !wasm {
+                    assert!(s.spawned > 1, "{threads} threads built on {}", s.spawned);
+                } else {
+                    assert_eq!(s.spawned, 0);
+                }
+                (calls, s.start.clone(), s.entries.clone(), spans)
+            };
+            let (calls, start, entries, spans) = run(1, 1);
+            assert_eq!(spans, 1);
+            assert!(calls.len() > 500, "{} pairs", calls.len());
+            for (threads, pieces) in [(2, 2), (3, 24), (7, 56), (16, 81), (16, 10_000)] {
+                let label = format!("{per_side}³ waters, {threads} threads, {pieces} pieces");
+                let (c, st, en, sp) = run(threads, pieces);
+                assert!(sp > 1 && sp <= pieces, "{label}: {sp} spans");
+                assert_eq!(st, start, "{label}");
+                assert_eq!(en, entries, "{label}");
+                assert_eq!(c, calls, "{label}");
+            }
+        }
+    }
+
+    /// **Cut into spans, the list visits what it visits in one at every step of a trajectory**,
+    /// across its builds and the steps between them, when atoms change cell and are keyed and
+    /// sorted again span by span: three lists of their own, visited in one span, in 24 on three
+    /// threads' builds and in 81 on sixteen's, every call the same bits in the same order at each
+    /// of 120 steps of 125 waters at 4.6 Å, six half-cutoff cells across.
+    #[test]
+    fn a_list_cut_into_spans_visits_what_it_visits_whole_along_a_trajectory() {
+        let (field, path) = trajectory(5, 4.6 * ANGSTROM, 120);
+        let (cell, cutoff, ex) = (
+            field.cell(),
+            field.ewald().parameters().cutoff,
+            field.skipped(),
+        );
+        assert!(cell_grid(cell.lengths(), cutoff).is_some());
+        let skin = 1.0 * ANGSTROM;
+        let lists = [(1, 1), (3, 24), (16, 81)].map(|(t, p)| (t, p, NeighbourList::new(skin)));
+        let mut changed = 0;
+        let mut previous: Option<Vec<[usize; 3]>> = None;
+        for (k, at) in path.iter().enumerate() {
+            let builds = lists[0].2.status().builds;
+            let mut seen: Vec<Vec<Call>> = Vec::new();
+            for (threads, pieces, list) in &lists {
+                let mut calls = Vec::new();
+                list.for_each_span(&cell, at, cutoff, ex, *threads, *pieces, |cut| {
+                    for span in cut {
+                        span.visit(&mut |i, j, d, r2| {
+                            calls.push((i, j, d.map(f64::to_bits), r2.to_bits()));
+                        });
+                    }
+                });
+                seen.push(calls);
+            }
+            assert_eq!(seen[1], seen[0], "step {k}, 24 spans");
+            assert_eq!(seen[2], seen[0], "step {k}, 81 spans");
+            // Atoms that changed cell at a step that built nothing: keyed and sorted again in
+            // place, span by span.
+            let home = lists[0].2.state.borrow().home.clone();
+            if let (Some(before), true) = (&previous, lists[0].2.status().builds == builds) {
+                changed += home.iter().zip(before).filter(|(a, b)| a != b).count();
+            }
+            previous = Some(home);
+        }
+        let s = lists[0].2.status();
+        assert!(s.builds >= 2, "{} builds", s.builds);
+        assert!(s.builds < s.evaluations / 4, "{} builds", s.builds);
+        assert!(changed > 100, "{changed} changes of cell");
+        for (_, _, list) in &lists {
+            assert_eq!(list.status().builds, s.builds);
+        }
     }
 }

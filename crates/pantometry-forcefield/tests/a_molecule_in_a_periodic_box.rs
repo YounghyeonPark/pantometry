@@ -919,9 +919,11 @@ fn the_cost() {
                 1e3 * (total - real)
             );
             if k == 10 {
+                // One thread, as the table in `periodic`'s documentation was measured.
                 let field = PeriodicForceField::new(&c, &uff::assign(&c), cell, p)
                     .expect("water")
-                    .with_charges(q.clone());
+                    .with_charges(q.clone())
+                    .with_threads(1);
                 let whole = best(&mut || {
                     std::hint::black_box(field.evaluate(&at));
                 });

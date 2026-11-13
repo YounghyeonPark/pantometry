@@ -351,8 +351,10 @@
 //!
 //! # Determinism, and where it stops
 //!
-//! No clock, no randomness, no hash order and no threads, so a run repeats bit for bit on one
-//! machine, at any optimisation level. **Not across platforms.** IEEE-754 defines `+ − × ÷` and
+//! No clock, no randomness, no hash order, and no sum split across threads, so a run repeats bit
+//! for bit on one machine, at any optimisation level and on any number of threads: the periodic
+//! force field computes its real-space pairs on several and adds them on one, in the one-thread
+//! order ([`periodic`]). **Not across platforms.** IEEE-754 defines `+ − × ÷` and
 //! `sqrt` exactly, but this crate also calls the platform's `cos`, `sin`, `ln`, `asin` and, under a
 //! restraint, `atan2` — on every torsion evaluation as well as when a [`ForceField`] is built.
 //! Those are not correctly rounded and are not required to be the same function on two
@@ -469,6 +471,7 @@ pub mod free_energy;
 pub mod minimise;
 pub mod mol2;
 pub mod neighbours;
+mod ordered;
 pub mod pdb;
 pub mod periodic;
 pub mod pme;

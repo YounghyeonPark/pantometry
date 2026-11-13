@@ -36,6 +36,16 @@ identical across one, two, three, four, eight and sixteen of them, and
 across one, two, four and eight. It holds because each thread owns a disjoint
 range of the output: there is no reduction, so there is no summation order to vary.
 
+`PeriodicForceField` has a reduction — every pair adds to two forces and to the energy —
+and keeps it on one thread. The threads compute what each pair adds, span of atoms by
+span, and the calling thread adds the spans in order, so every sum takes the one-thread
+evaluation's additions in its order. `periodic::tests::the_threads_move_no_bit` holds the
+energy, the forces, the virial and a decoupling's coupling on 2, 3, 7, 16 and 64 threads
+to one thread's, by the cell list and the neighbour list, each by cells and over every
+pair, before and after the atoms move, asserting each time that the threads were spawned;
+and the pins of the bits `b6558df` and `8b58114` gave before there were threads pass at
+three and at sixteen.
+
 ## Running several domains at once
 
 Domains do not agree on how big a step is: an explicit FDTD solver on a nanometre

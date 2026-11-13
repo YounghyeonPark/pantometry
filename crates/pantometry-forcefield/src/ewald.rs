@@ -124,14 +124,16 @@
 //!
 //! # Determinism, and where it stops
 //!
-//! No threads, no hashing: every sum runs over its terms in an order fixed by the atom indices
-//! and the integer wave vectors, so an evaluation is the same bits however often and from wherever
-//! it is called. The reciprocal sum's phase factors start from **the platform's `sin` and `cos`**
-//! of each atom's three fractional coordinates — 3N calls an evaluation — and are carried to
-//! higher `k` by complex multiplication, so across platforms the reciprocal energy can differ in
-//! its last bits, as UFF's torsion `cos` already makes every trajectory of this crate do. **The
-//! particle mesh does not** ([`crate::pme`]): its transform's twiddles are its own `sin` and `cos`,
-//! and with it the whole sum is the same bits on every platform, which a test pins.
+//! No hashing, and no sum split across threads: every sum runs over its terms in an order fixed
+//! by the atom indices and the integer wave vectors, so an evaluation is the same bits however
+//! often and from wherever it is called. (A [`crate::PeriodicForceField`] computes its real-space
+//! pairs on several threads and adds them on one, in that order.) The reciprocal sum's phase
+//! factors start from **the platform's `sin` and `cos`** of each atom's three fractional
+//! coordinates — 3N calls an evaluation — and are carried to higher `k` by complex
+//! multiplication, so across platforms the reciprocal energy can differ in its last bits, as UFF's
+//! torsion `cos` already makes every trajectory of this crate do. **The particle mesh does not**
+//! ([`crate::pme`]): its transform's twiddles are its own `sin` and `cos`, and with it the whole
+//! sum is the same bits on every platform, which a test pins.
 //!
 //! # Cost, and what is not here
 //!

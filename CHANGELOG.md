@@ -111,6 +111,73 @@ protects nothing.
 
 ### Changed
 
+- **The periodic force field computes its real-space pairs on several threads by default, and
+  every bit is as it was on one** (`pantometry-forcefield`). A sum split across threads and
+  combined depends on how the work was divided, so no sum is split: the atoms are cut into spans,
+  a thread turns a span's pairs into what each adds — its force, its Ewald real part and its van
+  der Waals — and the calling thread adds every span's in the spans' order, whatever order the
+  threads finished them in. Each sum takes the one-thread evaluation's additions in its order. The
+  neighbour list's builds are searched the same way.
+  - **The default changed**: an evaluation takes `√(pairs / 800)` of the machine's threads, `pairs`
+    the number inside the cutoff that the box's density gives, a spawn costing about as much as
+    800 pairs; and one below 20 000 pairs. That is every production box here: 17 threads for the
+    1 534-atom water leg, 31 for the 5 089-atom octanol box. `PeriodicForceField::with_threads`
+    and `PeriodicDecoupling::with_threads`, both new, set the number, `with_threads(1)` the
+    calling thread alone, and `PANTOMETRY_THREADS` caps the default. Several processes run side
+    by side now share the cores rather than taking one each. WebAssembly, and a machine that
+    refuses a spawn, take one.
+  - **What it gave**, phenol's two legs, release, an i9-13900HX's 32 logical processors,
+    unpinned, the mean of three runs each of `8dd3316` and of this, milliseconds: the water box's
+    forces 19.5 → 6.5 by the cell list and 11.6 → 5.5 by the neighbour list, and its step
+    20.3 → 7.0; the octanol box's forces 52.7 → 12.1 and 34.6 → 10.6, and its step 40.4 → 13.0. A
+    step is 2.9 and 3.1 times as fast. **On one thread** it is `8dd3316`'s to 2%, pinned to a
+    P-core: the forces 20.10 → 20.11 and 11.94 → 12.16 in water, 54.37 → 54.01 and 35.56 → 35.91 in
+    octanol.
+  - **What the first threaded version lacked**, each measured on the octanol box: the calling
+    thread added each term through memory, a load, an add and a store on `i`'s force that the next
+    term waited for, which kept it busy 3.8 of the pairs' 6.1 ms at sixteen threads, and now holds
+    `i`'s force while its run lasts, which no other term of the run adds to; a term was 64 bytes,
+    and is 48 with the force `g d` kept in place of `d` and `(∂U/∂r)/r` and the atoms in 32 bits,
+    the adding going 3.3 → 2.25 ms; and the spans' buffers were allocated at each evaluation and
+    are kept between them, one more than the threads, the pairs going 7.2 → 5.9 ms at eight.
+  - **What is left on one thread**: the particle mesh, 4.3 to 4.9 ms of either step and now the
+    largest part of the water's; the excluded and 1-4 pairs, the bonded terms and the dynamics;
+    and the adding, about 2 ms of the octanol box's pairs.
+  - **Every bit is as it was**: the 298 431 values on both legs of the harness kept out of the
+    tree, at the default and on one thread, the same file to the byte as HEAD `8b58114`'s; 120
+    steps of each leg at every count from 1 to 32; and the pins of `b6558df` and `8b58114`, which
+    now run at one thread, three and sixteen.
+  - **Three reviewers read it before it was committed, and the tests changed because of them.**
+    No test checked that any work ran on another thread: the comparisons are of bits, and one
+    thread gives the same bits, so every call taken on the calling thread would have passed them
+    all. Each threaded evaluation, build and ordered call now says how many threads it spawned, and
+    the tests assert it. The test of the threads never reached the search by cells, and nothing
+    compared a list re-sorted span by span after atoms changed cell; the threshold was pinned only
+    below it; the ordering was left to the scheduler; and a panic on a thread would have hung its
+    test. The documented 192-atom figure was within the noise and partly wrong, and is re-measured.
+    A spawn the machine refuses now falls back to the calling thread, the buffers kept are bounded,
+    and a count past the atoms is the atoms.
+  - **Tests**: the threads move no bit of the energy, the forces, the virial or a decoupling's
+    coupling, on 2 to 64 threads, by both searches, by cells and over every pair, before and after
+    the atoms move, plain and decoupled; a build on threads is the build on one, by cells and over
+    every pair; a list cut into spans visits what it visits whole along a trajectory; the default
+    follows the pairs, exactly for a machine of 64; and the ordered sum is the one-thread sum
+    whatever the threads and the cut, an item finished first waits its turn, a machine that gives
+    no thread takes the calling one, the runs cover every index once, and a panic on a thread is a
+    panic here within a minute.
+  - **The build test found a defect in the first version**: the last atoms have no partner
+    `j > i`, so the cut by entries stopped short of them and gave them a span of their own, one
+    more than asked for. The bits were right; the count was not.
+  - **Twenty-one sabotages each fail a test**, twelve on the version the reviewers read and nine
+    after. Of the twelve, five failed only checks this change added: the threaded virial
+    transposed, the pairs across a decoupling left out of the threaded sum, `with_threads`
+    ignored, the default capped at two, and the extra span. Of the nine, eight failed only checks
+    the review added, among them every call taken on the calling thread, one thread whatever an
+    evaluation is given, the moved flags read from a span's first atom, and the threshold raised
+    to 150 000.
+  - **The timings documented as one core** — `periodic`'s cost table and the neighbour list's on
+    W4's box — are measured by tests that now ask for one thread, so they still are.
+
 - **The periodic force field's forces are 12–14% faster with the neighbour list, and every bit is
   as it was** (`pantometry-forcefield`). Profiled first, on phenol's two legs from their real
   starts, release, pinned to one P-core of an i9-13900HX: the real-space pairs are 80% of a step,
