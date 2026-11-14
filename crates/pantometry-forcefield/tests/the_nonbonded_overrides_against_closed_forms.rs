@@ -1790,7 +1790,10 @@ fn reciprocal_bits(field: &PeriodicForceField, at: &[[f64; 3]]) -> Vec<u64> {
 
 /// The digest of [`reciprocal_bits`] HEAD `a03c98c` gave, before the reciprocal sum took any
 /// thread, for [`pinned::waters_and_an_ion`]'s box by the classical sum, on
-/// `x86_64-pc-windows-gnu`.
+/// `x86_64-pc-windows-gnu`, and compiled there alone: everywhere else it is a constant nothing
+/// reads, which `-D warnings` refuses — CI's clippy on Linux did, at `ea2088c`, where this
+/// machine's could not see it.
+#[cfg(all(target_os = "windows", target_env = "gnu"))]
 const HEAD_CLASSICAL: u64 = 0x274d_6e7c_3926_b781;
 
 /// The same by the mesh on a grid of three lengths, on every platform.
