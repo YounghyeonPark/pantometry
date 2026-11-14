@@ -339,6 +339,20 @@ protects nothing.
   on the host, were built already. With the `cfg` removed again, the new
   line fails on the constant and the old one passes. It is the eighteenth entry in
   CONTRIBUTING.md's table.
+- **The prose gate stopped on any change to a document in `app/`, printing one line from `sed`,
+  under the refusal's exit code.** In a git pathspec `*` crosses a `/`, so `crates/*/tests/*.rs`
+  took the twelve modules under `tests/*/` for test targets, and the directory term `app` matched
+  eight of them. The gate looked for a `tests/Cargo.toml` beside one, and `set -e` ended the run
+  with `sed`'s 2. A module now runs the targets that declare it. It is refused if none does, or
+  while anything in the tests can compile a file that a target does not name: `#[path]`, a
+  `cfg_attr` path, `include!`, an inline `mod`, or `[[test]]` in the manifest. The tree has none of
+  them, and each has a case in which the version without its guard left a target out. A directory
+  is matched as a path, `"app"` or `/app/`, not as a word: as a word `app` is in 143 of the 196
+  test targets, and as a path in 4 and one module. Over every directory a document sat in at
+  `f796d37`, the hits that dropped were comments and messages. An error the script did not expect
+  prints its line and exits 3, and `PROSE_GATE_LIST=1` lists what it would run without running
+  it, exit 4. A newline at the end of `app/README.md` now runs eleven targets and passes in 164 s;
+  `tools/prose-gate/README.md` has the other cases.
 
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**
