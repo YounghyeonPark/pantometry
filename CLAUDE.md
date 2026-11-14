@@ -41,7 +41,8 @@ shell problem and every one of them looked like success:
   `ea2088c` held a test to `windows-gnu` with a `cfg` and left the constant it reads without one:
   dead code everywhere else, clippy green here, CI's `fmt, clippy, docs` red. Clippy with
   `--target x86_64-unknown-linux-gnu` sees it, and writes no Linux object code, so it needs no
-  Linux linker.
+  Linux linker. Rustdoc has the same blind spot — a link to an item a `cfg` holds to Windows is
+  broken on Linux — so both gates document for that target too.
 - **The log had two authors.** A stopped run's child kept going and a new run truncated the log
   under it: forty-four step markers for a twenty-four-step gate, and both verdicts in one file.
   Run it once, and make a second run refuse.
@@ -62,6 +63,7 @@ cargo test --locked --workspace
 # not, for long enough that a gate built from it ran debug only and said "the gate passed".
 cargo test --locked --workspace --release
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
 for e in beam_hot_spot airy_pattern detector_snr room_modes melting lens_spots \
          heat_in_three_dimensions room_in_three_dimensions busbar_rating optical_bench \
@@ -109,6 +111,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 cargo build --locked --release -p editor-wasm --target wasm32-unknown-unknown

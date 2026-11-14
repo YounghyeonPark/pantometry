@@ -338,7 +338,11 @@ protects nothing.
   library, where 147 of 205 Linux units were new and the build scripts and proc-macros, which run
   on the host, were built already. With the `cfg` removed again, the new
   line fails on the constant and the old one passes. It is the eighteenth entry in
-  CONTRIBUTING.md's table.
+  CONTRIBUTING.md's table. Rustdoc had the same blind spot, since a link to an item a `cfg`
+  holds to Windows is broken on Linux, where CI documents, and both gates now document for Linux
+  too: a public `#[cfg(windows)]` function, with another whose doc links to it, failed that step
+  in each workspace while the host's doc and both clippy lines passed. No public item is held to
+  one platform today, so it has caught nothing yet.
 - **The prose gate stopped on any change to a document in `app/`, printing one line from `sed`,
   under the refusal's exit code.** In a git pathspec `*` crosses a `/`, so `crates/*/tests/*.rs`
   took the twelve modules under `tests/*/` for test targets, and the directory term `app` matched

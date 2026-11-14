@@ -117,6 +117,8 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+# The same for rustdoc: a link to an item a `cfg` holds to Windows is broken on Linux.
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 cargo build --locked --release -p editor-wasm --target wasm32-unknown-unknown

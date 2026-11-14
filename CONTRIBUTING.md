@@ -20,6 +20,8 @@ cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gn
 cargo test --locked --workspace
 cargo test --locked --workspace --release
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+# And rustdoc: a link to an item a `cfg` holds to Windows is broken on Linux, where CI documents.
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check                       # needs `cargo install cargo-deny`
 
 # The examples are tests that print.
@@ -295,8 +297,19 @@ Clippy writes no Linux object code, so the step needs the target's standard libr
 linker. Build scripts and proc-macros still compile and run on this machine, and today none of them
 needs a Linux library: `wayland-sys` would ask `pkg-config` for one, and does not because `winit`'s
 `wayland-dlopen` feature is on. A dependency that did need one would make this step fail here and
-pass in CI, which is the loud direction. With that `cfg` removed again, the Linux line fails on the
-constant and the line before it passes.
+pass in CI, which is the loud direction. With that `cfg` removed again, the Linux clippy line fails
+on the constant and the line before it passes.
+
+Rustdoc has the same blind spot. CI documents on Linux too, and a doc link to an item a `cfg` holds
+to Windows resolves here and is broken there, which `-D warnings` refuses and clippy, which reads
+doc comments, never resolves. So both blocks document for Linux as well. On 2026-11-14 a public
+`#[cfg(windows)]` function, with another public function whose doc links to it, failed that line in
+each workspace, with the host's `cargo doc` and both clippy lines green. No public item in either
+workspace is held to one platform today, so it has caught nothing yet. Doctests are what it does
+not reach, because rustdoc compiles them only under `cargo test`. The library's also run under
+`wasm32-wasip1`, where `cfg(windows)` is false as well. `app/`'s run on this machine's target alone,
+and CI's `the app` job runs them on Linux. There is one today, in `pantometry-gpu`, and compiling
+them for Linux here would need a Linux linker.
 
 The MSRV job is the other half of the same rule and points the other way: `crates/` is built with
 **1.78** and a lint suggesting something stabilised after that is a suggestion to break a promise.
@@ -334,6 +347,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
 ```

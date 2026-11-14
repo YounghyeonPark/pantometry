@@ -18,8 +18,11 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
 
 jobs:
-  # Formatting, lints and documentation. One platform is enough — none of these
-  # depend on the target.
+  # Formatting, lints and documentation, on one platform. Formatting does not depend on
+  # the target; clippy and rustdoc do, through `cfg`: an item held to one platform is
+  # dead code, or a broken link, on another: ea2088c's constant, CONTRIBUTING.md's entry
+  # 18. This job checks Linux, and both gates check the machine they run on and Linux.
+  # Nothing lints or documents for macOS, and no `cfg` in this repository names it.
   #
   # `-D warnings` is passed to clippy and rustdoc rather than set in RUSTFLAGS,
   # because RUSTFLAGS also applies to dependencies and would make this build fail on
