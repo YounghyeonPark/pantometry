@@ -16,7 +16,7 @@ works in a fresh `bash -c`, so the option is right and the paste is what defeats
 
 The surest thing is one check per command with its exit code read — three shell guards had not
 caught the one that needed it. [CONTRIBUTING.md](CONTRIBUTING.md#run-what-ci-runs) is the authority
-and its table is the index: **seventeen** instances with what each cost, numbered there and nowhere
+and its table is the index: **eighteen** instances with what each cost, numbered there and nowhere
 else, because this file used to number them too and the two sets had drifted apart by two.
 
 What is worth carrying every session is which *kind* of thing each was, since none of them is a
@@ -37,6 +37,11 @@ shell problem and every one of them looked like success:
   `dtolnay/rust-toolchain@stable`, so **stable is the contract**; this gate ran clippy **1.96**
   against CI's **1.98** with two lints failing every job, both workspaces green. `rustup update`
   before trusting a green.
+- **The target is not CI's.** CI's clippy runs on Linux and this machine is `windows-gnu`.
+  `ea2088c` held a test to `windows-gnu` with a `cfg` and left the constant it reads without one:
+  dead code everywhere else, clippy green here, CI's `fmt, clippy, docs` red. Clippy with
+  `--target x86_64-unknown-linux-gnu` sees it, and writes no Linux object code, so it needs no
+  Linux linker.
 - **The log had two authors.** A stopped run's child kept going and a new run truncated the log
   under it: forty-four step markers for a twenty-four-step gate, and both verdicts in one file.
   Run it once, and make a second run refuse.
@@ -50,6 +55,8 @@ set -euo pipefail
 
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+# CI's clippy runs on Linux, where a `cfg` that holds here can leave dead code -- entry 18.
+cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 # CI runs this as `test (release, LTO)` and CONTRIBUTING.md has always listed it. This block did
 # not, for long enough that a gate built from it ran debug only and said "the gate passed".
@@ -99,6 +106,7 @@ closed-form checks, which used to run in the line above. Two workspaces, two gat
 cd app
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check
@@ -122,7 +130,7 @@ The device tests there skip loudly on a machine with no adapter. A skip that say
 result; a skip that says nothing is the shape of a suite that has stopped testing anything.
 
 **Read a result from the thing that produced it, and read whether the check *ran* rather than what it
-printed.** Seventeen times this gate has said `ok` while failing, and twice that reached `main` — indexed in
+printed.** Eighteen times this gate has said `ok` while failing, and more than once that reached `main` — indexed in
 CONTRIBUTING.md, counted nowhere else. A CI run's
 roll-up has said `success` with a job still `queued`; ask each job for its own `conclusion`. A script
 that edits several files can write the first and raise on the next, so check every anchor before

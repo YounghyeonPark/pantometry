@@ -13,6 +13,10 @@ set -euo pipefail
 
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+# CI's clippy runs on Linux, and a `cfg` that holds here can leave code there that nothing reads.
+# Needs `rustup target add x86_64-unknown-linux-gnu`. It writes no Linux object code, so it needs no
+# Linux linker; build scripts and proc-macros still run on this machine.
+cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 cargo test --locked --workspace --release
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
@@ -79,7 +83,7 @@ held to them. The application lives in [`app/`](app/README.md) now, which is its
 which cargo keeps out of this one, so there is nothing left to exclude and every member here is
 published and held to all three.
 
-### This gate has reported a result it had not earned, seventeen times
+### This gate has reported a result it had not earned, eighteen times
 
 **This table is the index, and it is the only place the count is kept.** It used to say eight while
 holding six rows, with eight more instances described in the prose below it and one described only
@@ -110,6 +114,7 @@ and the rest are the ways that is not the only one.
 | 15 | a change *inside* the library that broke a workspace outside it | `extent_m` on `PanelData::Field` made the viewer's `deny_unknown_fields` reader refuse every run file, with the gate green |
 | 16 | two gate runs writing one log | a stopped run's child kept going, the new one truncated the log under it, and a twenty-four-step gate produced forty-four markers and both verdicts |
 | 17 | the `wasm32-wasip1` tests compiled with `--no-run` and not run | `documented_version` had no wasm `cfg` and compiled, as a missing `cfg` always does; under wasmtime it had passed over nothing on every commit, and when `81c7dae` made that a failure CI went red with every step here green |
+| 18 | clippy for this machine's target, `x86_64-pc-windows-gnu`, and no other | `ea2088c` held a pinned test to `windows-gnu` with a `cfg` and left the constant it reads without one; on Linux nothing read it, and CI's `fmt, clippy, docs` refused it under `-D warnings` with every step here green |
 
 ### Run it **once**, and make a second run refuse
 
@@ -280,6 +285,19 @@ It has happened, and it looked like success: the gate was clippy **1.96** while 
 gates were green. `rustup update` first, and if that brings new lints in, they were already failing
 CI and this is when you find out rather than after a push.
 
+**And on the target CI uses.** CI's clippy runs on `ubuntu-latest`, and a gate on another platform
+checks a different set of `cfg`s. `ea2088c` pinned a digest of the classical Ewald sum that only
+`x86_64-pc-windows-gnu` reproduces, because its phases come from the platform's `sin_cos`, and put
+the `cfg` on the test but not on the constant the test reads. Everywhere else that constant was
+dead code: clippy here checked the one platform where it is read, and CI's refused it (entry 18). The second clippy
+line in the block above checks the library as Linux sees it, and `app/`'s block has the same line.
+Clippy writes no Linux object code, so the step needs the target's standard library and no Linux
+linker. Build scripts and proc-macros still compile and run on this machine, and today none of them
+needs a Linux library: `wayland-sys` would ask `pkg-config` for one, and does not because `winit`'s
+`wayland-dlopen` feature is on. A dependency that did need one would make this step fail here and
+pass in CI, which is the loud direction. With that `cfg` removed again, the Linux line fails on the
+constant and the line before it passes.
+
 The MSRV job is the other half of the same rule and points the other way: `crates/` is built with
 **1.78** and a lint suggesting something stabilised after that is a suggestion to break a promise.
 Both `#[allow]`s in `pantometry-shape/src/voxels.rs` are there for exactly that, with the version
@@ -313,6 +331,7 @@ thirty-four scenes and their closed-form checks live there now:
 cd app
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check

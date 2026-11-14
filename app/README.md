@@ -113,6 +113,8 @@ Two workspaces, two gates. This one:
 cd app
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+# CI runs this job on Linux; a `cfg` that holds here can leave dead code there. No Linux linker.
+cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 cargo deny check

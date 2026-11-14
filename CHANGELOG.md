@@ -15,7 +15,7 @@ Entries record what was *found* as well as what was added, because several of th
 changes here were corrections to a mistaken assumption rather than new features. The commit
 messages carry the full account.
 
-`CONTRIBUTING.md` holds the gate and indexes the seventeen times it has reported a pass it had not
+`CONTRIBUTING.md` holds the gate and indexes the eighteen times it has reported a pass it had not
 earned; `CLAUDE.md` carries the kinds they were, and why a `set -euo pipefail` pasted into a shell
 protects nothing.
 
@@ -327,6 +327,18 @@ protects nothing.
   always compiles. Both now run the suite under wasmtime v49.0.0, CI's pinned release, at CI's
   opt-level: 1427 passed and 85 ignored, 312 s with the build cold. It is the seventeenth entry in
   CONTRIBUTING.md's table, and the second to reach `main`.
+- **Both gates ran clippy for this machine's target only, and CI runs it on Linux.** `ea2088c`'s
+  pin of the classical Ewald sum is held to `x86_64-pc-windows-gnu` by a `cfg`, because the sum's
+  phases come from the platform's `sin_cos`, and the constant it reads had none. On Linux nothing
+  read it: CI's `fmt, clippy, docs` refused it under `-D warnings` with all 34 checks of both gates
+  green here, and `db102d2` fixed it. Both gates now run clippy a second time with
+  `--target x86_64-unknown-linux-gnu`. Clippy writes no Linux object code, so the step needs the
+  target's standard library and no Linux linker; build scripts and proc-macros still run here, and
+  today none of them needs a Linux library. It took 89 s for `app/` from cold and 19 s for the
+  library, where 147 of 205 Linux units were new and the build scripts and proc-macros, which run
+  on the host, were built already. With the `cfg` removed again, the new
+  line fails on the constant and the old one passes. It is the eighteenth entry in
+  CONTRIBUTING.md's table.
 
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**
