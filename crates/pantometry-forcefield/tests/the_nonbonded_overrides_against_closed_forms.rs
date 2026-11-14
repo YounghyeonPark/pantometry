@@ -1764,3 +1764,92 @@ fn the_dynamics_forces_are_the_evaluations_with_every_rule_on() {
         assert_eq!(evaluation_bits(&alone).0, terms, "{name}");
     }
 }
+
+/// What [`the_classical_sum_is_heads_bits`] and [`the_mesh_on_an_uneven_grid_is_heads_bits`] pin:
+/// `evaluate`'s terms, five atoms' forces and the virial ([`pinned::all_bits`]), `energy`'s
+/// non-bonded terms, the dynamics' energy and every atom's force, and with the first two waters
+/// decoupled at two states the dynamics' energy and every force, and the coupling's energy and its
+/// two gradients.
+fn reciprocal_bits(field: &PeriodicForceField, at: &[[f64; 3]]) -> Vec<u64> {
+    let mut out = pinned::all_bits(field, &field.evaluate(at));
+    out.extend(pinned::nonbonded_bits(field, &field.energy(at)));
+    let mut forces = vec![[0.0; 3]; at.len()];
+    out.push(Potential::energy_and_forces(field, at, &mut forces).to_bits());
+    out.extend(forces.iter().flat_map(|f| f.map(f64::to_bits)));
+    let mut group = vec![false; at.len()];
+    group[..6].fill(true);
+    let d = PeriodicDecoupling::new(field, &group).expect("two waters decouple");
+    for l in [Lambda::new(0.0, 0.5, 1.0), Lambda::new(0.0, 0.0, 0.4)] {
+        out.push(d.energy_and_forces(at, l, &mut forces).to_bits());
+        out.extend(forces.iter().flat_map(|f| f.map(f64::to_bits)));
+        let c = d.coupling(at, l);
+        out.extend([c.energy, c.gradient[1], c.gradient[2]].map(f64::to_bits));
+    }
+    out
+}
+
+/// The digest of [`reciprocal_bits`] HEAD `a03c98c` gave, before the reciprocal sum took any
+/// thread, for [`pinned::waters_and_an_ion`]'s box by the classical sum, on
+/// `x86_64-pc-windows-gnu`.
+const HEAD_CLASSICAL: u64 = 0x274d_6e7c_3926_b781;
+
+/// The same by the mesh on a grid of three lengths, on every platform.
+const HEAD_UNEVEN_MESH: u64 = 0xec8b_2776_5b28_2588;
+
+/// **The classical reciprocal sum is HEAD's bits on any number of threads**: [`reciprocal_bits`]
+/// of [`pinned::waters_and_an_ion`]'s box by the classical sum, at `k_c = 6α` on its 12 Å cube,
+/// as HEAD `a03c98c` computed it, on one thread, three and sixteen and at the default. The
+/// threads' test compares the threaded sum with the one-thread sum, and both share the phase
+/// tables, the phases' products and the virial's terms; this compares them with the code before
+/// either existed. **On the platform it was written on only**, `x86_64-pc-windows-gnu`: the
+/// classical sum's phases start from the platform's `sin_cos`, which is why the pins in
+/// `tests/pinned/` use the mesh, and why the next test does.
+#[test]
+#[cfg(all(target_os = "windows", target_env = "gnu"))]
+fn the_classical_sum_is_heads_bits() {
+    let (_, at) = pinned::waters_and_an_ion();
+    let cutoff = 5.5 * ANGSTROM;
+    let alpha = 3.2 / cutoff;
+    let classical = PeriodicForceField::tip3p(
+        PeriodicBox::cubic(12.0 * ANGSTROM),
+        EwaldParameters {
+            alpha,
+            cutoff,
+            k_cutoff: 6.0 * alpha,
+        },
+        64,
+    )
+    .with_ions(&[Ion::chloride()]);
+    assert!(classical.ewald().mesh().is_none());
+    assert!(classical.ewald().wave_vectors() > 300);
+    for t in [None, Some(1), Some(3), Some(16)] {
+        let f = match t {
+            Some(t) => classical.clone().with_threads(t),
+            None => classical.clone(),
+        };
+        let d = pinned::digest(&reciprocal_bits(&f, &at));
+        assert_eq!(d, HEAD_CLASSICAL, "{t:?} threads: {d:#018x}");
+    }
+}
+
+/// **The mesh on a grid of three lengths is HEAD's bits on any number of threads**, on every
+/// platform: [`pinned::waters_and_an_ion`]'s box with its mesh of order 6 on 16 × 8 × 32, so that
+/// each axis's slabs, columns and lines are cut differently, as HEAD `a03c98c` computed it, on one
+/// thread, three and sixteen and at the default. The pins `HEAD_WATER` and `HEAD_FURTHER` hold the
+/// mesh on a cube.
+#[test]
+fn the_mesh_on_an_uneven_grid_is_heads_bits() {
+    let (water, at) = pinned::waters_and_an_ion();
+    let uneven = water.with_mesh(PmeParameters {
+        order: 6,
+        grid: [16, 8, 32],
+    });
+    for t in [None, Some(1), Some(3), Some(16)] {
+        let f = match t {
+            Some(t) => uneven.clone().with_threads(t),
+            None => uneven.clone(),
+        };
+        let d = pinned::digest(&reciprocal_bits(&f, &at));
+        assert_eq!(d, HEAD_UNEVEN_MESH, "{t:?} threads: {d:#018x}");
+    }
+}

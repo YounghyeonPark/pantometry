@@ -202,22 +202,59 @@
 //!   chosen mesh is more accurate than the classical sum at the same `δ`, in energy by 24 to 330
 //!   times and in forces by 34 to 210, and at 24 000 atoms 20 to 70 times cheaper.
 //!
-//! //! # Not here
+//! # Threads, with the same bits on any number
+//!
+//! A [`crate::PeriodicForceField`]'s mesh is computed in five parts, each on as many threads as its
+//! work pays for ([`crate::PeriodicForceField::with_threads`] sets the number), and none splits a
+//! sum:
+//!
+//! 1. **The splines**, by atom: each charge's weights and slopes on each axis, computed once and
+//!    kept for the spread and the interpolation.
+//! 2. **The spread, and the transform along the third axis and the second**, by slabs of the first
+//!    axis: each point of a slab takes the charges whose splines reach it in the atoms' order,
+//!    whichever thread has the slab, and no line of either axis leaves its slab.
+//! 3. **The transform along the first axis**, by columns, each column a line of its own.
+//! 4. **The energy and the potentials, and their transform back along the third axis and the
+//!    second**, by slabs: each vector's own energy, cross term and, when the virial is wanted, its
+//!    virial, into the slab's buffer, added on the calling thread in the vectors' order.
+//! 5. **The first axis back**, by columns, and **the interpolation**, by atom, each atom's force its
+//!    own.
+//!
+//! Each point of the grid takes the additions it takes on one thread in the same order, each line
+//! is transformed by the same butterflies, and each sum is added in the one-thread order: **the same
+//! bits on any number of threads**, which the tests hold against one thread and against the bits
+//! `b6558df` and `8b58114` gave before any of it was threaded. A round of spawns has its first thread
+//! running about 80 µs after it starts and each further one about 35 µs later on the machine it was
+//! measured on, so a part takes threads only where they shorten it: on phenol's octanol box, 5 089
+//! atoms on 32³, the splines take four, the spread five, the energy three and the interpolation six,
+//! and the transform along the first axis, 0.23 ms, one. [`Ewald::evaluate`](crate::Ewald::evaluate)
+//! takes one.
+//!
+//! **What one thread gained with it**: the splines computed once rather than twice, 0.85 ms of the
+//! octanol box's; the transform along the first axis and the second gathering eight lines at once, a
+//! cache line of each slab, where line by line the 32 points of a column of a 32³ grid are 8 KiB
+//! apart and fall in one set of the level-one cache; the grids and splines kept between a force
+//! field's evaluations, a fresh 1.7 MB having cost 262 µs to touch, on one thread or eight; and the
+//! virial computed only when it is wanted, which the dynamics never does.
+//!
+//! # Not here
 //!
 //! A triclinic box; a real-to-complex transform (the mesh transforms a complex grid with a zero
 //! imaginary part, twice the arithmetic a real transform needs, except when decoupling, where the
-//! imaginary part carries the group); threads; any grid length but a power of two; and a force
-//! target for the grid, which is chosen from the energy's estimates. The transform is this
-//! module's own, private: moving it to [`pantometry_core::transform`] would change the kernel's
-//! public API, and is a separate decision.
+//! imaginary part carries the group); any grid length but a power of two; and a force target for
+//! the grid, which is chosen from the energy's estimates. The transform is this module's own,
+//! private: moving it to [`pantometry_core::transform`] would change the kernel's public API, and is
+//! a separate decision.
 
 // The splines, grids and axes are written as the formulas' index loops, which read against them.
 #![allow(clippy::needless_range_loop)]
 
-use crate::ewald::{EwaldParameters, COULOMB};
+use crate::ewald::{pieces, stress_terms, EwaldParameters, Reciprocal, Scratch, COULOMB};
+use crate::ordered::{self, Spawned};
 use crate::periodic::PeriodicBox;
 use pantometry_core::math::exp;
 use std::f64::consts::PI;
+use std::ops::Range;
 
 /// The lowest spline order a mesh accepts: `M_3`'s derivative is continuous, `M_2`'s is not.
 pub const MIN_ORDER: usize = 3;
@@ -523,44 +560,247 @@ impl Line {
     }
 }
 
-/// The three-dimensional transform of a grid stored `[k₁][k₂][k₃]`, `k₃` fastest: the third axis,
-/// then the second, then the first, in a fixed order.
-fn transform_3d(lines: &[Line; 3], re: &mut [f64], im: &mut [f64], inverse: bool) {
-    let [n1, n2, n3] = [lines[0].n, lines[1].n, lines[2].n];
-    for row in 0..n1 * n2 {
-        let s = row * n3..(row + 1) * n3;
-        lines[2].transform(&mut re[s.clone()], &mut im[s], inverse);
-    }
-    let longest = n1.max(n2);
-    let (mut br, mut bi) = (vec![0.0; longest], vec![0.0; longest]);
-    for i1 in 0..n1 {
-        for i3 in 0..n3 {
-            for i2 in 0..n2 {
-                let t = (i1 * n2 + i2) * n3 + i3;
-                br[i2] = re[t];
-                bi[i2] = im[t];
-            }
-            lines[1].transform(&mut br[..n2], &mut bi[..n2], inverse);
-            for i2 in 0..n2 {
-                let t = (i1 * n2 + i2) * n3 + i3;
-                re[t] = br[i2];
-                im[t] = bi[i2];
-            }
-        }
-    }
-    let plane = n2 * n3;
-    for p in 0..plane {
-        for i1 in 0..n1 {
-            br[i1] = re[i1 * plane + p];
-            bi[i1] = im[i1 * plane + p];
-        }
-        lines[0].transform(&mut br[..n1], &mut bi[..n1], inverse);
-        for i1 in 0..n1 {
-            re[i1 * plane + p] = br[i1];
-            im[i1 * plane + p] = bi[i1];
+/// A line gathered from a grid along an axis that is not the fastest, to be transformed in place.
+#[derive(Default)]
+struct Buffer {
+    re: Vec<f64>,
+    im: Vec<f64>,
+}
+
+impl Buffer {
+    fn at_least(&mut self, n: usize) {
+        if self.re.len() < n {
+            self.re.resize(n, 0.0);
+            self.im.resize(n, 0.0);
         }
     }
 }
+
+/// The transform along the third axis and then the second of whole slabs of the first, a grid
+/// stored `[k₁][k₂][k₃]`, `k₃` fastest: what `transform_3d` does first, on any of its slabs, since
+/// no line of either axis leaves its slab.
+fn rows_and_planes(
+    lines: &[Line; 3],
+    re: &mut [f64],
+    im: &mut [f64],
+    inverse: bool,
+    buffer: &mut Buffer,
+) {
+    let [n2, n3] = [lines[1].n, lines[2].n];
+    let slabs = re.len() / (n2 * n3);
+    for row in 0..slabs * n2 {
+        let s = row * n3..(row + 1) * n3;
+        lines[2].transform(&mut re[s.clone()], &mut im[s], inverse);
+    }
+    buffer.at_least(BLOCK * n2);
+    let (br, bi) = (&mut buffer.re, &mut buffer.im);
+    for i1 in 0..slabs {
+        let mut i3 = 0;
+        while i3 < n3 {
+            let width = BLOCK.min(n3 - i3);
+            for i2 in 0..n2 {
+                let t = (i1 * n2 + i2) * n3 + i3;
+                for c in 0..width {
+                    br[c * n2 + i2] = re[t + c];
+                    bi[c * n2 + i2] = im[t + c];
+                }
+            }
+            for c in 0..width {
+                let s = c * n2..(c + 1) * n2;
+                lines[1].transform(&mut br[s.clone()], &mut bi[s], inverse);
+            }
+            for i2 in 0..n2 {
+                let t = (i1 * n2 + i2) * n3 + i3;
+                for c in 0..width {
+                    re[t + c] = br[c * n2 + i2];
+                    im[t + c] = bi[c * n2 + i2];
+                }
+            }
+            i3 += width;
+        }
+    }
+}
+
+/// How many lines a transform along an axis that is not the fastest gathers at once: a cache
+/// line's worth, so that each line of the grid it reads is read once rather than once a column.
+/// Along the first axis of a 32³ grid, column by column, every column's 32 points are 8 KiB apart
+/// and fall in one set of the level-one cache, which holds twelve.
+const BLOCK: usize = 8;
+
+/// The transform along the first axis of some of a grid's columns: `re[i₁]` and `im[i₁]` are the
+/// part of slab `i₁` those columns are, the same part of every slab.
+fn columns(
+    line: &Line,
+    re: &mut [&mut [f64]],
+    im: &mut [&mut [f64]],
+    inverse: bool,
+    buffer: &mut Buffer,
+) {
+    let n1 = line.n;
+    debug_assert!(re.len() == n1 && im.len() == n1);
+    let columns = re.first().map_or(0, |s| s.len());
+    buffer.at_least(BLOCK * n1);
+    let (br, bi) = (&mut buffer.re, &mut buffer.im);
+    let mut p = 0;
+    while p < columns {
+        let width = BLOCK.min(columns - p);
+        for i1 in 0..n1 {
+            let (r, i) = (&re[i1][p..p + width], &im[i1][p..p + width]);
+            for c in 0..width {
+                br[c * n1 + i1] = r[c];
+                bi[c * n1 + i1] = i[c];
+            }
+        }
+        for c in 0..width {
+            let s = c * n1..(c + 1) * n1;
+            line.transform(&mut br[s.clone()], &mut bi[s], inverse);
+        }
+        for i1 in 0..n1 {
+            let (r, i) = (&mut re[i1][p..p + width], &mut im[i1][p..p + width]);
+            for c in 0..width {
+                r[c] = br[c * n1 + i1];
+                i[c] = bi[c * n1 + i1];
+            }
+        }
+        p += width;
+    }
+}
+
+/// A grid of slabs `plane` points each cut into the columns `parts`, which run in order from 0
+/// to `plane`: for each, the part of every slab it is, in the slabs' order. Disjoint, so that each
+/// can go to a thread of its own.
+fn column_parts<'a>(
+    grid: &'a mut [f64],
+    plane: usize,
+    parts: &[Range<usize>],
+) -> Vec<Vec<&'a mut [f64]>> {
+    let mut out: Vec<Vec<&'a mut [f64]>> = parts
+        .iter()
+        .map(|_| Vec::with_capacity(grid.len() / plane))
+        .collect();
+    for slab in grid.chunks_mut(plane) {
+        let mut rest: &'a mut [f64] = slab;
+        for (part, columns) in parts.iter().zip(&mut out) {
+            let (head, tail) = std::mem::take(&mut rest).split_at_mut(part.len());
+            columns.push(head);
+            rest = tail;
+        }
+    }
+    out
+}
+
+/// A grid cut into the slabs `slabs` of the first axis, `plane` points each, which run in order
+/// from 0: each slab's points, disjoint.
+fn slab_parts<'a>(grid: &'a mut [f64], plane: usize, slabs: &[Range<usize>]) -> Vec<&'a mut [f64]> {
+    let mut rest = grid;
+    slabs
+        .iter()
+        .map(|s| {
+            let (head, tail) = std::mem::take(&mut rest).split_at_mut(s.len() * plane);
+            rest = tail;
+            head
+        })
+        .collect()
+}
+
+/// The three-dimensional transform of a grid stored `[k₁][k₂][k₃]`, `k₃` fastest: the third axis,
+/// then the second, then the first, in a fixed order. The reciprocal sum does the same in parts.
+#[cfg(test)]
+fn transform_3d(lines: &[Line; 3], re: &mut [f64], im: &mut [f64], inverse: bool) {
+    let mut buffer = Buffer::default();
+    rows_and_planes(lines, re, im, inverse, &mut buffer);
+    let plane = lines[1].n * lines[2].n;
+    // One part, every column: a list of ranges with one in it, not a list of the plane's points.
+    #[allow(clippy::single_range_in_vec_init)]
+    let whole = [0..plane];
+    let mut r = column_parts(re, plane, &whole);
+    let mut i = column_parts(im, plane, &whole);
+    columns(&lines[0], &mut r[0], &mut i[0], inverse, &mut buffer);
+}
+
+/// Where the energy loop's terms go: into the sums as they come, on one thread, or into a slab's
+/// buffer, to be added in the slabs' order ([`SlabTerms`]).
+trait Spectrum {
+    /// A vector's own energy and cross term, in units of `k_e`.
+    fn energy(&mut self, own: f64, across: f64);
+    /// Its virial's terms, `k_e e (δ_ab − stress m̃_a m̃_b)`, when the virial is wanted.
+    fn stress(&mut self, terms: [[f64; 3]; 3]);
+}
+
+/// The energy loop's sums, added to at once.
+struct Sums<'a> {
+    rest: &'a mut f64,
+    cross: &'a mut f64,
+    virial: Option<&'a mut [[f64; 3]; 3]>,
+}
+
+impl Spectrum for Sums<'_> {
+    #[inline(always)]
+    fn energy(&mut self, own: f64, across: f64) {
+        *self.rest += own;
+        *self.cross += across;
+    }
+
+    #[inline(always)]
+    fn stress(&mut self, terms: [[f64; 3]; 3]) {
+        if let Some(v) = self.virial.as_deref_mut() {
+            add_terms(v, &terms);
+        }
+    }
+}
+
+/// A slab's terms, in the order its vectors come, and a line's buffer for its transforms.
+#[derive(Default)]
+struct SlabTerms {
+    energy: Vec<[f64; 2]>,
+    stress: Vec<[[f64; 3]; 3]>,
+    buffer: Buffer,
+}
+
+impl Spectrum for SlabTerms {
+    #[inline(always)]
+    fn energy(&mut self, own: f64, across: f64) {
+        self.energy.push([own, across]);
+    }
+
+    #[inline(always)]
+    fn stress(&mut self, terms: [[f64; 3]; 3]) {
+        self.stress.push(terms);
+    }
+}
+
+/// `virial[a][b] += terms[a][b]`, in that order.
+#[inline(always)]
+fn add_terms(virial: &mut [[f64; 3]; 3], terms: &[[f64; 3]; 3]) {
+    for (row, t) in virial.iter_mut().zip(terms) {
+        for (v, x) in row.iter_mut().zip(t) {
+            *v += x;
+        }
+    }
+}
+
+/// What one atom's spline costs on one thread, nanoseconds, for [`ordered::threads_for_work`]: each
+/// of these is measured on phenol's octanol box, 5 089 atoms at order 7 on a grid of 32³, release,
+/// `x86_64-pc-windows-gnu`, an i9-13900HX's P-core, the median of five rounds of twenty — 166.7 ns
+/// here.
+const NS_A_SPLINE: f64 = 167.0;
+
+/// What spreading one atom's charge to one of its `n³` points costs on one thread: 0.507 ns.
+const NS_A_SPREAD_POINT: f64 = 0.51;
+
+/// What interpolating one atom's force from one of its `n³` points costs on one thread: 0.775 ns.
+const NS_AN_INTERPOLATED_POINT: f64 = 0.78;
+
+/// What one point's part of the transform along the third axis or the second costs on one thread,
+/// per factor of two in that axis's length: 1.048 ns forward and 1.000 back.
+const NS_A_BUTTERFLY_POINT: f64 = 1.05;
+
+/// The same along the first, whose lines cross the slabs: 1.385 ns forward and 1.438 back.
+const NS_A_COLUMN_BUTTERFLY_POINT: f64 = 1.4;
+
+/// What one grid point's energy and potentials cost on one thread, the virial not wanted: 2.725 ns.
+/// The virial, wanted by an evaluation and not by the dynamics, is not counted.
+const NS_A_SPECTRUM_POINT: f64 = 2.7;
 
 /// The signed vector `m` a grid index `j` on an axis of `k` points stands for, `(−K/2, K/2)`, or
 /// `None` on the Nyquist plane `j = K/2`.
@@ -711,75 +951,349 @@ impl Pme {
 
     /// The reciprocal sum, with a partition, as [`crate::Ewald`]'s classical one: `group` marks the
     /// atoms whose charges are split off and `lambda` scales their cross terms with the rest.
-    /// Returns `(E_rest, E_cross)` and adds to `forces` and `virial` those of `E_rest + λ E_cross`.
+    /// Returns `E_rest` and `E_cross` and adds to `forces` and `virial`, each when given, those of
+    /// `E_rest + λ E_cross`. On `threads` threads, `None` for as many as each part's work pays for
+    /// ([`ordered::threads_for_work`]), **with the same bits on any number**: see the module
+    /// documentation. Its buffers are `scratch`'s.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn reciprocal(
         &self,
         charges: &[f64],
         group: Option<(&[bool], f64)>,
         at: &[[f64; 3]],
         forces: Option<&mut [[f64; 3]]>,
-        virial: &mut [[f64; 3]; 3],
-    ) -> (f64, f64) {
+        virial: Option<&mut [[f64; 3]; 3]>,
+        threads: Option<usize>,
+        scratch: &mut Scratch,
+    ) -> Reciprocal {
         let n = self.parameters.order;
         let grid = self.parameters.grid;
         let [k1, k2, k3] = grid;
-        let total = k1 * k2 * k3;
+        let plane = k2 * k3;
+        let total = k1 * plane;
         let l = self.cell.lengths();
         let marked = |i: usize| group.is_some_and(|(g, _)| g[i]);
-        let lambda = group.map_or(0.0, |(_, x)| x);
-
-        // Each charge's spline, per axis: the grid points k₀ − j and the weights there.
-        let spline = |p: &[f64; 3]| {
-            let mut index = [[0usize; MAX_ORDER]; 3];
-            let mut value = [[0.0; MAX_ORDER]; 3];
-            let mut slope = [[0.0; MAX_ORDER]; 3];
-            for a in 0..3 {
-                let f = p[a] / l[a];
-                let u = grid[a] as f64 * (f - f.floor());
-                let base = u.floor();
-                weights(n, u - base, &mut value[a], &mut slope[a]);
-                let k0 = base as i64;
-                for j in 0..n {
-                    index[a][j] = (k0 - j as i64).rem_euclid(grid[a] as i64) as usize;
-                }
-            }
-            (index, value, slope)
-        };
-
-        // Spread: the rest in the real part, the group in the imaginary.
-        let mut re = vec![0.0; total];
-        let mut im = vec![0.0; total];
-        for (i, &q) in charges.iter().enumerate() {
-            if q == 0.0 {
-                continue;
-            }
-            let (index, value, _) = spline(&at[i]);
-            let target = if marked(i) { &mut im } else { &mut re };
-            for j1 in 0..n {
-                let row1 = index[0][j1] * k2;
-                let q1 = q * value[0][j1];
-                for j2 in 0..n {
-                    let row2 = (row1 + index[1][j2]) * k3;
-                    let q12 = q1 * value[1][j2];
-                    for j3 in 0..n {
-                        target[row2 + index[2][j3]] += q12 * value[2][j3];
-                    }
-                }
-            }
-        }
-        transform_3d(&self.lines, &mut re, &mut im, false);
-
-        // The energy by vector, the virial, and the spectrum of the potentials.
         let want = forces.is_some();
-        let (mut pr, mut pi) = if want {
-            (vec![0.0; total], vec![0.0; total])
+        let mut spawned = Spawned::default();
+
+        // How many threads each part takes, from what it costs on one.
+        let atoms = charges.len();
+        let charged = charges.iter().filter(|&&q| q != 0.0).count() as f64;
+        let cube = (n * n * n) as f64;
+        let log2 = |k: usize| k.trailing_zeros() as f64;
+        let butterflies = |k: usize| NS_A_BUTTERFLY_POINT * total as f64 * log2(k);
+        let splining = ordered::threads_for_work(threads, NS_A_SPLINE * charged);
+        let spreading = ordered::threads_for_work(
+            threads,
+            NS_A_SPREAD_POINT * charged * cube + butterflies(k2) + butterflies(k3),
+        );
+        let across_slabs = ordered::threads_for_work(
+            threads,
+            NS_A_COLUMN_BUTTERFLY_POINT * total as f64 * log2(k1),
+        );
+        let inverse = if want {
+            butterflies(k2) + butterflies(k3)
         } else {
-            (Vec::new(), Vec::new())
+            0.0
         };
-        let split = group.is_some();
+        let summing =
+            ordered::threads_for_work(threads, NS_A_SPECTRUM_POINT * total as f64 + inverse);
+        let interpolating =
+            ordered::threads_for_work(threads, NS_AN_INTERPOLATED_POINT * charged * cube);
+
+        // Each charge's spline, once, by atom: per axis the point k₀ its offset is past, and the
+        // weights and slopes at the points k₀ − j.
+        let width = 6 * n;
+        let Scratch {
+            bases,
+            splines,
+            grids,
+            ..
+        } = scratch;
+        // Every charged atom's entries are written below, and no other's is read.
+        bases.resize(atoms, [0; 3]);
+        splines.resize(width * atoms, 0.0);
+        {
+            let runs = ordered::ranges(atoms, pieces(splining));
+            let mut rest = &mut splines[..];
+            let mut items = Vec::with_capacity(runs.len());
+            for (run, b) in runs
+                .iter()
+                .zip(bases.chunks_mut(runs.first().map_or(1, |r| r.len())))
+            {
+                let (head, tail) = std::mem::take(&mut rest).split_at_mut(width * run.len());
+                items.push((run.clone(), b, head));
+                rest = tail;
+            }
+            spawned.add(ordered::in_order(
+                splining,
+                items,
+                &mut Vec::new(),
+                |(run, bases, splines): (Range<usize>, &mut [[u32; 3]], &mut [f64]), _: &mut ()| {
+                    for ((i, b), s) in run.zip(bases).zip(splines.chunks_mut(width)) {
+                        if charges[i] == 0.0 {
+                            continue;
+                        }
+                        let p = &at[i];
+                        let (mut value, mut slope) = ([0.0; MAX_ORDER], [0.0; MAX_ORDER]);
+                        for a in 0..3 {
+                            let f = p[a] / l[a];
+                            let u = grid[a] as f64 * (f - f.floor());
+                            let floor = u.floor();
+                            weights(n, u - floor, &mut value, &mut slope);
+                            s[a * n..(a + 1) * n].copy_from_slice(&value[..n]);
+                            s[(3 + a) * n..(4 + a) * n].copy_from_slice(&slope[..n]);
+                            // `u` is in [0, K], so `k₀` is too.
+                            b[a] = floor as u32;
+                        }
+                    }
+                },
+                |_| {},
+            ));
+        }
+        let (bases, splines) = (&bases[..], &splines[..]);
+        // The grid points k₀ − j of atom `i`'s spline on each axis, `K` a power of two.
+        let masks = grid.map(|k| k as i64 - 1);
+        let points = |i: usize| {
+            let mut index = [[0usize; MAX_ORDER]; 3];
+            for a in 0..3 {
+                for j in 0..n {
+                    index[a][j] = ((bases[i][a] as i64 - j as i64) & masks[a]) as usize;
+                }
+            }
+            index
+        };
+        // Whether atom `i`'s spline reaches any of the slabs `slab` of the first axis: two arcs of
+        // the circle of K₁ points meet when either's start is in the other.
+        let reaches = |i: usize, slab: &Range<usize>| {
+            let lo = (bases[i][0] as i64 - (n as i64 - 1)) & masks[0];
+            let start = slab.start as i64;
+            ((start - lo) & masks[0]) < n as i64 || ((lo - start) & masks[0]) < slab.len() as i64
+        };
+
+        // Spread, the rest in the real part and the group in the imaginary, and transform along
+        // the third axis and the second: by slabs of the first, each slab's every point taking its
+        // charges in their order, whichever thread it is on.
+        let [re, im, pr, pi] = grids;
+        re.resize(total, 0.0);
+        im.resize(total, 0.0);
+        {
+            let slabs = ordered::ranges(k1, pieces(spreading));
+            let items: Vec<_> = slabs
+                .iter()
+                .cloned()
+                .zip(slab_parts(&mut re[..], plane, &slabs))
+                .zip(slab_parts(&mut im[..], plane, &slabs))
+                .collect();
+            spawned.add(ordered::in_order(
+                spreading,
+                items,
+                &mut Vec::new(),
+                |((slab, re), im): ((Range<usize>, &mut [f64]), &mut [f64]),
+                 buffer: &mut Buffer| {
+                    re.fill(0.0);
+                    im.fill(0.0);
+                    let whole = slab.len() == k1;
+                    for (i, &q) in charges.iter().enumerate() {
+                        if q == 0.0 || !(whole || reaches(i, &slab)) {
+                            continue;
+                        }
+                        let index = points(i);
+                        let s = &splines[i * width..(i + 1) * width];
+                        let value = [&s[..n], &s[n..2 * n], &s[2 * n..3 * n]];
+                        let target = if marked(i) { &mut *im } else { &mut *re };
+                        for j1 in 0..n {
+                            if !slab.contains(&index[0][j1]) {
+                                continue;
+                            }
+                            let row1 = (index[0][j1] - slab.start) * k2;
+                            let q1 = q * value[0][j1];
+                            for j2 in 0..n {
+                                let row2 = (row1 + index[1][j2]) * k3;
+                                let q12 = q1 * value[1][j2];
+                                for j3 in 0..n {
+                                    target[row2 + index[2][j3]] += q12 * value[2][j3];
+                                }
+                            }
+                        }
+                    }
+                    rows_and_planes(&self.lines, re, im, false, buffer);
+                },
+                |_| {},
+            ));
+        }
+        self.along_the_first(&mut re[..], &mut im[..], false, across_slabs, &mut spawned);
+
+        // The energy by vector, the virial, and the spectrum of the potentials, transformed back
+        // along the third axis and the second; by slabs, the terms added here in their order.
+        if want {
+            pr.resize(total, 0.0);
+            pi.resize(total, 0.0);
+        }
+        let stress = virial.is_some();
         let (mut rest, mut cross) = (0.0, 0.0);
+        if summing <= 1 {
+            // A part like the others, which spawned none: so that a part that stopped taking its
+            // threads is seen in the record rather than left out of it.
+            spawned.add(0);
+            let mut sums = Sums {
+                rest: &mut rest,
+                cross: &mut cross,
+                virial,
+            };
+            if want {
+                pr.fill(0.0);
+                pi.fill(0.0);
+            }
+            let potentials = want.then_some((&mut pr[..], &mut pi[..]));
+            self.spectrum(0..k1, re, im, group, stress, potentials, &mut sums);
+            if want {
+                rows_and_planes(&self.lines, pr, pi, true, &mut Buffer::default());
+            }
+        } else {
+            let mut virial = virial;
+            let slabs = ordered::ranges(k1, pieces(summing));
+            let potentials: Vec<Option<(&mut [f64], &mut [f64])>> = if want {
+                slab_parts(&mut pr[..], plane, &slabs)
+                    .into_iter()
+                    .zip(slab_parts(&mut pi[..], plane, &slabs))
+                    .map(Some)
+                    .collect()
+            } else {
+                slabs.iter().map(|_| None).collect()
+            };
+            let items: Vec<_> = slabs.iter().cloned().zip(potentials).collect();
+            let (re, im) = (&re[..], &im[..]);
+            spawned.add(ordered::in_order(
+                summing,
+                items,
+                &mut Vec::new(),
+                |(slab, potentials), out: &mut SlabTerms| {
+                    let mut potentials = potentials;
+                    if let Some((r, i)) = potentials.as_mut() {
+                        r.fill(0.0);
+                        i.fill(0.0);
+                    }
+                    let p = potentials.as_mut().map(|(r, i)| (&mut **r, &mut **i));
+                    self.spectrum(slab, re, im, group, stress, p, out);
+                    if let Some((r, i)) = potentials {
+                        rows_and_planes(&self.lines, r, i, true, &mut out.buffer);
+                    }
+                },
+                |out| {
+                    for (k, &[own, across]) in out.energy.iter().enumerate() {
+                        rest += own;
+                        cross += across;
+                        if let Some(v) = virial.as_deref_mut() {
+                            add_terms(v, &out.stress[k]);
+                        }
+                    }
+                    out.energy.clear();
+                    out.stress.clear();
+                },
+            ));
+        }
+
+        if let Some(f) = forces {
+            self.along_the_first(&mut pr[..], &mut pi[..], true, across_slabs, &mut spawned);
+            let (pr, pi) = (&pr[..], &pi[..]);
+            spawned.add(ordered::in_order(
+                interpolating,
+                ordered::chunks(f, pieces(interpolating)),
+                &mut Vec::new(),
+                |(atoms, f): (Range<usize>, &mut [[f64; 3]]), _: &mut ()| {
+                    for (i, fi) in atoms.zip(f.iter_mut()) {
+                        let q = charges[i];
+                        if q == 0.0 {
+                            continue;
+                        }
+                        let phi = if marked(i) { pi } else { pr };
+                        let index = points(i);
+                        let s = &splines[i * width..(i + 1) * width];
+                        let value = [&s[..n], &s[n..2 * n], &s[2 * n..3 * n]];
+                        let slope = [&s[3 * n..4 * n], &s[4 * n..5 * n], &s[5 * n..]];
+                        let mut grad = [0.0; 3];
+                        for j1 in 0..n {
+                            let row1 = index[0][j1] * k2;
+                            let (w1, d1) = (value[0][j1], slope[0][j1]);
+                            for j2 in 0..n {
+                                let row2 = (row1 + index[1][j2]) * k3;
+                                let (w2, d2) = (value[1][j2], slope[1][j2]);
+                                for j3 in 0..n {
+                                    let v = phi[row2 + index[2][j3]];
+                                    let (w3, d3) = (value[2][j3], slope[2][j3]);
+                                    grad[0] += d1 * w2 * w3 * v;
+                                    grad[1] += w1 * d2 * w3 * v;
+                                    grad[2] += w1 * w2 * d3 * v;
+                                }
+                            }
+                        }
+                        for a in 0..3 {
+                            fi[a] -= COULOMB * q * grad[a] * grid[a] as f64 / l[a];
+                        }
+                    }
+                },
+                |_| {},
+            ));
+        }
+        Reciprocal {
+            rest: COULOMB * rest,
+            cross: COULOMB * cross,
+            spawned,
+        }
+    }
+
+    /// The transform along the first axis of a grid, by columns on `threads` threads: each column
+    /// a line of its own, so the same bits on any number.
+    fn along_the_first(
+        &self,
+        re: &mut [f64],
+        im: &mut [f64],
+        inverse: bool,
+        threads: usize,
+        spawned: &mut Spawned,
+    ) {
+        let plane = self.lines[1].n * self.lines[2].n;
+        let parts = ordered::ranges(plane, pieces(threads));
+        let items: Vec<_> = column_parts(re, plane, &parts)
+            .into_iter()
+            .zip(column_parts(im, plane, &parts))
+            .collect();
+        let line = &self.lines[0];
+        spawned.add(ordered::in_order(
+            threads,
+            items,
+            &mut Vec::new(),
+            |(mut re, mut im), buffer: &mut Buffer| {
+                columns(line, &mut re, &mut im, inverse, buffer)
+            },
+            |_| {},
+        ));
+    }
+
+    /// The energy loop over the slabs `slab` of the first axis, in order: each vector's own energy
+    /// and cross term and, when `stress`, its virial's terms, into `sink`; and when `potentials`
+    /// holds the slabs' points, the spectrum of the potentials there, `G(A + λB)` for the rest and
+    /// `i λ G A` for the group. `re` and `im` are the whole transformed grid, read at each vector
+    /// and at its negative.
+    #[allow(clippy::too_many_arguments)]
+    fn spectrum(
+        &self,
+        slab: Range<usize>,
+        re: &[f64],
+        im: &[f64],
+        group: Option<(&[bool], f64)>,
+        stress: bool,
+        mut potentials: Option<(&mut [f64], &mut [f64])>,
+        sink: &mut impl Spectrum,
+    ) {
+        let [k1, k2, k3] = self.parameters.grid;
+        let l = self.cell.lengths();
+        let split = group.is_some();
+        let lambda = group.map_or(0.0, |(_, x)| x);
         let a2 = self.alpha * self.alpha;
-        for j1 in 0..k1 {
+        let first = slab.start * k2 * k3;
+        for j1 in slab {
             let n1 = (k1 - j1) % k1;
             for j2 in 0..k2 {
                 let n2 = (k2 - j2) % k2;
@@ -803,61 +1317,26 @@ impl Pme {
                     };
                     let own = 0.5 * g * (ar * ar + ai * ai);
                     let across = g * (ar * br + ai * bi);
-                    rest += own;
-                    cross += across;
-                    let e = own + lambda * across;
-                    let m = [
-                        signed(j1, k1).expect("G is zero on the Nyquist plane") / l[0],
-                        signed(j2, k2).expect("G is zero on the Nyquist plane") / l[1],
-                        signed(j3, k3).expect("G is zero on the Nyquist plane") / l[2],
-                    ];
-                    let mm = m[0] * m[0] + m[1] * m[1] + m[2] * m[2];
-                    let stress = 2.0 * (1.0 / mm + PI * PI / a2);
-                    for a in 0..3 {
-                        for b in 0..3 {
-                            let delta = if a == b { 1.0 } else { 0.0 };
-                            virial[a][b] += COULOMB * e * (delta - stress * m[a] * m[b]);
-                        }
+                    sink.energy(own, across);
+                    if stress {
+                        let e = own + lambda * across;
+                        let m = [
+                            signed(j1, k1).expect("G is zero on the Nyquist plane") / l[0],
+                            signed(j2, k2).expect("G is zero on the Nyquist plane") / l[1],
+                            signed(j3, k3).expect("G is zero on the Nyquist plane") / l[2],
+                        ];
+                        let mm = m[0] * m[0] + m[1] * m[1] + m[2] * m[2];
+                        let stress = 2.0 * (1.0 / mm + PI * PI / a2);
+                        sink.stress(stress_terms(e, stress, m));
                     }
-                    if want {
+                    if let Some((pr, pi)) = potentials.as_mut() {
                         // G(A + λB) for the rest, and i λ G A for the group.
-                        pr[t] = g * (ar + lambda * br) - lambda * g * ai;
-                        pi[t] = g * (ai + lambda * bi) + lambda * g * ar;
+                        pr[t - first] = g * (ar + lambda * br) - lambda * g * ai;
+                        pi[t - first] = g * (ai + lambda * bi) + lambda * g * ar;
                     }
                 }
             }
         }
-
-        if let Some(f) = forces {
-            transform_3d(&self.lines, &mut pr, &mut pi, true);
-            for (i, &q) in charges.iter().enumerate() {
-                if q == 0.0 {
-                    continue;
-                }
-                let phi = if marked(i) { &pi } else { &pr };
-                let (index, value, slope) = spline(&at[i]);
-                let mut grad = [0.0; 3];
-                for j1 in 0..n {
-                    let row1 = index[0][j1] * k2;
-                    let (w1, d1) = (value[0][j1], slope[0][j1]);
-                    for j2 in 0..n {
-                        let row2 = (row1 + index[1][j2]) * k3;
-                        let (w2, d2) = (value[1][j2], slope[1][j2]);
-                        for j3 in 0..n {
-                            let v = phi[row2 + index[2][j3]];
-                            let (w3, d3) = (value[2][j3], slope[2][j3]);
-                            grad[0] += d1 * w2 * w3 * v;
-                            grad[1] += w1 * d2 * w3 * v;
-                            grad[2] += w1 * w2 * d3 * v;
-                        }
-                    }
-                }
-                for a in 0..3 {
-                    f[i][a] -= COULOMB * q * grad[a] * grid[a] as f64 / l[a];
-                }
-            }
-        }
-        (COULOMB * rest, COULOMB * cross)
     }
 }
 

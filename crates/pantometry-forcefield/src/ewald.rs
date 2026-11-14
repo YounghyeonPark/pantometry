@@ -126,9 +126,20 @@
 //!
 //! No hashing, and no sum split across threads: every sum runs over its terms in an order fixed
 //! by the atom indices and the integer wave vectors, so an evaluation is the same bits however
-//! often and from wherever it is called. (A [`crate::PeriodicForceField`] computes its real-space
-//! pairs on several threads and adds them on one, in that order.) The reciprocal sum's phase
-//! factors start from **the platform's `sin` and `cos`** of each atom's three fractional
+//! often, from wherever and on however many threads it is called. A [`crate::PeriodicForceField`]
+//! computes its real-space pairs on several threads and adds them on one, in that order, and its
+//! reciprocal sum likewise: each wave's structure factor on some thread, over every atom in order,
+//! its energy and virial added on the calling thread in the waves' order, and then each atom's
+//! force on some thread, its waves in order, its phases computed again there — keeping every
+//! atom's for every wave would be 15 MB for phenol's water box, 1 534 atoms and 606 waves. On one
+//! thread the three are one loop, each phase computed once, **in a function of its own**: written
+//! in the function that holds the parts for several threads, the same loop made the water box's
+//! couplings on one thread 11 to 14% slower than `a03c98c`'s, and on its own they are 5% faster,
+//! the phase tables now kept between evaluations — measured each time against `a03c98c` in the
+//! same session, pinned to one P-core, the mean of three runs. [`Ewald::evaluate`] takes one
+//! thread. On that box, at the default, the structure factors take seven threads and the forces
+//! ten. The reciprocal sum's phase factors start from **the platform's `sin` and `cos`** of each
+//! atom's three fractional
 //! coordinates — 3N calls an evaluation — and are carried to higher `k` by complex
 //! multiplication, so across platforms the reciprocal energy can differ in its last bits, as UFF's
 //! torsion `cos` already makes every trajectory of this crate do. **The particle mesh does not**
@@ -148,11 +159,13 @@
 
 use crate::ccd::ANGSTROM;
 use crate::energy::COULOMB_KCAL;
+use crate::ordered::{self, Spawned};
 use crate::periodic::{for_each_pair, Exclusions, PeriodicBox};
 use crate::pme::{Pme, PmeParameters};
 use crate::uff::KCAL_PER_MOL;
 use pantometry_core::math::exp;
 use std::f64::consts::{FRAC_2_SQRT_PI, PI};
+use std::ops::Range;
 
 /// The Coulomb constant `k_e = e²/(4π ε₀)` in joules × metres per elementary charge squared: eq 43's
 /// 332.0637 kcal mol⁻¹ Å e⁻² in SI, the prefactor [`crate::energy::coulomb`] uses.
@@ -644,6 +657,108 @@ struct Wave {
     stress: f64,
 }
 
+/// Phase factors per axis, `(re, im)` laid out `[m][atom]`: [`Ewald::tables`].
+type Tables = [(Vec<f64>, Vec<f64>); 3];
+
+/// What a reciprocal sum's evaluation fills, kept between evaluations by the force field that owns
+/// it so that each buffer is allocated, and its pages first touched, about once: touching a fresh
+/// 1.7 MB, the octanol box's splines, took 262 µs on one thread and 247 to 305 on two to eight,
+/// release, `x86_64-pc-windows-gnu`, an i9-13900HX. Nothing in it is read before it is written.
+#[derive(Default)]
+pub(crate) struct Scratch {
+    /// The classical sum's phase factors.
+    pub(crate) tables: Tables,
+    /// The mesh's splines: each atom's `k₀` per axis.
+    pub(crate) bases: Vec<[u32; 3]>,
+    /// And each atom's weights and slopes, `6n` numbers.
+    pub(crate) splines: Vec<f64>,
+    /// The mesh's grids: the charges' transform, real and imaginary, and the potentials'.
+    pub(crate) grids: [Vec<f64>; 4],
+}
+
+/// `exp(i 2π m x_a / L_a)` of atom `i` of `n` on axis `a`, from its tables, `m` of either sign.
+#[inline(always)]
+fn phase(tables: &Tables, n: usize, a: usize, m: i32, i: usize) -> (f64, f64) {
+    let (re, im) = &tables[a];
+    let k = m.unsigned_abs() as usize * n + i;
+    if m >= 0 {
+        (re[k], im[k])
+    } else {
+        (re[k], -im[k])
+    }
+}
+
+/// `exp(i k·r_i)` for wave `w`: the three axes' factors, x times y and then times z, the one
+/// sequence of operations every path takes.
+#[inline(always)]
+fn wave_phase(tables: &Tables, n: usize, w: &Wave, i: usize) -> (f64, f64) {
+    let (xr, xi) = phase(tables, n, 0, w.n[0], i);
+    let (yr, yi) = phase(tables, n, 1, w.n[1], i);
+    let (zr, zi) = phase(tables, n, 2, w.n[2], i);
+    let (pr, pi) = (xr * yr - xi * yi, xr * yi + xi * yr);
+    (pr * zr - pi * zi, pr * zi + pi * zr)
+}
+
+/// A wave vector's virial, `k_e e (δ_ab − stress k_a k_b)` for its energy `e` (in units of
+/// `k_e`): the classical sum's and the mesh's, the same operations.
+#[inline(always)]
+pub(crate) fn stress_terms(e: f64, stress: f64, k: [f64; 3]) -> [[f64; 3]; 3] {
+    let mut terms = [[0.0; 3]; 3];
+    for a in 0..3 {
+        for b in 0..3 {
+            let delta = if a == b { 1.0 } else { 0.0 };
+            terms[a][b] = COULOMB * e * (delta - stress * k[a] * k[b]);
+        }
+    }
+    terms
+}
+
+/// Adds [`stress_terms`] to `virial`, each component its own sum.
+#[inline(always)]
+fn add_stress(virial: &mut [[f64; 3]; 3], e: f64, stress: f64, k: [f64; 3]) {
+    let terms = stress_terms(e, stress, k);
+    for (row, t) in virial.iter_mut().zip(terms) {
+        for (v, x) in row.iter_mut().zip(t) {
+            *v += x;
+        }
+    }
+}
+
+/// How many pieces a part of the reciprocal sum on several threads is cut into, a thread: enough
+/// that a thread finishing early, or one on a slower core, is not what the rest wait for.
+pub(crate) const PIECES_A_THREAD: usize = 4;
+
+/// The pieces a part on `threads` threads is cut into: one on one thread, so that the calling
+/// thread's evaluation is the part whole — the loop as it was before there were threads, which the
+/// tests then compare with every cut — and [`PIECES_A_THREAD`] a thread on several, a count past
+/// any machine's saturating rather than overflowing.
+pub(crate) fn pieces(threads: usize) -> usize {
+    if threads <= 1 {
+        1
+    } else {
+        PIECES_A_THREAD.saturating_mul(threads)
+    }
+}
+
+/// What one atom's term of one wave's structure factor costs, nanoseconds, for
+/// [`ordered::threads_for_work`]: 1.909 ns, summed over the two threads that ran it on two P-cores
+/// of an i9-13900HX, on phenol's water box, 1 534 atoms and 606 waves, release,
+/// `x86_64-pc-windows-gnu`, the median of five rounds of twenty.
+const NS_A_STRUCTURE_FACTOR_TERM: f64 = 1.9;
+
+/// What one atom's force from one wave costs, its phase computed again, measured as
+/// [`NS_A_STRUCTURE_FACTOR_TERM`] is: 4.016 ns.
+const NS_A_FORCE_TERM: f64 = 4.0;
+
+/// The reciprocal sum's result: `E_rest` and `E_cross` (joules) as [`Ewald::reciprocal`] has
+/// them, and the threads its parts spawned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Reciprocal {
+    pub rest: f64,
+    pub cross: f64,
+    pub spawned: Spawned,
+}
+
 /// The electrostatic energy of a periodic system, by part, joules. `total` is accumulated
 /// separately from the parts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -843,26 +958,194 @@ impl Ewald {
     }
 
     /// The reciprocal sum, with a partition. `group` marks the atoms whose charges are split off,
-    /// and `lambda` scales their cross terms with the rest: returns `(E_rest, E_cross)` with
-    /// `E_rest` the sum over the unmarked charges alone and `E_cross` the cross terms at full
-    /// strength, and adds to `forces` and `virial` those of `E_rest + lambda E_cross`. The marked
-    /// charges' own terms are not computed. With no group, `E_rest` is the whole sum and `E_cross`
-    /// zero.
+    /// and `lambda` scales their cross terms with the rest: returns `E_rest` the sum over the
+    /// unmarked charges alone and `E_cross` the cross terms at full strength, and adds to `forces`
+    /// and `virial`, each when given, those of `E_rest + lambda E_cross`. The marked charges' own
+    /// terms are not computed. With no group, `E_rest` is the whole sum and `E_cross` zero.
+    ///
+    /// On `threads` threads, `None` for as many as each part's work pays for
+    /// ([`ordered::threads_for_work`]), **with the same bits on any number**: see the module
+    /// documentation. Its buffers are `scratch`'s.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn reciprocal(
         &self,
         charges: &[f64],
         group: Option<(&[bool], f64)>,
         at: &[[f64; 3]],
-        mut forces: Option<&mut [[f64; 3]]>,
-        virial: &mut [[f64; 3]; 3],
-    ) -> (f64, f64) {
+        forces: Option<&mut [[f64; 3]]>,
+        mut virial: Option<&mut [[f64; 3]; 3]>,
+        threads: Option<usize>,
+        scratch: &mut Scratch,
+    ) -> Reciprocal {
+        debug_assert_eq!(charges.len(), at.len(), "one charge per position");
         if let Some(mesh) = &self.mesh {
-            return mesh.reciprocal(charges, group, at, forces, virial);
+            return mesh.reciprocal(charges, group, at, forces, virial, threads, scratch);
         }
         let n = at.len();
+        self.tables(at, &mut scratch.tables);
+        let tables = &scratch.tables;
+        let marked = |i: usize| group.is_some_and(|(g, _)| g[i]);
+        let lambda = group.map_or(0.0, |(_, l)| l);
+        let waves = &self.waves;
+        let products = (n * waves.len()) as f64;
+        let summing = ordered::threads_for_work(threads, NS_A_STRUCTURE_FACTOR_TERM * products);
+        let pushing = match forces {
+            Some(_) => ordered::threads_for_work(threads, NS_A_FORCE_TERM * products),
+            None => 1,
+        };
+        let (mut rest, mut cross) = (0.0, 0.0);
+        let mut spawned = Spawned::default();
+
+        if summing <= 1 && pushing <= 1 {
+            let (rest, cross) = self.on_one_thread(tables, charges, group, forces, virial);
+            return Reciprocal {
+                rest: COULOMB * rest,
+                cross: COULOMB * cross,
+                spawned,
+            };
+        }
+
+        // Several: the waves' structure factors on the threads, each over every atom in order,
+        // and their energies and virials added here in the waves' order; then the forces on the
+        // threads by atom, each atom's waves in order, its phases computed again.
+        let mut sums: Vec<[f64; 4]> = Vec::with_capacity(waves.len());
+        spawned.add(ordered::in_order(
+            summing,
+            ordered::ranges(waves.len(), pieces(summing)),
+            &mut Vec::new(),
+            |range, out: &mut Vec<[f64; 4]>| {
+                for w in &waves[range] {
+                    let (mut sr, mut si, mut gr, mut gi) = (0.0, 0.0, 0.0, 0.0);
+                    for (i, &q) in charges.iter().enumerate() {
+                        let (r, im) = wave_phase(tables, n, w, i);
+                        if marked(i) {
+                            gr += q * r;
+                            gi += q * im;
+                        } else {
+                            sr += q * r;
+                            si += q * im;
+                        }
+                    }
+                    out.push([sr, si, gr, gi]);
+                }
+            },
+            |out| {
+                for s in out.drain(..) {
+                    let w = &waves[sums.len()];
+                    let [sr, si, gr, gi] = s;
+                    let own = w.weight * (sr * sr + si * si);
+                    let across = 2.0 * w.weight * (sr * gr + si * gi);
+                    rest += own;
+                    cross += across;
+                    if let Some(v) = virial.as_deref_mut() {
+                        add_stress(v, own + lambda * across, w.stress, w.k);
+                    }
+                    sums.push(s);
+                }
+            },
+        ));
+        if let Some(f) = forces {
+            let sums = &sums;
+            spawned.add(ordered::in_order(
+                pushing,
+                ordered::chunks(f, pieces(pushing)),
+                &mut Vec::new(),
+                |(atoms, f): (Range<usize>, &mut [[f64; 3]]), _: &mut ()| {
+                    for (w, &[sr, si, gr, gi]) in waves.iter().zip(sums) {
+                        for (i, fi) in atoms.clone().zip(f.iter_mut()) {
+                            let q = charges[i];
+                            if q == 0.0 {
+                                continue;
+                            }
+                            let (r, im) = wave_phase(tables, n, w, i);
+                            let (tr, ti) = if marked(i) {
+                                (lambda * sr, lambda * si)
+                            } else {
+                                (sr + lambda * gr, si + lambda * gi)
+                            };
+                            let g = 2.0 * COULOMB * q * w.weight * (tr * im - ti * r);
+                            for a in 0..3 {
+                                fi[a] += g * w.k[a];
+                            }
+                        }
+                    }
+                },
+                |_| {},
+            ));
+        }
+        Reciprocal {
+            rest: COULOMB * rest,
+            cross: COULOMB * cross,
+            spawned,
+        }
+    }
+
+    /// The classical sum on the calling thread, `(E_rest, E_cross)` in units of `k_e`: each wave's
+    /// structure factor, its energy and virial, and its forces, in turn, every atom's phase
+    /// computed once. A function of its own, never inlined: see the module documentation.
+    #[inline(never)]
+    fn on_one_thread(
+        &self,
+        tables: &Tables,
+        charges: &[f64],
+        group: Option<(&[bool], f64)>,
+        mut forces: Option<&mut [[f64; 3]]>,
+        mut virial: Option<&mut [[f64; 3]; 3]>,
+    ) -> (f64, f64) {
+        let n = charges.len();
+        let marked = |i: usize| group.is_some_and(|(g, _)| g[i]);
+        let lambda = group.map_or(0.0, |(_, l)| l);
+        let (mut rest, mut cross) = (0.0, 0.0);
+        let mut er = vec![0.0; n];
+        let mut ei = vec![0.0; n];
+        for w in &self.waves {
+            let (mut sr, mut si, mut gr, mut gi) = (0.0, 0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (r, im) = wave_phase(tables, n, w, i);
+                er[i] = r;
+                ei[i] = im;
+                let q = charges[i];
+                if marked(i) {
+                    gr += q * r;
+                    gi += q * im;
+                } else {
+                    sr += q * r;
+                    si += q * im;
+                }
+            }
+            let own = w.weight * (sr * sr + si * si);
+            let across = 2.0 * w.weight * (sr * gr + si * gi);
+            rest += own;
+            cross += across;
+            if let Some(v) = virial.as_deref_mut() {
+                add_stress(v, own + lambda * across, w.stress, w.k);
+            }
+            if let Some(f) = forces.as_deref_mut() {
+                for i in 0..n {
+                    let q = charges[i];
+                    if q == 0.0 {
+                        continue;
+                    }
+                    let (tr, ti) = if marked(i) {
+                        (lambda * sr, lambda * si)
+                    } else {
+                        (sr + lambda * gr, si + lambda * gi)
+                    };
+                    let g = 2.0 * COULOMB * q * w.weight * (tr * ei[i] - ti * er[i]);
+                    for a in 0..3 {
+                        f[i][a] += g * w.k[a];
+                    }
+                }
+            }
+        }
+        (rest, cross)
+    }
+
+    /// Phase factors `exp(i 2π m x_a / L_a)` for `m = 0..=extent_a`, per axis, laid out
+    /// `[m][atom]`, into `tables`, every entry written.
+    fn tables(&self, at: &[[f64; 3]], tables: &mut Tables) {
+        let n = at.len();
         let l = self.cell.lengths();
-        // Phase factors exp(i 2π m x_a / L_a) for m = 0..=extent_a, per axis, laid out [m][atom].
-        let mut tables: [(Vec<f64>, Vec<f64>); 3] = Default::default();
         for a in 0..3 {
             let m_max = self.extent[a];
             let (re, im) = &mut tables[a];
@@ -880,70 +1163,6 @@ impl Ewald {
                 }
             }
         }
-        let phase = |a: usize, m: i32, i: usize| -> (f64, f64) {
-            let (re, im) = &tables[a];
-            let k = m.unsigned_abs() as usize * n + i;
-            if m >= 0 {
-                (re[k], im[k])
-            } else {
-                (re[k], -im[k])
-            }
-        };
-        let marked = |i: usize| group.is_some_and(|(g, _)| g[i]);
-        let lambda = group.map_or(0.0, |(_, l)| l);
-        let mut er = vec![0.0; n];
-        let mut ei = vec![0.0; n];
-        let (mut rest, mut cross) = (0.0, 0.0);
-        for w in &self.waves {
-            let (mut sr, mut si, mut gr, mut gi) = (0.0, 0.0, 0.0, 0.0);
-            for i in 0..n {
-                let (xr, xi) = phase(0, w.n[0], i);
-                let (yr, yi) = phase(1, w.n[1], i);
-                let (zr, zi) = phase(2, w.n[2], i);
-                let (pr, pi) = (xr * yr - xi * yi, xr * yi + xi * yr);
-                let (r, im) = (pr * zr - pi * zi, pr * zi + pi * zr);
-                er[i] = r;
-                ei[i] = im;
-                let q = charges[i];
-                if marked(i) {
-                    gr += q * r;
-                    gi += q * im;
-                } else {
-                    sr += q * r;
-                    si += q * im;
-                }
-            }
-            let own = w.weight * (sr * sr + si * si);
-            let across = 2.0 * w.weight * (sr * gr + si * gi);
-            rest += own;
-            cross += across;
-            let e = own + lambda * across;
-            let k = w.k;
-            for a in 0..3 {
-                for b in 0..3 {
-                    let delta = if a == b { 1.0 } else { 0.0 };
-                    virial[a][b] += COULOMB * e * (delta - w.stress * k[a] * k[b]);
-                }
-            }
-            if let Some(f) = forces.as_deref_mut() {
-                for i in 0..n {
-                    let q = charges[i];
-                    if q == 0.0 {
-                        continue;
-                    }
-                    let (tr, ti) = if marked(i) {
-                        (lambda * sr, lambda * si)
-                    } else {
-                        (sr + lambda * gr, si + lambda * gi)
-                    };
-                    let g = 2.0 * COULOMB * q * w.weight * (tr * ei[i] - ti * er[i]);
-                    for a in 0..3 {
-                        f[i][a] += g * k[a];
-                    }
-                }
-            }
-        }
-        (COULOMB * rest, COULOMB * cross)
     }
 
     /// The whole sum for `charges` (e) at `at` (metres, any image), with the pairs `excluded` left
@@ -992,7 +1211,17 @@ impl Ewald {
             add_pair(&mut forces, &mut virial, i, j, d, de_dr / r);
         }
         if charges.iter().any(|&q| q != 0.0) {
-            let (recip, _) = self.reciprocal(charges, None, at, Some(&mut forces), &mut virial);
+            let recip = self
+                .reciprocal(
+                    charges,
+                    None,
+                    at,
+                    Some(&mut forces),
+                    Some(&mut virial),
+                    Some(1),
+                    &mut Scratch::default(),
+                )
+                .rest;
             e.reciprocal = recip;
             e.total += recip;
         }

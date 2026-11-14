@@ -111,6 +111,87 @@ protects nothing.
 
 ### Changed
 
+- **The reciprocal sum is computed on several threads as well, by the classical sum and by the
+  particle mesh, and every bit is as it was on one** (`pantometry-forcefield`). No sum is split:
+  the classical sum's structure factors go to the threads by wave, each over every atom in order,
+  their energies and virials added on the calling thread in the waves' order, and its forces by
+  atom, each atom's waves in order; the mesh's splines and interpolation by atom, its spread and
+  its transform along the third axis and the second by slabs of the first, along the first by
+  columns, and its energy by slabs, added in order. Each grid point takes its charges in the
+  atoms' order on whichever thread has its slab, and each line of a transform is the same
+  butterflies.
+  - **What it gave**, phenol's two legs at the default threads, release, an i9-13900HX's 32
+    logical processors, unpinned, the mean of three runs each of `a03c98c` and of this,
+    interleaved, ms: the water box's forces 6.69 → 4.10 by the cell list and 5.64 → 3.29 by the
+    neighbour list, its step 7.60 → 4.84 and its couplings at 29 states 3.30 → 1.34; the octanol
+    box's forces 12.89 → 10.36 and 11.15 → 8.99, its step 13.35 → 11.06 and its couplings
+    2.85 → 1.94. A step is 1.57 and 1.21 times as fast.
+  - **On one thread it is faster than `a03c98c`**, by up to 6%, pinned to a P-core: the steps
+    21.52 → 20.97 and 43.86 → 42.91, the couplings 3.36 → 3.18 and 3.06 → 3.05. The mesh's
+    splines are computed once rather than twice, 0.85 ms of the octanol box's; its transforms
+    along the first two axes gather eight lines at once, a cache line of each slab, where line by
+    line a column's 32 points are 8 KiB apart and fall in one set of the level-one cache; its
+    grids and splines, and the classical sum's phase tables, are kept between a force field's
+    evaluations, a fresh 1.7 MB having cost 262 µs to touch, on one thread or eight; and the
+    virial is computed only where it is wanted, which the dynamics never is.
+  - **A part takes threads only where they shorten it.** A round of spawns has its first thread
+    running 64 to 86 µs after it starts and each further one 31 to 40 µs later. Threads that do
+    nothing, spawned and joined back to back, cost 27 µs each, and a first version that took that
+    for the whole cost threaded the transform along the first axis, 0.23 ms on one thread, and
+    made it no faster on any number. Each part's cost on one thread is measured, and a part takes
+    `⌊√(work / 35 µs)⌋` threads where that beats one with the first thread's 80 µs counted: on
+    the octanol box the splines take four, the spread five, the energy three, the interpolation
+    six and the first axis one; on the water box the structure factors seven and the forces ten.
+    `with_threads` gives every part the number it sets.
+  - **What the first threaded mesh lacked**, measured on the octanol box: each slab computed the
+    splines of the charges that reached it again, 12 763 of them for 5 089 atoms at eight
+    threads, and it had as many slabs as threads, so the slowest core set the time — the spread
+    was 1.80 ms on one thread and 1.12 on eight.
+  - **The classical sum's one-thread loop is a function of its own.** Written in the function
+    that holds the parts for several threads, the same loop made the water box's couplings on one
+    thread 11% slower than `a03c98c`'s with the phase tables read through a reference, and 14%
+    with them held as slices; on its own they are 5% faster.
+  - **Every bit is as it was**: digests of both legs' evaluations, forces, 120 steps and
+    couplings at 29 states, the same as `a03c98c`'s at the default and on one thread; a 648-atom
+    box's 7 800 values by the classical sum and by the mesh on 1, 3 and 8 threads and at the
+    default, the same as `a03c98c`'s; the pins of `b6558df` and `8b58114`, whose systems use the
+    mesh and now run it at three and sixteen threads; and two pins new here, written by
+    `a03c98c` itself in a worktree of its own: the pinned box by the classical sum, on
+    `x86_64-pc-windows-gnu` only since its phases start from the platform's `sin_cos`, and by the
+    mesh on a grid of 16 × 8 × 32, on every platform.
+  - **Tests**: the threads move no bit by the classical sum and by the mesh, on a grid of
+    16 × 8 × 32, the couplings' included, every part of the reciprocal sum asserted to have
+    spawned more than one thread and the parts counted; the kept buffers carry nothing from one
+    evaluation into the next, which no comparison of thread counts can see, since a grid left
+    unzeroed would add the last evaluation's numbers alike on any number; a count past any
+    machine is as many threads as each part has pieces; a part takes threads only where they pay,
+    exactly at the 230 µs where two first do, for a machine of 32 and of three whatever this one
+    is; and the chunks are the runs.
+  - **Three reviewers read it before it was committed, and the code and tests changed because of
+    them.** The mesh's one-thread energy branch recorded no part, so the threaded one could have
+    stopped running with every test green; no committed check held the classical sum to
+    `a03c98c`'s bits, its threaded and one-thread paths sharing the phases and the virial's
+    terms; the record of a part's threads was never reset, so a part that recorded nothing read
+    the last one's; the rule's test checked nothing on a machine of one thread, which is what
+    `PANTOMETRY_THREADS=1` makes; `with_threads(usize::MAX)` overflowed the count of pieces, a
+    panic wherever overflow is checked; and on one thread the mesh was still cut into four slabs,
+    so a defect common to every cut was invisible to the comparison of thread counts. A part on
+    one thread is now one piece, the loop whole, which every cut is compared with.
+  - **Eighteen sabotages each fail a test by name**, ten before the review and eight after.
+    Before: the spread's grid, the threaded spectrum's potentials and the one-thread spectrum's
+    left unzeroed; a spline reaching a slab by its last point missed; the spread on the calling
+    thread; the threaded classical force reassociated; its structure factors summed backwards; the
+    couplings' reciprocal sum on one thread; the spread's charges taken backwards on every path,
+    which no comparison of thread counts can see, failing the pins; and the first thread's start
+    taken as 60 µs. After, for what the review added: the energy always by its one-thread branch;
+    the interpolation left out of the record; the couplings' record not set; the first thread's
+    start taken as 60 µs on a machine of one; a spline reaching a slab from behind its start
+    missed; the phases' product taken in another order on every path, failing the classical pin;
+    the pieces' product unchecked; and the second axis's negative taken on the first axis's
+    length, which a cube cannot show, failing the uneven grid's pin.
+  - `pme`'s module documentation had a heading written `//! //! # Not here`, which rendered as a
+    line of text; and it listed threads as not there.
+
 - **The periodic force field computes its real-space pairs on several threads by default, and
   every bit is as it was on one** (`pantometry-forcefield`). A sum split across threads and
   combined depends on how the work was divided, so no sum is split: the atoms are cut into spans,
@@ -140,9 +221,10 @@ protects nothing.
     and is 48 with the force `g d` kept in place of `d` and `(∂U/∂r)/r` and the atoms in 32 bits,
     the adding going 3.3 → 2.25 ms; and the spans' buffers were allocated at each evaluation and
     are kept between them, one more than the threads, the pairs going 7.2 → 5.9 ms at eight.
-  - **What is left on one thread**: the particle mesh, 4.3 to 4.9 ms of either step and now the
-    largest part of the water's; the excluded and 1-4 pairs, the bonded terms and the dynamics;
-    and the adding, about 2 ms of the octanol box's pairs.
+  - **What is left on one thread**: the reciprocal sum — the classical sum in the water box, 606
+    wave vectors and 3.7 ms of its step, which this line first called the particle mesh, and the
+    mesh in the octanol box, about 5 ms — until the entry above; the excluded and 1-4 pairs, the
+    bonded terms and the dynamics; and the adding, about 2 ms of the octanol box's pairs.
   - **Every bit is as it was**: the 298 431 values on both legs of the harness kept out of the
     tree, at the default and on one thread, the same file to the byte as HEAD `8b58114`'s; 120
     steps of each leg at every count from 1 to 32; and the pins of `b6558df` and `8b58114`, which

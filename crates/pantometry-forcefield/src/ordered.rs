@@ -7,7 +7,9 @@
 //! will add, each pair's terms, and the calling thread adds every item's in the items' order,
 //! whatever order the threads finished them in. Each pair's terms are a function of the positions
 //! and the parameters alone, so they are the same bits on any thread, and the additions are the
-//! one-thread evaluation's, in its order.
+//! one-thread evaluation's, in its order. Or each item owns what it writes — a run of atoms'
+//! forces, a slab of a grid, some of its columns ([`chunks`]) — and takes its additions there in
+//! the one-thread order, and nothing is added across items at all.
 //!
 //! That assumes every thread rounds alike. A new thread starts in the default floating-point
 //! environment, round to nearest with subnormals kept, and Rust offers no way to leave it; a host
@@ -15,10 +17,12 @@
 //! subnormal in them computed differently there.
 //!
 //! What it costs is the terms' round trip through memory, against the one-thread evaluation's
-//! adding them where they are computed; and a spawn a thread an evaluation, since a persistent pool
+//! adding them where they are computed; and a spawn a thread a round, since a persistent pool
 //! could not be written here without `unsafe` or a dependency ([`pantometry_core::sweep`]'s reason
-//! too). WebAssembly has no threads to spawn and takes one, the calling thread, and so does a
-//! machine that refuses to spawn one.
+//! too). A round's first thread runs about 80 µs after it starts and each further one about 35 µs
+//! later ([`FIRST_THREAD_NS`]), so a part of an evaluation takes threads only where they shorten
+//! it ([`threads_for_work`]). WebAssembly has no threads to spawn and takes one, the calling thread,
+//! and so does a machine that refuses to spawn one.
 
 use std::ops::Range;
 
@@ -48,6 +52,77 @@ pub(crate) fn ranges(n: usize, pieces: usize) -> Vec<Range<usize>> {
     (0..n.div_ceil(per))
         .map(|k| k * per..((k + 1) * per).min(n))
         .collect()
+}
+
+/// `slice` cut as [`ranges`] cuts its indices, each run with its range: disjoint, so that each
+/// can go to a thread of its own.
+pub(crate) fn chunks<T>(slice: &mut [T], pieces: usize) -> Vec<(Range<usize>, &mut [T])> {
+    let mut rest = slice;
+    let mut out = Vec::new();
+    for r in ranges(rest.len(), pieces) {
+        let (head, tail) = std::mem::take(&mut rest).split_at_mut(r.len());
+        out.push((r, head));
+        rest = tail;
+    }
+    out
+}
+
+/// How long a round of scoped spawns takes to have its first thread running, nanoseconds, and how
+/// much later each further thread starts: measured as rounds shaped like [`in_order`]'s, each
+/// after 300 µs of the calling thread's work alone as an evaluation's parts are, release,
+/// `x86_64-pc-windows-gnu`, an i9-13900HX, medians of 200 rounds — the first thread running at 64
+/// to 86 µs, and the last of two, four and eight at 117, 184 and 343 µs, 31 to 40 µs a thread.
+/// Threads that do nothing, spawned and joined back to back, are 27 µs a thread, which a first
+/// version took for the whole cost and then threaded parts that one thread finished sooner.
+pub(crate) const FIRST_THREAD_NS: f64 = 80_000.0;
+
+/// See [`FIRST_THREAD_NS`].
+pub(crate) const SPAWN_NS: f64 = 35_000.0;
+
+/// The threads a part of an evaluation that takes about `ns` nanoseconds on one thread takes:
+/// `asked` when it was asked for, and otherwise the `T` that makes `T` spawns and `1/T` of the
+/// work least, `⌊√(ns / SPAWN_NS)⌋` at most the machine's ([`available`]) — or one, when that
+/// would take longer than one thread does, [`FIRST_THREAD_NS`] counted. One on WebAssembly.
+pub(crate) fn threads_for_work(asked: Option<usize>, ns: f64) -> usize {
+    if cfg!(target_family = "wasm") {
+        return 1;
+    }
+    if let Some(t) = asked {
+        return t.max(1);
+    }
+    by_work(ns, available())
+}
+
+/// [`threads_for_work`]'s default for a machine of `available` threads.
+fn by_work(ns: f64, available: usize) -> usize {
+    let t = ((ns / SPAWN_NS).sqrt() as usize).clamp(1, available.max(1));
+    let threaded = FIRST_THREAD_NS + (t - 1) as f64 * SPAWN_NS + ns / t as f64;
+    if t > 1 && threaded < ns {
+        t
+    } else {
+        1
+    }
+}
+
+/// The fewest and the most threads the parts of an evaluation spawned, which the tests read: an
+/// evaluation that asked for several is to have spawned more than one in every part.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Spawned {
+    /// The fewest any part spawned, `None` before the first.
+    pub fewest: Option<usize>,
+    /// The most any part spawned.
+    pub most: usize,
+    /// How many parts there were.
+    pub parts: usize,
+}
+
+impl Spawned {
+    /// Counts a part that spawned `threads`.
+    pub(crate) fn add(&mut self, threads: usize) {
+        self.fewest = Some(self.fewest.map_or(threads, |f| f.min(threads)));
+        self.most = self.most.max(threads);
+        self.parts += 1;
+    }
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
@@ -365,6 +440,56 @@ mod tests {
         assert!(!elsewhere.into_inner());
         assert_eq!(sum.to_bits(), reference.to_bits());
         assert_eq!(spare.len(), 1);
+    }
+
+    /// **A part takes threads only where they pay**: as many as asked when asked, one for nothing to
+    /// do, and by default `⌊√(ns / SPAWN_NS)⌋` of the machine's where that beats one thread with the
+    /// first thread's start counted, and one where it does not. Two threads pay from 230 µs exactly,
+    /// `80 + 35 + 230/2`: the octanol box's transform along the first axis, 229 µs by the model
+    /// (`1.4 ns × 32³ × 5`, measured 0.23 ms), stays on one, and its splines, 850 µs
+    /// (`167 ns × 5 089`), take four. The rule is checked exactly for a machine of 32 and of three,
+    /// whatever this one is, and on this one as [`threads_for_work`] reads it. One on WebAssembly,
+    /// asked or not.
+    #[test]
+    fn a_part_takes_threads_only_where_they_pay() {
+        let wasm = cfg!(target_family = "wasm");
+        for t in [1usize, 2, 7, 64] {
+            let want = if wasm { 1 } else { t };
+            assert_eq!(threads_for_work(Some(t), 0.0), want);
+            assert_eq!(threads_for_work(Some(t), 1e12), want);
+        }
+        assert_eq!(threads_for_work(Some(0), 1e12), 1);
+        for (ns, on_32, on_3) in [
+            (0.0, 1, 1),
+            (1.4 * 32_768.0 * 5.0, 1, 1),
+            (230_000.0, 1, 1),
+            (230_001.0, 2, 2),
+            (167.0 * 5_089.0, 4, 3),
+            (1e12, 32, 3),
+        ] {
+            assert_eq!(by_work(ns, 32), on_32, "{ns} ns on 32");
+            assert_eq!(by_work(ns, 3), on_3, "{ns} ns on 3");
+            assert_eq!(by_work(ns, 1), 1, "{ns} ns on 1");
+            let here = if wasm { 1 } else { by_work(ns, available()) };
+            assert_eq!(threads_for_work(None, ns), here, "{ns} ns here");
+        }
+    }
+
+    /// `chunks` cuts a slice where `ranges` cuts its indices, each piece its own range's elements.
+    #[test]
+    fn the_chunks_are_the_runs() {
+        for n in [0usize, 1, 7, 100, 5089] {
+            for pieces in [1usize, 3, 8, 64, 10_000] {
+                let mut v: Vec<usize> = (0..n).collect();
+                let runs = ranges(n, pieces);
+                let cut = chunks(&mut v, pieces);
+                assert_eq!(cut.len(), runs.len(), "{n} in {pieces}");
+                for ((range, chunk), run) in cut.into_iter().zip(&runs) {
+                    assert_eq!(&range, run);
+                    assert_eq!(chunk.to_vec(), range.collect::<Vec<_>>());
+                }
+            }
+        }
     }
 
     /// The runs cover `0..n` once each, in order, and are no more than asked for.

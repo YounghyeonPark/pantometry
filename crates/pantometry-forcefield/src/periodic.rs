@@ -206,6 +206,13 @@
 //! thread starts in the default floating-point environment, and a host that had set flush-to-zero
 //! on the calling thread would see a term with a subnormal in it computed differently there.
 //!
+//! **The reciprocal sum is computed in parts the same way**, by the classical sum and by the mesh
+//! ([`crate::ewald`] and [`crate::pme`] say how): the classical sum's structure factors by wave
+//! and its forces by atom; the mesh's splines and interpolation by atom, its spread and transforms
+//! by slab and by column, and its energy by slab. Each part's sums are added on the calling thread
+//! in the one-thread order, or each piece's results are its own — an atom's force, a slab's
+//! points — and so they are the same bits too.
+//!
 //! Without `with_threads` an evaluation takes `√(pairs / 800)` threads, `pairs` the number inside
 //! the cutoff its box's density gives, at most the machine's, and one below 20 000. Phenol's two
 //! legs, release, `x86_64-pc-windows-gnu`, an i9-13900HX's 32 logical processors, unpinned, the
@@ -226,12 +233,35 @@
 //! water box, 54.37 → 54.01 and 35.56 → 35.91 in the octanol box, and the steps 20.84 → 20.72 and
 //! 41.15 → 41.26.
 //!
-//! What is left runs on one thread: the particle mesh, 4.3 to 4.9 ms of either step; the excluded
-//! and 1-4 pairs, the bonded terms and the dynamics; and adding the spans' terms, which kept the
-//! calling thread busy about 2 ms of the octanol box's 5.2 to 5.8 ms of pairs at eight and sixteen
-//! threads, while the threads computed. The threads are spawned at each evaluation, since a pool
-//! that outlived one could not be written without `unsafe` or a dependency; WebAssembly takes one,
-//! and so does a machine that refuses a spawn.
+//! **With the reciprocal sum's parts on threads too**, its own default deciding how many each part
+//! takes, the same legs against `a03c98c`, the mean of three runs each, interleaved, ms:
+//!
+//! | | `a03c98c` | the reciprocal sum on threads |
+//! | --- | --- | --- |
+//! | water: forces by the cell list | 6.69 | 4.10 |
+//! | the same by the neighbour list | 5.64 | 3.29 |
+//! | a step of the dynamics, by the cell list | 7.60 | 4.84 |
+//! | the couplings at 29 states | 3.30 | 1.34 |
+//! | octanol: forces by the cell list | 12.89 | 10.36 |
+//! | the same by the neighbour list | 11.15 | 8.99 |
+//! | a step of the dynamics, by the neighbour list | 13.35 | 11.06 |
+//! | the couplings at 29 states | 2.85 | 1.94 |
+//!
+//! and on one thread, pinned to one P-core, faster than `a03c98c` by up to 6%: the steps
+//! 21.52 → 20.97 and 43.86 → 42.91, the couplings 3.36 → 3.18 and 3.06 → 3.05. **The water box's
+//! reciprocal sum is the classical sum**, 606 wave vectors and 3.7 ms of its step on one thread,
+//! and the octanol box's the mesh, about 5 ms: this documentation called both the particle mesh
+//! before.
+//!
+//! What is left runs on one thread: the classical sum's phase tables; the excluded and 1-4 pairs,
+//! the bonded terms and the dynamics; and adding the spans' terms, which kept the calling thread
+//! busy about 2 ms of the octanol box's 5.2 to 5.8 ms of pairs at eight and sixteen threads, while
+//! the threads computed. The threads are spawned for each part of each evaluation — the pairs,
+//! and each part of the reciprocal sum that takes more than one — since a pool that outlived one
+//! could not be written without `unsafe` or a dependency; and a round's first thread runs about
+//! 80 µs after it starts and each further one about 35 µs later. The octanol box's pairs take
+//! thirty-one threads a step, and thirty-one threads that did nothing took 854 µs to spawn and
+//! join. WebAssembly takes one thread, and so does a machine that refuses a spawn.
 //!
 //! # The cost, measured
 //!
@@ -273,9 +303,9 @@ use crate::boresch::Boresch;
 use crate::ccd::Component;
 use crate::dynamics::Potential;
 use crate::energy::{coulomb, ForceField, Pair, Unsupported};
-use crate::ewald::{add_force, add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters};
+use crate::ewald::{add_force, add_pair, norm, sub, Ewald, EwaldEnergy, EwaldParameters, Scratch};
 use crate::neighbours::NeighbourList;
-use crate::ordered;
+use crate::ordered::{self, Spawned};
 use crate::uff::UffType;
 use crate::water;
 use std::cell::RefCell;
@@ -810,21 +840,24 @@ pub struct PeriodicForceField {
     tree: Vec<[usize; 2]>,
     /// The real-space pairs' Verlet list, when one is asked for ([`crate::neighbours`]).
     pub(crate) neighbours: Option<NeighbourList>,
-    /// How many threads an evaluation's real-space pairs take, or `None` for the machine's
-    /// ([`PeriodicForceField::with_threads`]).
+    /// How many threads each part of an evaluation takes — its real-space pairs and each part of
+    /// its reciprocal sum — or `None` for each part's default ([`PeriodicForceField::with_threads`]).
     threads: Option<usize>,
     /// The buffers a threaded evaluation hands its spans' terms through.
     spare: Spare,
 }
 
-/// The buffers a threaded evaluation hands its spans' terms through, kept between evaluations so
-/// that each is allocated about once, and how many threads the last evaluation spawned, which the
-/// tests read: a cache, not a parameter, so two force fields that differ only in it compare equal,
-/// and a clone starts without.
+/// The buffers a threaded evaluation hands its spans' terms through and its reciprocal sum fills,
+/// kept between evaluations so that each is allocated about once, and how many threads the last
+/// evaluation spawned for its pairs and for its reciprocal sum's parts, which the tests read: a
+/// cache, not a parameter, so two force fields that differ only in it compare equal, and a clone
+/// starts without.
 #[derive(Default)]
 struct Spare {
     buffers: RefCell<Vec<Terms>>,
+    scratch: RefCell<Scratch>,
     spawned: std::cell::Cell<usize>,
+    reciprocal: std::cell::Cell<Spawned>,
 }
 
 impl Clone for Spare {
@@ -1433,14 +1466,18 @@ impl PeriodicForceField {
         self.mixing
     }
 
-    /// The same force field computing its real-space pairs, and its neighbour list's builds, on
-    /// `threads` threads, **with the same bits on any number**: each pair's terms are computed on
-    /// some thread and added on the calling one, in the one-thread order (see the module
-    /// documentation). `1`, or `0`, is the calling thread alone; more threads than atoms are as
-    /// many as the atoms; and WebAssembly, or a machine that refuses a spawn, takes one. Without it
-    /// an evaluation takes `√(pairs / 800)` threads, `pairs` the number inside the cutoff that the
-    /// box's density gives, at most the machine's — `PANTOMETRY_THREADS` when that is set and
-    /// [`std::thread::available_parallelism`] otherwise — and one below 20 000.
+    /// The same force field computing its real-space pairs, its neighbour list's builds and every
+    /// part of its reciprocal sum on `threads` threads, **with the same bits on any number**: each
+    /// pair's terms are computed on some thread and added on the calling one, in the one-thread
+    /// order, and the reciprocal sum's parts likewise (see the module documentation). `1`, or `0`,
+    /// is the calling thread alone; more threads than a part has pieces are as many as the pieces;
+    /// and WebAssembly, or a machine that refuses a spawn, takes one. Without it an evaluation's
+    /// pairs take `√(pairs / 800)` threads, `pairs` the number inside the cutoff that the box's
+    /// density gives, at most the machine's — `PANTOMETRY_THREADS` when that is set and
+    /// [`std::thread::available_parallelism`] otherwise — and one below 20 000; and each part of
+    /// the reciprocal sum takes as many as its work pays for, which for a small part is one. With
+    /// it every part takes them all, small or not, and a round of spawns has a cost of its own: see
+    /// the module documentation.
     pub fn with_threads(mut self, threads: usize) -> PeriodicForceField {
         self.threads = Some(threads.max(1));
         self
@@ -1913,15 +1950,21 @@ impl PeriodicForceField {
             }
         }
 
-        // Reciprocal space, self and background.
+        // Reciprocal space, self and background. The record of its threads is reset first, so
+        // that an evaluation that skips the sum reads as one that ran no part.
+        self.spare.reciprocal.set(Spawned::default());
         if q.iter().any(|&x| x != 0.0) {
-            let (rest, cross) = self.ewald.reciprocal(
+            let r = self.ewald.reciprocal(
                 q,
                 split.map(|s| (s.group, le)),
                 at,
                 (wanted != Wanted::Energy).then_some(&mut forces[..]),
-                &mut virial,
+                (wanted == Wanted::Virial).then_some(&mut virial),
+                self.threads,
+                &mut self.spare.scratch.borrow_mut(),
             );
+            self.spare.reciprocal.set(r.spawned);
+            let (rest, cross) = (r.rest, r.cross);
             e.ewald.reciprocal = rest + le * cross;
             e.ewald.total += rest + le * cross;
             coupling.energy += le * cross;
@@ -2081,8 +2124,8 @@ impl PeriodicDecoupling {
         self
     }
 
-    /// The same decoupling with its field's real-space pairs on `threads` threads
-    /// ([`PeriodicForceField::with_threads`]): the same bits on any number.
+    /// The same decoupling with its field's real-space pairs and reciprocal sum on `threads`
+    /// threads ([`PeriodicForceField::with_threads`]): the same bits on any number.
     pub fn with_threads(mut self, threads: usize) -> PeriodicDecoupling {
         self.field = self.field.with_threads(threads);
         self
@@ -2178,11 +2221,19 @@ impl PeriodicDecoupling {
                 }
             }
         }
+        f.spare.reciprocal.set(Spawned::default());
         let reciprocal = if q.iter().any(|&x| x != 0.0) {
-            let mut unused = [[0.0; 3]; 3];
-            f.ewald
-                .reciprocal(q, Some((&self.group, 0.0)), at, None, &mut unused)
-                .1
+            let r = f.ewald.reciprocal(
+                q,
+                Some((&self.group, 0.0)),
+                at,
+                None,
+                None,
+                f.threads,
+                &mut f.spare.scratch.borrow_mut(),
+            );
+            f.spare.reciprocal.set(r.spawned);
+            r.cross
         } else {
             0.0
         };
@@ -2406,16 +2457,19 @@ mod tests {
 
     /// **The threads move no bit**: every energy term, every force, the virial and a decoupling's
     /// coupling are the one-thread evaluation's bits on 2, 3, 7, 16 and 64 threads, asked for the
-    /// energy, the forces and the virial. On 27 waters at 4.6 Å, fewer than five cells of half the
-    /// cutoff across, where both searches visit every pair, and at 3.5 Å, five across, where both
-    /// go by cells; under both mixing rules; plain and with two waters decoupled at three states;
-    /// and at a second configuration, each atom moved less than half the skin, so that the
+    /// energy, the forces and the virial, and so are the couplings from the cross terms alone. On
+    /// 27 waters at 4.6 Å, fewer than five cells of half the cutoff across, where both searches
+    /// visit every pair, and at 3.5 Å, five across, where both go by cells; under both mixing
+    /// rules; by the classical reciprocal sum and by the particle mesh, order 5 on a grid of
+    /// 16 × 8 × 32, each axis a different length; plain and with two waters decoupled at three
+    /// states; and at a second configuration, each atom moved less than half the skin, so that the
     /// neighbour list is not built again and the atoms that changed cell are keyed and sorted again
     /// on the threads. Each count's field and decoupling are made afresh, so their lists are built
-    /// on their threads. **Every evaluation is asserted to have spawned more than one thread**, so
-    /// that no comparison is one thread's against itself; on WebAssembly every count takes the
-    /// calling thread, which is asserted instead, and there the test says nothing. At 64 threads
-    /// the cell list's spans are single atoms.
+    /// on their threads. **Every evaluation is asserted to have spawned more than one thread for
+    /// its pairs and for every part of its reciprocal sum**, so that no comparison is one thread's
+    /// against itself; on WebAssembly every count takes the calling thread, which is asserted
+    /// instead, and there the test says nothing. At 64 threads the cell list's spans are single
+    /// atoms.
     #[test]
     fn the_threads_move_no_bit() {
         let water = WaterBox::lattice(3, 0x3C0);
@@ -2451,9 +2505,20 @@ mod tests {
             )
         };
         let wasm = cfg!(target_family = "wasm");
+        let mesh = crate::pme::PmeParameters {
+            order: 5,
+            grid: [16, 8, 32],
+        };
         let mut checked = 0;
-        for cutoff in [4.6 * ANGSTROM, 3.5 * ANGSTROM] {
-            let base = water.force_field(cutoff, 1e-8);
+        for (cutoff, mesh) in [4.6 * ANGSTROM, 3.5 * ANGSTROM]
+            .into_iter()
+            .flat_map(|c| [(c, None), (c, Some(mesh))])
+        {
+            let mut base = water.force_field(cutoff, 1e-8);
+            if let Some(m) = mesh {
+                base = base.with_mesh(m);
+            }
+            assert_eq!(base.ewald().mesh().is_some(), mesh.is_some());
             let grid = cell_grid(base.cell().lengths(), cutoff);
             assert_eq!(grid.is_some(), cutoff < 4.0 * ANGSTROM, "{grid:?}");
             if let Some(cells) = grid {
@@ -2468,8 +2533,9 @@ mod tests {
                     if listed {
                         field = field.with_neighbour_list(PeriodicForceField::NEIGHBOUR_SKIN);
                     }
-                    // Every evaluation at both configurations in turn, its bits and how many
-                    // threads it spawned, and the threads each list's build spawned.
+                    // Every evaluation at both configurations in turn, its bits, how many
+                    // threads it spawned for its pairs and for its reciprocal sum's parts, the
+                    // couplings at the three states, and the threads each list's build spawned.
                     let run = |t: usize| {
                         let f = field.clone().with_threads(t);
                         let d = PeriodicDecoupling::new(&field, &group)
@@ -2477,18 +2543,29 @@ mod tests {
                             .with_threads(t);
                         assert_eq!(f.threads(), Some(t));
                         assert_eq!(d.field().threads(), Some(t));
-                        let (mut out, mut spawned) = (Vec::new(), Vec::new());
+                        let (mut out, mut spawned, mut parts) =
+                            (Vec::new(), Vec::new(), Vec::new());
+                        let mut couplings = Vec::new();
                         for at in configurations {
                             for w in wanted {
                                 out.push(bits(&f.core(at, None, w)));
                                 spawned.push(f.spare.spawned.get());
+                                parts.push(f.spare.reciprocal.get());
                             }
                             for l in lambdas {
                                 for w in wanted {
                                     out.push(bits(&d.core(at, l, w)));
                                     spawned.push(d.field().spare.spawned.get());
+                                    parts.push(d.field().spare.reciprocal.get());
                                 }
                             }
+                            for c in d.couplings(at, &lambdas) {
+                                couplings.push(
+                                    [c.energy, c.gradient[0], c.gradient[1], c.gradient[2]]
+                                        .map(f64::to_bits),
+                                );
+                            }
+                            parts.push(d.field().spare.reciprocal.get());
                         }
                         for g in [&f, d.field()] {
                             if let Some(list) = &g.neighbours {
@@ -2496,10 +2573,16 @@ mod tests {
                                 spawned.push(list.spawned_at_build());
                             }
                         }
-                        (out, spawned)
+                        (out, couplings, spawned, parts)
                     };
-                    let (reference, none) = run(1);
+                    let (reference, coupled, none, no_parts) = run(1);
                     assert!(none.iter().all(|&s| s == 0), "{none:?}");
+                    assert!(no_parts.iter().all(|p| p.most == 0), "{no_parts:?}");
+                    assert_eq!(coupled.len(), 6);
+                    assert!(
+                        coupled.iter().all(|c| c[0] != 0 && c[2] != 0),
+                        "{coupled:x?}"
+                    );
                     // The pairs across are there to be added: the coupling's energy and its `λ_e`
                     // and `λ_v` gradients are not zero. (There is no restraint, so `λ_r`'s is.)
                     // Evaluation 7 is the decoupling's at the second state, asked for the forces.
@@ -2507,14 +2590,16 @@ mod tests {
                     assert!(k[0] != 0 && k[2] != 0 && k[3] != 0, "{mixing:?}: {k:x?}");
                     for t in [2usize, 3, 7, 16, 64] {
                         let label = format!(
-                            "{:.1} Å, {mixing:?}, listed {listed}, {t} threads",
-                            cutoff / ANGSTROM
+                            "{:.1} Å, mesh {}, {mixing:?}, listed {listed}, {t} threads",
+                            cutoff / ANGSTROM,
+                            mesh.is_some()
                         );
-                        let (got, spawned) = run(t);
+                        let (got, couplings, spawned, parts) = run(t);
                         assert_eq!(got.len(), reference.len(), "{label}");
                         for (m, (a, b)) in got.iter().zip(&reference).enumerate() {
                             assert_eq!(a, b, "{label}, evaluation {m}");
                         }
+                        assert_eq!(couplings, coupled, "{label}, the couplings");
                         for s in spawned {
                             if wasm {
                                 assert_eq!(s, 0, "{label}");
@@ -2522,12 +2607,170 @@ mod tests {
                                 assert!(s > 1 && s <= t, "{label}: {s} spawned");
                             }
                         }
+                        // Each configuration's 3 evaluations, 9 decoupled and the couplings,
+                        // in that order; the parts each takes, the forces' two more.
+                        assert_eq!(parts.len(), 26, "{label}");
+                        for (k, p) in parts.into_iter().enumerate() {
+                            let j = k % 13;
+                            let energy = j == 12 || (if j < 3 { j } else { (j - 3) % 3 }) == 0;
+                            let want = match (mesh.is_some(), energy) {
+                                (false, true) => 1,
+                                (false, false) => 2,
+                                (true, true) => 4,
+                                (true, false) => 6,
+                            };
+                            if wasm {
+                                assert_eq!(p.most, 0, "{label}");
+                            } else {
+                                let fewest = p.fewest.expect("a part ran");
+                                assert!(fewest > 1 && p.most <= t, "{label}: {p:?}");
+                                assert_eq!(p.parts, want, "{label}, record {k}: {p:?}");
+                            }
+                        }
                         checked += 1;
                     }
                 }
             }
         }
-        assert_eq!(checked, 40);
+        assert_eq!(checked, 80);
+    }
+
+    /// **An evaluation's kept buffers carry nothing into the next**: a field, and a decoupling, that
+    /// have evaluated one configuration — asked for the virial, the energy alone and the forces,
+    /// and the decoupling for its couplings — give another configuration the bits a fresh copy
+    /// that has evaluated nothing gives it, asked for each, by the classical sum and by the mesh,
+    /// on one thread and on three. The reciprocal sum's buffers are kept between evaluations
+    /// ([`Spare`]), and a grid left unzeroed, or a table not rewritten, would add the last
+    /// evaluation's numbers to this one's alike on any number of threads: what
+    /// `the_threads_move_no_bit` cannot see. Each kept buffer is asserted to have been filled
+    /// before the comparison, so that the comparison is not of two fresh evaluations.
+    #[test]
+    fn the_kept_buffers_carry_nothing_over() {
+        let water = WaterBox::lattice(3, 0x3C0);
+        let start = water.positions().to_vec();
+        let moved: Vec<[f64; 3]> = start
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let s = (i % 7) as f64 * 0.05 * ANGSTROM;
+                [p[0] + s, p[1] - s, p[2] + 0.5 * s]
+            })
+            .collect();
+        let mut group = vec![false; start.len()];
+        group[..6].fill(true);
+        let l = Lambda::new(0.0, 0.5, 1.0);
+        let bits = |c: &Core| {
+            (
+                energy_bits(&c.energy),
+                force_bits(&c.forces),
+                c.virial.map(|r| r.map(f64::to_bits)),
+            )
+        };
+        let filled = |f: &PeriodicForceField| {
+            let s = f.spare.scratch.borrow();
+            match f.ewald().mesh() {
+                Some(_) => s.grids.iter().all(|g| !g.is_empty()) && !s.splines.is_empty(),
+                None => s
+                    .tables
+                    .iter()
+                    .all(|(re, im)| !re.is_empty() && !im.is_empty()),
+            }
+        };
+        let wanted = [Wanted::Virial, Wanted::Energy, Wanted::Forces];
+        let mut checked = 0;
+        for mesh in [
+            None,
+            Some(crate::pme::PmeParameters {
+                order: 5,
+                grid: [16, 8, 32],
+            }),
+        ] {
+            let mut base = water.force_field(4.6 * ANGSTROM, 1e-8);
+            if let Some(m) = mesh {
+                base = base.with_mesh(m);
+            }
+            for t in [1, 3] {
+                let field = base.clone().with_threads(t);
+                let decoupled = PeriodicDecoupling::new(&field, &group).unwrap();
+                for w in wanted {
+                    let label = format!("mesh {}, {t} threads, {w:?}", mesh.is_some());
+                    let used = field.clone();
+                    let d = decoupled.clone();
+                    for v in wanted {
+                        let _ = used.core(&start, None, v);
+                        let _ = d.core(&start, l, v);
+                    }
+                    let _ = d.couplings(&start, &[l]);
+                    assert!(filled(&used) && filled(d.field()), "{label}");
+                    let fresh = bits(&field.clone().core(&moved, None, w));
+                    assert_eq!(bits(&used.core(&moved, None, w)), fresh, "{label}");
+                    let p = used.spare.reciprocal.get();
+                    if t > 1 && !cfg!(target_family = "wasm") {
+                        assert!(p.fewest.is_some_and(|f| f > 1), "{label}: {p:?}");
+                    } else {
+                        assert_eq!(p.most, 0, "{label}: {p:?}");
+                    }
+                    let fresh = bits(&decoupled.clone().core(&moved, l, w));
+                    assert_eq!(bits(&d.core(&moved, l, w)), fresh, "{label}, decoupled");
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 12);
+    }
+
+    /// **A count past any machine is as many threads as each part has pieces**:
+    /// `with_threads(usize::MAX)` gives one thread's bits, by the classical sum and by the mesh,
+    /// plain and decoupled, the couplings too. The pieces a part is cut into, four a thread, were a
+    /// product that overflowed there, a panic in every build with overflow checks.
+    #[test]
+    fn a_count_past_any_machine_is_the_pieces() {
+        let water = WaterBox::lattice(3, 0x3C0);
+        let at = water.positions();
+        let mut group = vec![false; at.len()];
+        group[..6].fill(true);
+        let l = Lambda::new(0.0, 0.5, 1.0);
+        let bits = |c: &Core| {
+            (
+                energy_bits(&c.energy),
+                force_bits(&c.forces),
+                c.virial.map(|r| r.map(f64::to_bits)),
+            )
+        };
+        let coupled = |d: &PeriodicDecoupling| {
+            let c = d.coupling(at, l);
+            [c.energy, c.gradient[1], c.gradient[2]].map(f64::to_bits)
+        };
+        for mesh in [
+            None,
+            Some(crate::pme::PmeParameters {
+                order: 5,
+                grid: [16, 8, 32],
+            }),
+        ] {
+            let mut base = water.force_field(4.6 * ANGSTROM, 1e-8);
+            if let Some(m) = mesh {
+                base = base.with_mesh(m);
+            }
+            let one = base.clone().with_threads(1);
+            let every = base.with_threads(usize::MAX);
+            let label = format!("mesh {}", mesh.is_some());
+            for w in [Wanted::Virial, Wanted::Forces] {
+                let want = bits(&one.core(at, None, w));
+                assert_eq!(bits(&every.core(at, None, w)), want, "{label}, {w:?}");
+            }
+            let (d1, dn) = (
+                PeriodicDecoupling::new(&one, &group).unwrap(),
+                PeriodicDecoupling::new(&every, &group).unwrap(),
+            );
+            let want = bits(&d1.core(at, l, Wanted::Forces));
+            assert_eq!(
+                bits(&dn.core(at, l, Wanted::Forces)),
+                want,
+                "{label}, decoupled"
+            );
+            assert_eq!(coupled(&dn), coupled(&d1), "{label}, the coupling");
+        }
     }
 
     /// **Without `with_threads` the threads follow the pairs**: the rule is one below 20 000 pairs
