@@ -1127,6 +1127,204 @@ fn every_example_is_run_and_only_examples_are() {
     }
 }
 
+/// The commands of each ```` ```sh ```` block in `relative`, in order, one `Vec` a block: a line
+/// ending in `\` joined to the next, comments and blank lines dropped, and every run of whitespace
+/// made one space. Copies of the gate explain themselves differently, so a comment may differ
+/// between them; what they run may not.
+///
+/// **It reads less than bash does, and refuses what it would misread.** A ` #` is a comment, so one
+/// inside quotes, `echo "a #b"`, would be read as `echo "a`: refused, by counting the quotes before
+/// it. Only a `\` that ends the line continues it. A `\` followed by a space is an escaped space to
+/// bash, which ends the command there, and the first draft trimmed the space and joined the lines.
+fn sh_blocks(relative: &str) -> Vec<Vec<String>> {
+    let text = read(root().join(relative)).replace("\r\n", "\n");
+    let mut blocks = Vec::new();
+    let mut inside = false;
+    let mut block = Vec::new();
+    let mut joined = String::new();
+    for line in text.lines() {
+        if !inside {
+            inside = line.trim_end() == "```sh";
+            continue;
+        }
+        if line.starts_with("```") {
+            assert!(
+                joined.is_empty(),
+                "{relative}: an sh block ends inside a `\\` continuation"
+            );
+            blocks.push(std::mem::take(&mut block));
+            inside = false;
+            continue;
+        }
+        let code = if line.trim_start().starts_with('#') {
+            ""
+        } else if let Some((code, _)) = line.split_once(" #") {
+            assert!(
+                code.matches('"').count() % 2 == 0 && code.matches('\'').count() % 2 == 0,
+                "{relative}: a ` #` inside quotes, which sh_blocks would read as a comment: {line:?}"
+            );
+            code
+        } else {
+            line
+        };
+        let (code, more) = match code.strip_suffix('\\') {
+            Some(code) => (code, true),
+            None => (code, false),
+        };
+        joined.push_str(code);
+        joined.push(' ');
+        if more {
+            continue;
+        }
+        let command = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+        joined.clear();
+        if !command.is_empty() {
+            block.push(command);
+        }
+    }
+    assert!(!inside, "{relative} has an sh block that never closes");
+    blocks
+}
+
+/// **Every copy of a gate written out in a document runs the same commands, in the same order.**
+///
+/// The library's gate is written out twice, in `CLAUDE.md` and `CONTRIBUTING.md`, with its two
+/// wasm lines in a block of their own each time, and `app/`'s three times, the third in
+/// `app/README.md`. Nothing compared the copies but their example loops, which
+/// [`every_example_is_run_and_only_examples_are`] holds to the examples. `e031626`, on 2026-09-29,
+/// added the release build of `editor-wasm` and `node editor-wasm/selftest.mjs` to `app/`'s gate
+/// in `CLAUDE.md` and `app/README.md`, after the browser editor's self-test had failed for twenty
+/// days because nothing ran it. `CONTRIBUTING.md`, which `CLAUDE.md` calls the authority on the
+/// gate, went on without them for forty-seven days: a gate run from it would have skipped the one
+/// step that runs the browser path.
+///
+/// A block is a gate if it runs clippy as the gate does, and an `app/` gate if it starts with
+/// `cd app`; it is the library's wasm block if it sets wasmtime as the wasip1 runner. Each
+/// document has to hold exactly the blocks listed for it, so a block that stops looking like one,
+/// or a second copy in the same file, fails here instead of going unread. A second copy in a block
+/// [`sh_blocks`] does not read, ```` ```bash ````, `~~~` or indented under a list item, is caught
+/// by counting the lines that start one: `unearned-pass-hunter` appended a stale four-line gate to
+/// `app/README.md` under each and the first draft passed all seven.
+///
+/// **The one difference allowed is where wasmtime is**, a path on this machine in `CLAUDE.md` and
+/// a command on `PATH` in `CONTRIBUTING.md`. The first draft excused the whole wasm block for it,
+/// and then a `--no-run` in one copy, the seventeenth entry in `CONTRIBUTING.md`'s table come
+/// back, passed. Now only the runner's value is.
+///
+/// What this cannot see: the script a gate is run from, which is outside the repository, and a
+/// document not named here. The two reviewers in `.claude/agents/` that list the gate's commands
+/// are excerpts, not the gate, and are not compared.
+#[test]
+fn every_written_out_gate_runs_the_same_commands() {
+    if !repository() {
+        return;
+    }
+    // The line every gate has, and no other block in these documents.
+    const CLIPPY: &str = "cargo clippy --locked --workspace --all-targets -- -D warnings";
+    // The line the wasm block starts with, which nothing else in them starts with.
+    const RUNNER: &str = "CARGO_TARGET_WASM32_WASIP1_RUNNER=";
+    let mut library: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut wasm: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut app: Vec<(&str, Vec<String>)> = Vec::new();
+    for doc in ["CLAUDE.md", "CONTRIBUTING.md", "app/README.md"] {
+        let (mut gates, mut runners) = (0, 0);
+        for block in sh_blocks(doc) {
+            let copies = if block.iter().any(|command| command == CLIPPY) {
+                gates += 1;
+                if block.first().is_some_and(|command| command == "cd app") {
+                    &mut app
+                } else {
+                    &mut library
+                }
+            } else if block.iter().any(|command| command.starts_with(RUNNER)) {
+                runners += 1;
+                &mut wasm
+            } else {
+                continue;
+            };
+            for command in &block {
+                assert!(
+                    !command.contains("<<"),
+                    "{doc}: a heredoc in a gate, whose body sh_blocks reads as commands with \
+                     their comments dropped and their indentation collapsed: {command:?}"
+                );
+            }
+            let block = block
+                .into_iter()
+                .map(|command| {
+                    command
+                        .split(' ')
+                        .map(|word| {
+                            if word.starts_with(RUNNER) {
+                                "CARGO_TARGET_WASM32_WASIP1_RUNNER=<wherever wasmtime is>"
+                            } else {
+                                word
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect();
+            copies.push((doc, block));
+        }
+        let text = read(root().join(doc));
+        let starting = |with: &str| {
+            text.lines()
+                .filter(|line| line.trim_start().starts_with(with))
+                .count()
+        };
+        for (lines, blocks, what) in [
+            (starting(CLIPPY), gates, "run the gate's clippy"),
+            (starting(RUNNER), runners, "set wasmtime as the runner"),
+        ] {
+            assert_eq!(
+                lines, blocks,
+                "{doc} has {lines} lines that {what} and {blocks} sh blocks read with one: a copy \
+                 in a block sh_blocks does not read, ```bash, ~~~ or indented, is never compared"
+            );
+        }
+    }
+    for (gate, copies, want) in [
+        (
+            "the library's",
+            &library,
+            &["CLAUDE.md", "CONTRIBUTING.md"][..],
+        ),
+        (
+            "the library's wasm",
+            &wasm,
+            &["CLAUDE.md", "CONTRIBUTING.md"][..],
+        ),
+        (
+            "app/'s",
+            &app,
+            &["CLAUDE.md", "CONTRIBUTING.md", "app/README.md"][..],
+        ),
+    ] {
+        let found: Vec<&str> = copies.iter().map(|(doc, _)| *doc).collect();
+        assert_eq!(
+            found, want,
+            "{gate} gate should be written out once in each of {want:?}, and was found in \
+             {found:?}"
+        );
+        let (first, reference) = &copies[0];
+        for (doc, commands) in &copies[1..] {
+            let only_first: Vec<_> = reference.iter().filter(|c| !commands.contains(c)).collect();
+            let only_here: Vec<_> = commands.iter().filter(|c| !reference.contains(c)).collect();
+            assert!(
+                commands == reference,
+                "{doc}'s copy of {gate} gate is not {first}'s. Only in {first}: {only_first:?}. \
+                 Only in {doc}: {only_here:?}.{}",
+                if only_first.is_empty() && only_here.is_empty() {
+                    " The same commands, in another order or a different number of times."
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+}
+
 /// The names in the first column of `EXAMPLES.md`'s table under `## Examples`, in order, and the
 /// paragraphs straight after it that excuse examples from it.
 ///

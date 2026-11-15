@@ -357,6 +357,24 @@ protects nothing.
   prints its line and exits 3, and `PROSE_GATE_LIST=1` lists what it would run without running
   it, exit 4. A newline at the end of `app/README.md` now runs eleven targets and passes in 164 s;
   `tools/prose-gate/README.md` has the other cases.
+- **`CONTRIBUTING.md`'s copy of `app/`'s gate did not run the browser editor.** `e031626` added
+  the release build of `editor-wasm` and `node editor-wasm/selftest.mjs` to the copies in
+  `CLAUDE.md` and `app/README.md`, and this one went forty-seven days without them: nothing
+  compared the copies but their example loops. `counts_in_prose`'s
+  `every_written_out_gate_runs_the_same_commands` now holds the library's two written-out gates,
+  their wasm blocks, and `app/`'s three gates to the same commands in the same order. Comments
+  may differ, and so may where wasmtime is. Against the block as it was it failed on those two
+  lines, and with them it passes. `unearned-pass-hunter` found five ways for a copy to change
+  and pass the first draft, which excused the wasm block whole, so that a `--no-run` in one copy
+  passed it. Now a changed comment, a command split with `\`, and wasmtime named by another path
+  pass, and 21 sabotages fail it:
+  - a line deleted, added, swapped or repeated, a mistyped `cd app`, or a changed clippy line;
+  - a `--no-run`, or a dropped opt-level, build or runner, in a wasm block;
+  - a stale copy appended under `sh`, or under any of seven fences it does not read, `bash`,
+    `~~~sh` and an indented `sh` among them, which it finds by counting the lines that start a
+    gate;
+  - a ` #` inside quotes and a heredoc, which it refuses rather than misread;
+  - a `\` followed by a space, which bash does not take for a continuation.
 
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**

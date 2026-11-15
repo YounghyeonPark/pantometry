@@ -350,11 +350,22 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
 cargo build --locked -p editor-wasm --target wasm32-unknown-unknown
+cargo build --locked --release -p editor-wasm --target wasm32-unknown-unknown
+node editor-wasm/selftest.mjs     # the browser path, run -- see app/README.md
 ```
 
 And read the jobs, not the roll-up: `gh run view <id> --json jobs` gives each one its own
 `conclusion`, which is how those two were found still failing under a run whose summary nobody had
 opened.
+
+The block's last two lines run the browser editor: the release build is the `.wasm` the page
+fetches, and `selftest.mjs` drives it through the page's own exports under Node. `CLAUDE.md` and
+`app/README.md` have had them since `e031626`, on 2026-09-29, and this block went on without them
+for forty-seven days, because nothing compared the copies but their example loops.
+`every_written_out_gate_runs_the_same_commands`, in `counts_in_prose`, now holds every copy of a
+gate in these three documents, the library's wasm lines included, to the same commands in the same
+order; only where wasmtime is may differ. Against this block as it was, it failed on those two
+lines, and with them it passes.
 
 ## The conventions that are not obvious
 
