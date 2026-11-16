@@ -92,7 +92,8 @@ holding six rows, with eight more instances described in the prose below it and 
 in `CLAUDE.md` — which said this file "has all eight" and then narrated a ninth of its own. Two
 documents numbering two different sets is the same defect as a stale count, so the numbering lives
 here and `CLAUDE.md` points at it. `the_unearned_passes_are_counted_where_they_are_listed` holds
-the two together.
+this heading, the two sentences in `CLAUDE.md` that state the count and `CHANGELOG.md`'s preamble
+to these rows.
 
 The first six are one mistake — reading the *output* of a check as evidence the check **ran** —
 and the rest are the ways that is not the only one.

@@ -12,9 +12,11 @@ the most expensive outcome available here, because every other agent's work is d
 `numerics-reviewer` asks whether a test would notice a wrong value, and its answer is worth
 nothing if the test did not run.
 
-`CLAUDE.md` names this in its own words — the gate has *"reported a pass it had not earned"* six
-times, and the file carries a table of the disguises. This agent is that table, applied to a
-change rather than to the gate.
+`CONTRIBUTING.md` indexes every time this gate has reported a result it had not earned, with what
+each cost, and `CLAUDE.md` carries the kinds they were. This agent asks the same question of a
+change rather than of the gate. It used to say `CLAUDE.md` counted six and carried a table of the
+disguises: the table was `CONTRIBUTING.md`'s, its heading already said eight, and the six stayed
+while the index grew.
 
 Report findings most severe first. For each: what claimed to pass, what it actually exercised,
 and the smallest thing that would have made the difference visible. Say plainly when you find

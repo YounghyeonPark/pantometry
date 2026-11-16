@@ -134,7 +134,7 @@ result; a skip that says nothing is the shape of a suite that has stopped testin
 
 **Read a result from the thing that produced it, and read whether the check *ran* rather than what it
 printed.** Eighteen times this gate has said `ok` while failing, and more than once that reached `main` — indexed in
-CONTRIBUTING.md, counted nowhere else. A CI run's
+CONTRIBUTING.md, listed nowhere else. A CI run's
 roll-up has said `success` with a job still `queued`; ask each job for its own `conclusion`. A script
 that edits several files can write the first and raise on the next, so check every anchor before
 writing any of them.
@@ -202,7 +202,7 @@ rather than from a generic role. They are for developing pantometry and are usel
 Run `numerics-reviewer` and `physics-checker` on anything touching physics or tolerances, and
 `invariant-guard` before a commit that adds a crate, a dependency, or anything with randomness in it.
 `prose-auditor` before a release. **`unearned-pass-hunter` on anything that adds a check** — a test,
-a harness, a gate step, a CI job, a script that verifies something. The table of disguises above is
+a harness, a gate step, a CI job, a script that verifies something. The kinds of disguise above are
 its subject, and four of the nine instances in the session that produced it were caught by the gate
 rather than by anybody reading the output.
 

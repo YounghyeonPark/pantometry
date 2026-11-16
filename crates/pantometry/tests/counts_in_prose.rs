@@ -519,6 +519,19 @@ fn the_releasing_example_command_counts_every_example() {
 /// worse in one way: each looked consistent on its own. So the numbering lives in the table, and
 /// this holds every sentence that states it against the number of rows — which is a count of the
 /// thing rather than a count somebody remembered.
+///
+/// **It held two of the five.** The commit that wrote this test, `719ae90`, held `CLAUDE.md`'s
+/// "the index: **sixteen** instances" and left a sentence eighty-seven lines under it saying "Six
+/// times this gate has said `ok` while failing", which `25852aa` found the next day. `CHANGELOG.md`'s
+/// preamble still said sixteen after `4cd0420` made the table seventeen, until `0961366` the day
+/// after. Both are held now; with the test as it was, "Seventeen times this gate" and "indexes the
+/// nineteen times" passed it.
+///
+/// The fifth was `unearned-pass-hunter`'s "six times", written on 2026-09-02 while this heading said
+/// eight, and left at six until 2026-11-16 while the rows went to sixteen, seventeen and
+/// eighteen. It quoted words `CLAUDE.md` dropped in `719ae90`. That sentence states no count now,
+/// which is one fewer to hold. A count written in new words elsewhere is not held by anything here:
+/// this test can only find the sentences it names.
 #[test]
 fn the_unearned_passes_are_counted_where_they_are_listed() {
     if !repository() {
@@ -566,6 +579,16 @@ fn the_unearned_passes_are_counted_where_they_are_listed() {
         listed,
     );
     phrase("CLAUDE.md", "the index: **{}** instances", listed);
+    phrase(
+        "CLAUDE.md",
+        "{} times this gate has said `ok` while failing",
+        listed,
+    );
+    phrase(
+        "CHANGELOG.md",
+        "indexes the {} times it has reported a pass",
+        listed,
+    );
 }
 
 /// **Every crate in `crates/` has a row in the table `AGENTS.md` calls "What is in the box".**

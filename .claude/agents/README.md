@@ -51,7 +51,7 @@ of which had turned the bug into the specification.
 `unearned-pass-hunter` asks the one the other four are downstream of: *did the check run at
 all, and did its answer come from the thing it claims to test*. `numerics-reviewer`'s question —
 would the test notice — is worth nothing if the test did not execute, and this workspace produces
-that outcome often enough to have a table of the disguises in `CLAUDE.md`. Nine instances in a
+that outcome often enough to keep an index of them in `CONTRIBUTING.md`. Nine instances in a
 single session, of which four were caught by the gate rather than by anybody reading:
 
 - a sabotage harness backed two files up under one name, the tree stopped compiling, and four

@@ -409,6 +409,31 @@ protects nothing.
     wasmtime under another path in a copy of the gate; both builds dropped; and a check piped
     into `tail`, which it takes for a measurement, and says so.
 
+- **Five sentences stated how many times the gate has reported a pass it had not earned, and a test
+  held two.** `the_unearned_passes_are_counted_where_they_are_listed` holds `CONTRIBUTING.md`'s
+  heading and `CLAUDE.md`'s "the index: **eighteen** instances" to the rows of the table. The other
+  three had each been wrong:
+  - `CLAUDE.md`'s "Eighteen times this gate has said `ok` while failing" said six in the commit
+    that wrote the test, `719ae90`, eighty-seven lines under the sixteen it held, until `25852aa`
+    the next day;
+  - this file's preamble said sixteen for a day after `4cd0420` made the table seventeen;
+  - `unearned-pass-hunter` said `CLAUDE.md` counted six and carried a table of the disguises. It
+    was written on 2026-09-02, when the table's heading said eight, and the six stayed while the
+    table went to sixteen, seventeen and eighteen. The table had left `CLAUDE.md` three weeks
+    before, thirty minutes after it was written there, and `CLAUDE.md` and
+    `.claude/agents/README.md` still said it was there.
+
+  The first two are held now; with the test as it was, "Seventeen times this gate" and "indexes the
+  nineteen times" passed it. The agent's sentence states no count, which is one fewer to hold, and
+  the three say where the table is. 13 sabotages, each restored from its bytes and checked by
+  SHA-256, and each failure counted only if its message names the sentence the case broke:
+  - 10 fail it: either sentence a number up or down, reworded, or copied again with another number;
+    and a nineteenth row with only the two sentences held before moved to nineteen, or with every
+    sentence but this file's.
+  - 3 pass, as intended: the tree as it is; a nineteenth row with all four moved to nineteen; and
+    the agent's sentence saying "six times" again. Nothing holds that: the test finds only the
+    sentences it names, and a count written in new words is not one of them.
+
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**
   - **Cargo 1.100 builds a test in `target/<profile>/build/<package>/<hash>/out/`**, not in
