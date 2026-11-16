@@ -119,16 +119,19 @@ domain with a scene is a domain somebody has used from outside.
 - **There are no closed forms.** Say which claims would be unverifiable and let the human decide
   whether an unverifiable domain is wanted.
 
-## Finish by running what CI runs
+## Finish by running the gate
 
-```sh
-cargo fmt --all --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-cargo +1.78 build --locked --workspace
-cargo deny check
-```
+All of it, as `CLAUDE.md` writes it out under "The gate, before any commit": the library's block,
+its two wasm lines, and `app/`'s block, because step 8 changes the facade `app/` builds against
+and step 10 adds a scene there. Read it there rather than from a copy here. `CONTRIBUTING.md`
+holds the same commands, and `counts_in_prose` holds the copies to each other.
+
+This section was a six-line copy, written on 2026-08-07 and called "what CI runs", and the gate
+grew past it. It had no release tests, no clippy or rustdoc for CI's Linux, no examples, no
+`wasm32` build, no `app/`, and a `cargo test` with no `wasm32-wasip1` twin. That last one is the
+step a new domain is likeliest to fail: a test that reads the repository off a disk needs
+`#![cfg(not(target_family = "wasm"))]`, and `CLAUDE.md` records one that shipped without it,
+passed twenty-seven checks here, and turned CI's `test (wasm32-wasip1, wasmtime)` job red.
 
 Then hand back a summary that names the closed forms the new domain is checked against, and
 anything you had to leave undone.

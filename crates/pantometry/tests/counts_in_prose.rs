@@ -1186,6 +1186,94 @@ fn sh_blocks(relative: &str) -> Vec<Vec<String>> {
     blocks
 }
 
+/// The line every written-out gate has, and no other block in the documents that hold one.
+const CLIPPY: &str = "cargo clippy --locked --workspace --all-targets -- -D warnings";
+
+/// The line the library's wasm block starts with, which nothing else in them starts with.
+const RUNNER: &str = "CARGO_TARGET_WASM32_WASIP1_RUNNER=";
+
+/// `command` with where wasmtime is, the one thing copies of the gate may differ in, written the
+/// same way for all of them. One word, so that [`words`] reads it as one.
+///
+/// **Where wasmtime is, and not what the runner is.** The first version took any value, and
+/// `unearned-pass-hunter` set `CONTRIBUTING.md`'s runner to `true`, and both tests here passed it.
+/// Cargo runs a test binary through its runner, and through `true` the unit tests of
+/// `pantometry-units` printed no result at all while cargo exited 0. A runner whose last path part
+/// is not `wasmtime` or `wasmtime.exe` is kept as it is written, so it differs from every other
+/// copy.
+fn wherever_wasmtime_is(command: &str) -> String {
+    command
+        .split(' ')
+        .map(|word| match word.strip_prefix(RUNNER) {
+            Some(path)
+                if matches!(
+                    path.rsplit(['/', '\\']).next(),
+                    Some("wasmtime" | "wasmtime.exe")
+                ) =>
+            {
+                "CARGO_TARGET_WASM32_WASIP1_RUNNER=<wasmtime>"
+            }
+            _ => word,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The words of `command` as bash splits them, a double-quoted run kept whole:
+/// `RUSTDOCFLAGS="-D warnings"` is one word.
+fn words(command: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut start = None;
+    let mut quoted = false;
+    for (at, c) in command.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        if c == ' ' && !quoted {
+            if let Some(from) = start.take() {
+                words.push(&command[from..at]);
+            }
+        } else if start.is_none() {
+            start = Some(at);
+        }
+    }
+    if let Some(from) = start {
+        words.push(&command[from..]);
+    }
+    words
+}
+
+/// The step a gate command runs, whatever it runs it for: the command with its `--target`, its
+/// `+toolchain` and the variables set in front of it taken off. Clippy for this machine and clippy
+/// for Linux are one step, and so are the tests and the tests under wasmtime. The release tests are
+/// not the tests, because `--release` is another build and not another target.
+///
+/// **A toolchain is a target here.** Rust 1.78 and `wasm32-unknown-unknown` are the two places the
+/// library promises to build, and the first version kept them apart, so `invariant-guard` could
+/// drop its `wasm32` build, the line this change gave it, and pass.
+fn step(command: &str) -> String {
+    let assignment = |word: &str| {
+        word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        })
+    };
+    let mut kept = Vec::new();
+    let mut rest = words(command)
+        .into_iter()
+        .skip_while(|word| assignment(word));
+    while let Some(word) = rest.next() {
+        if word == "--target" {
+            rest.next();
+        } else if !(word.starts_with("--target=") || (word.starts_with('+') && kept == ["cargo"])) {
+            kept.push(word);
+        }
+    }
+    kept.join(" ")
+}
+
 /// **Every copy of a gate written out in a document runs the same commands, in the same order.**
 ///
 /// The library's gate is written out twice, in `CLAUDE.md` and `CONTRIBUTING.md`, with its two
@@ -1209,20 +1297,17 @@ fn sh_blocks(relative: &str) -> Vec<Vec<String>> {
 /// **The one difference allowed is where wasmtime is**, a path on this machine in `CLAUDE.md` and
 /// a command on `PATH` in `CONTRIBUTING.md`. The first draft excused the whole wasm block for it,
 /// and then a `--no-run` in one copy, the seventeenth entry in `CONTRIBUTING.md`'s table come
-/// back, passed. Now only the runner's value is.
+/// back, passed. Now only the runner's value is, and only while it names wasmtime, for the reason
+/// [`wherever_wasmtime_is`] gives.
 ///
 /// What this cannot see: the script a gate is run from, which is outside the repository, and a
-/// document not named here. The two reviewers in `.claude/agents/` that list the gate's commands
-/// are excerpts, not the gate, and are not compared.
+/// document not named here. An excerpt of the gate is not a copy of it, and is held instead by
+/// [`every_excerpt_of_the_gate_runs_each_step_it_names_for_every_target`].
 #[test]
 fn every_written_out_gate_runs_the_same_commands() {
     if !repository() {
         return;
     }
-    // The line every gate has, and no other block in these documents.
-    const CLIPPY: &str = "cargo clippy --locked --workspace --all-targets -- -D warnings";
-    // The line the wasm block starts with, which nothing else in them starts with.
-    const RUNNER: &str = "CARGO_TARGET_WASM32_WASIP1_RUNNER=";
     let mut library: Vec<(&str, Vec<String>)> = Vec::new();
     let mut wasm: Vec<(&str, Vec<String>)> = Vec::new();
     let mut app: Vec<(&str, Vec<String>)> = Vec::new();
@@ -1249,22 +1334,7 @@ fn every_written_out_gate_runs_the_same_commands() {
                      their comments dropped and their indentation collapsed: {command:?}"
                 );
             }
-            let block = block
-                .into_iter()
-                .map(|command| {
-                    command
-                        .split(' ')
-                        .map(|word| {
-                            if word.starts_with(RUNNER) {
-                                "CARGO_TARGET_WASM32_WASIP1_RUNNER=<wherever wasmtime is>"
-                            } else {
-                                word
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .collect();
+            let block = block.iter().map(|c| wherever_wasmtime_is(c)).collect();
             copies.push((doc, block));
         }
         let text = read(root().join(doc));
@@ -1323,6 +1393,183 @@ fn every_written_out_gate_runs_the_same_commands() {
             );
         }
     }
+}
+
+/// **An excerpt of the gate may leave a step out, but not one of the targets of a step it runs.**
+///
+/// Two reviewers in `.claude/agents/` ended by running part of the gate, and both said it was what
+/// CI runs. `invariant-guard`'s "Run these exactly as CI does" ran clippy and rustdoc for this
+/// machine alone, and CI's run on Linux, so the dead code a `cfg` held to Windows leaves everywhere
+/// else, the eighteenth entry in `CONTRIBUTING.md`'s table, was out of its sight. `domain-builder`'s
+/// "Finish by running what CI runs" was six lines written on 2026-08-07, and the gate had grown
+/// past them: no release tests, no clippy or rustdoc for Linux, no examples, no `wasm32` build, no
+/// `app/`, and a `cargo test` with no wasip1 twin, in the agent whose work is adding tests. A test
+/// that reads the disk without the `cfg` wasm needs is the mistake `CLAUDE.md` records for exactly
+/// that work. `domain-builder` points at the gate now instead of copying it.
+///
+/// A [`step`] is a gate command with its `--target`, its `+toolchain` and the variables in front
+/// of it taken off, and an excerpt that runs a step has to run it for every target the gate does.
+/// An excerpt is an ```` ```sh ```` block in `.claude/agents/` holding one of the commands of the
+/// library's gate or its wasm block, and every command in it has to be one of them, so a flag the
+/// gate has changed since fails here instead of leaving an agent running last month's check. It
+/// may not print the gate's verdict, which it has not earned. Against the two files as they were,
+/// this failed on both.
+///
+/// **The command it holds has to start like one**, with `cargo`, `RUSTDOCFLAGS=` or the runner.
+/// The gate's example loop ends in `done`, and so do two of `invariant-guard`'s own loops over the
+/// domains, which the first draft took for excerpts and refused every `grep` in.
+///
+/// **A check an agent runs is one of the gate's.** The agents that hold an excerpt are listed, so
+/// one that stops sharing any command with the gate fails as missing. But a new one could drift
+/// that far before anyone listed it: `unearned-pass-hunter` put `cargo clippy --workspace
+/// --all-targets -- -D warnings` and `cargo test --workspace` in a block of `domain-builder`'s, and
+/// the first draft passed it. So a command in any block that starts like one, is not the gate's
+/// and pipes nothing is refused, because an agent runs it for its exit code, which makes it a
+/// check. A measurement pipes what it prints into what reads it: `prose-auditor` has four and
+/// `invariant-guard` one, and they are let be.
+///
+/// **Every line that starts a command, after a `$ ` prompt or not, has to be in a block this
+/// reads**, which caught a copy under ```` ```bash ```` in
+/// [`every_written_out_gate_runs_the_same_commands`]. It is each line matched against the fences.
+/// The first draft compared two counts, and a hidden line passed it, balanced by one more in a
+/// block it read.
+///
+/// What this cannot see: an excerpt of `app/`'s gate, which would be read as the library's and
+/// refused, and a check piped into something, which is taken for a measurement.
+#[test]
+fn every_excerpt_of_the_gate_runs_each_step_it_names_for_every_target() {
+    if !repository() {
+        return;
+    }
+    // `CLAUDE.md`'s copies, which the test above holds to `CONTRIBUTING.md`'s.
+    let blocks: Vec<Vec<String>> = sh_blocks("CLAUDE.md")
+        .into_iter()
+        .filter(|block| {
+            let gate =
+                block.iter().any(|c| c == CLIPPY) && block.first().is_some_and(|c| c != "cd app");
+            gate || block.iter().any(|c| c.starts_with(RUNNER))
+        })
+        .collect();
+    assert_eq!(
+        blocks.len(),
+        2,
+        "CLAUDE.md should hold the library's gate and its wasm block, and {} blocks read as one",
+        blocks.len()
+    );
+    let gate: Vec<String> = blocks
+        .iter()
+        .flatten()
+        .map(|c| wherever_wasmtime_is(c))
+        .collect();
+    // As the gate's commands start, behind a shell's `$ ` prompt or not.
+    let starts_a_command = |line: &str| {
+        let line = line.trim_start();
+        let line = line.strip_prefix("$ ").unwrap_or(line);
+        ["cargo ", "RUSTDOCFLAGS=", RUNNER]
+            .iter()
+            .any(|with| line.starts_with(with))
+    };
+    let mut names: Vec<String> = list(root().join(".claude/agents"))
+        .map(|entry| {
+            entry
+                .expect("an entry in .claude/agents")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.ends_with(".md"))
+        .collect();
+    names.sort();
+    assert!(
+        names.iter().any(|name| name == "invariant-guard.md"),
+        "read {names:?} in .claude/agents"
+    );
+    let mut excerpts = Vec::new();
+    let mut problems = Vec::new();
+    for name in &names {
+        let relative = format!(".claude/agents/{name}");
+        // The fences as `sh_blocks` reads them. A line that continues the one before it is not
+        // the start of a command, however it starts: `CONTRIBUTING.md`'s wasm block breaks before
+        // `cargo test`, and the first draft took that line for a command outside any block and
+        // refused a faithful copy of it.
+        let mut inside = false;
+        let mut continued = false;
+        for line in read(root().join(&relative)).lines() {
+            if inside {
+                inside = !line.starts_with("```");
+            } else if line.trim_end() == "```sh" {
+                inside = true;
+            } else if !continued && starts_a_command(line) {
+                problems.push(format!(
+                    "{relative} runs {line:?} outside any ```sh block, under ```bash, ~~~ or \
+                     indented, where nothing compares it"
+                ));
+            }
+            continued = line.ends_with('\\');
+        }
+        for block in sh_blocks(&relative) {
+            let block: Vec<String> = block.iter().map(|c| wherever_wasmtime_is(c)).collect();
+            let excerpt = block
+                .iter()
+                .any(|c| starts_a_command(c) && gate.contains(c));
+            if excerpt {
+                excerpts.push(name.as_str());
+            }
+            for command in &block {
+                let the_gates = gate.contains(command);
+                if excerpt && command.starts_with("echo ") {
+                    problems.push(format!(
+                        "{relative} prints {command:?}, the gate's verdict, from an excerpt of it"
+                    ));
+                } else if excerpt && !the_gates {
+                    problems.push(format!(
+                        "{relative} runs {command:?}, which the gate does not: a flag the gate \
+                         has changed since, or a step it does not have"
+                    ));
+                } else if !the_gates && starts_a_command(command) && !command.contains('|') {
+                    problems.push(format!(
+                        "{relative} runs {command:?} for its exit code, and it is not one of the \
+                         gate's commands: a check an agent runs is the gate's, and a measurement \
+                         pipes what it prints"
+                    ));
+                }
+            }
+            if !excerpt {
+                continue;
+            }
+            let steps: Vec<String> = block.iter().map(|c| step(c)).collect();
+            for command in &gate {
+                if steps.contains(&step(command)) && !block.contains(command) {
+                    problems.push(format!(
+                        "{relative} runs `{}` and leaves out the gate's {command:?}: a step run \
+                         for one target and not another reports a green the other never gave",
+                        step(command)
+                    ));
+                }
+            }
+        }
+    }
+    if excerpts != ["invariant-guard.md"] {
+        problems.push(format!(
+            "the agents holding an excerpt of the gate should be [\"invariant-guard.md\"], and \
+             were {excerpts:?}: one that stops sharing a command with the gate stops being read, \
+             and a new one belongs in this list"
+        ));
+    }
+    if !read(root().join("CLAUDE.md"))
+        .lines()
+        .any(|line| line == "## The gate, before any commit")
+    {
+        problems.push("CLAUDE.md has no heading \"The gate, before any commit\"".into());
+    }
+    if !read(root().join(".claude/agents/domain-builder.md"))
+        .contains("\"The gate, before any commit\"")
+    {
+        problems.push(
+            "domain-builder.md does not point at the gate by its heading in CLAUDE.md".into(),
+        );
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
 /// The names in the first column of `EXAMPLES.md`'s table under `## Examples`, in order, and the

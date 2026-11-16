@@ -375,6 +375,39 @@ protects nothing.
     gate;
   - a ` #` inside quotes and a heredoc, which it refuses rather than misread;
   - a `\` followed by a space, which bash does not take for a continuation.
+- **Two reviewers in `.claude/agents/` ran less of the gate than they said.** `invariant-guard`'s
+  "Run these exactly as CI does" ran clippy and rustdoc for this machine alone, and CI's run on
+  Linux, so the dead code and the broken doc link a `cfg` held to Windows leaves everywhere else
+  were out of its sight. It had no `wasm32-unknown-unknown` build either, in the agent that is run
+  before a commit that adds a dependency. `domain-builder`'s "Finish by running what CI runs" was
+  six lines from 2026-08-07: no release tests, no clippy or rustdoc for Linux, no examples, no
+  `wasm32` build, no `app/`, and a `cargo test` with no `wasm32-wasip1` twin. `invariant-guard`
+  gains the three lines and stays an excerpt, and `domain-builder` points at `CLAUDE.md`'s gate
+  instead of copying it. `counts_in_prose`'s
+  `every_excerpt_of_the_gate_runs_each_step_it_names_for_every_target` holds every excerpt of the
+  library's gate in `.claude/agents/` to the gate's own commands, and refuses one that runs a step
+  for one target and leaves out another; Rust 1.78 and `wasm32` count as two targets of one build.
+  Against the two files as they were it failed on the five missing lines, and it passes now. Its
+  first draft refused two faithful files, found by running it: `invariant-guard`'s loops over the
+  domains, which end in `done` as the gate's example loop does, and a copy of `CONTRIBUTING.md`'s
+  wasm block, whose `cargo test` continues a line. `unearned-pass-hunter` then found five ways
+  past it, and one reached the test before it:
+  `every_written_out_gate_runs_the_same_commands` excused any wasip1 runner, so
+  `CONTRIBUTING.md`'s set to `true` passed it. Through `true`, `pantometry-units`' unit tests
+  printed no result at all and cargo exited 0. Only a runner named `wasmtime` is excused now. 34
+  sabotages, each restored from its bytes and checked by SHA-256:
+  - 25 fail it: a target dropped from either pair, or the `wasm32` or the MSRV build alone; a
+    `cargo test` without its wasip1 twin, or with `true` as the twin's runner; a flag the gate
+    does not have, `--locked` dropped or `-W` for `-D`; the excerpt under a `bash` fence,
+    indented, or removed; the old six lines back; the heading the pointer names changed on either
+    side; the gate gaining a target the excerpt lacks, or losing one it has; a command outside any
+    block it reads, on a prose line, behind a `$ ` prompt, or under `bash` and balanced by one
+    inside; `$ cargo clippy` in an `sh` block; a new agent with an excerpt; a block of near-gate
+    commands; the gate's verdict echoed; and the runner set to `true` in either copy of the gate.
+  - 9 pass, as intended: the tree as it is; a comment changed; a step left out whole, with one
+    target or two; lines reordered; tests added with their wasip1 twin and wasmtime elsewhere;
+    wasmtime under another path in a copy of the gate; both builds dropped; and a check piped
+    into `tail`, which it takes for a measurement, and says so.
 
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**

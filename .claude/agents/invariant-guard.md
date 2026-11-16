@@ -110,20 +110,35 @@ ls -d crates/*/src/lib.rs app/*/src/lib.rs | wc -l                          # 25
 
 ## 5. The promises CI makes
 
-Run these exactly as CI does:
+Run these as CI does. CI's clippy and rustdoc run on Linux and this machine is `windows-gnu`, so
+each runs twice here, the second time with `--target x86_64-unknown-linux-gnu`: that is what sees
+the dead code, and the broken doc link, that a `cfg` holding an item to Windows leaves on every
+other platform. Neither writes Linux object code, so neither needs a Linux linker. This said
+"exactly as CI does" over the first line of each pair alone: the miss the eighteenth entry in
+`CONTRIBUTING.md`'s table records for clippy, and its rustdoc twin.
 
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo +1.78 build --locked --workspace                                # the declared MSRV
+cargo build --locked --workspace --target wasm32-unknown-unknown      # no thread, clock or disk
 cargo deny check                             # licences and advisories
 ```
+
+This is part of the gate, not all of it: no tests, so it stays fast. `counts_in_prose` holds it to
+the gate's own commands, and fails if it runs a step for one target and leaves out another the gate
+runs it for. The build for Rust 1.78 and the build for `wasm32` count as one step for two targets.
 
 - **MSRV is 1.78 and set by the lockfile format**, not by the source. A clippy suggestion that
   requires a newer Rust is not a reason to raise it; a declared MSRV is a promise.
 - **`--locked` throughout.** A change that needs `Cargo.lock` updated must update it in the
   same commit.
+- **`wasm32-unknown-unknown` is a promise too**, and the one a new dependency is likeliest to
+  break: the target has no thread, no clock and no filesystem, and CI builds the whole workspace
+  for it.
 - **A new dependency** must be justified and must pass `deny.toml`'s allow-list. The workspace
   has twelve external crates, three of which reach a *published* artifact; `pantometry-world`
   links four more and is not published. If a change adds one,
