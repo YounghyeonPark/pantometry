@@ -326,7 +326,8 @@ protects nothing.
   CONTRIBUTING.md said compiling catches a missing wasm `cfg`. It does not: a missing `cfg`
   always compiles. Both now run the suite under wasmtime v49.0.0, CI's pinned release, at CI's
   opt-level: 1427 passed and 85 ignored, 312 s with the build cold. It is the seventeenth entry in
-  CONTRIBUTING.md's table, and the second to reach `main`.
+  CONTRIBUTING.md's table, and it reached `main`: `81c7dae` made it a failure, and CI's
+  `test (wasm32-wasip1, wasmtime)` went red.
 - **Both gates ran clippy for this machine's target only, and CI runs it on Linux.** `ea2088c`'s
   pin of the classical Ewald sum is held to `x86_64-pc-windows-gnu` by a `cfg`, because the sum's
   phases come from the platform's `sin_cos`, and the constant it reads had none. On Linux nothing
@@ -433,6 +434,18 @@ protects nothing.
   - 3 pass, as intended: the tree as it is; a nineteenth row with all four moved to nineteen; and
     the agent's sentence saying "six times" again. Nothing holds that: the test finds only the
     sentences it names, and a count written in new words is not one of them.
+
+- **`CONTRIBUTING.md` called entry 10 the first unearned pass to reach `main` and entry 17 the
+  second, and this file called 17 the second.** Measured against CI's history, nine entries
+  reached it: 6, 10, 11, 12, 13, 14, 15, 17 and 18. The first of them was 6, on 2026-08-12:
+  `fmt, clippy, docs` failed on the half-written commit before the next push cancelled its run,
+  and its row says "red on `main`". The sentence replaced "The one that reached `main`" in
+  `4cd0420`, which was already wrong. What entry 10 does have is that CI never ran it: no run
+  exists for `4a3654f`. It went up in a push whose tip, `3f53fde`, was fourteen commits later,
+  and the test was fixed by then. Entry 15, `9117640`, went up the same way, and its next run was
+  `0f468d5`, nine commits later. CI went red on the other seven. The paragraph names the nine,
+  dated, and calls entry 10 by its number. No test holds it: whether a commit reached `main` is
+  CI's history, which nothing here can read offline.
 
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**

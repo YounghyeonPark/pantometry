@@ -169,13 +169,22 @@ command and read its exit code. The last is what caught the sixth one after thre
 not. And a doubled command is caught by none of them — running each check **once** is the only fix for
 that.
 
-**The first that reached `main`** (entry 17 is the second, and is below). `cargo test --locked --workspace` takes long enough here to be
+**Entry 10, which reached `main`.** `cargo test --locked --workspace` takes long enough here to be
 moved to the background, and its output file is then a transcript that is still being written — so
 a `grep` over it for `FAILED` finds nothing, because the failing binary has not run yet. Commit
 `4a3654f` shipped `heat_crosses_a_join_and_not_a_gap` failing on that reading, and it was found a
-commit later by a clean worktree at that sha rather than by the gate. Reading a partial file is the
-same mistake as reading a roll-up: wait for the exit code, and read *that*. The claim that a test
-suite passed is the one claim in this repository that has never survived being inferred.
+commit later by a clean worktree at that sha rather than by the gate. Nor by CI: no run exists for
+`4a3654f`. It went up in one push whose tip, `3f53fde`, was fourteen commits later, CI runs a push's
+tip, and by then the test was fixed. Reading a partial file is the same mistake as reading a
+roll-up: wait for the exit code, and read *that*. The claim that a test suite passed is the one
+claim in this repository that has never survived being inferred.
+
+This paragraph called entry 10 the first to reach `main`, and entry 17 the second, until
+2026-11-16. Measured against CI's history that day, entries 6, 10, 11, 12, 13, 14, 15, 17 and 18
+reached it. CI went red on seven of them. For 6 the run was `cancelled` by the next push, after
+`fmt, clippy, docs` had already failed. For 10 and 15 no run exists at the commit, because each
+went up in a push whose tip was a later one. Neither a run nor a commit message ties any other
+entry to `main`.
 
 Two more of the same shape, outside the shell.
 
