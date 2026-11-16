@@ -194,25 +194,57 @@ for p in "${changed[@]}"; do
     for k in "${resolved[@]}"; do wanted[$k]=1; done
   done <<< "$hits"
   # A `.md` is read by the always-run walks and `CITATION.cff` by `citation_is_valid`. Anything
-  # else is said to be unread, rather than covered by the word "passed" -- *whatever* the grep
-  # found, because a name in a test is not a read: `ci.yml` is named in two tests, both in
-  # comments, and neither opens it.
+  # else is listed before the verdict, rather than covered by the word "passed".
   if [[ "$p" != *.md && "$p" != CITATION.cff ]]; then unread+=("$p"); fi
 done
 
-# A workflow no test reads can at least be read as YAML. It is still not *checked*: a valid file
-# that deletes a job parses fine, which the line before `passed` says.
+# **Where a test names the file is found, not written down.** This used to print "no test reads
+# what it says" for every workflow, and say here that `ci.yml` "is named in two tests, both in
+# comments, and neither opens it". Both were true on 2026-09-29, when they were written. From
+# 2026-10-02, `every_example_is_run_and_only_examples_are` read `ci.yml`'s example loop, and the
+# note said otherwise until 2026-11-17. So the note now lists each line of a test that has the
+# file's path outside a comment, and says to read those lines rather than deciding what they check.
+#
+# **It errs toward saying less was checked, never more**, which is the other way from the search
+# that chose the tests, where too much costs only minutes:
+# - it looks for the whole path and not the name, so `"app/tool/config.yml"` is not taken for
+#   `.github/ISSUE_TEMPLATE/config.yml`. A test that joins the name to a directory, or walks the
+#   directory, is chosen above and not named here;
+# - a line that starts with `//`, `/*` or `*` is a comment, and a path on it is dropped;
+# - but a comment after code on the same line counts as code, and so does a line inside a block
+#   comment that does not start with `*`, and a path in a string, an assertion's message among them.
+# The path contains the name, so every file it names is one whose tests were chosen. `--no-column`,
+# because `grep.column` in a git config puts a column before the text, and then no line starts with
+# `//`. Measured on a draft that searched for the name, the two comments that name `ci.yml` were
+# then listed as reads.
+#
+# A workflow can also be read as YAML. A valid file that deletes a job parses fine, and the note
+# is how you know how little of it any test reads.
 notes=()
 for p in "${unread[@]}"; do
+  code=0
+  lines=$(git grep --no-column -nF -e "$p" -- "${tests[@]}") || code=$?
+  [ "$code" -le 1 ] || { echo "git grep failed ($code) looking for $p"; exit 3; }
+  where=$(printf '%s\n' "$lines" | awk '
+    { i = index($0, ":"); f = substr($0, 1, i - 1); r = substr($0, i + 1)
+      j = index(r, ":"); n = substr(r, 1, j - 1); t = substr(r, j + 1)
+      if (i == 0 || j == 0 || t ~ /^[ \t]*(\/\/|\/\*|\*)/) next
+      out = out (out == "" ? "" : ", ") f ":" n }
+    END { print out }')
+  if [ -n "$where" ]; then
+    what="its path is in a test outside a comment at $where; read those lines for what they check of it"
+  else
+    what="no test has its path outside a comment"
+  fi
   if [[ "$p" == .github/*.yml || "$p" == .github/*.yaml ]] && [ -f "$p" ]; then
     # A missing parser is this script's problem, not the file's: it would otherwise be reported as
     # a workflow that "does not parse".
     python -c "import yaml" 2>/dev/null || { echo "cannot read $p as YAML: no python with PyYAML here"; exit 3; }
     python -c "import sys, yaml; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$p" \
       || { echo "$p does not parse as YAML"; exit 1; }
-    notes+=("$p: parses as YAML; no test reads what it says")
+    notes+=("$p: parses as YAML; $what")
   else
-    notes+=("$p: no test reads it")
+    notes+=("$p: $what")
   fi
 done
 
@@ -233,7 +265,7 @@ if [ "${PROSE_GATE_LIST:-}" = 1 ]; then
   for key in $(printf '%s\n' "${!groups[@]}" | sort); do
     echo "== ${key%%|*}: -p ${key#*|}${groups[$key]}"
   done
-  [ ${#notes[@]} -eq 0 ] || { echo "not checked by any test:"; printf '  %s\n' "${notes[@]}"; }
+  [ ${#notes[@]} -eq 0 ] || { echo "what reads these, as far as a search of the tests can say:"; printf '  %s\n' "${notes[@]}"; }
   echo "listed, and nothing run: this is not a pass"
   exit 4
 fi
@@ -256,5 +288,5 @@ for key in $(printf '%s\n' "${!groups[@]}" | sort); do
 done
 
 [ "$failed" -eq 0 ] || { echo "the prose gate FAILED"; exit 1; }
-[ ${#notes[@]} -eq 0 ] || { echo "not checked by any test:"; printf '  %s\n' "${notes[@]}"; }
+[ ${#notes[@]} -eq 0 ] || { echo "what reads these, as far as a search of the tests can say:"; printf '  %s\n' "${notes[@]}"; }
 echo "the prose gate passed"

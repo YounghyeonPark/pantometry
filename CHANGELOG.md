@@ -447,6 +447,51 @@ protects nothing.
   dated, and calls entry 10 by its number. No test holds it: whether a commit reached `main` is
   CI's history, which nothing here can read offline.
 
+- **The prose gate said no test read `ci.yml`, and one had for forty-six days.** Over any changed
+  workflow it printed "parses as YAML; no test reads what it says", under "not checked by any
+  test:". Its comment and README said `ci.yml` was named in two tests, both in comments. That was
+  true on 2026-09-29, when `18ce3dc` wrote it. On 2026-10-02 `7f1c3c5` made
+  `every_example_is_run_and_only_examples_are` read `ci.yml`'s example loop, and the gate runs that
+  test on every change. It still printed the same note on 2026-11-17.
+
+  The note is now found by a search. It lists each line of a test that has the file's whole path
+  outside a comment, or prints "no test has its path outside a comment", and it says to read those
+  lines rather than deciding what they check. It errs toward saying less was checked:
+  - it searches for the path and not the name, so another file's `config.yml` is not taken for
+    this one's;
+  - a line that starts with `//`, `/*` or `*` is a comment;
+  - it asks git for no column.
+
+  Two things are still taken for code: a comment after code, and a path in a string. The README's
+  "runs `every_scene_can_be_drawn`" had left out `every_scene_is_offered_as_a_start`, whose comment
+  named `ci.yml` when the sentence was written.
+
+  `unearned-pass-hunter` read a draft that searched for the name. It found three faults, and each
+  is fixed:
+  - `grep.column=true` turned both of `ci.yml`'s comments into reads;
+  - another file's `config.yml`, or a `/* */` comment, could be named as a read;
+  - the README wrote down the `1132` the note works out.
+
+  Twelve cases were run, each restored by bytes and checked by SHA-256:
+  - **Before:** the version before printed "no test reads what it says" over a comment appended to
+    `ci.yml`.
+  - **The new note over that change:** it names line 1132 and not the two comments, and the gate
+    passed in seven targets.
+  - **The read is real:** an example dropped from `ci.yml`'s loop failed
+    `every_example_is_run_and_only_examples_are`, and the gate failed. That is the read the old
+    note denied.
+  - **Other workflows:** `release-python.yml` gets "no test has its path outside a comment", and
+    an unclosed list in `ci.yml` still fails to parse.
+  - **In a throwaway worktree, "no test has its path":**
+    - line 1132 made a comment;
+    - another file's `release-python.yml` in code;
+    - the path in a `/* */` comment and on a ` * ` line;
+    - the path in a `//` comment with `grep.column=true`.
+  - **The guard is reached:** that last case, through a copy without `--no-column`, lists the
+    comment.
+  - **The stated limit:** a `// .github/workflows/release-python.yml` after a line of code is
+    listed.
+
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**
   - **Cargo 1.100 builds a test in `target/<profile>/build/<package>/<hash>/out/`**, not in

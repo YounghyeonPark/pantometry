@@ -61,9 +61,11 @@ crate's tests declare that module inline as `mod NAME { ... }`, or while its man
 or `autotests`. Each of those can compile a file into a target that names neither the file nor its
 directory. The tree had none of them on 2026-11-14, so these refuse nothing today.
 
-It over-includes. A change to `ci.yml` runs `every_scene_can_be_drawn`, whose comments mention the
-file. That costs minutes and is the right direction for the error to be in: the failure this gate
-must not have is passing over the one test that reads the sentence.
+It over-includes. A change to `ci.yml` runs `every_scene_can_be_drawn` and
+`every_scene_is_offered_as_a_start`, whose comments mention the file. This named the first alone,
+and the second's comment was there when it was written. That costs minutes and is the right
+direction for the error to be in: the failure this gate must not have is passing over the one test
+that reads the sentence.
 
 Each package's tests run in one `cargo test`, and the gate reads the exit code from that run. It
 also requires every named target to report tests that ran and passed, because a target whose
@@ -75,12 +77,28 @@ pass. An error the script did not expect prints the line it stopped on and exits
 
 ## What "passed" does not cover, said before it
 
-A `.md` file is read by the always-run walks, and `CITATION.cff` by `citation_is_valid`. **Nothing
-else in a prose-only change is read by any test.** A name in a test is not a read: `ci.yml` is named
-in two, both times in a comment. So every other changed path is listed under `not checked by any
-test:` before the last line. A workflow is parsed as YAML first and fails the gate if it does not
-parse. A workflow that parses and deletes a job still gets through, and the listing is how you know
-it has not been checked.
+A `.md` file is read by the always-run walks, and `CITATION.cff` by `citation_is_valid`. Every
+other changed path is listed before the last line, under `what reads these, as far as a search of
+the tests can say:`. Each comes with every line of a test that has its whole path outside a comment,
+or with `no test has its path outside a comment`, and the listing says where rather than deciding
+what those lines check. For `ci.yml` it is the line of `every_example_is_run_and_only_examples_are`
+that reads its example loop, and no test reads any other line of it. A workflow is parsed as YAML
+first and fails the gate if it does not parse. A workflow that parses and deletes a job still gets
+through, and the listing is how you know how little of it was checked.
+
+**The listing errs toward saying less was checked**, the other way from the search that chooses
+the tests. It looks for the path, not the name, so another file's `config.yml` is not taken for
+this one's, and a test that joins the name to a directory or walks the directory is run and not
+listed. A line that starts with `//`, `/*` or `*` is a comment. Three things still count as code: a
+comment after code on the same line, a line inside a block comment that does not start with `*`,
+and the path in a string such as an assertion's message. It asks git for no column, because
+`grep.column` in a git config puts one before the text.
+
+**This section said no test read anything else.** It said `ci.yml` was "named in two, both times in
+a comment", and the script printed "no test reads what it says". All of it was true on 2026-09-29,
+when it was written. On 2026-10-02 `7f1c3c5` made `every_example_is_run_and_only_examples_are`
+read `ci.yml`'s example loop, and all of it stood until 2026-11-17. So the listing is found by a
+search, not written down.
 
 ## What it was checked against
 
@@ -137,6 +155,36 @@ The first guard on `cfg_attr` matched `cfg_attr\([^)]*path`, which stops at the 
 target that names neither it nor its directory, and the file of patterns that `MSYS_NO_PATHCONV=1`
 made unreadable. It also found exit codes outside the scheme above, and counts in this section
 that the measurements did not support. All of them are fixed above.
+
+### And the version that says where a file is named, 2026-11-17
+
+Run on 2026-11-17 by a script that held the new `run.sh` outside the tree, so the tree held only the
+change each case made. Each change was restored by bytes and checked by SHA-256. The six that need
+a committed `.rs` change ran in a throwaway worktree, listed and not run. Each committed one line
+or a few to the end of `counts_in_prose.rs`, or the one change named, and then appended a comment
+to the workflow:
+
+| change | result |
+| --- | --- |
+| a comment appended to `ci.yml`, through the version before | listed, with `no test reads what it says` |
+| a comment appended to `ci.yml` | passed in seven targets, with `its path is in a test outside a comment at crates/pantometry/tests/counts_in_prose.rs:1132`; the two comments that name the file are not listed |
+| an example dropped from `ci.yml`'s loop | `every_example_is_run_and_only_examples_are` failed; the gate FAILED |
+| a comment appended to `release-python.yml` | listed, with `no test has its path outside a comment` |
+| an unclosed list appended to `ci.yml` | failed: does not parse |
+| `ci.yml`, with line 1132 of `counts_in_prose.rs` made a comment | `no test has its path outside a comment` |
+| `release-python.yml`, with `"app/tool/release-python.yml"` in code | `no test has its path outside a comment` |
+| `release-python.yml`, with its path in a `/* */` comment and on a ` * ` line | `no test has its path outside a comment` |
+| `release-python.yml`, with its path in a `//` comment and `grep.column=true` | `no test has its path outside a comment` |
+| the same, through a copy without `--no-column` | that comment listed as where its path is: the case reaches the guard |
+| `release-python.yml`, with `// .github/workflows/release-python.yml` after a line of code | that line listed: the stated limit, a comment after code taken for code |
+
+`unearned-pass-hunter` read the first draft, which searched for the name. It found that
+`grep.column` put a column before the text and turned both of `ci.yml`'s comments into reads; that
+a search built to over-include could name a read that was not there, through another file's
+`config.yml` or a `/* */` comment; and that this README wrote `1132` down in the change whose
+point is that it is found. The path, the wider comment rule and `--no-column` are the fixes. A path
+in a string is still taken for a read, which the section above says, and so is a `//!` behind a
+byte-order mark, which no test file has.
 
 What it does not do: build anything, run clippy, or check formatting. There is no Rust in the
 change, which is the condition it checks first.
