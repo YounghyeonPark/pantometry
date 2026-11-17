@@ -16,8 +16,14 @@ param(
     # than for a fixed time, and gives up -- writing nothing -- after this.
     [int]$RunSeconds = 120,
     # After the run has finished, for the shaded pass to draw what it produced.
-    [int]$SettleSeconds = 3
+    [int]$SettleSeconds = 3,
+    # The results panel's tab, given to the dump and to the window alike, or empty for the one the
+    # panel picks: the region when the run has a field and the readings when it has none.
+    [string]$Results = ""
 )
+# One list for both commands, so the caption and the picture cannot be of different tabs.
+$tabArgs = @()
+if ($Results -ne "") { $tabArgs = @("--results", $Results) }
 
 # **A failure stops the script.** PowerShell 5.1 treats an exception from a .NET method as ending
 # that statement and no more, inside `try` as well, so a picture that failed to save went on to a
@@ -127,7 +133,7 @@ $was = [Console]::OutputEncoding
 # picture of any other scene silently replaced the committed caption for this one -- the picture
 # and its caption then described different scenes, and only the guard test would have said so.
 # `$caption` is set at the top, from the resolved `-Out`.
-$dump = & $exe --ui-dump $Scene --ran | Out-String
+$dump = & $exe --ui-dump $Scene --ran @tabArgs | Out-String
 $code = $LASTEXITCODE
 [Console]::OutputEncoding = $was
 # **The dump's exit code, read.** `Stop` does not reach a native command's exit code in 5.1, and a
@@ -142,7 +148,7 @@ $wantH = [int]$Matches[2]
 # `, ran` to its title then, and only for a run that finished -- not one stopped or refused.
 $ranTitle = "pantometry editor " + [char]0x2014 + " " + [System.IO.Path]::GetFileName($Scene) + ", ran"
 
-$p = Start-Process -FilePath $exe -ArgumentList @("edit", $Scene, "--run") -PassThru
+$p = Start-Process -FilePath $exe -ArgumentList (@("edit", $Scene, "--run") + $tabArgs) -PassThru
 try {
     $hwnd = [IntPtr]::Zero
     $r = New-Object Win+RECT

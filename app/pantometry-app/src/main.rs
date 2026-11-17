@@ -36,6 +36,7 @@ mod cli;
 mod edit;
 mod glyphs;
 mod render;
+mod results;
 mod start;
 mod view;
 
@@ -131,7 +132,7 @@ fn main() {
 const DUMP_USAGE: &str = concat!(
     "usage: pantometry --ui-dump [scene.json] [--width W] [--height H] [--new [kind,kind]]",
     " [--open AREA] [--custom] [--click X,Y]... [--drag X0,Y0,X1,Y1]... [--ran] [--iso]",
-    " [--solo] [--run-after-clicks] [--source] [--select PATH]"
+    " [--solo] [--run-after-clicks] [--source] [--select PATH] [--results TAB]"
 );
 
 /// **`--ui-dump`'s arguments, every one accounted for.**
@@ -167,6 +168,7 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
         run_after: false,
         source: false,
         select: None,
+        results: None,
     };
     // A flag that sets one value is refused the second time, rather than one of the two winning.
     let mut once: Vec<&str> = Vec::new();
@@ -174,7 +176,10 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
     while i < rest.len() {
         let a = rest[i].as_str();
         let said = rest.get(i + 1).map(String::as_str);
-        if matches!(a, "--width" | "--height" | "--open" | "--new" | "--select") {
+        if matches!(
+            a,
+            "--width" | "--height" | "--open" | "--new" | "--select" | "--results"
+        ) {
             if once.contains(&a) {
                 return Err(format!("{a} was given twice"));
             }
@@ -296,6 +301,24 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
                 }
                 took = 2;
             }
+            // **The results panel on one tab**, by the tab's name. A word that names none is
+            // refused with the names, for the reason a bad `--select` is: a frame on the tab the
+            // panel picked itself looks like a frame on the tab that was asked for.
+            "--results" => {
+                match said.and_then(results::Tab::named) {
+                    Some(t) => asked.results = Some(t),
+                    None => {
+                        let names: Vec<&str> =
+                            results::Tab::ALL.iter().map(|t| t.label()).collect();
+                        return Err(format!(
+                            "--results takes one of {}; got {}",
+                            names.join(", "),
+                            said.unwrap_or("nothing")
+                        ));
+                    }
+                }
+                took = 2;
+            }
             _ if i == 0 && !a.starts_with('-') => asked.path = Some(a.to_string()),
             _ if a.starts_with('-') => return Err(format!("--ui-dump does not take {a}")),
             _ => {
@@ -315,6 +338,14 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
         if asked.custom {
             return Err(String::from("--custom takes effect only with --new"));
         }
+    }
+    // **And a tab of a panel that is not there.** The results panel opens with a run, so
+    // `--results line` without one drew a frame with no panel and exited 0: a test that forgot
+    // `--ran` would have swept nothing and passed.
+    if asked.results.is_some() && !(asked.ran || asked.run_after) {
+        return Err(String::from(
+            "--results takes effect only with --ran or --run-after-clicks",
+        ));
     }
     // **A point outside the window lands on nothing**, which is what a mistyped click used to do.
     let points = asked

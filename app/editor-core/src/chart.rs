@@ -49,15 +49,29 @@ pub struct Axis {
     pub lines: Vec<Line>,
 }
 
+/// What a chart's horizontal axis measures.
+///
+/// The readings are against time and a profile along a line is against distance. One chart and
+/// two axes, rather than a second chart that would be a second chance to place a point wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Across {
+    /// Seconds, labelled in whatever unit the span is said in: `time / h`.
+    Time,
+    /// Metres, labelled the same way: `distance / mm`.
+    Distance,
+}
+
 /// A run's readings, ready to draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chart {
     /// Whether the vertical axes are logarithmic.
     pub log: bool,
-    /// The time the run starts at, in seconds.
-    pub t0: f64,
-    /// The time it ends at, in seconds.
-    pub t1: f64,
+    /// What the horizontal axis measures.
+    pub across: Across,
+    /// Where the horizontal axis starts: seconds for time, metres for distance.
+    pub x0: f64,
+    /// Where it ends, in the same unit.
+    pub x1: f64,
     /// One per unit, in the order the units first appear.
     pub axes: Vec<Axis>,
 }
@@ -121,12 +135,76 @@ pub fn chart(run: &Run, log: bool) -> Option<Chart> {
         };
     }
     axes.retain(|a| a.lo.is_finite());
-    let t0 = run.frames.first()?.t;
-    let t1 = run.frames.last()?.t;
+    let x0 = run.frames.first()?.t;
+    let x1 = run.frames.last()?.t;
     if axes.is_empty() {
         return None;
     }
-    Some(Chart { log, t0, t1, axes })
+    Some(Chart {
+        log,
+        across: Across::Time,
+        x0,
+        x1,
+        axes,
+    })
+}
+
+/// Lines in one unit as a chart against `across`, or `None` when no line has a finite point.
+///
+/// **The vertical axis fits the data**, where [`chart`]'s takes in zero. A reading is usually an
+/// amount, and an amount's distance from nothing is part of what it says; a profile through a
+/// part at 293 K is not, and an axis from zero would draw it as a flat line along the top of the
+/// plot. A twentieth of the range is left above and below, and a line with no range at all gets
+/// a thousandth of its value either side, so it is drawn as a line in the middle and not as an
+/// axis of zero height.
+///
+/// **No range means less than a billionth of the value.** A run writes seven figures, so a field
+/// that is flat in the file and read between its samples varies only by the interpolation's
+/// rounding: scene 24's profile through its module is 488.5735 K to within 1.7e-13. An axis fitted
+/// to that is labelled to twelve decimals — scene 25's read `435.018200000000`, 106 points wide,
+/// out of the plot and over the outliner beside it. A range that small is not the field's and is
+/// drawn as flat.
+pub fn graph(across: Across, unit: &str, lines: Vec<Line>) -> Option<Chart> {
+    let finite = || {
+        lines
+            .iter()
+            .flat_map(|l| l.points.iter())
+            .filter(|p| p[0].is_finite() && p[1].is_finite())
+    };
+    let (mut x0, mut x1) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for p in finite() {
+        x0 = x0.min(p[0]);
+        x1 = x1.max(p[0]);
+        lo = lo.min(p[1]);
+        hi = hi.max(p[1]);
+    }
+    if lo > hi {
+        return None;
+    }
+    let size = lo.abs().max(hi.abs());
+    let pad = if hi - lo > 1e-9 * size {
+        0.05 * (hi - lo)
+    } else if size > 0.0 {
+        // Flat: centred on its middle, so a line rounding-wide is drawn as one line.
+        let mid = 0.5 * (lo + hi);
+        (lo, hi) = (mid, mid);
+        1e-3 * size
+    } else {
+        1.0
+    };
+    Some(Chart {
+        log: false,
+        across,
+        x0,
+        x1,
+        axes: vec![Axis {
+            unit: unit.to_string(),
+            lo: lo - pad,
+            hi: hi + pad,
+            lines,
+        }],
+    })
 }
 
 /// The whole decades that hold `min..=max`, both positive: `10^⌊log min⌋` to `10^⌈log max⌉`, and
@@ -164,15 +242,46 @@ impl Axis {
     /// of ten on a linear one, about five of them.
     pub fn ticks(&self, log: bool) -> Vec<f64> {
         let mut out = Vec::new();
+        // **An axis no wider than its numbers' rounding has one tick, and an axis of no number
+        // has none.** A run of one frame is a time axis from `t` to `t`; the step below was a
+        // fifth of nothing, and `nice_step` looked for a power of ten under zero until it reached
+        // zero and then multiplied zero by ten for ever. And an axis a rounding wide is worse:
+        // the results panel's line tab on scene 24 drew a profile flat at 488.5735 K to within
+        // 1.7e-13, the step was 5e-14 and the first tick's count 9.77e15 — past 2^53, 9.01e15,
+        // where adding one to it changes nothing — and the loop pushed the same tick until it
+        // asked for 34 GB and the editor aborted.
+        if !(self.lo.is_finite() && self.hi.is_finite()) {
+            return out;
+        }
+        // **And the ends of the doubles.** A fifth of the span is the step's first guess, and
+        // `numerics-reviewer` found two axes where it is not a normal number: `[0, 1e-323]`,
+        // whose fifth rounds to zero, and `±9.35e307`, whose span overflows to infinity. Both
+        // looped for ever in `nice_step` without allocating. They take one tick too.
+        let size = self.lo.abs().max(self.hi.abs());
+        let fifth = (self.hi - self.lo) / 5.0;
+        if self.hi - self.lo <= 64.0 * f64::EPSILON * size || !fifth.is_normal() {
+            out.push(self.lo);
+            return out;
+        }
         if log {
+            // A decade is a positive number times ten, and the loop ends at the first one past
+            // the top or at infinity, whichever comes first: an axis built by hand with a top
+            // near the largest double made `hi * (1 + 1e-9)` infinite and the loop endless.
+            // `lo` is finite here, so this is every bottom with no logarithm.
+            if self.lo <= 0.0 {
+                return out;
+            }
             let mut v = self.lo;
-            while v <= self.hi * (1.0 + 1e-9) {
+            while v.is_finite() && v <= self.hi * (1.0 + 1e-9) {
                 out.push(v);
                 v *= 10.0;
             }
             return out;
         }
-        let step = nice_step((self.hi - self.lo) / 5.0);
+        let step = nice_step(fifth);
+        // Past the guard above the span is over 64 ulps of the value, so the step is over a
+        // fifth of that and `k` starts below 5 / (64 ε) ≈ 3.5e14 — well under 2^53, where
+        // `k += 1.0` still counts.
         let mut k = (self.lo / step).ceil();
         while k * step <= self.hi + step * 1e-9 {
             // `k * step` rather than a running sum, so the tenth tick is not ten roundings out.
@@ -183,7 +292,43 @@ impl Axis {
     }
 }
 
-/// The smallest of 1, 2 and 5 times a power of ten that is at least `raw`.
+/// The step a tick's label is written to: the distance between two ticks, or for an axis with
+/// one, the tick's own size.
+///
+/// **One, it was**, which labels a run of one frame at 0.5 s as `0` — `unearned-pass-hunter` read
+/// it off the code, and a check that could not fail had hidden it.
+fn step_of(ticks: &[f64]) -> f64 {
+    match ticks {
+        [a, b, ..] => b - a,
+        [v] if *v != 0.0 => v.abs(),
+        _ => 1.0,
+    }
+}
+
+/// One connected run of a line's points, drawn: a stroke for two or more, and a dot for one.
+///
+/// **A dot, because a stroke of one point is not painted.** The first frame of every run streams
+/// in alone, and a line that touches a domain at one point has one value; each drew a legend and
+/// nothing beside it.
+fn trace(d: &mut Drawing, run: Vec<[f64; 2]>, colour: [u8; 3]) {
+    match run.as_slice() {
+        [] => {}
+        [only] => d.discs.push(Disc {
+            centre: *only,
+            radius: 2.5,
+            fill: Some(colour),
+            outline: colour,
+        }),
+        _ => d.strokes.push(Stroke {
+            points: run,
+            colour,
+            width: 2.0,
+        }),
+    }
+}
+
+/// The smallest of 1, 2 and 5 times a power of ten that is at least `raw`, which must be a
+/// positive number: [`Axis::ticks`] does not call it for an axis of no length.
 fn nice_step(raw: f64) -> f64 {
     let mut p = 1.0;
     while p > raw {
@@ -210,6 +355,21 @@ pub fn time_unit(span_s: f64) -> (&'static str, f64) {
         ("min", 60.0)
     } else {
         ("s", 1.0)
+    }
+}
+
+/// The unit a length is labelled in, and metres in one of it: millimetres for a part, microns
+/// for a channel. Spelled `um`, as [`crate::metres`] spells it.
+pub fn length_unit(span_m: f64) -> (&'static str, f64) {
+    let a = span_m.abs();
+    if a >= 1.0 {
+        ("m", 1.0)
+    } else if a >= 1e-3 {
+        ("mm", 1e-3)
+    } else if a >= 1e-6 {
+        ("um", 1e-6)
+    } else {
+        ("nm", 1e-9)
     }
 }
 
@@ -294,7 +454,8 @@ pub struct Disc {
 pub struct Drawing {
     /// Lines: the readings, the axes and gridlines, and the cursor.
     pub strokes: Vec<Stroke>,
-    /// Circles: a diagram's compartments. A chart has none.
+    /// Circles: a diagram's compartments, and a chart's points that stand alone — a line's only
+    /// point, or one between two its axis cannot place.
     pub discs: Vec<Disc>,
     /// Tick labels, units, the time axis and each line's name.
     pub texts: Vec<Text>,
@@ -347,25 +508,37 @@ fn tick_label(v: f64, step: f64, log: bool) -> String {
             format!("1e{e}")
         };
     }
+    // **Zero is `0`**, not twelve decimals of it: the protein's time axis starts at 0 with a step
+    // of 5e-12 s, and the decimals the step asks for made its first label `0.000000000000`.
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let a = v.abs();
+    if !(1e-3..1e6).contains(&a) {
+        // **As many figures as tell two ticks apart.** Two decimals always made the protein's
+        // softest mode, flat at 2.1837e11 Hz on an axis stepping 2e8, four labels of `2.18e11`.
+        // A tick is a whole number of steps, so the figures between the value's exponent and the
+        // step's are exactly what distinguishes it from its neighbours.
+        let e = a.log10().floor();
+        let s = step.abs().log10().floor();
+        let figures = (e - s).clamp(1.0, 12.0) as usize;
+        return format!("{v:.figures$e}");
+    }
     let mut decimals = 0usize;
     let mut s = step;
     while s < 1.0 - 1e-9 && decimals < 12 {
         s *= 10.0;
         decimals += 1;
     }
-    let a = v.abs();
-    if a != 0.0 && !(1e-3..1e6).contains(&a) {
-        format!("{v:.2e}")
-    } else {
-        format!("{v:.decimals$}")
-    }
+    format!("{v:.decimals$}")
 }
 
 impl Chart {
-    /// Where time `t` (seconds) sits across the plots, 0 at the run's start and 1 at its end.
-    pub fn place_time(&self, t: f64) -> f64 {
-        if self.t1 > self.t0 {
-            (t - self.t0) / (self.t1 - self.t0)
+    /// Where `x` — seconds or metres, as [`Chart::across`] says — sits across the plots, 0 at
+    /// the start of the axis and 1 at its end.
+    pub fn place_x(&self, x: f64) -> f64 {
+        if self.x1 > self.x0 {
+            (x - self.x0) / (self.x1 - self.x0)
         } else {
             0.0
         }
@@ -385,21 +558,21 @@ impl Chart {
             .collect()
     }
 
-    /// The chart as strokes and text in a `width × height` drawing, with a cursor at `cursor`
-    /// seconds when there is one — the frame on screen.
+    /// The chart as strokes and text in a `width × height` drawing, with a cursor at `cursor` —
+    /// in the horizontal axis's own unit, seconds or metres — when there is one: the frame on
+    /// screen.
     pub fn draw(&self, width: f64, height: f64, cursor: Option<f64>) -> Drawing {
         let mut d = Drawing::default();
         let plots = self.plots(width, height);
-        let (unit, per) = time_unit(self.t1 - self.t0);
-        let x = |r: &[f64; 4], t: f64| r[0] + self.place_time(t) * (r[2] - r[0]);
+        let (quantity, (unit, per)) = match self.across {
+            Across::Time => ("time", time_unit(self.x1 - self.x0)),
+            Across::Distance => ("distance", length_unit(self.x1 - self.x0)),
+        };
+        let x = |r: &[f64; 4], t: f64| r[0] + self.place_x(t) * (r[2] - r[0]);
         for (axis, r) in self.axes.iter().zip(&plots) {
             let y = |u: f64| r[3] - u * (r[3] - r[1]);
             let ticks = axis.ticks(self.log);
-            let step = if ticks.len() > 1 {
-                ticks[1] - ticks[0]
-            } else {
-                1.0
-            };
+            let step = step_of(&ticks);
             for v in &ticks {
                 let Some(u) = axis.place(*v, self.log) else {
                     continue;
@@ -437,24 +610,10 @@ impl Chart {
                 for p in &line.points {
                     match axis.place(p[1], self.log) {
                         Some(u) => run.push([x(r, p[0]), y(u)]),
-                        None => {
-                            if !run.is_empty() {
-                                d.strokes.push(Stroke {
-                                    points: std::mem::take(&mut run),
-                                    colour,
-                                    width: 2.0,
-                                });
-                            }
-                        }
+                        None => trace(&mut d, std::mem::take(&mut run), colour),
                     }
                 }
-                if !run.is_empty() {
-                    d.strokes.push(Stroke {
-                        points: run,
-                        colour,
-                        width: 2.0,
-                    });
-                }
+                trace(&mut d, run, colour);
                 d.texts.push(Text {
                     at: [r[2] - 6.0, r[1] + 4.0 + 15.0 * i as f64],
                     text: format!("{} {}", line.domain, line.label),
@@ -464,31 +623,36 @@ impl Chart {
             }
         }
         if let (Some(first), Some(last)) = (plots.first(), plots.last()) {
-            let span = self.t1 - self.t0;
+            let span = self.x1 - self.x0;
             let axis = Axis {
                 unit: String::new(),
-                lo: self.t0 / per,
-                hi: self.t1 / per,
+                lo: self.x0 / per,
+                hi: self.x1 / per,
                 lines: Vec::new(),
             };
             let ticks = axis.ticks(false);
-            let step = if ticks.len() > 1 {
-                ticks[1] - ticks[0]
-            } else {
-                1.0
-            };
+            let step = step_of(&ticks);
             for v in ticks {
                 let px = x(last, v * per);
+                // **A tick at the end of the axis is labelled inside it.** Centred on the plot's
+                // right edge, half of `0.006` hung past the drawing's 14-pixel margin and was
+                // cut to `0.00` by whatever held the drawing — the results panel's first chart
+                // showed it. Right-aligned there, it ends on its tick.
+                let near_end = last[2] - px < 24.0;
                 d.texts.push(Text {
                     at: [px, last[3] + 6.0],
                     text: tick_label(v, step, false),
-                    anchor: Anchor::Top,
+                    anchor: if near_end {
+                        Anchor::TopRight
+                    } else {
+                        Anchor::Top
+                    },
                     colour: INK,
                 });
             }
             d.texts.push(Text {
                 at: [last[2], last[3] + 20.0],
-                text: format!("time / {unit}"),
+                text: format!("{quantity} / {unit}"),
                 anchor: Anchor::TopRight,
                 colour: INK,
             });

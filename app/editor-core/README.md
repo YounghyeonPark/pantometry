@@ -198,6 +198,106 @@ than against a second. The closed form it answers to is the tissue's: one joined
 blood and clearing nothing rises while its head points in and falls once it points out, so the
 frame a head turns is the frame the tissue peaks, and the test reads both off the run.
 
+## Results under the view
+
+A run on screen was a picture, a slider and a readout under the pointer. What a person running a
+simulation tool asks next is a number, so once a run is on screen a panel opens under everything
+but the tree, with five tabs:
+
+- **Region**: the largest and smallest value and where they are, the mean by volume, the integral
+  and the volume. It reads the domain or a box of it, and charts the max, mean and min over the run.
+- **Slice**: the field on a plane across x, y or z, in the view's own colours and with a colour
+  bar. Under the pointer it gives the value read off the field, not off the pixel.
+- **Line**: the field along a straight line, against distance.
+- **Point**: the value at a point now, and at every frame.
+- **Readings**: every reading the frame reports as a table, and the one picked charted against
+  time.
+
+What a tab reads is drawn in the viewport too: the plane, the line, the probe or the box.
+Positions are in the domain's own frame, in the unit its size is said in.
+
+`editor_core::post` computes all of it and the shell computes nothing, so the browser editor can
+draw the same numbers from the same calls. What it promises, and what holds each promise:
+
+- **Between samples, trilinear; at a sample, the sample to the bit.** A neighbour whose weight is
+  zero is not multiplied in, so a probe on a sample next to a hole reads the sample.
+- **A hole is a hole.** A point whose neighbours include one has no value, and a line through it
+  breaks. A probe on the edge of a part would otherwise read the average of the neighbours that
+  exist, which is a number no cell has.
+- **Past the last cell centre, that cell.** A cell-centred field has no sample on its walls, and
+  extending a line past the data can overshoot what any cell holds.
+- **Each lattice integrates by its own rule.** Cell averages use the midpoint rule and samples on
+  the faces the trapezoid rule. The linear test cannot tell the two apart, so
+  `each_lattice_is_integrated_by_its_own_rule` holds each to its exact error on `x^2`:
+  `-L^3/(12 n^2)` for the midpoint and `+L^3/(6 m^2)` for the trapezoid.
+- **An insulated block keeps its mean, and a leaking one does not.** Scene 15 is a 9 mm aluminium
+  cube at 20 °C with one cell of 729 at 60 K above it and no face cooled, so its mean is
+  293.15 + 60/729 K in every one of its 89 frames. Its hottest cell can only cool and its coldest
+  only warm. The test holds the mean to 5e-5 K, which is the seven figures the run file writes
+  and not a property of the solver. It holds the other two with no slack, because rounding to a
+  fixed grid keeps order. The wrong rule fails it by a distance: trapezoid weights on these cell
+  averages put the mean 0.035 K high.
+
+  As shipped, the hot cell is in the middle, and over 6 ms its heat barely reaches the walls.
+  Cooling all six faces at 25 W/m²/K left the written mean where it was. So the test also puts
+  the cell in a corner, where the mean holds to 3.2e-6 K, and cools that corner's face at
+  1e4 W/m²/K, where the mean falls 1.6e-3 K. The test asks for both.
+
+The panel is held to the domains' own numbers rather than to `post` alone. On scene 29's bracket
+the region's max, min and mean match the block's own `peak`, `coldest` and `mean` readings. The
+domain computes those over the 4100 cells the STL filled, and the panel counts the same 4100 with
+the 4012 holes left out. On scene 15 the probe opens at the middle cell and reads the region's
+maximum.
+
+**What sweeping it found.** Every shipped scene on every tab, and the built-in scene at nine widths
+with and without an isosurface, was checked for strings drawn over each other or cut off by the
+window. That sweep found:
+
+- **A crash.** Scene 24's line through its module is 488.5735 K to within 1.7e-13: a field flat in
+  the file, read between its samples. The chart fitted its axis to that, the first tick's count
+  was 9.77e15 (past 2^53, where adding one changes nothing), and the tick loop pushed one tick until
+  it asked for 34 GB and aborted. An axis no wider than its numbers' rounding now has one tick, and
+  `graph` draws a range under a billionth of the value as flat.
+- **Unreadable ticks.** Scene 25's ticks read `435.018200000000`, 106 points wide, across the
+  outliner. The protein's ticks read `2.18e11` four times over and its time axis began
+  `0.000000000000`. Tick labels now carry as many figures as tell two ticks apart, and zero is `0`.
+- **Overlaps the dump counted and nobody would see.** Sixty were reported on the line tab, each a
+  wrapping label's box covering the controls before it. The panel's rows lay their labels out whole.
+- **Layout faults.**
+  - A table of three readings left the panel's row 64 points tall, under the chart's 100-point
+    floor, so the chart was not drawn.
+  - A panel with only a sentence in it shrank to its floor.
+  - At a 700-point window the region's chart beside its statistics laid its time axis's five
+    labels across 64 points.
+- **Collisions in the viewport, not the panel.** Two domains on one corner had their names drawn on
+  one spot: scene 25's structure on its block's own grid, scene 18's two pucks. With the panel
+  taking the bottom of the window, the built-in room's corner note fell on the draw count. Names now
+  stack, a note that repeats one already there is drawn once, and both stay above the readouts'
+  bands and on the view.
+- **Height.** At short heights the panel left a view whose readouts overlapped eight times, so it
+  keeps the view 320 points tall. When even its own floor does not fit, it goes, and the status
+  bar says so.
+
+**What three reviewers found**, each reproduced before it was fixed.
+
+- **A pass that could not fail.**
+  - The insulated test, as above.
+  - A hole probed where it was not one of the eight corners.
+  - A width sweep that passed over a panel drawing nothing.
+  - The line tab's `0` and `9` read from its own controls, not its plot.
+  - An integral checked against the mean it defines.
+  - A label count that always found the axis title.
+- **Absent and said nothing.**
+  - A chart with no room for it.
+  - An unreadable field dropped, so the panel said the run had none.
+  - A plane along a bar.
+  - Names held above a short view and clipped.
+- **Wrong, quietly.**
+  - A pick in the domain menu undone the next frame by the outliner's selection.
+  - A lone tick printing 0.5 s as `0`.
+  - A placed domain's positions not saying they are its own.
+  - Two axes at the ends of the doubles that never returned.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

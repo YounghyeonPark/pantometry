@@ -308,8 +308,25 @@ fn a_compartment_model_is_drawn_as_its_body() {
         .filter(|r| r.unit == "mg/L")
         .map(|r| r.value)
         .collect();
+    // **The diagram's, above the results panel.** The panel's readings table states the same
+    // concentrations in the same unit, and counted with it the diagram had eight for four
+    // compartments. A diagram is drawn with no shaded viewport, so there is no viewport rect to
+    // hold the count to; the panel's heading is where the panel starts.
+    let (_, panel) = at(&dump, "Results").unwrap_or_else(|| panic!("no results panel:\n{dump}"));
+    let above = |l: &str| {
+        let mut n = l
+            .get(..TEXT_AT)
+            .into_iter()
+            .flat_map(|h| h.split_whitespace())
+            .filter_map(|w| w.parse::<f32>().ok());
+        let (Some(_), Some(y)) = (n.next(), n.next()) else {
+            return false;
+        };
+        y < panel
+    };
     let shown: Vec<f64> = dump
         .lines()
+        .filter(|l| above(l))
         .filter_map(|l| l.get(TEXT_AT..)?.strip_suffix(" mg/L")?.parse().ok())
         .collect();
     assert_eq!(

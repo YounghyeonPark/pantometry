@@ -47,6 +47,7 @@ pub mod chart;
 pub mod diagram;
 pub mod edit;
 pub mod form;
+pub mod post;
 
 pub use edit::{
     add_domain, add_domain_json, add_entry, asset_domain, domain_named, drag_along_axis,

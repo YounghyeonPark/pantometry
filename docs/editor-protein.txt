@@ -1,11 +1,11 @@
 size=1500x950
-texts=95
+texts=127
 elided=2
 cut=0
 overlap=0
 unwritable=0
 callbacks=1
-viewport=823,58 374x864
+viewport=823,58 374x604
       16     4    20  File
       60     4    23  Edit
      107     4    28  View
@@ -71,33 +71,65 @@ viewport=823,58 374x864
      611   224     7  +
      634   226   126  structures/1CRN.pdb
      221   226    30  Group
-     379   226   176  crambin at body temperature, moving along the collective modes its own fold has
-     268   242    33  title
+     379   226   133  crambin at body temperature, moving along the collective modes its own fold has
       82   248    77  softest mode
      215   249    36  Scalar
+     268   250    33  title
       82   270    39  spread
      215   272    36  Scalar
-     379   280    65  2.0000e-11
-     268   280    93  duration_s (s)
       82   294    78  displacement
+     379   294    65  2.0000e-11
      215   295    36  Scalar
-     383   304    15  16
-     268   304    40  frames
+     268   296    93  duration_s (s)
       82   316    40  energy
      215   318    36  Scalar
+     383   318    15  16
+     268   320    40  frames
       82   340    74  temperature
      215   341    36  Scalar
       82   362    68  rigid modes
      215   364    36  Scalar
       82   386    98  mode separation
      215   387    36  Scalar
-     831   780   181  0 triangles, 0 lines, 0 paints
-     974   808    66  crambin / m
-    1049   821    60  3.9674e-11
-    1121   821    60  9.5054e-11
-     862   838    24  1 nm
-     831   876    92  t = 2.0000e-11 s
-     952   896    15  16
-     987   896    35  frame
+     831   520   181  0 triangles, 0 lines, 0 paints
+     974   548    66  crambin / m
+    1049   561    60  3.9674e-11
+    1121   561    60  9.5054e-11
+     862   578    24  1 nm
+     831   616    92  t = 2.0000e-11 s
+     952   636    15  16
+     987   636    35  frame
+     268   676    42  Results
+     340   676    41  Region
+     405   676    26  Slice
+     455   676    24  Line
+     503   676    31  Point
+     558   676    53  Readings
+     276   708   127  crambin softest mode
+     444   708    94  2.1837e11 Hz
+     726   713    13  Hz
+     276   730    89  crambin spread
+     444   730    94  5.7185e-11 m
+    1340   737   132  crambin softest mode
+     276   752   127  crambin displacement
+     444   752    94  5.2996e-11 m
+     667   758    53  2.185e11
+     276   774    90  crambin energy
+     444   774    94  5.6523e-19 J
+     667   795    53  2.184e11
+     276   796   124  crambin temperature
+     444   796    70  37.0000 C
+     276   818   118  crambin rigid modes
+     444   818    55  6.0000
+     667   832    53  2.183e11
+     276   840   148  crambin mode separation
+     444   840    78  1.4020e14
+     667   869    53  2.182e11
+     723   900     7  0
+     891   900    46  5.0e-12
+    1079   900    46  1.0e-11
+    1267   900    46  1.5e-11
+    1432   900    46  2.0e-11
+    1425   914    53  time / s
        8   933    83  ran: 17 frames
     1396   933    96  watching the file

@@ -76,14 +76,41 @@ fn open(passed: &[String]) -> eframe::Result {
     //
     // The arguments come from the dispatcher, not from `std::env` — this is a subcommand now, and
     // reading the process's own arguments here would see `edit` as a filename.
+    //
+    // `--results TAB` opens the results panel on that tab, which is the same door `--ui-dump`
+    // has, so a screenshot of a tab and a caption of it are of one frame.
     let mut path = None;
     let mut run_at_once = false;
-    for arg in passed {
+    let mut tab = None;
+    let mut args = passed.iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--run" => run_at_once = true,
+            // Refused twice, as `--ui-dump` refuses a flag given twice: one of two winning is a
+            // window on a tab nobody asked for.
+            "--results" if tab.is_some() => {
+                eprintln!("pantometry edit: --results was given twice");
+                std::process::exit(2);
+            }
+            "--results" => {
+                let word = args.next();
+                match word.and_then(|w| crate::results::Tab::named(w)) {
+                    Some(t) => tab = Some(t),
+                    None => {
+                        let names: Vec<&str> =
+                            crate::results::Tab::ALL.iter().map(|t| t.label()).collect();
+                        eprintln!(
+                            "pantometry edit: --results takes one of {}; got {}",
+                            names.join(", "),
+                            word.map_or("nothing", String::as_str)
+                        );
+                        std::process::exit(2);
+                    }
+                }
+            }
             other if other.starts_with('-') => {
                 eprintln!("pantometry edit: unknown option {other}");
-                eprintln!("usage: pantometry edit [scene.json] [--run]");
+                eprintln!("usage: pantometry edit [scene.json] [--run] [--results TAB]");
                 std::process::exit(2);
             }
             other => path = Some(other.to_string()),
@@ -116,6 +143,7 @@ fn open(passed: &[String]) -> eframe::Result {
                 None => App::empty(),
             };
             app.run_at_once = run_at_once;
+            app.results.tab = tab;
             Ok(Box::new(app))
         }),
     )
@@ -245,6 +273,8 @@ pub struct Dump {
     pub source: bool,
     /// Select this row of the tree, so the settings pane is its form.
     pub select: Option<String>,
+    /// Open the results panel on this tab rather than the one it chooses for itself.
+    pub results: Option<crate::results::Tab>,
 }
 
 /// One frame of the editor's interface, as text: every string it drew and where.
@@ -289,6 +319,7 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
         run_after,
         source,
         select,
+        results,
     } = asked;
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -324,6 +355,7 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
     // outliner: there is no width at which a click can reach it and leave it hidden.
     app.solo = solo;
     app.source = source;
+    app.results.tab = results;
     if let Some(path) = select {
         let frame = app.run.as_ref().map_or(0, |v| v.frame);
         let tree = editor_core::tree(&app.checked, app.run.as_ref().map(|v| &v.run), frame);
@@ -625,6 +657,17 @@ fn collect(
 /// and `panel_budget`, which decides how wide each of them may be. They disagreed, and the
 /// viewport was zero points wide at four of the eleven widths `--ui-dump` was asked about.
 pub const VIEWPORT_FLOOR: f32 = 280.0;
+
+/// What the viewport keeps of the window's **height** while the results panel is open.
+///
+/// The width floor's twin. The panel takes the bottom of the window, and the viewport's readouts
+/// hold fixed bands at its top and bottom: at a 550-point window the panel at its 45% share left
+/// a view so short that the readings, the colour bar and the draw count were drawn over each other
+/// eight times.
+pub const VIEWPORT_FLOOR_HEIGHT: f32 = 320.0;
+
+/// The shortest results panel: its tabs, one row of controls and a line under them.
+pub const RESULTS_MIN: f32 = 120.0;
 
 /// The narrowest useful outliner: a tree row with a disclosure arrow, a dot and a truncated name.
 pub const OUTLINER_MIN: f32 = 170.0;
@@ -960,6 +1003,15 @@ struct App {
     /// and egui draws every frame. Rebuilt when the text or the selection changes, and not sixty
     /// times a second in between.
     form_cache: Option<(u64, editor_core::Form)>,
+    /// Whether the results panel is on screen under the view, once there is a run to read.
+    show_results: bool,
+    /// Whether the window was last too short for the results panel, so the note is said once.
+    results_short_was: bool,
+    /// What the results panel is asking, and where. See [`crate::results`].
+    results: crate::results::Results,
+    /// Counts the runs that have arrived and the frames they have grown by, so anything cached
+    /// from a run knows when it is stale without hashing the run.
+    run_generation: u64,
     /// What `panels_that_fit` last reported hiding, so the note is said once and not per paint.
     squeezed_was: Vec<&'static str>,
     /// The files beside the scene that a domain could read, as paths relative to it.
@@ -1043,6 +1095,10 @@ impl App {
             show_assets: true,
             source: false,
             form_cache: None,
+            show_results: true,
+            results_short_was: false,
+            results: crate::results::Results::default(),
+            run_generation: 0,
             squeezed_was: Vec::new(),
             assets: assets_beside(&scanned),
         }
@@ -1213,6 +1269,7 @@ impl App {
             last_step: None,
             partial: false,
         });
+        self.run_generation += 1;
         self.needs_fit = true;
         Ok(())
     }
@@ -1300,6 +1357,7 @@ impl App {
                 last_step: None,
                 partial: true,
             });
+            self.run_generation += 1;
             self.status = format!("running: {} frame(s) so far", last + 1);
         }
         match ended {
@@ -1777,6 +1835,7 @@ impl App {
                     ui.checkbox(&mut self.show_inspector, "Inspector");
                     ui.checkbox(&mut self.show_text, "Settings and source");
                     ui.checkbox(&mut self.show_assets, "Assets");
+                    ui.checkbox(&mut self.show_results, "Results");
                 });
                 menu(ui, "Domain", |ui| {
                     let mut wanted: Option<&str> = None;
@@ -2172,6 +2231,51 @@ impl App {
                 .size_range(OUTLINER_MIN..=most)
                 .show(ui, |ui| self.outliner(ui, &tree));
         }
+
+        // **The results, under everything but the tree.** Declared after the outliner and before
+        // the other panels, so it spans from the tree to the window's right edge: under the view
+        // alone it was 374 points wide on the default window, the statistics took 300 of them and
+        // the chart beside them drew its time axis's four labels over each other. It is where a
+        // commercial package keeps its tables, and for the same reason.
+        //
+        // Only with a run on screen — before one there is nothing to read, and an empty panel is a
+        // fifth of the window saying so. At most a little under half the height between the bars,
+        // and never so much that the view keeps less than `VIEWPORT_FLOOR_HEIGHT`; when even the
+        // panel's own floor does not fit it goes, and the status bar says so once, as it does for
+        // a side panel the width cannot hold.
+        if self.show_results {
+            if let Some(view) = &self.run {
+                let room = ui.available_height();
+                let most = (room - VIEWPORT_FLOOR_HEIGHT).min(room * 0.45);
+                let short = most < RESULTS_MIN;
+                if short != self.results_short_was {
+                    if short {
+                        self.status = String::from(
+                            "the results hidden — the window is too short for them and the view",
+                        );
+                    }
+                    self.results_short_was = short;
+                }
+                if !short {
+                    let prefer = self.selected_domain();
+                    egui::Panel::bottom("results")
+                        .resizable(true)
+                        .default_size(260.0)
+                        .size_range(RESULTS_MIN..=most)
+                        .show(ui, |ui| {
+                            crate::results::panel(
+                                ui,
+                                &mut self.results,
+                                &view.run,
+                                view.frame,
+                                prefer.as_deref(),
+                                self.run_generation,
+                            );
+                        });
+                }
+            }
+        }
+
         if fits.inspector {
             let most = cap(INSPECTOR_MIN, 460.0);
             egui::Panel::right("inspector")
@@ -2870,6 +2974,14 @@ impl App {
         // states are in the settings pane beside the tree, which is where a person sets something
         // up; this side is where they read what a run made of it. The two used to share this
         // panel, inputs above results, and the split is the same line drawn between two panels.
+        //
+        // **A long value wraps inside the panel.** A placed domain's bounds are two corners of
+        // three coordinates, `(0.0000, 0.0000, 0.0000) .. (0.0120, 0.0120, 0.0120)` — 344 points
+        // in a grid that does not wrap, beside a key, in a panel of 320. The grid laid itself out
+        // past the window's edge (`--ui-dump` said `cut=1` for every selected domain) and the
+        // viewport beside it was handed a rect that ran under the inspector, so with a run on
+        // screen its readouts were drawn over the inspector's rows fifteen times.
+        let room = (ui.available_width() - 90.0).max(120.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2877,10 +2989,14 @@ impl App {
                     .num_columns(2)
                     .striped(true)
                     .spacing([10.0, 3.0])
+                    .max_col_width(room)
                     .show(ui, |ui| {
                         for (k, v) in &node.detail {
                             ui.label(egui::RichText::new(k).weak().monospace().size(11.0));
-                            ui.label(egui::RichText::new(v).monospace().size(11.0));
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(v).monospace().size(11.0))
+                                    .wrap(),
+                            );
                             ui.end_row();
                         }
                     });
@@ -2984,10 +3100,16 @@ impl App {
                         _ => "nothing here is set in the scene",
                     });
                 } else {
+                    // **No wider than the pane.** A grid sizes its columns to what is in them,
+                    // and an array's elements side by side are as wide as their numbers: scene
+                    // 06's system and scene 14's sky ran their rows into the asset panel, the
+                    // last number cut at the pane's edge. Capped, a row of them wraps.
+                    let room = (ui.available_width() - 150.0).max(160.0);
                     egui::Grid::new("settings")
                         .num_columns(2)
                         .striped(true)
                         .spacing([10.0, 4.0])
+                        .max_col_width(room)
                         .show(ui, |ui| {
                             for row in &form.rows {
                                 match row {
@@ -2999,7 +3121,7 @@ impl App {
                                     }
                                     editor_core::Row::Many { label, unit, items } => {
                                         ui.label(Self::setting_label(label, unit));
-                                        ui.horizontal(|ui| {
+                                        ui.horizontal_wrapped(|ui| {
                                             for field in items {
                                                 if let Some(c) =
                                                     Self::setting_widget(ui, field, false)
@@ -3998,44 +4120,7 @@ impl App {
                     rect.height() as f64,
                     view.frame,
                 ) {
-                    let at = |p: [f64; 2]| {
-                        egui::pos2(rect.left() + p[0] as f32, rect.top() + p[1] as f32)
-                    };
-                    let rgb = |c: [u8; 3]| egui::Color32::from_rgb(c[0], c[1], c[2]);
-                    for s in &drawing.strokes {
-                        painter.add(egui::Shape::line(
-                            s.points.iter().map(|p| at(*p)).collect(),
-                            egui::Stroke::new(s.width as f32, rgb(s.colour)),
-                        ));
-                    }
-                    for c in &drawing.discs {
-                        let outline = egui::Stroke::new(1.0, rgb(c.outline));
-                        match c.fill {
-                            Some(fill) => {
-                                painter.circle(at(c.centre), c.radius as f32, rgb(fill), outline)
-                            }
-                            None => painter.circle_stroke(at(c.centre), c.radius as f32, outline),
-                        };
-                    }
-                    for t in &drawing.texts {
-                        let align = match t.anchor {
-                            editor_core::chart::Anchor::Left => egui::Align2::LEFT_CENTER,
-                            editor_core::chart::Anchor::Right => egui::Align2::RIGHT_CENTER,
-                            editor_core::chart::Anchor::Top => egui::Align2::CENTER_TOP,
-                            editor_core::chart::Anchor::TopLeft => egui::Align2::LEFT_TOP,
-                            editor_core::chart::Anchor::TopRight => egui::Align2::RIGHT_TOP,
-                            editor_core::chart::Anchor::Bottom => egui::Align2::CENTER_BOTTOM,
-                            editor_core::chart::Anchor::BottomLeft => egui::Align2::LEFT_BOTTOM,
-                            editor_core::chart::Anchor::BottomRight => egui::Align2::RIGHT_BOTTOM,
-                        };
-                        painter.text(
-                            at(t.at),
-                            align,
-                            &t.text,
-                            egui::FontId::monospace(11.0),
-                            rgb(t.colour),
-                        );
-                    }
+                    crate::results::paint(&painter, rect.min, &drawing);
                     return;
                 }
             }
@@ -4169,6 +4254,58 @@ impl App {
             None => Vec::new(),
         };
 
+        // **One bottom, shared.** The scale bar, the colour bar, the count of what the shaded
+        // pass drew and the frame transport each anchored to `rect.bottom()` on their own, and
+        // with a run open the slider was laid out through the middle of the count: `--ui-dump`
+        // reported `overlap=2` and marked `13`, `frame` and `0 triangles, 0 lines, 0 paints` as
+        // sitting on each other.
+        //
+        // **Counted, not measured.** The transport is a `Ui` and is laid out *after* these are
+        // painted, so there is nothing to ask. What it will take is a row for the frame slider
+        // and three for the isosurface level, its name and its note, and 22 points is a widget row with its
+        // spacing. A number arrived at that way is exactly the kind that goes quietly wrong, so
+        // `a_frame_of_the_editor_can_be_read` asserts `overlap` is zero on a run with both.
+        // One band of the viewport's bottom, and there are three of them above the transport:
+        // the scale bar, the colour bar, and the count of what the shaded pass drew.
+        const BAND: f32 = 26.0;
+        let rows = usize::from(self.run.as_ref().is_some_and(|v| v.run.frames.len() > 1)) * 2
+            + usize::from(self.iso.is_some()) * 3;
+        let reserved = if rows == 0 {
+            0.0
+        } else {
+            8.0 + rows as f32 * 22.0
+        };
+        let floor =
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - reserved));
+
+        // **Where a label hung from a corner may reach down to.** A domain's name sits above its
+        // first corner and a field's note below it, so the camera decides their height, while the
+        // readouts hold the bands above. With the results panel taking the bottom of the window,
+        // the built-in room's corner fell on the draw count at 700 points; both labels are held
+        // above the bands now, by one rule, so they move together and stay in their order.
+        //
+        // **And never above the viewport's own top.** The bands are fixed and the viewport is
+        // not: with the results panel taking the bottom of a short window, `floor.bottom()` less
+        // the bands was above the viewport, every corner was held there, and the painter clipped
+        // every name and note away with nothing said. Held inside, a crowded short view may
+        // stack labels over the readouts, which is legible; clipped, it was empty.
+        let lowest = (floor.bottom() - 3.0 * BAND - 30.0).max(rect.top() + 16.0);
+        // **What the corner labels have taken, so a second one finds room.** Two domains that
+        // share a corner — a structure on its block's own grid, two pucks side by side — drew their
+        // names on one spot and their notes on another: scene 25's `module` and `stress` at one
+        // point, its two identical notes on one line. A name steps up past what is taken, a note
+        // steps down, and a note that says what one already says there is drawn once.
+        let mut taken: Vec<(egui::Rect, String)> = Vec::new();
+        // Where each note was anchored and what it said, so a second one saying the same from the
+        // same corner is known by where it was meant to go and not by where the first one ended.
+        let mut noted: Vec<(egui::Pos2, String)> = Vec::new();
+        let clear = |taken: &[(egui::Rect, String)], r: egui::Rect| {
+            !taken.iter().any(|(t, _)| {
+                t.shrink2(egui::vec2(0.0, 2.0))
+                    .intersects(r.shrink2(egui::vec2(0.0, 2.0)))
+            })
+        };
+
         // The scene's own geometry: every placed extent, wireframed. Drawn from the text, not
         // the run, so layout is visible while editing and before anything is computed.
         //
@@ -4224,36 +4361,45 @@ impl App {
             let x =
                 at.x.min(rect.right() - galley.rect.width())
                     .max(rect.left());
-            painter.galley(egui::pos2(x, at.y - galley.rect.height()), galley, colour);
+            let mut place = egui::Rect::from_min_size(
+                egui::pos2(x, at.y.min(lowest) - galley.rect.height()),
+                galley.rect.size(),
+            );
+            // Up past what is taken, and no further than the viewport's top: a name stacked off
+            // the picture is a name nobody reads.
+            while !clear(&taken, place) && place.top() - galley.rect.height() >= rect.top() {
+                place = place.translate(egui::vec2(0.0, -galley.rect.height()));
+            }
+            taken.push((place, placed.name.clone()));
+            painter.galley(place.min, galley, colour);
+        }
+
+        // **What the results panel is reading, where it is.** The plane, the line, the probe or
+        // the box, drawn over the picture like a handle is: a number about a place is only as
+        // good as knowing which place, and the panel's coordinates are in the domain's own frame.
+        if self.show_results {
+            if let Some(view) = &self.run {
+                let overlay = crate::results::overlay(&self.results, &view.run, view.frame);
+                let ink = egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(40, 200, 220));
+                for line in &overlay.lines {
+                    for pair in line.windows(2) {
+                        if seen(pair[0]) && seen(pair[1]) {
+                            painter.line_segment([to_screen(pair[0]), to_screen(pair[1])], ink);
+                        }
+                    }
+                }
+                for mark in &overlay.marks {
+                    if seen(*mark) {
+                        painter.circle_stroke(to_screen(*mark), 5.0, ink);
+                    }
+                }
+            }
         }
 
         // How big any of this is. A viewport with no scale is a picture of a shape and not of a
         // part: the same wireframe serves a 40 mm die and a 4 m room, and until now nothing on
         // screen said which. Drawn from the framing's own span, so it is the model's metres and
         // not the window's pixels.
-        // **One bottom, shared.** The scale bar, the colour bar, the count of what the shaded
-        // pass drew and the frame transport each anchored to `rect.bottom()` on their own, and
-        // with a run open the slider was laid out through the middle of the count: `--ui-dump`
-        // reported `overlap=2` and marked `13`, `frame` and `0 triangles, 0 lines, 0 paints` as
-        // sitting on each other.
-        //
-        // **Counted, not measured.** The transport is a `Ui` and is laid out *after* these are
-        // painted, so there is nothing to ask. What it will take is a row for the frame slider
-        // and three for the isosurface level, its name and its note, and 22 points is a widget row with its
-        // spacing. A number arrived at that way is exactly the kind that goes quietly wrong, so
-        // `a_frame_of_the_editor_can_be_read` asserts `overlap` is zero on a run with both.
-        // One band of the viewport's bottom, and there are three of them above the transport:
-        // the scale bar, the colour bar, and the count of what the shaded pass drew.
-        const BAND: f32 = 26.0;
-        let rows = usize::from(self.run.as_ref().is_some_and(|v| v.run.frames.len() > 1)) * 2
-            + usize::from(self.iso.is_some()) * 3;
-        let reserved = if rows == 0 {
-            0.0
-        } else {
-            8.0 + rows as f32 * 22.0
-        };
-        let floor =
-            egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - reserved));
 
         scale_bar(
             &painter,
@@ -4532,13 +4678,32 @@ impl App {
                             )
                         };
                         if let Some(note) = note.filter(|_| seen(b.corners[0])) {
-                            painter.text(
-                                to_screen(b.corners[0]),
-                                egui::Align2::LEFT_TOP,
-                                note,
+                            // Held above the readouts' bands with the name: see `lowest`.
+                            let at = to_screen(b.corners[0]);
+                            let ink = ui.visuals().weak_text_color();
+                            let galley = painter.layout_no_wrap(
+                                note.to_string(),
                                 egui::FontId::proportional(10.0),
-                                ui.visuals().weak_text_color(),
+                                ink,
                             );
+                            let mut place = egui::Rect::from_min_size(
+                                egui::pos2(at.x, at.y.min(lowest)),
+                                galley.rect.size(),
+                            );
+                            let said_here = noted.iter().any(|(anchor, text)| {
+                                text == note && (*anchor - place.min).length() < 1.0
+                            });
+                            if !said_here {
+                                noted.push((place.min, note.to_string()));
+                                // Down past what is taken, and no further than the floor.
+                                while !clear(&taken, place)
+                                    && place.bottom() + galley.rect.height() <= floor.bottom()
+                                {
+                                    place = place.translate(egui::vec2(0.0, galley.rect.height()));
+                                }
+                                taken.push((place, note.to_string()));
+                                painter.galley(place.min, galley, ink);
+                            }
                         }
                     }
                 }

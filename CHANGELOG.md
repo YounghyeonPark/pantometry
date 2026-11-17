@@ -23,6 +23,74 @@ protects nothing.
 
 ### Added
 
+- **A run's results can be read as numbers, not only looked at.** A run on screen was a picture,
+  a frame slider and a readout under the pointer. A panel now opens under everything but the tree
+  once a run is on screen. **Window → Results** puts it away.
+  - **Five tabs.**
+    - **Region**: the max and min and where they are, the mean by volume, the integral and the
+      volume, over a domain or a box of it, with the three charted over the run.
+    - **Slice**: the field on a plane across x, y or z, in the view's colours with a colour bar.
+    - **Line**: a profile against distance.
+    - **Point**: a probe's value now and over the run.
+    - **Readings**: a table of the frame's readings, with the one picked charted against time.
+
+    What a tab reads is drawn in the viewport too. `editor_core::post` computes every number, so
+    the shells draw and do not compute.
+  - **Checked against closed forms** in `tests/results_are_read_off_the_fields.rs`:
+    - at a sample, the sample to the bit;
+    - a linear field exact between samples;
+    - a hole not averaged over;
+    - the midpoint and trapezoid rules each to its exact error on `x^2`;
+    - scene 15's insulated block keeping its mean at 293.15 + 60/729 K through 89 frames, to the
+      5e-5 K its run file's seven figures allow, with its hottest cell only cooling.
+  - **Checked against the domains' own numbers.** Through the interface, on scene 29's bracket, the
+    region's max, min and mean match the block's own peak, coldest and mean readings. The volume is
+    the 4100 cells the STL filled, times (2 mm)^3.
+  - **What sweeping every scene on every tab found:**
+    - **A crash.** A profile flat to 1.7e-13 at 488.57 K on scene 24 started its tick count at
+      9.77e15, past 2^53. The loop pushed one tick until it asked for 34 GB and the editor aborted.
+    - **Ticks no one could read.** One axis was labelled `435.018200000000` across the outliner;
+      another read four ticks of `2.18e11` and a first of `0.000000000000`.
+    - **Viewport collisions.** Two domains on one corner drew their names on one spot, and a
+      corner's note fell on the draw count.
+
+    Each is fixed and pinned. The two in the chart's ticks were the readings chart's own, and were
+    there before this panel; so was a lone point drawn as a one-point stroke, which egui does not
+    paint and which the readings chart's own test counted as drawn.
+  - **Three reviewers read it** — `numerics-reviewer`, `unearned-pass-hunter`,
+    `silent-failure-hunter` — and each finding was reproduced before it was fixed.
+    - **The insulated-block test could not tell insulated from cooled.** Over 6 ms the centre
+      cell's heat barely reaches the walls, and cooling all six faces at 25 W/m^2/K left the
+      written mean where it was. The test now also has the hot cell in a corner, where it holds to
+      3.2e-6 K, and a cooled corner, where it falls 1.6e-3 K. It asks for both.
+    - **Checks that could not fail.** A hole was probed where it was no corner, a sweep passed over
+      a panel drawing nothing, ticks were read from the controls, and an integral was checked
+      against the mean it defines.
+    - **Absences that said nothing.** A chart with no room, an unreadable field dropped from the
+      menu, a plane along a bar, and names clipped above a short view.
+    - **Quiet wrongs.** A domain picked in the menu was undone the next frame. A lone tick printed
+      0.5 s as `0`. Two axes at the ends of the doubles never returned. `--results` without a run
+      drew a frame with no panel.
+  - **Selecting every shipped domain with a run on screen**, which nothing had done, found two
+    faults in the previous entry's panes.
+    - A selected domain's bounds, two corners of three coordinates, ran the inspector past the
+      window (`cut=1` for every one). The viewport beside it was handed a rect under the inspector
+      and drew its readouts over the inspector's rows: `overlap=15` on scene 25.
+    - An array's elements side by side ran the settings pane into the asset panel on scenes 06
+      and 14.
+
+    Both wrap now. One of the 50 frames still reads `overlap=1`: scene 17's busbar, where a form
+    row half scrolled out of the settings pane sits on the results panel's tabs. The scroll area
+    clips all but two points of it, but the dump counts laid-out text and not what a clip leaves,
+    and changing that is a change to the instrument, left for a commit of its own.
+  - **Thirty-one sabotages**, one per check, each failed and was restored by bytes and SHA-256. One more
+    passed: the line's points written as `a + (b - a) f` miss `b` by an ulp on eleven of the test
+    grid's pairs, and no value read there changes, so nothing here can see it and the code says
+    so. Two were not run because they allocate without bound: the log axis's guard for a bottom
+    at or below zero, and its stop at an infinite decade.
+  - **`pantometry edit --results TAB`** and `--ui-dump --results TAB` open the panel on a tab;
+    `tools/screenshot/take.ps1 -Results` passes the tab to both. Not yet: the browser editor's
+    panel, picking a point in the viewport, a stored set of results in the scene file, and export.
 - **The editor sets a scene up from a model tree and a form, rather than from its JSON.** The
   outliner listed placed *extents*, so a thermal network or a compartment model was not in it until
   a run had reported a scalar, and the inspector could change a value the file had and never give

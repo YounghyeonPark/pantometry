@@ -16,6 +16,11 @@ run finished. It gives the shaded pass three seconds to draw and checks the wind
 size. Only then does it capture the window, close it, and write two files: `docs/editor.png` and
 `docs/editor.txt`.
 
+`-Results TAB` opens the results panel on a tab — `Region`, `Slice`, `Line`, `Point` or
+`Readings` — and hands the same two words to the dump and to the window, so a picture of a tab and
+its caption are of one frame. Without it the panel picks for itself: the region when the run has a
+field and the readings when it has none, which is what both committed figures show.
+
 ## Why it captures the way it does
 
 Each of these is a thing that went wrong once.

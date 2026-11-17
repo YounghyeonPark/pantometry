@@ -88,12 +88,16 @@ fn a_log_axis_leaves_out_what_it_cannot_place() {
         assert_eq!(mg.place(0.0, log).is_none(), log);
 
         let d = c.draw(900.0, 600.0, None);
+        // Strokes and dots: a point alone between two that cannot be placed is a dot, because a
+        // stroke of one point is not painted. On the log axis one of `cleared`'s points is that,
+        // and this counted it as drawn while it was a one-point stroke nobody could see.
         let drawn: usize = d
             .strokes
             .iter()
             .filter(|s| s.width == 2.0)
             .map(|s| s.points.len())
-            .sum();
+            .sum::<usize>()
+            + d.discs.len();
         let placeable: usize = c
             .axes
             .iter()
@@ -287,7 +291,7 @@ fn the_slope_the_chart_draws_is_the_slowest_mode() {
     let ax = &c.axes[i];
     let decades = ax.hi.log10() - ax.lo.log10();
     let fall = (q[1] - p[1]) / (plot[3] - plot[1]) * decades;
-    let hours = (q[0] - p[0]) / (plot[2] - plot[0]) * (c.t1 - c.t0) / 3600.0;
+    let hours = (q[0] - p[0]) / (plot[2] - plot[0]) * (c.x1 - c.x0) / 3600.0;
     let drawn = fall * std::f64::consts::LN_10 / hours;
 
     let (u, v) = (bl[day], bl[bl.len() - 1]);

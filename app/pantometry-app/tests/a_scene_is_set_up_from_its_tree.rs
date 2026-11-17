@@ -368,3 +368,35 @@ fn a_long_value_wraps_inside_its_pane() {
         value.x + value.w
     );
 }
+
+/// **A row of numbers stays in its pane, and so does the inspector beside a selected domain.** An
+/// array's elements are drawn side by side, and a grid sizes its columns to what is in them: scene
+/// 06's orbit radii and scene 14's sky ran their rows into the asset panel. And a selected
+/// domain's bounds, two corners of three coordinates, ran the inspector past the window's edge.
+/// Found by selecting every shipped domain with a run on screen, which nothing had done.
+#[test]
+fn a_selected_domain_keeps_its_rows_in_their_panes() {
+    let header = |d: &str, key: &str| -> usize {
+        d.lines()
+            .find_map(|l| l.strip_prefix(&format!("{key}=")))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("no {key}=:\n{d}"))
+    };
+    for (file, row) in [
+        ("06-orbits.json", "/domains/system"),
+        ("14-a-world.json", "/domains/sky"),
+        ("15-a-hot-spot-in-a-block.json", "/domains/block"),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pantometry-world/scenes")
+            .join(file)
+            .to_string_lossy()
+            .into_owned();
+        let d = dump(&[&path, "--ran", "--select", row]);
+        assert_eq!(
+            (header(&d, "overlap"), header(&d, "cut")),
+            (0, 0),
+            "{file} with {row} selected:\n{d}"
+        );
+    }
+}

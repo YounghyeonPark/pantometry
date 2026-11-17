@@ -1,11 +1,11 @@
 size=1500x950
-texts=110
+texts=148
 elided=3
 cut=0
 overlap=0
 unwritable=0
 callbacks=1
-viewport=823,58 374x864
+viewport=823,58 374x604
       16     4    20  File
       60     4    23  Edit
      107     4    28  View
@@ -97,22 +97,60 @@ viewport=823,58 374x864
      215   410    36  Scalar
       82   432    32  mean
      215   433    36  Scalar
+     927   441    40  bracket
       82   454    42  coldest
+     927   455   248  field: false colour — nothing here is hot enough to glow
      215   456    36  Scalar
       82   478    54  absorbed
      215   479    36  Scalar
       82   500    60  generated
      215   502    36  Scalar
-     927   570    40  bracket
-     927   584   248  field: false colour — nothing here is hot enough to glow
-     831   780   181  0 triangles, 0 lines, 0 paints
-     987   808    66  bracket / K
-    1061   821    36  303.58
-    1103   821    36  314.59
-    1145   821    36  325.59
-     849   838    30  10 mm
-     831   876    67  t = 200.00 s
-     952   896    15  13
-     987   896    35  frame
+     831   520   181  0 triangles, 0 lines, 0 paints
+     987   548    66  bracket / K
+    1061   561    36  303.58
+    1103   561    36  314.59
+    1145   561    36  325.59
+     849   578    30  10 mm
+     831   616    67  t = 200.00 s
+     952   636    15  13
+     987   636    35  frame
+     268   676    42  Results
+     340   676    41  Region
+     405   676    26  Slice
+     455   676    24  Line
+     503   676    31  Point
+     558   676    53  Readings
+     649   676    43  bracket
+     286   708   104  the whole domain
+     268   730    24  max
+     325   730    63  325.59 K
+     646   736     7  K
+     268   754    18  at
+     325   754   110  (49, 9, 17) mm
+     620   759    20  325
+    1399   760    73  bracket max
+    1393   775    79  bracket mean
+     268   776    22  min
+     325   776    63  303.69 K
+     620   788    20  320
+    1399   790    73  bracket min
+     268   800    18  at
+     325   800   102  (9, 49, 1) mm
+     620   816    20  315
+     268   822    32  mean
+     325   822    63  316.90 K
+     620   845    20  310
+     268   846    45  integral
+     325   846   110  0.010394 K m^3
+     268   868    43  volume
+     325   868   102  3.2800e-5 m^3
+     620   873    20  305
+     268   892    25  cells
+     325   892   243  4100 and 4012 not in the domain
+     643   900     7  0
+     892   900     7  1
+    1142   900     7  2
+    1391   900     7  3
+    1412   914    66  time / min
        8   933    83  ran: 14 frames
     1396   933    96  watching the file
