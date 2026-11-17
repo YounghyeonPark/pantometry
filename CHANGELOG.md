@@ -492,6 +492,45 @@ protects nothing.
   - **The stated limit:** a `// .github/workflows/release-python.yml` after a line of code is
     listed.
 
+- **`app/`'s doctests were compiled for Windows only, and CI compiles them on Linux.** The gate's
+  `cargo test` in `app/` compiles them for windows-gnu and CI's `the app` job on ubuntu, so a
+  doctest that used an item a `cfg` holds to Windows would pass the gate and fail CI. Clippy does
+  not read doctests, and rustdoc compiles them only under `cargo test`, so neither Linux line saw
+  one. `CONTRIBUTING.md` said that checking them for Linux here would need a Linux linker, and this
+  machine had one, in WSL's Ubuntu.
+
+  `tools/doctest-linux/run.sh` is a new step in `app/`'s gate, in all three copies. It runs `cargo
+  test --locked --workspace --doc` in WSL, on the same working tree and at CI's opt-level, in a
+  target directory of its own for each tree. It refuses when WSL's `rustc -V` or `cargo -V` is not
+  the host's. It fails a run in which no doctest passed. On Linux or macOS it runs the doctests
+  itself. Cold it took 56 s and 1.5 GB in WSL; warm, 4 to 8 s.
+
+  Each sabotage was restored by bytes and checked by SHA-256:
+  - **The defect:** a doctest calling a `#[cfg(windows)]` function. `cargo test --doc` here passed,
+    and so did clippy and rustdoc for Linux. The new step failed with `E0425`.
+  - **At run time:** a doctest asserting `cfg!(windows)` passed here and failed in the new step.
+  - **No doctest at all:** cargo exited 0 and the step exited 1, "no doctest passed".
+  - **Another toolchain:** a `rustc`, and then a `cargo`, reporting 1.99.0 were each refused
+    before cargo started.
+  - **From a shell in WSL:** refused, because it would skip that comparison.
+  - **As a Linux machine:** WSL with `WSL_DISTRO_NAME` unset ran the doctests itself and passed.
+  - **Killed from outside, as the gate's timeout kills it:** eleven runs. Two landed after the build
+    and show nothing. In the other nine, nothing of the run was left in WSL 0.2 s later, and the
+    next run compiled the three crates it had not finished.
+  - **The clean tree,** before and after.
+
+  The plan put a time limit inside WSL as well, because killing `wsl.exe` was taken to leave the
+  cargo inside it running. Measured, it does not: a 41 s `sleep` was gone at the first look. So the
+  step has no limit of its own.
+
+  `unearned-pass-hunter` read the first version. It found four faults:
+  - off Windows it exited 0 on a sentence it never checked;
+  - one target directory served every checkout;
+  - it asked for the toolchain before entering `app/`, and asked for `rustc` alone;
+  - this entry's numbers came from earlier versions of the script.
+
+  Each is fixed.
+
 - **Rust 1.100 failed both gates in three places nothing here had changed, and one of them had
   been wrong in the published documentation since 0.24.0.**
   - **Cargo 1.100 builds a test in `target/<profile>/build/<package>/<hash>/out/`**, not in

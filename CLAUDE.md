@@ -110,6 +110,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
+bash ../tools/doctest-linux/run.sh   # the doctests on Linux too, in WSL -- see below
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
@@ -122,6 +123,14 @@ node editor-wasm/selftest.mjs     # the browser path, run -- see below
 the `.wasm` the page loads through the page's own exports, under Node. Two READMEs named it and no
 gate or CI job ran it, so when it was finally run it had been failing a claim for twenty days, and
 the browser's half of a fix had been compiled and never executed.
+
+**The doctests run on Linux too, and this gate ran them only here.** `cargo test` compiles
+`app/`'s doctests for this machine and CI's `the app` job compiles them on ubuntu, so a doctest
+that uses an item a `cfg` holds to Windows would pass `cargo test` here and both Linux lines, and
+fail CI. Clippy does not read doctests, and rustdoc compiles them only under `cargo test`.
+`tools/doctest-linux/run.sh` runs them in this machine's WSL Ubuntu. It refuses when WSL's `rustc`
+or `cargo` is not the host's, and fails a run in which no doctest passed.
+[Its README](tools/doctest-linux/README.md) has what it was checked against.
 
 **A change with no code in it has a shorter gate:** `bash tools/prose-gate/run.sh`. It decides for
 itself — every changed path `.md`, `.claude/`, `.github/` or `CITATION.cff`, none compiled in —

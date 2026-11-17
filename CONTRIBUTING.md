@@ -317,9 +317,12 @@ doc comments, never resolves. So both blocks document for Linux as well. On 2026
 each workspace, with the host's `cargo doc` and both clippy lines green. No public item in either
 workspace is held to one platform today, so it has caught nothing yet. Doctests are what it does
 not reach, because rustdoc compiles them only under `cargo test`. The library's also run under
-`wasm32-wasip1`, where `cfg(windows)` is false as well. `app/`'s run on this machine's target alone,
-and CI's `the app` job runs them on Linux. There is one today, in `pantometry-gpu`, and compiling
-them for Linux here would need a Linux linker.
+`wasm32-wasip1`, where `cfg(windows)` is false as well. `app/`'s run under `cargo test` here, and
+on Linux through `tools/doctest-linux/run.sh`, which runs them in WSL as CI's `the app` job runs
+them on ubuntu. There is one today, in `pantometry-gpu`. Until 2026-11-17 this paragraph said
+that compiling them for Linux here would need a Linux linker, and this machine had one, in WSL's
+Ubuntu. On that day a doctest calling a `#[cfg(windows)]` function passed `cargo test` here and
+both Linux lines, and failed that step alone.
 
 The MSRV job is the other half of the same rule and points the other way: `crates/` is built with
 **1.78** and a lint suggesting something stabilised after that is a suggestion to break a promise.
@@ -356,6 +359,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace
+bash ../tools/doctest-linux/run.sh   # the doctests on Linux too, in WSL -- see its README
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --target x86_64-unknown-linux-gnu
 cargo deny check
