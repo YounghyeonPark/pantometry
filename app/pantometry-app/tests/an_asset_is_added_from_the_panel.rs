@@ -170,7 +170,9 @@ fn every_listed_asset_has_a_way_to_add_it() {
 /// that produced text nothing could build would pass the first alone.
 #[test]
 fn pressing_add_puts_the_domain_in_the_scene() {
-    let before = dump(&[&scene(), "--width", "1400", "--height", "800"]);
+    // On the Source tab, because the text is one of the three things checked and the settings
+    // form beside the tree does not draw it.
+    let before = dump(&[&scene(), "--width", "1400", "--height", "800", "--source"]);
     let rows = drawn(&before);
     let row = rows
         .iter()
@@ -190,6 +192,7 @@ fn pressing_add_puts_the_domain_in_the_scene() {
         "1400",
         "--height",
         "800",
+        "--source",
         "--click",
         &at,
     ]);

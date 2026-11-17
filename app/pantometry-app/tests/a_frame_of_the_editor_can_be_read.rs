@@ -589,7 +589,7 @@ fn the_panels_are_in_a_menu_about_the_window_and_not_about_the_view() {
 
     let (wx, wy) = menu_at(&plain, "Window");
     let window = dump(&[&scene(), "--click", &format!("{wx},{wy}")]);
-    for item in ["Outliner", "Inspector", "Scene text"] {
+    for item in ["Outliner", "Inspector", "Settings and source"] {
         assert!(
             count(&window, item) > count(&plain, item),
             "Window does not hold {item}:\n{window}"
@@ -598,7 +598,7 @@ fn the_panels_are_in_a_menu_about_the_window_and_not_about_the_view() {
 
     let (vx, vy) = menu_at(&plain, "View");
     let view = dump(&[&scene(), "--click", &format!("{vx},{vy}")]);
-    for item in ["Outliner", "Inspector", "Scene text"] {
+    for item in ["Outliner", "Inspector", "Settings and source"] {
         assert_eq!(
             count(&view, item),
             count(&plain, item),

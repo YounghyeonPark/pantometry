@@ -30,17 +30,75 @@ model metres, a probe that names whatever the cursor is over, and a transport �
 way, and the space bar, the arrow keys, Home and End. What it draws is still chosen by the shape
 of the data and never by a domain's name.
 
-The left pane is the scene's JSON, checked **as you type** with the same two steps
-`pantometry-world --check` runs — parse, then build — with parse errors carried as `line:column`,
-which is what that error format was designed for.
+## A model tree, and a form for each row of it
 
-The right pane is the inspector, and it **writes**. Selecting a row that names a domain — its
-extent before a run, its field or its readings after one — lists every value the scene states
-about it, at whatever depth it sits: a number gets a drag, a `material` gets a menu of the
-catalogue plus whatever the scene declared, any other string gets a field. A change goes back into
-the text and re-checks on the same frame. `kind` and `name` are the two it holds back, both
-because they identify rather than describe — the format refuses unknown fields when a `kind`
-changes, and five other keys refer to a domain by `name`.
+The outliner is the scene's **model tree**. The scene; every domain it states, placed or not, with
+its kind in the type column; under each domain the lists it holds — `cooling`, `regions`, `nodes`,
+`perfusions` — with a row per entry; and the scene-level maps of things, `materials` or `poses`,
+as groups of their own. After a run, the run's fields and readings follow. It used to list placed
+*extents*, so a thermal network or a compartment model was not in the tree at all until a run had
+reported a scalar about it — and a domain that is not in the tree cannot be selected to be changed.
+
+It is read from the JSON, not from the parsed scene, so a scene the format refuses still has a tree
+to select from while it is being fixed, and from the **shape** of the file rather than from a list
+of kinds: a domain written out of tree gets the same rows. `editor_core::model` is all of it.
+
+The pane beside the tree has two tabs. **Settings** is a form for the selected row — every value
+the row states, in the file's order, with the unit its key names: a number gets a drag, an array of
+numbers one line of drags, a string the format reads as one of a set a menu, any other string a
+field. With nothing selected it is the scene's own form: its duration, its frames, its schedule.
+**Source** is the scene's JSON, checked **as you type** with the same two steps
+`pantometry-world --check` runs — parse, then build — with parse errors carried as `line:column`.
+
+**The text is still the model.** The form reads it on every frame and writes it by splice, so the
+two cannot disagree; every change can be undone, and the check runs on the same frame, its verdict
+shown at the top of the form as well as on the canvas — an add can produce a scene the build
+refuses, and the sentence that says so belongs beside the button that caused it.
+
+**Every value has one home.** A domain's form holds what it states outside its lists, and each
+entry's form holds the entry; together, over every row `tree` makes, they are every value in the
+file but `kind` and `name`. `tests/the_model_tree_sets_up_a_scene.rs` checks that over every shipped
+scene against a walk of the JSON written in the test, which is the property a form can lose
+quietly: a value no row shows is part of the file nothing but the source can change. A name with
+a slash in it — a material called `FR-4/Cu` — is one row, not two; split as a path, its form was
+empty and its values had no home anywhere.
+
+**A menu's words are the format's own.** The value is replaced with a word no enum has and the scene
+parsed: serde's refusal names every variant it expected. Each is then tried, and only those the
+scene still parses with are offered. So a cooled face offers the six faces, a hold `clamp` and
+`roller`, the schedule its three, and a room's `"as": "mode"` no menu at all — `pulse` is a variant
+of the same enum, and one that would make the keys beside it unknown. A `material` keeps the
+catalogue plus whatever the scene declared. Nothing in the editor lists a set of words.
+
+**An entry is added, copied and taken out.** A list's row has `+ <list>`, which adds the starting
+entry the format keeps for it — `pantometry_world::templates::ENTRIES`, one for each of the
+seventeen lists of objects the format has — and a domain's row offers the lists it does not hold
+yet. An entry's row has `duplicate` and `delete`. A copy of a named node is renamed, `winding 2`,
+for the reason a second domain of a kind is.
+
+The starting entry is **fitted to the domain it lands in**, by `templates::entry_for`, and the one
+reason is worth stating. A block's `area_cm2` is the whole cooled face's area, which the domain
+shares out among its boundary cells, so the template's `1.21` cm² added to scene 21's wax — 11 ×
+11 cells of 2 mm — would have stated its 4.84 cm² top as a quarter of itself, and the build cannot
+know: a stated area is the scene's to state. So a cooled face takes the first face its list does not hold yet and
+states that face's area, and a box of cells or a contact plane lands inside the grid. The test that
+found the other half of this was adding a cooled face to every shipped block: scene 23's housing
+already cools its top, and a second entry on one face is refused — "a face cannot lose heat to two
+different airs". A new face avoids the faces *every* list names, so a structure is not pressed
+where it is held, and a region is made of something the domain is not.
+
+**When a menu is a text box.** A scene that fails to parse at an earlier byte has its refusal
+about that byte, so the menus below it are text boxes until the file is fixed, with the error at
+the top of the form. A named fluid or medium, `"water"` or `"vacuum"`, is free text, because the
+format reads any string there and resolves the name at build.
+
+`kind` and `name` are the two keys no form offers, both because they identify rather than describe
+— the format refuses unknown fields when a `kind` changes, and five other keys refer to a domain by
+`name`. Both stay jobs for the Source tab.
+
+**The inspector says what came out.** It holds a row's box, its range over the run and this frame's
+spread, and no inputs: those are on the form beside the tree. The two used to share the inspector,
+inputs above results, and the line between them is now a line between two panels.
 
 **Domain → Add** puts a new domain in, from a starting example of each of the twenty-two kinds the
 format defines, named so it does not collide with anything already there; **Domain → Delete**
@@ -51,18 +109,21 @@ domain appears in this menu without the shell learning about it, and cannot quie
 Two kinds arrive incomplete because the format will not let them stand alone: a `beam` states
 what it shines `onto` and a `structure` states the block it `follows`, and neither can be guessed.
 
-Below those, **placement**: where the domain's origin sits in the world, and the turn — an axis
-and degrees — applied about it. It is a separate control
+A placed domain's form ends with **placement**: where the domain's origin sits in the world, and
+the turn — an axis and degrees — applied about it. Only a placed one: a thermal network or a
+compartment model is not at anywhere, the build takes a pose for one and does nothing with it, and
+dragging its position wrote the file and moved nothing. It is a separate control
 because `poses` is a map beside `materials` rather than a field inside the domain, and it is the
 one write that **creates** instead of replacing — no shipped scene states `poses` at all, so
 moving anything means writing a key the file does not have. Three levels can be missing and each
 is filled in where it is found; a scene that gains a pose keeps every other byte.
 
 Every one of those is a byte splice rather than a re-serialise, so the file keeps its own
-formatting and key order. `editor_core::set_number`, `set_text`, `set_pose`, `add_domain` and
-`remove_domain` are where that lives and where the tests for it are — including one that adds each
-of the twenty-two kinds and removes it again, and asserts the file is byte-identical to what it
-started as.
+formatting and key order. `editor_core::set_number`, `set_text`, `set_pose`, `add_domain`,
+`remove_domain`, `add_entry`, `duplicate_entry` and `remove_entry` are where that lives and where
+the tests for it are — including one that adds each of the twenty-two kinds and removes it again,
+and one that adds to, copies within and removes from every list in every shipped scene, and both
+assert the file is byte-identical to what it started as.
 
 Nothing in any of it enumerates domain kinds, so a domain written out of tree is as editable as a
 shipped one. The read-only rows below say what came *out*, and the two halves are kept apart on
@@ -404,8 +465,11 @@ scene back into another would offer a text belonging to no path.
 
 ## What the first version does not do
 
-No structured editing — the text *is* the model, and `deny_unknown_fields` plus the version
-check are what stand between a typo and a silently different scene. No shadows, no ambient
+The forms are structured editing *over* the text, not instead of it: a rename, a reference
+followed from one domain to another, a key no form offers — those are the Source tab's, and
+`deny_unknown_fields` plus the version check are still what stand between a typo and a silently
+different scene. A string that names another entry — a link's `from`, a dose's `into` — is free
+text, not a menu of the names the scene has; that is the next thing this wants. No shadows, no ambient
 occlusion and no anti-aliasing beyond whatever the context gives: the lighting is a key, a fill and
 an ambient, which is the least that shows a shape. No file dialogs. Undo covers the editor's own
 edits and leaves typing to the text box, which is the division described above rather than a gap.

@@ -23,6 +23,111 @@ protects nothing.
 
 ### Added
 
+- **The editor sets a scene up from a model tree and a form, rather than from its JSON.** The
+  outliner listed placed *extents*, so a thermal network or a compartment model was not in it until
+  a run had reported a scalar, and the inspector could change a value the file had and never give
+  the file a new one: a cooled face, a heat source or a dose meant typing JSON.
+  - **The tree is the model's:** the scene, every domain it states with its kind in the type
+    column, the lists each holds — `cooling`, `regions`, `nodes`, `perfusions` — with a row per
+    entry, and the scene-level maps of things such as `materials`. Read from the file's shape, so a
+    domain written out of tree gets one too. `editor_core::model`.
+  - **The pane beside it is two tabs.** Settings is a form for the selected row, in the file's
+    order, an array's elements on one line, each value with its unit; Source is the JSON as it was.
+    Every change is one of `editor_core::edit`'s byte splices and can be undone, and the check's
+    verdict is at the top of the form. The inspector keeps what a row is and what came out.
+    `editor_core::form`.
+  - **A menu offers the format's own words.** The value is replaced by a word no enum has, the
+    parse's refusal names every variant, and each is kept only if the scene still parses with it.
+    A cooled face offers the six faces, a hold `clamp` and `roller`, the schedule its three; a
+    room's `"as": "mode"` gets no menu, since `pulse` would make the keys beside it unknown.
+  - **An entry is added, copied and removed.** `+ <list>` adds the starting entry
+    `pantometry_world::templates::ENTRIES` keeps for each of the format's seventeen lists of
+    objects, fitted to the domain by `templates::entry_for`. A copy of a named node is renamed.
+  - **The fitting is the part that would have been wrong silently.** A block's `area_cm2` is the
+    whole cooled face's area. The template's `1.21` cm² added to scene 21's wax, 11 x 11 cells of
+    2 mm, would have stated its 4.84 cm² top as a quarter of that, and the build accepts it: a
+    stated area is the scene's to state. So a cooled face takes the first face its list does not
+    hold and states that face's area, and a box of cells or a contact plane lands inside the grid.
+    The test that adds a cooled face to every shipped block found the other half: scene 23's
+    housing cools its top already, and a second entry on one face is refused. A doc comment here had
+    said two were legal and meant twice the area; it was wrong and is corrected.
+  - **Checked on 2026-11-17, over the thirty-four shipped scenes:**
+    - **Forms:** 865 values, each in exactly one of `tree`'s rows' forms, the union being every
+      leaf of the JSON but `kind` and `name`, walked in the test.
+    - **Lists in the scenes:** each of 31 had an entry added and its first and last entries
+      copied. Removing each again gave back the file byte for byte.
+    - **Lists a domain lacks:** 42 were started and emptied to `[]`, with nothing else changed.
+    - **Entries in their templates:** each builds in its kind's template, except three that name
+      what they need. `parts` names a 16 x 16 x 60 mm rod, too big for the 11 mm block; `depots` and
+      `oral` each need the other. Each of the three builds once that is met. Every list a shipped
+      scene uses has an entry.
+    - **Cooled faces:** one added to each of the ten shipped blocks lands on a face its list does
+      not hold, states that face's area, and builds.
+    - **Through the interface, with `--ui-dump --select`:**
+      - an entry's row draws its own form;
+      - `+ cooling` makes the tree say `Cooling (3)` and the file hold three faces;
+      - `delete` leaves one face;
+      - `x-min` picked from the face menu is written where `z-min` was.
+  - **A number keeps its magnitude.** The drag the inspector used printed two decimals, so on the
+    first retaken figure the protein's 2e-11 s duration and the bracket's 1e-8 tolerance both read
+    `0.00` — the erasure `editor_core::magnitude` exists for, a fourth time, now on the editor's
+    front page — and one pixel moved either by 0.01. The form prints significant figures, and the
+    rate is a hundredth of the value a pixel.
+  - **A long value wraps.** A string on a line of its own was a single-line field, which lays the
+    whole string out and clips it to the box. The protein's title showed its first third, and the
+    hidden 470 points of it lay under the asset panel's rows: the retaken `docs/editor-protein.png`
+    said `overlap=2`, and the gate's screenshot test refused it. Such a field wraps now, so the
+    whole value can be read, and Enter writes no newline into it.
+  - **Two reviewers read it, and between them found eleven things the tests could not see.**
+    - `unearned-pass-hunter`:
+      - The face areas were checked only where they could not be told apart. The shipped blocks
+        reach a z face and an x face, and both that reach an x face are square in x and y. So an x
+        face given a y face's area passed, and a y face's area was never computed at all. It is
+        now checked on a 3 x 5 x 7 grid, face by face.
+      - The "one home" test built its rows from the model rather than from `tree`, and its
+        expectation from the same walk the forms use. It now takes `tree`'s rows and a walk of the
+        JSON written in the test.
+      - A pinned refusal reason, `oral`, would have been met by a serde error listing fields.
+      - Two counts were floors far below the measurement.
+      - Three interface checks matched text that another widget also draws.
+    - `silent-failure-hunter`:
+      - Placement was offered for domains that are not at anywhere. A network's position dragged
+        wrote the file, recorded an undo and moved nothing. It is offered only for a row with a
+        box now, and the form says why otherwise.
+      - A material called `FR-4/Cu` split as a path, so its form was empty and its values had no
+        home anywhere. The old inspector had shown them.
+      - A broken file's error came after "no longer in this scene", which was all a reader saw.
+      - A new pressed face could land on a held one, where a load moves nothing. New faces now
+        avoid every list's faces.
+      - A region was always aluminium, which changes nothing in an aluminium block.
+      - The only entry removed left `[  ]`, not `[]`.
+  - **Each check was sabotaged once and failed, sixteen in all:**
+    - a value left out of a domain's form;
+    - every variant offered;
+    - an x face given a z face's area, and a y face an x face's;
+    - the taken faces ignored, and the faces of other lists ignored;
+    - a removal leaving a byte behind, and one leaving `[  ]`;
+    - a copy not renamed;
+    - the add button applying nothing;
+    - a menu's pick dropped;
+    - two decimals again;
+    - a slash splitting a name;
+    - placement offered everywhere;
+    - a region of the block's own material;
+    - a long value on one line again.
+
+    Each was restored by bytes and checked by SHA-256.
+  - **What a menu still cannot do.** When the scene fails to parse at an earlier byte, serde's
+    refusal is about that byte and not about the probe, so the menus below it are text boxes until
+    the file is fixed. The error is at the top of the form. A named fluid or medium, `"water"` or
+    `"vacuum"`, is free text: the format reads any string there and resolves the name at build.
+  - **`--ui-dump` takes `--source` and `--select PATH`.** It refuses a path the tree does not have,
+    for the reason it refuses a bad `--open`: a selection of nothing looks like no selection.
+  - **Not done here:**
+    - The browser editor keeps its text pane. The machinery is in `editor-core`, and the page is a
+      step of its own.
+    - A string naming another entry — a link's `from`, a dose's `into` — is still free text.
+
 - **Phenol through benzene's log P legs, the first polar solute, the gate registered before any
   window ran: log P 2.08 ± 0.46 against 1.46, and the gate calls it uninformative**
   (`pantometry-forcefield`'s `tests/phenol_partitioned_into_octanol.rs`, kept out

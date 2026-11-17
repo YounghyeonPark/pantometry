@@ -48,7 +48,7 @@ fn nothing_in_the_scene_is_missing_from_the_tree() {
 
     assert_eq!(tree.nodes[0].kind, NodeKind::Scene, "the root is the scene");
     assert!(
-        paths.contains(&"/extents/bar"),
+        paths.contains(&"/domains/bar"),
         "the placed block: {paths:?}"
     );
     assert!(
@@ -62,6 +62,23 @@ fn nothing_in_the_scene_is_missing_from_the_tree() {
     assert!(
         paths.iter().any(|p| p.starts_with("/readings/element")),
         "the heater has no geometry and must still appear: {paths:?}"
+    );
+    // **And before any run, as a domain of the scene.** The tree was built from placed extents,
+    // so until a run reported a scalar the heater was not in it at all, and a domain that is not
+    // in the tree cannot be selected to be changed.
+    let unrun = editor_core::tree(&checked, None, 0);
+    let element = unrun
+        .find("/domains/element")
+        .expect("the heater is a row of the model tree before anything has run");
+    assert_eq!(element.kind, NodeKind::Domain);
+    assert_eq!(
+        element.tag.as_deref(),
+        Some("heater"),
+        "its type column says its kind"
+    );
+    assert!(
+        element.bounds.is_none(),
+        "and it claims no box, since it has none"
     );
 
     // Parents come before children, which is what lets a shell draw this with one pass and an
@@ -122,7 +139,7 @@ fn containment_is_by_path_and_not_by_prefix() {
     ));
     assert!(!Tree::contains("/run/bar", "/run/barometer"));
     assert!(!Tree::contains("/run/bar", "/run"));
-    assert!(!Tree::contains("/extents/bar", "/run/bar"));
+    assert!(!Tree::contains("/domains/bar", "/run/bar"));
 }
 
 /// **The inspector's numbers are the run's, not the frame's, where it says so.**
@@ -179,7 +196,21 @@ fn only_the_rows_with_geometry_offer_a_box() {
     for n in &tree.nodes {
         match n.kind {
             NodeKind::Reading => assert!(n.bounds.is_none(), "{} claims a box", n.path),
-            NodeKind::Placed | NodeKind::Field => {
+            // A domain has a box when it is placed and not otherwise: the heater is not at
+            // anywhere, and its row must not offer to frame the origin.
+            NodeKind::Domain
+                if !checked
+                    .boxes
+                    .iter()
+                    .any(|b| n.path == format!("/domains/{}", b.name)) =>
+            {
+                assert!(
+                    n.bounds.is_none(),
+                    "{} claims a box it has no extent for",
+                    n.path
+                )
+            }
+            NodeKind::Domain | NodeKind::Field => {
                 let b = n.bounds.unwrap_or_else(|| panic!("{} has no box", n.path));
                 // At least one axis, not all three: a bar is a line and a plane cut through a
                 // solid is a plane, and both are legitimately flat in the axes they collapse.

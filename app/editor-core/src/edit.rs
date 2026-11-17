@@ -134,7 +134,7 @@ fn unit_of(key: &str) -> &'static str {
 
 /// Every value the inspector can change for the selected outliner row.
 ///
-/// `path` is a [`crate::Node::path`]: `/` for the scene itself, `/extents/<name>` for a domain —
+/// `path` is a [`crate::Node::path`]: `/` for the scene itself, `/domains/<name>` for a domain —
 /// and `/run/<name>` or `/readings/<name>`, which are the same domain seen after a run. Anything
 /// else yields nothing, because a reading is output and the only honest way to change one is to
 /// change the scene that produced it.
@@ -208,16 +208,16 @@ pub fn editable(text: &str, path: &str) -> Vec<Editable> {
 /// row is a thing that can be deleted — and two crates deciding separately what counts as a
 /// domain row is two chances to disagree about it.
 ///
-/// A domain occupies **three** rows: `/extents/<name>` before a run, and `/run/<name>` and
-/// `/readings/<name>` after one. All three are the same object and all three offer the same
+/// A domain occupies **three** rows: `/domains/<name>` in the model tree, and `/run/<name>` and
+/// `/readings/<name>` after a run. All three are the same object and all three offer the same
 /// inputs, because the row a person is looking at after a run is one of the last two and making
 /// them hunt for the first would be friction with nothing on the other side of it.
 ///
 /// Deeper paths are not: `/readings/<name>/<label>` is one scalar a domain reported, which is
-/// output, and the group rows `/extents`, `/run` and `/readings` are about a set rather than a
-/// domain.
+/// output, `/domains/<name>/cooling/0` is one entry of a list the domain holds, and the group rows
+/// `/domains`, `/run` and `/readings` are about a set rather than a domain.
 pub fn domain_named(path: &str) -> Option<&str> {
-    let rest = ["/extents/", "/run/", "/readings/"]
+    let rest = ["/domains/", "/run/", "/readings/"]
         .iter()
         .find_map(|prefix| path.strip_prefix(prefix))?;
     (!rest.is_empty() && !rest.contains('/')).then_some(rest)
@@ -240,7 +240,7 @@ pub fn domain_named(path: &str) -> Option<&str> {
 /// Both stay jobs for the text box, which is where a change that rewrites more than one place
 /// belongs. Naming two keys of the format is not enumerating domains: nothing here knows what
 /// kinds exist, only that whatever they are, these two keys are how the file refers to them.
-const STRUCTURAL: [&str; 2] = ["kind", "name"];
+pub(crate) const STRUCTURAL: [&str; 2] = ["kind", "name"];
 
 /// Every value inside `value` a person could change, however deeply it sits.
 ///
@@ -253,7 +253,7 @@ const STRUCTURAL: [&str; 2] = ["kind", "name"];
 /// shipped scene yields **55** fields and the median is **8**, which is a scroll area's business
 /// and not this function's. A cap would have to drop rows, and a panel that silently omits part
 /// of the scene it claims to describe is the failure shape this workspace keeps finding.
-fn collect(
+pub(crate) fn collect(
     value: &serde_json::Value,
     pointer: &str,
     label: &str,
@@ -333,12 +333,12 @@ fn last_key(label: &str) -> &str {
 /// and composites and a menu that offered only the catalogue could not express the file it was
 /// editing. Empty for every key but `material`, which is the one place the format has a set and
 /// [`crate::MATERIALS`] is already re-exported for a shell's menus.
-struct Choices {
+pub(crate) struct Choices {
     materials: Vec<String>,
 }
 
 impl Choices {
-    fn of(root: &serde_json::Value) -> Choices {
+    pub(crate) fn of(root: &serde_json::Value) -> Choices {
         let mut materials: Vec<String> = crate::MATERIALS.iter().map(|m| m.to_string()).collect();
         for declared in ["materials", "composites"] {
             if let Some(object) = root.get(declared).and_then(|d| d.as_object()) {
@@ -364,7 +364,7 @@ impl Choices {
 /// No scene key has either today. It is here because the *decoding* half has to exist for the
 /// pointer to be well defined, and an encoder that did not match it would be a bug waiting for
 /// the first key with a slash in it.
-fn escape(key: &str) -> String {
+pub(crate) fn escape(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
 
@@ -458,7 +458,7 @@ fn splice(text: &str, span: Range<usize>, rendered: &str) -> String {
 /// A scanner rather than a parse, because the whole point is to know *where* a value is and a
 /// parsed `Value` has thrown that away. It walks the text once per segment and never allocates
 /// except to decode a key.
-fn value_span(text: &str, pointer: &str) -> Option<Range<usize>> {
+pub(crate) fn value_span(text: &str, pointer: &str) -> Option<Range<usize>> {
     let segments = segments(pointer)?;
     span_of(text.as_bytes(), 0, &segments)
 }
@@ -645,27 +645,247 @@ pub fn add_domain_json(text: &str, domain: &str) -> Result<String, String> {
         name = format!("{base} {n}");
     }
     let domain = set_text(domain, "/name", &name)?;
+    push_element(text, "/domains", domains.len(), &domain)
+}
 
-    // Where the last element starts on its line, so the new one lines up with it rather than
-    // with the margin. A scene written by hand keeps its shape when the editor adds to it.
-    let array = value_span(text, "/domains").ok_or_else(|| "no `domains` array".to_string())?;
-    match domains.len() {
-        0 => {
-            // `[]` or `[ ]`: put the element between the brackets and let the one-line form be.
-            let inner = array.start + 1..array.end - 1;
-            Ok(splice(text, inner, &format!(" {domain} ")))
+/// Put `element` at the end of the array at `array`, which holds `len` elements now.
+///
+/// Lined up with the last element rather than with the margin, so a scene written by hand keeps
+/// its shape when the editor adds to it. One place for the domains and for every list inside a
+/// domain, so the two cannot differ about where a comma goes.
+fn push_element(text: &str, array: &str, len: usize, element: &str) -> Result<String, String> {
+    let span =
+        value_span(text, array).ok_or_else(|| format!("{array}: no such list in this scene"))?;
+    if len == 0 {
+        // `[]` or `[ ]`: put the element between the brackets and let the one-line form be.
+        let inner = span.start + 1..span.end - 1;
+        return Ok(splice(text, inner, &format!(" {element} ")));
+    }
+    let end = value_span(text, &format!("{array}/{}", len - 1))
+        .ok_or_else(|| format!("{array}: the last element has no span"))?;
+    let indent = indent_of(text, end.start);
+    Ok(splice(
+        text,
+        end.end..end.end,
+        &format!(",\n{indent}{element}"),
+    ))
+}
+
+/// `text` without element `i` of the `len` in the array at `array`, and without the comma that
+/// held it in place.
+///
+/// The element alone is not a valid removal: the comma beside it would be left behind. So this
+/// takes the gap on whichever side has one, which is the previous element's end when there is a
+/// previous element and the next element's start otherwise — the exact bytes [`push_element`]
+/// wrote, so adding and then removing the last element gives back the file it started from.
+///
+/// **The only element takes the inside of the brackets with it**, so the list is left `[]`. It
+/// left `[  ]`, the two spaces [`push_element`] puts round an element it adds to an empty list,
+/// and so a list that started empty did not come back as it was.
+fn cut_element(text: &str, array: &str, i: usize, len: usize) -> Result<String, String> {
+    let span = value_span(text, &format!("{array}/{i}"))
+        .ok_or_else(|| format!("{array}/{i}: no such element"))?;
+    if len == 1 {
+        let outer = value_span(text, array).ok_or_else(|| format!("{array}: no such list"))?;
+        return Ok(splice(text, outer.start + 1..outer.end - 1, ""));
+    }
+    let cut = if i > 0 {
+        let prev = value_span(text, &format!("{array}/{}", i - 1))
+            .ok_or_else(|| format!("{array}/{}: no span", i - 1))?;
+        prev.end..span.end
+    } else if i + 1 < len {
+        let next = value_span(text, &format!("{array}/{}", i + 1))
+            .ok_or_else(|| format!("{array}/{}: no span", i + 1))?;
+        span.start..next.start
+    } else {
+        span
+    };
+    Ok(splice(text, cut, ""))
+}
+
+/// The keys an entry of a list is known by, in the order they are looked for.
+///
+/// A network's nodes are called by `name` and a compartment model's volumes and depots by `label`,
+/// and both are what other entries refer to. Two keys of the format, not a list of domains.
+pub(crate) const IDENTITY: [&str; 2] = ["name", "label"];
+
+/// `element` renamed away from whatever its list already calls something, the way
+/// [`add_domain_json`] renames a domain: `node`, then `node 2`, `node 3`.
+///
+/// Two nodes called `node` are refused by the build, which is correct and is also the second
+/// click on "add" failing for a reason that has nothing to do with what was clicked. An entry
+/// with neither key is copied as it is, and the build has the last word on a copy: a block refuses
+/// a second cooled face on the same face, and says to add the areas instead.
+fn fresh(element: &str, list: &[serde_json::Value]) -> Result<String, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(element).map_err(|e| format!("this entry does not parse: {e}"))?;
+    for key in IDENTITY {
+        let Some(base) = parsed.get(key).and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let taken: Vec<&str> = list
+            .iter()
+            .filter_map(|x| x.get(key).and_then(|v| v.as_str()))
+            .collect();
+        let mut name = base.to_string();
+        let mut n = 1;
+        while taken.contains(&name.as_str()) {
+            n += 1;
+            name = format!("{base} {n}");
         }
-        last => {
-            let end = value_span(text, &format!("/domains/{}", last - 1))
-                .ok_or_else(|| "the last domain has no span".to_string())?;
-            let indent = indent_of(text, end.start);
-            Ok(splice(
+        return set_text(element, &format!("/{key}"), &name);
+    }
+    Ok(element.to_string())
+}
+
+/// A domain's grid, `cells` and `cell_mm`, when it states both: what an entry that says where in a
+/// grid is fitted to. See [`pantometry_world::templates::entry_for`].
+fn grid_of(d: &serde_json::Value) -> Option<([usize; 3], f64)> {
+    let cells: Vec<usize> = d
+        .get("cells")?
+        .as_array()?
+        .iter()
+        .map(|v| v.as_u64().map(|v| v as usize))
+        .collect::<Option<_>>()?;
+    Some((
+        <[usize; 3]>::try_from(cells).ok()?,
+        d.get("cell_mm")?.as_f64()?,
+    ))
+}
+
+/// The faces domain `d`'s lists already name, every list of them: a structure's held faces are
+/// not faces to press, and its pressed ones not faces to hold.
+fn faces_in(d: &serde_json::Value) -> Vec<&str> {
+    d.as_object()
+        .into_iter()
+        .flat_map(|o| o.values())
+        .filter_map(|m| m.as_array())
+        .flatten()
+        .filter_map(|e| e.get("face").and_then(|f| f.as_str()))
+        .collect()
+}
+
+/// Where domain `name` is in the file, and the object itself.
+fn domain_at<'a>(
+    root: &'a serde_json::Value,
+    name: &str,
+) -> Result<(usize, &'a serde_json::Value), String> {
+    root.get("domains")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "this scene has no `domains` array".to_string())?
+        .iter()
+        .enumerate()
+        .find(|(_, d)| d.get("name").and_then(|n| n.as_str()) == Some(name))
+        .ok_or_else(|| format!("this scene defines no domain called {name:?}"))
+}
+
+/// Add an entry to domain `domain`'s list `key` — a cooled face, a heat source, a dose — from the
+/// starting entry the format keeps for that list, and create the list if the domain has none.
+///
+/// The entry is [`pantometry_world::templates::entry_for`]'s, which builds in its kind's template
+/// and is fitted to this domain's grid where it says where in one. The names it refers to are the
+/// template's, so in another scene the build may say that one of them is not there. That is the
+/// check speaking, on the same frame, about the thing just added.
+///
+/// Fails, and leaves the file alone, when the format has no starting entry for this list: a list
+/// written out of tree has no example to start from, and an entry made up here would be refused.
+pub fn add_entry(text: &str, domain: &str, key: &str) -> Result<String, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    let (i, d) = domain_at(&root, domain)?;
+    let kind = d.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    let faces = faces_in(d);
+    let fit = pantometry_world::templates::Fit {
+        grid: grid_of(d),
+        faces: &faces,
+        material: d.get("material").and_then(|m| m.as_str()),
+    };
+    let start = pantometry_world::templates::entry_for(kind, key, &fit)
+        .ok_or_else(|| format!("the scene format keeps no starting `{key}` entry for a {kind}"))?;
+    match d.get(key) {
+        Some(serde_json::Value::Array(list)) => {
+            let element = fresh(&start, list)?;
+            push_element(
                 text,
-                end.end..end.end,
-                &format!(",\n{indent}{domain}"),
-            ))
+                &format!("/domains/{i}/{}", escape(key)),
+                list.len(),
+                &element,
+            )
+        }
+        Some(_) => Err(format!("{domain}.{key} is not a list")),
+        None => {
+            let object = value_span(text, &format!("/domains/{i}"))
+                .ok_or_else(|| format!("{domain}: no span for domains[{i}]"))?;
+            let quoted = serde_json::to_string(key).map_err(|e| e.to_string())?;
+            append_member(text, object, &format!("{quoted}: [ {start} ]"))
         }
     }
+}
+
+/// A copy of entry `index` of domain `domain`'s list `key`, put right after it.
+///
+/// The copy is the entry's own bytes, so its formatting comes with it; only an identifying `name`
+/// or `label` is changed, to `node 2` and on, because the build refuses two entries of one name.
+pub fn duplicate_entry(
+    text: &str,
+    domain: &str,
+    key: &str,
+    index: usize,
+) -> Result<String, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    let (i, d) = domain_at(&root, domain)?;
+    let list = d
+        .get(key)
+        .and_then(|l| l.as_array())
+        .ok_or_else(|| format!("{domain} has no `{key}` list"))?;
+    let array = format!("/domains/{i}/{}", escape(key));
+    let span = value_span(text, &format!("{array}/{index}"))
+        .ok_or_else(|| format!("{domain}.{key}[{index}]: no such entry"))?;
+    let copy = fresh(&text[span.clone()], list)?;
+    // The gap the list already uses between two entries, so the copy sits the way its
+    // neighbours do; between the bracket and the first entry when there is only one.
+    let gap = if list.len() >= 2 {
+        let (a, b) = if index + 1 < list.len() {
+            (index, index + 1)
+        } else {
+            (index - 1, index)
+        };
+        let left = value_span(text, &format!("{array}/{a}")).ok_or("no span")?;
+        let right = value_span(text, &format!("{array}/{b}")).ok_or("no span")?;
+        text[left.end..right.start].to_string()
+    } else {
+        let outer = value_span(text, &array).ok_or("no span")?;
+        let lead = &text[outer.start + 1..span.start];
+        if lead.contains('\n') {
+            format!(",\n{}", indent_of(text, span.start))
+        } else {
+            ", ".to_string()
+        }
+    };
+    Ok(splice(text, span.end..span.end, &format!("{gap}{copy}")))
+}
+
+/// Remove entry `index` of domain `domain`'s list `key`, and the comma that held it.
+///
+/// The list stays when its last entry goes, empty: `[]` and an absent key mean the same thing to
+/// the format for every optional list, and for a required one — a network's `nodes` — the build
+/// says so, which is better than this deleting a key the format then asks for.
+pub fn remove_entry(text: &str, domain: &str, key: &str, index: usize) -> Result<String, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
+    let (i, d) = domain_at(&root, domain)?;
+    let len = d
+        .get(key)
+        .and_then(|l| l.as_array())
+        .ok_or_else(|| format!("{domain} has no `{key}` list"))?
+        .len();
+    if index >= len {
+        return Err(format!(
+            "{domain}.{key} has {len} entries, and no entry {index}"
+        ));
+    }
+    cut_element(text, &format!("/domains/{i}/{}", escape(key)), index, len)
 }
 
 /// How many cells a dropped part's grid may use.
@@ -786,24 +1006,7 @@ pub fn remove_domain(text: &str, name: &str) -> Result<String, String> {
         .position(|d| d.get("name").and_then(|n| n.as_str()) == Some(name))
         .ok_or_else(|| format!("this scene defines no domain called {name:?}"))?;
 
-    let span = value_span(text, &format!("/domains/{i}"))
-        .ok_or_else(|| format!("{name}: no span for domains[{i}]"))?;
-
-    // The element alone is not a valid removal: the comma beside it would be left behind. Take
-    // the gap on whichever side has one, which is the previous element's end when there is a
-    // previous element and the next element's start otherwise.
-    let cut = if i > 0 {
-        let prev = value_span(text, &format!("/domains/{}", i - 1))
-            .ok_or_else(|| "no span for the previous domain".to_string())?;
-        prev.end..span.end
-    } else if i + 1 < domains.len() {
-        let next = value_span(text, &format!("/domains/{}", i + 1))
-            .ok_or_else(|| "no span for the next domain".to_string())?;
-        span.start..next.start
-    } else {
-        span
-    };
-    Ok(splice(text, cut, ""))
+    cut_element(text, "/domains", i, domains.len())
 }
 
 /// Where a domain's origin sits in the world, in metres.
@@ -1215,7 +1418,7 @@ mod tests {
     /// rows would edit the lamp's watts while the reader was looking at the block.
     #[test]
     fn a_domain_is_found_by_name_even_when_the_outliner_skipped_one() {
-        let fields = editable(SCENE, "/extents/buffer");
+        let fields = editable(SCENE, "/domains/buffer");
         let cell = fields
             .iter()
             .find(|e| e.label == "cell_mm")
@@ -1268,10 +1471,10 @@ mod tests {
     /// **All three of a domain's rows offer the same inputs.**
     ///
     /// After a run the reader is looking at `/run/buffer` or `/readings/buffer`, not at the
-    /// extent row, and the scene values are the same object's either way.
+    /// model tree's row, and the scene values are the same object's either way.
     #[test]
     fn every_row_that_names_a_domain_offers_its_inputs() {
-        let from_extent = editable(SCENE, "/extents/buffer");
+        let from_extent = editable(SCENE, "/domains/buffer");
         assert!(!from_extent.is_empty());
         for same in ["/run/buffer", "/readings/buffer"] {
             assert_eq!(editable(SCENE, same), from_extent, "{same}");
@@ -1284,10 +1487,12 @@ mod tests {
     fn an_output_or_group_row_is_not_editable() {
         for not_a_domain in [
             "/readings/buffer/peak",
-            "/extents",
+            "/domains",
+            "/extents/buffer",
+            "/domains/buffer/cooling/0",
             "/run",
             "/readings",
-            "/extents/nothing-called-this",
+            "/domains/nothing-called-this",
             "/buffer",
         ] {
             assert!(
@@ -1328,7 +1533,7 @@ mod tests {
     /// to change, sitting one object down, invisible to an inspector that only read the top.
     #[test]
     fn a_nested_object_is_walked_into() {
-        let fields = editable(SCENE, "/extents/buffer");
+        let fields = editable(SCENE, "/domains/buffer");
         let above = fields
             .iter()
             .find(|e| e.label == "hot_spot.above_k")
@@ -1356,7 +1561,7 @@ mod tests {
     /// an inspector at all.
     #[test]
     fn an_array_of_objects_is_walked_into() {
-        let fields = editable(SCENE, "/extents/buffer");
+        let fields = editable(SCENE, "/domains/buffer");
         let material = fields
             .iter()
             .find(|e| e.label == "regions[0].material")
@@ -1374,11 +1579,11 @@ mod tests {
     ///
     /// `kind` because every other key in the object depends on it. `name` because the outliner's
     /// selection is keyed by it: a text field committing per keystroke would rename the domain to
-    /// `buffe` on the first backspace, the row `/extents/buffer` would stop existing, and the
+    /// `buffe` on the first backspace, the row `/domains/buffer` would stop existing, and the
     /// field being typed into would vanish. Five other keys point at names as well.
     #[test]
     fn the_identifying_keys_are_not_editable() {
-        let fields = labels(&editable(SCENE, "/extents/buffer"));
+        let fields = labels(&editable(SCENE, "/domains/buffer"));
         for identifier in ["kind", "name"] {
             assert!(
                 !fields.iter().any(|l| l == identifier),
@@ -1402,7 +1607,7 @@ mod tests {
       "specific_heat_j_per_kg_k": 800.0, "conductivity_w_per_m_k": 50.0 } },
   "domains": ["#,
         );
-        let fields = editable(&declared, "/extents/buffer");
+        let fields = editable(&declared, "/domains/buffer");
         let material = fields
             .iter()
             .find(|e| e.label == "material")

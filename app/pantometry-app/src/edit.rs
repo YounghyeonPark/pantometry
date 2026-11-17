@@ -241,6 +241,10 @@ pub struct Dump {
     /// cannot reach a preset: a preset only exists once its tile is clicked. So the editor
     /// handing a run the preset's own files was a change no dump could see.
     pub run_after: bool,
+    /// Show the middle pane's Source tab — the scene's text — rather than its settings form.
+    pub source: bool,
+    /// Select this row of the tree, so the settings pane is its form.
+    pub select: Option<String>,
 }
 
 /// One frame of the editor's interface, as text: every string it drew and where.
@@ -283,6 +287,8 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
         open,
         custom,
         run_after,
+        source,
+        select,
     } = asked;
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -317,6 +323,18 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
     // worth looking at is solo *with the outliner not on screen*, and the checkbox is in the
     // outliner: there is no width at which a click can reach it and leave it hidden.
     app.solo = solo;
+    app.source = source;
+    if let Some(path) = select {
+        let frame = app.run.as_ref().map_or(0, |v| v.frame);
+        let tree = editor_core::tree(&app.checked, app.run.as_ref().map(|v| &v.run), frame);
+        if tree.find(&path).is_none() {
+            let rows: Vec<&str> = tree.nodes.iter().map(|n| n.path.as_str()).collect();
+            return Err(format!(
+                "--select: no row {path} in this scene; it has {rows:?}"
+            ));
+        }
+        app.selected = Some(path);
+    }
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -933,6 +951,15 @@ struct App {
     show_inspector: bool,
     show_text: bool,
     show_assets: bool,
+    /// Whether the middle pane shows the scene's **source** rather than the settings form for the
+    /// selected row. The form is the default; the text is still the model, one click away.
+    source: bool,
+    /// The last form built, and the text and row it was built for, as one hash.
+    ///
+    /// A form asks the format which words a string may be, by parsing the scene once per word,
+    /// and egui draws every frame. Rebuilt when the text or the selection changes, and not sixty
+    /// times a second in between.
+    form_cache: Option<(u64, editor_core::Form)>,
     /// What `panels_that_fit` last reported hiding, so the note is said once and not per paint.
     squeezed_was: Vec<&'static str>,
     /// The files beside the scene that a domain could read, as paths relative to it.
@@ -1014,6 +1041,8 @@ impl App {
             show_inspector: true,
             show_text: true,
             show_assets: true,
+            source: false,
+            form_cache: None,
             squeezed_was: Vec::new(),
             assets: assets_beside(&scanned),
         }
@@ -1746,7 +1775,7 @@ impl App {
                 menu(ui, "Window", |ui| {
                     ui.checkbox(&mut self.show_outliner, "Outliner");
                     ui.checkbox(&mut self.show_inspector, "Inspector");
-                    ui.checkbox(&mut self.show_text, "Scene text");
+                    ui.checkbox(&mut self.show_text, "Settings and source");
                     ui.checkbox(&mut self.show_assets, "Assets");
                 });
                 menu(ui, "Domain", |ui| {
@@ -2159,6 +2188,18 @@ impl App {
                 .default_size(430.0)
                 .size_range(TEXT_MIN..=most)
                 .show(ui, |ui| {
+                    // **Two tabs, one model.** The form is what a person sets a simulation up
+                    // with; the source is the file it writes, byte for byte. Neither is a copy of
+                    // the other: the form reads the text on every frame and writes it by splice.
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(!self.source, "Settings").clicked() {
+                            self.source = false;
+                        }
+                        if ui.selectable_label(self.source, "Source").clicked() {
+                            self.source = true;
+                        }
+                    });
+                    ui.separator();
                     if let Some(summary) = &self.checked.summary {
                         ui.label(summary.clone());
                         for note in &self.checked.notes {
@@ -2169,18 +2210,22 @@ impl App {
                         }
                         ui.separator();
                     }
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let edit = ui.add(
-                            egui::TextEdit::multiline(&mut self.text)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(34),
-                        );
-                        if edit.changed() {
-                            self.dirty = true;
-                            self.recheck();
-                        }
-                    });
+                    if self.source {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            let edit = ui.add(
+                                egui::TextEdit::multiline(&mut self.text)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(34),
+                            );
+                            if edit.changed() {
+                                self.dirty = true;
+                                self.recheck();
+                            }
+                        });
+                    } else {
+                        self.settings(ui, &tree);
+                    }
                 });
         }
 
@@ -2441,12 +2486,12 @@ impl App {
         }
     }
 
-    /// Whether a *panel or extent named `name`* is drawn. The viewport asks this.
+    /// Whether a *panel or domain named `name`* is drawn. The viewport asks this.
     ///
-    /// A name can appear in the tree twice — as a placed extent and as the panel a run filled it
-    /// with — and hiding either should hide the drawing, which is one thing.
+    /// A name can appear in the tree twice — as the domain the scene states and as the panel a run
+    /// filled it with — and hiding either should hide the drawing, which is one thing.
     fn draws(&self, name: &str) -> bool {
-        self.visible(&format!("/run/{name}")) && self.visible(&format!("/extents/{name}"))
+        self.visible(&format!("/run/{name}")) && self.visible(&format!("/domains/{name}"))
     }
 
     /// The outliner: what is in this scene, as a tree you can select, hide and collapse.
@@ -2672,10 +2717,12 @@ impl App {
                         // hover, which is where a name too long to show belongs.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
-                                egui::RichText::new(node.kind.label())
-                                    .weak()
-                                    .monospace()
-                                    .size(10.0),
+                                egui::RichText::new(
+                                    node.tag.as_deref().unwrap_or(node.kind.label()),
+                                )
+                                .weak()
+                                .monospace()
+                                .size(10.0),
                             );
                             ui.with_layout(
                                 egui::Layout::left_to_right(egui::Align::Center),
@@ -2819,215 +2866,10 @@ impl App {
         }
         ui.separator();
 
-        // What the scene *states* about this row, and can be changed. Above the read-only detail
-        // because it is the half a person came here to act on, and separated from it because the
-        // difference between "this is what you asked for" and "this is what came out" is the
-        // difference between an input and a result — an inspector that mixed them would invite
-        // dragging a peak temperature.
-        let fields = editor_core::editable(&self.text, &path);
-        // One change per frame, applied after the grid. Collected rather than applied in place
-        // because the closure cannot hold `&mut self` while `self.text` is being read for the
-        // widgets, and because a splice mid-iteration would invalidate every pointer after it.
-        let mut change: Option<Edited> = None;
-        if !fields.is_empty() {
-            ui.label(egui::RichText::new("scene").weak().size(11.0));
-            egui::Grid::new("scene values")
-                .num_columns(2)
-                .striped(true)
-                .spacing([10.0, 3.0])
-                .show(ui, |ui| {
-                    for field in &fields {
-                        let label = if field.unit.is_empty() {
-                            field.label.clone()
-                        } else {
-                            format!("{} ({})", field.label, field.unit)
-                        };
-                        ui.label(egui::RichText::new(label).weak().monospace().size(11.0));
-                        match &field.value {
-                            editor_core::Value::Number { now, integral } => {
-                                let mut value = *now;
-                                // A rate, not a range. Nothing here clamps: the scene's own check
-                                // is the authority on what is legal and it runs on every change
-                                // already, so a limit invented in the shell would be a second
-                                // opinion that can only be wrong — and wrong in the direction of
-                                // refusing a value the format takes.
-                                let drag = if *integral {
-                                    egui::DragValue::new(&mut value)
-                                        .speed(1.0)
-                                        .fixed_decimals(0)
-                                } else {
-                                    egui::DragValue::new(&mut value)
-                                        .speed(now.abs().max(1.0) * 0.01)
-                                };
-                                if ui.add(drag).changed() {
-                                    change = Some(Edited::Number(field.pointer.clone(), value));
-                                }
-                            }
-                            // A menu where the format has a set and a text box where it does not.
-                            // The menu is not a restriction: `choices` is the catalogue plus the
-                            // scene's own declarations, so anything the file could already say is
-                            // in it, and a key with no known set stays free text rather than
-                            // being offered a list this shell invented.
-                            editor_core::Value::Text { now, choices } if !choices.is_empty() => {
-                                let mut picked = now.clone();
-                                egui::ComboBox::from_id_salt(&field.pointer)
-                                    .selected_text(now.as_str())
-                                    .show_ui(ui, |ui| {
-                                        for choice in choices {
-                                            ui.selectable_value(
-                                                &mut picked,
-                                                choice.clone(),
-                                                choice.as_str(),
-                                            );
-                                        }
-                                    });
-                                if picked != *now {
-                                    change = Some(Edited::Text(field.pointer.clone(), picked));
-                                }
-                            }
-                            editor_core::Value::Text { now, .. } => {
-                                let mut typed = now.clone();
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut typed)
-                                            .desired_width(f32::INFINITY),
-                                    )
-                                    .changed()
-                                {
-                                    change = Some(Edited::Text(field.pointer.clone(), typed));
-                                }
-                            }
-                        }
-                        ui.end_row();
-                    }
-                });
-            ui.separator();
-        }
-
-        // Where the domain sits, which is the scene's business rather than the domain's: `poses`
-        // is a map beside `materials`, not a field inside the object above. So it is its own
-        // control with its own write, and it appears for a domain row whether or not the file has
-        // ever said anything about placement — no shipped scene does.
-        let mut moved: Option<(String, [f64; 3])> = None;
-        let mut turned: Option<(String, [f64; 3], f64)> = None;
-        if let Some(domain) = editor_core::domain_named(&path).map(str::to_string) {
-            let at = editor_core::pose_of(&self.text, &domain);
-            let mut to = at;
-            // A millimetre a pixel would be wrong for a room and right for a die, so the rate
-            // comes from what this scene is the size of. Still a rate and not a limit: nothing
-            // here bounds where a domain may go.
-            let speed = self
-                .checked
-                .bounds
-                .map(|b| ((b[3] - b[0]).max(b[4] - b[1]).max(b[5] - b[2]) / 400.0).max(1e-6))
-                .unwrap_or(1e-3);
-            ui.label(egui::RichText::new("placement").weak().size(11.0));
-            egui::Grid::new("placement")
-                .num_columns(2)
-                .striped(true)
-                .spacing([10.0, 3.0])
-                .show(ui, |ui| {
-                    for (i, axis) in ["x", "y", "z"].iter().enumerate() {
-                        ui.label(
-                            egui::RichText::new(format!("at_m.{axis} (m)"))
-                                .weak()
-                                .monospace()
-                                .size(11.0),
-                        );
-                        if ui
-                            .add(egui::DragValue::new(&mut to[i]).speed(speed))
-                            .changed()
-                        {
-                            moved = Some((domain.clone(), to));
-                        }
-                        ui.end_row();
-                    }
-                    // The turn, beside the position because they are one key in the file. Once it
-                    // exists the inspector's generic walk offers it from the scene row as well —
-                    // this is the control that brings it into being, which is the only part that
-                    // needed writing.
-                    let (axis, degrees) = editor_core::turn_of(&self.text, &domain);
-                    let (mut spin, mut about) = (degrees, axis);
-                    ui.label(
-                        egui::RichText::new("turn (deg)")
-                            .weak()
-                            .monospace()
-                            .size(11.0),
-                    );
-                    if ui.add(egui::DragValue::new(&mut spin).speed(1.0)).changed() {
-                        turned = Some((domain.clone(), about, spin));
-                    }
-                    ui.end_row();
-                    for (i, name) in ["axis.x", "axis.y", "axis.z"].iter().enumerate() {
-                        ui.label(egui::RichText::new(*name).weak().monospace().size(11.0));
-                        if ui
-                            .add(egui::DragValue::new(&mut about[i]).speed(0.05))
-                            .changed()
-                        {
-                            turned = Some((domain.clone(), about, spin));
-                        }
-                        ui.end_row();
-                    }
-                });
-            ui.separator();
-        }
-        if let Some((domain, to)) = moved {
-            match editor_core::set_pose(&self.text, &domain, to) {
-                Ok(text) => {
-                    // Fold in anything typed since the last edit, then record this one. The
-                    // first commit is a no-op when nobody typed, by construction.
-                    self.history.commit(self.text.clone());
-                    self.text = text;
-                    self.history.commit(self.text.clone());
-                    self.dirty = true;
-                    self.recheck();
-                }
-                Err(why) => self.status = why,
-            }
-        }
-        if let Some((domain, axis, degrees)) = turned {
-            // An axis dragged through zero on every component is refused by the format rather
-            // than normalised into a `NaN`, and the status line says so instead of the file
-            // taking it. Dragging back out of zero recovers.
-            match editor_core::set_turn(&self.text, &domain, axis, degrees) {
-                Ok(text) => {
-                    // Fold in anything typed since the last edit, then record this one. The
-                    // first commit is a no-op when nobody typed, by construction.
-                    self.history.commit(self.text.clone());
-                    self.text = text;
-                    self.history.commit(self.text.clone());
-                    self.dirty = true;
-                    self.recheck();
-                }
-                Err(why) => self.status = why,
-            }
-        }
-        {}
-        if let Some(edit) = change {
-            let spliced = match &edit {
-                Edited::Number(pointer, value) => {
-                    editor_core::set_number(&self.text, pointer, *value)
-                }
-                Edited::Text(pointer, value) => editor_core::set_text(&self.text, pointer, value),
-            };
-            match spliced {
-                Ok(text) => {
-                    // Fold in anything typed since the last edit, then record this one. The
-                    // first commit is a no-op when nobody typed, by construction.
-                    self.history.commit(self.text.clone());
-                    self.text = text;
-                    self.history.commit(self.text.clone());
-                    self.dirty = true;
-                    self.recheck();
-                }
-                // A refused change says why and leaves the file alone. The reachable case is a
-                // fraction dragged onto a count, which the widget's own step of one already makes
-                // hard — but "hard to reach" is not "cannot happen", and a splice that half
-                // applied would be the worst outcome available here.
-                Err(why) => self.status = why,
-            }
-        }
-
+        // **What the row is and what came out**, and nothing to change. The values the scene
+        // states are in the settings pane beside the tree, which is where a person sets something
+        // up; this side is where they read what a run made of it. The two used to share this
+        // panel, inputs above results, and the split is the same line drawn between two panels.
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3043,6 +2885,405 @@ impl App {
                         }
                     });
             });
+    }
+
+    /// The form for `path`, rebuilt only when the text or the row has changed since the last one.
+    fn form_for(&mut self, path: &str) -> editor_core::Form {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.text.hash(&mut h);
+        path.hash(&mut h);
+        let key = h.finish();
+        if let Some((k, f)) = &self.form_cache {
+            if *k == key {
+                return f.clone();
+            }
+        }
+        let f = editor_core::form(&self.text, path);
+        self.form_cache = Some((key, f.clone()));
+        f
+    }
+
+    /// Put an edit's result into the scene and select `select`, or say why there was none.
+    ///
+    /// Fold in anything typed since the last edit, then record this one. The first commit is a
+    /// no-op when nobody typed, by construction. A refused edit says why on the status line and
+    /// leaves the file alone: a splice that half applied would be the worst outcome available.
+    fn splice_in(&mut self, result: Result<String, String>, select: Option<String>, said: String) {
+        match result {
+            Ok(text) => {
+                self.history.commit(self.text.clone());
+                self.text = text;
+                self.history.commit(self.text.clone());
+                self.dirty = true;
+                self.recheck();
+                if let Some(path) = select {
+                    self.selected = Some(path);
+                }
+                if !said.is_empty() {
+                    self.status = said;
+                }
+            }
+            Err(why) => self.status = why,
+        }
+    }
+
+    /// The settings pane: the selected row of the model tree, as a form that writes the scene.
+    ///
+    /// With nothing selected it is the scene's own settings — its duration, its frames, its
+    /// schedule — which is the root of the tree and the first thing a new scene needs. A domain's
+    /// row adds where it sits and lists it can start; a list's row adds an entry; an entry's row
+    /// can be copied or taken out. Every one of those is a splice from `editor_core`, recorded so it
+    /// can be undone, and the check runs on the same frame.
+    fn settings(&mut self, ui: &mut egui::Ui, tree: &editor_core::Tree) {
+        let path = self.selected.clone().unwrap_or_else(|| "/".to_string());
+        // **The check's verdict first, here as well as on the canvas.** A form that adds an entry
+        // is a form that can add one the build refuses — an oral dose with no depot, a part bigger
+        // than its grid — and the sentence that says so belongs beside the button that caused it.
+        // First, because a scene that stops being JSON takes the selected row with it, and the
+        // line below would otherwise say only that the row has gone.
+        if let Some(error) = &self.checked.error {
+            ui.colored_label(egui::Color32::from_rgb(220, 80, 60), error.clone());
+        }
+        let Some(node) = tree.find(&path) else {
+            // A selection that no longer exists is worth saying rather than blanking: it means
+            // the scene was edited under it, which is a thing the reader did.
+            ui.weak(format!("{path} is no longer in this scene"));
+            return;
+        };
+        // The type first and the name after it, truncated: a scene's name is its title, and a
+        // title laid out on one line ran past the panel and pushed every line under it out too.
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(node.tag.as_deref().unwrap_or(node.kind.label()))
+                    .monospace()
+                    .weak()
+                    .size(10.0),
+            );
+            ui.add(egui::Label::new(egui::RichText::new(&node.name).strong()).truncate())
+                .on_hover_text(&node.name);
+        });
+        if self.selected.is_none() {
+            ui.weak("the scene itself — pick a row in the outliner to set up that part of it");
+        }
+        ui.separator();
+
+        let form = self.form_for(&path);
+        let mut change: Option<Edited> = None;
+        let mut action: Option<(Result<String, String>, Option<String>, String)> = None;
+        let mut moved: Option<(String, [f64; 3])> = None;
+        let mut turned: Option<(String, [f64; 3], f64)> = None;
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if form.rows.is_empty() {
+                    ui.weak(match node.kind {
+                        editor_core::NodeKind::List => "a list: select an entry to change it",
+                        editor_core::NodeKind::Group => "a group: select a row under it",
+                        _ => "nothing here is set in the scene",
+                    });
+                } else {
+                    egui::Grid::new("settings")
+                        .num_columns(2)
+                        .striped(true)
+                        .spacing([10.0, 4.0])
+                        .show(ui, |ui| {
+                            for row in &form.rows {
+                                match row {
+                                    editor_core::Row::One(field) => {
+                                        ui.label(Self::setting_label(&field.label, field.unit));
+                                        if let Some(c) = Self::setting_widget(ui, field, true) {
+                                            change = Some(c);
+                                        }
+                                    }
+                                    editor_core::Row::Many { label, unit, items } => {
+                                        ui.label(Self::setting_label(label, unit));
+                                        ui.horizontal(|ui| {
+                                            for field in items {
+                                                if let Some(c) =
+                                                    Self::setting_widget(ui, field, false)
+                                                {
+                                                    change = Some(c);
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                }
+
+                if let (Some(domain), Some((key, j))) = (&form.domain, &form.entry) {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("duplicate")
+                            .on_hover_text("a copy of this entry, right after it")
+                            .clicked()
+                        {
+                            action = Some((
+                                editor_core::duplicate_entry(&self.text, domain, key, *j),
+                                Some(format!("/domains/{domain}/{key}/{}", j + 1)),
+                                format!("copied {domain}'s {key} entry {}", j + 1),
+                            ));
+                        }
+                        if ui
+                            .button("delete")
+                            .on_hover_text("take this entry out of its list")
+                            .clicked()
+                        {
+                            // The list's row, unless taking its last entry takes the row too: a
+                            // list emptied to `[]` stays a row only when the format keeps a
+                            // starting entry to add again, and selecting a row that has gone
+                            // would say the list was "no longer in this scene".
+                            let listed = self
+                                .checked
+                                .model
+                                .domains
+                                .iter()
+                                .find(|d| d.name == *domain);
+                            let last = listed
+                                .and_then(|d| d.lists.iter().find(|l| l.key == *key))
+                                .is_some_and(|l| l.entries.len() == 1);
+                            let stays = listed.is_some_and(|d| {
+                                pantometry_world::templates::entry(&d.kind, key).is_some()
+                            });
+                            let row = if last && !stays {
+                                format!("/domains/{domain}")
+                            } else {
+                                format!("/domains/{domain}/{key}")
+                            };
+                            action = Some((
+                                editor_core::remove_entry(&self.text, domain, key, *j),
+                                Some(row),
+                                format!("removed {domain}'s {key} entry {}", j + 1),
+                            ));
+                        }
+                    });
+                }
+
+                if let Some(domain) = &form.domain {
+                    if !form.adds.is_empty() {
+                        ui.add_space(6.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for key in &form.adds {
+                                // Where the new entry will be: after whatever the list holds now.
+                                let at = self
+                                    .checked
+                                    .model
+                                    .domains
+                                    .iter()
+                                    .find(|d| d.name == *domain)
+                                    .and_then(|d| d.lists.iter().find(|l| l.key == *key))
+                                    .map_or(0, |l| l.entries.len());
+                                if ui
+                                    .button(format!("+ {key}"))
+                                    .on_hover_text(format!(
+                                        "add a {key} entry to {domain}, from the format's own \
+                                         starting point"
+                                    ))
+                                    .clicked()
+                                {
+                                    action = Some((
+                                        editor_core::add_entry(&self.text, domain, key),
+                                        Some(format!("/domains/{domain}/{key}/{at}")),
+                                        format!("added a {key} entry to {domain}"),
+                                    ));
+                                }
+                            }
+                        });
+                    }
+                }
+
+                // Where the domain sits, which is the scene's business rather than the domain's:
+                // `poses` is a map beside `materials`, not a field inside the object above. So it
+                // is its own control with its own write, and it appears for a domain row whether
+                // or not the file has ever said anything about placement — no shipped scene does.
+                //
+                // **Only for a domain that has an extent.** A thermal network, a compartment model
+                // or a heater is not at anywhere, and `build` takes a pose for one and does
+                // nothing with it: a drag there wrote the file, recorded an undo step and moved
+                // nothing, with nothing on screen to say why. The tree's row has a box exactly
+                // when the domain is placed, so that is the test.
+                if let Some(domain) = editor_core::domain_named(&path)
+                    .filter(|_| node.bounds.is_some())
+                    .map(str::to_string)
+                {
+                    ui.add_space(6.0);
+                    ui.separator();
+                    let at = editor_core::pose_of(&self.text, &domain);
+                    let mut to = at;
+                    // A millimetre a pixel would be wrong for a room and right for a die, so the
+                    // rate comes from what this scene is the size of. Still a rate and not a
+                    // limit: nothing here bounds where a domain may go.
+                    let speed = self
+                        .checked
+                        .bounds
+                        .map(|b| {
+                            ((b[3] - b[0]).max(b[4] - b[1]).max(b[5] - b[2]) / 400.0).max(1e-6)
+                        })
+                        .unwrap_or(1e-3);
+                    ui.label(egui::RichText::new("placement").weak().size(11.0));
+                    egui::Grid::new("placement")
+                        .num_columns(2)
+                        .striped(true)
+                        .spacing([10.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label(Self::setting_label("at_m", "m"));
+                            let mut dragged = false;
+                            ui.horizontal(|ui| {
+                                for slot in to.iter_mut() {
+                                    dragged |=
+                                        ui.add(egui::DragValue::new(slot).speed(speed)).changed();
+                                }
+                            });
+                            if dragged {
+                                moved = Some((domain.clone(), to));
+                            }
+                            ui.end_row();
+                            // The turn, beside the position because they are one key in the
+                            // file. Once it exists the generic walk offers it from the scene's
+                            // `poses` group as well — this is the control that brings it into
+                            // being, which is the only part that needed writing.
+                            let (axis, degrees) = editor_core::turn_of(&self.text, &domain);
+                            let (mut spin, mut about) = (degrees, axis);
+                            ui.label(Self::setting_label("turn", "deg"));
+                            if ui.add(egui::DragValue::new(&mut spin).speed(1.0)).changed() {
+                                turned = Some((domain.clone(), about, spin));
+                            }
+                            ui.end_row();
+                            ui.label(Self::setting_label("turn axis", ""));
+                            let mut tilted = false;
+                            ui.horizontal(|ui| {
+                                for slot in about.iter_mut() {
+                                    tilted |=
+                                        ui.add(egui::DragValue::new(slot).speed(0.05)).changed();
+                                }
+                            });
+                            if tilted {
+                                turned = Some((domain.clone(), about, spin));
+                            }
+                            ui.end_row();
+                        });
+                } else if editor_core::domain_named(&path).is_some() {
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.weak("no placement: this domain is not at anywhere, so a pose would move nothing");
+                }
+            });
+
+        if let Some((domain, to)) = moved {
+            let result = editor_core::set_pose(&self.text, &domain, to);
+            self.splice_in(result, None, String::new());
+        }
+        if let Some((domain, axis, degrees)) = turned {
+            // An axis dragged through zero on every component is refused by the format rather
+            // than normalised into a `NaN`, and the status line says so instead of the file
+            // taking it. Dragging back out of zero recovers.
+            let result = editor_core::set_turn(&self.text, &domain, axis, degrees);
+            self.splice_in(result, None, String::new());
+        }
+        if let Some(edit) = change {
+            let result = match &edit {
+                Edited::Number(pointer, value) => {
+                    editor_core::set_number(&self.text, pointer, *value)
+                }
+                Edited::Text(pointer, value) => editor_core::set_text(&self.text, pointer, value),
+            };
+            // A refused change says why and leaves the file alone. The reachable case is a
+            // fraction dragged onto a count, which the widget's own step of one already makes
+            // hard — but "hard to reach" is not "cannot happen".
+            self.splice_in(result, None, String::new());
+        }
+        if let Some((result, select, said)) = action {
+            self.splice_in(result, select, said);
+        }
+    }
+
+    /// A form's label: the key as the file spells it, and the unit the key names when it names one.
+    fn setting_label(label: &str, unit: &str) -> egui::RichText {
+        let text = if unit.is_empty() {
+            label.to_string()
+        } else {
+            format!("{label} ({unit})")
+        };
+        egui::RichText::new(text).weak().monospace().size(11.0)
+    }
+
+    /// The widget for one value, and the change it was given this frame, if any.
+    ///
+    /// `wide` is a value on a line of its own; an element of an array shares its line and takes
+    /// only the room a number needs.
+    fn setting_widget(
+        ui: &mut egui::Ui,
+        field: &editor_core::Editable,
+        wide: bool,
+    ) -> Option<Edited> {
+        match &field.value {
+            editor_core::Value::Number { now, integral } => {
+                let mut value = *now;
+                // A rate, not a range. Nothing here clamps: the scene's own check is the authority
+                // on what is legal and it runs on every change already, so a limit invented in the
+                // shell would be a second opinion that can only be wrong -- and wrong in the
+                // direction of refusing a value the format takes.
+                //
+                // **Significant figures, and a rate that goes with them.** The drag printed two
+                // decimals, so a protein's 2e-11 s duration and a conservation tolerance of 1e-9
+                // both read `0.00` — the erasure `magnitude` was written for, a fourth time — and
+                // a pixel moved either by 0.01, a hundred million times the value. The rate is now
+                // a hundredth of the value a pixel, and 0.01 only from zero.
+                let drag = if *integral {
+                    egui::DragValue::new(&mut value)
+                        .speed(1.0)
+                        .fixed_decimals(0)
+                } else {
+                    let rate = if *now == 0.0 { 0.01 } else { now.abs() * 0.01 };
+                    egui::DragValue::new(&mut value)
+                        .speed(rate)
+                        .custom_formatter(|v, _| editor_core::magnitude(v))
+                        .custom_parser(|s| s.trim().parse::<f64>().ok())
+                };
+                ui.add(drag)
+                    .changed()
+                    .then(|| Edited::Number(field.pointer.clone(), value))
+            }
+            // A menu where the format has a set and a text box where it does not. The set is the
+            // format's own -- see `editor_core::form` -- or, for a material, the catalogue plus the
+            // scene's own declarations, so anything the file could already say is in it.
+            editor_core::Value::Text { now, choices } if !choices.is_empty() => {
+                let mut picked = now.clone();
+                egui::ComboBox::from_id_salt(&field.pointer)
+                    .selected_text(now.as_str())
+                    .show_ui(ui, |ui| {
+                        for choice in choices {
+                            ui.selectable_value(&mut picked, choice.clone(), choice.as_str());
+                        }
+                    });
+                (picked != *now).then(|| Edited::Text(field.pointer.clone(), picked))
+            }
+            // **A value on a line of its own wraps, and Enter writes nothing.** A single line lays
+            // its whole string out and clips it to the field, so a scene's title was a sentence of
+            // which a third could be read, and its hidden two thirds lay under the asset panel's
+            // rows: `docs/editor-protein.png` was retaken with `overlap=2` from exactly that. A
+            // wrapped field shows all of it. Enter would put a newline in the value, which no
+            // value here means, so it is no key at all; a JSON string keeps any that is pasted.
+            editor_core::Value::Text { now, .. } => {
+                let mut typed = now.clone();
+                let edit = if wide {
+                    egui::TextEdit::multiline(&mut typed)
+                        .desired_rows(1)
+                        .return_key(None::<egui::KeyboardShortcut>)
+                        .desired_width(f32::INFINITY)
+                } else {
+                    egui::TextEdit::singleline(&mut typed).desired_width(90.0)
+                };
+                ui.add(edit)
+                    .changed()
+                    .then(|| Edited::Text(field.pointer.clone(), typed))
+            }
+        }
     }
 
     /// What the meshes on the GPU depend on, as one number.
@@ -3143,7 +3384,7 @@ impl App {
         let picked_colour = [1.0f32, 0.62, 0.12];
         let selected_name = self.selected.as_deref().and_then(|p| {
             p.strip_prefix("/run/")
-                .or_else(|| p.strip_prefix("/extents/"))
+                .or_else(|| p.strip_prefix("/domains/"))
                 .or_else(|| p.strip_prefix("/readings/"))
                 .map(|rest| rest.split('/').next().unwrap_or(rest).to_string())
         });
@@ -3735,11 +3976,11 @@ impl App {
         };
         let mut probe = Probe::default();
         // What the selection is, resolved to a name the panels can be matched against: the
-        // outliner's paths are `/run/<name>` and `/extents/<name>`, and the viewport draws by
-        // name.
+        // outliner's paths are `/run/<name>` and `/domains/<name>` -- and below it the domain's
+        // lists and entries, which select their domain's box -- and the viewport draws by name.
         let selected_name = self.selected.as_deref().and_then(|p| {
             p.strip_prefix("/run/")
-                .or_else(|| p.strip_prefix("/extents/"))
+                .or_else(|| p.strip_prefix("/domains/"))
                 .or_else(|| p.strip_prefix("/readings/"))
                 .map(|rest| rest.split('/').next().unwrap_or(rest).to_string())
         });

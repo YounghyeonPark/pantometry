@@ -46,12 +46,14 @@
 pub mod chart;
 pub mod diagram;
 pub mod edit;
+pub mod form;
 
 pub use edit::{
-    add_domain, add_domain_json, asset_domain, domain_named, drag_along_axis, editable, pose_of,
-    remove_domain, set_number, set_pose, set_text, set_turn, turn_of, Editable, Value,
-    ASSET_EXTENSIONS,
+    add_domain, add_domain_json, add_entry, asset_domain, domain_named, drag_along_axis,
+    duplicate_entry, editable, pose_of, remove_domain, remove_entry, set_number, set_pose,
+    set_text, set_turn, turn_of, Editable, Value, ASSET_EXTENSIONS,
 };
+pub use form::{form, model, Form, Model, Row};
 
 /// A starting example of every domain the format defines, re-exported so a shell talks to this
 /// crate and not past it. See [`pantometry_world::templates`] for how the list is kept in step.
@@ -167,6 +169,12 @@ pub struct Checked {
     /// Every `compartments` domain, laid out as a diagram for the viewport to colour from a run.
     /// Empty for a scene with none, and for one that does not parse.
     pub bodies: Vec<diagram::Body>,
+    /// What the scene states, as the model tree shows it: every domain and the lists it holds.
+    ///
+    /// Read from the **JSON**, not from the parsed scene, so a scene the format refuses — an
+    /// unknown key, a kind written out of tree — still has a tree to select from while it is
+    /// being fixed. Empty only when the text is not JSON at all.
+    pub model: form::Model,
 }
 
 /// Every designed part a scene names, as triangles in its domain's own frame.
@@ -297,11 +305,13 @@ pub fn nothing_to_draw(checks: bool, ran: bool) -> &'static str {
 /// scene even when the build fails, because "the beam's face count disagrees with the bar's"
 /// is exactly when a person wants to be looking at the boxes.
 pub fn check(text: &str, files: &dyn Parts) -> Checked {
+    let model = form::model(text);
     let scene: Scene = match serde_json::from_str(text) {
         Ok(s) => s,
         Err(e) => {
             return Checked {
                 error: Some(format!("{}:{}: {e}", e.line(), e.column())),
+                model,
                 ..Checked::default()
             }
         }
@@ -314,6 +324,7 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
     let mut out = Checked {
         error,
         notes,
+        model,
         summary: Some(format!(
             "{}: {} domain(s), {:.3} s in {} frames",
             scene.title,
@@ -1264,8 +1275,12 @@ pub enum NodeKind {
     Scene,
     /// A grouping row with no geometry of its own.
     Group,
-    /// A placed extent from the scene text, before or without a run.
-    Placed,
+    /// A domain the scene states, with its extent when it has one.
+    Domain,
+    /// A list of entries a domain holds: its cooled faces, its regions, its doses.
+    List,
+    /// One entry of a list, or of a scene-level map such as `materials`.
+    Entry,
     /// A field sampled on a grid.
     Field,
     /// Bodies at positions.
@@ -1284,7 +1299,9 @@ impl NodeKind {
         match self {
             NodeKind::Scene => "Scene",
             NodeKind::Group => "Group",
-            NodeKind::Placed => "Extent",
+            NodeKind::Domain => "Domain",
+            NodeKind::List => "List",
+            NodeKind::Entry => "Entry",
             NodeKind::Field => "Field",
             NodeKind::Points => "Bodies",
             NodeKind::Paths => "Paths",
@@ -1311,6 +1328,9 @@ pub struct Node {
     pub name: String,
     /// What it is.
     pub kind: NodeKind,
+    /// What the type column says when it can say more than [`NodeKind::label`]: a domain's
+    /// `kind` as the file spells it, `block` rather than `Domain`. Shown, never dispatched on.
+    pub tag: Option<String>,
     /// Index of the parent row, or `None` for the root.
     pub parent: Option<usize>,
     /// How deep to indent.
@@ -1427,13 +1447,14 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
             .map(|s| s.split(" \u{2014} ").next().unwrap_or(s).to_string())
             .unwrap_or_else(|| "scene".into()),
         kind: NodeKind::Scene,
+        tag: None,
         parent: None,
         depth: 0,
         bounds: checked.bounds,
         unit: String::new(),
         detail: {
             let mut d = vec![
-                ("domains".into(), checked.boxes.len().to_string()),
+                ("domains".into(), checked.model.domains.len().to_string()),
                 (
                     "frames".into(),
                     run.map_or("-".into(), |r| r.frames.len().to_string()),
@@ -1453,35 +1474,100 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
         },
     });
 
-    // Every domain the scene placed, whether or not a run has filled it. Grouped under one row so
-    // a scene with thirty extents does not bury the run's output.
-    if !checked.boxes.is_empty() {
+    // The scene-level maps of things — declared materials, composites, poses — each a group with a
+    // row per entry, so a declared substance has a row to select and a form to change it in.
+    for g in &checked.model.groups {
         let group = push(Node {
-            path: "/extents".into(),
-            name: "Placed extents".into(),
+            path: format!("/scene/{}", g.key),
+            name: title_case(&g.key),
             kind: NodeKind::Group,
+            tag: None,
+            parent: Some(root),
+            depth: 1,
+            bounds: None,
+            unit: String::new(),
+            detail: vec![("entries".into(), g.entries.len().to_string())],
+        });
+        for e in &g.entries {
+            push(Node {
+                path: format!("/scene/{}/{e}", g.key),
+                name: e.clone(),
+                kind: NodeKind::Entry,
+                tag: None,
+                parent: Some(group),
+                depth: 2,
+                bounds: None,
+                unit: String::new(),
+                detail: Vec::new(),
+            });
+        }
+    }
+
+    // **Every domain the scene states**, placed or not, and under each the lists it holds. It was
+    // every *placed extent*, which left a thermal network or a compartment model out of the tree
+    // until a run had reported something about it — and a domain that is not in the tree cannot be
+    // selected, so it cannot be changed from anywhere but the text.
+    if !checked.model.domains.is_empty() {
+        let group = push(Node {
+            path: "/domains".into(),
+            name: "Domains".into(),
+            kind: NodeKind::Group,
+            tag: None,
             parent: Some(root),
             depth: 1,
             bounds: checked.bounds,
             unit: String::new(),
-            detail: vec![("count".into(), checked.boxes.len().to_string())],
+            detail: vec![("count".into(), checked.model.domains.len().to_string())],
         });
-        for b in &checked.boxes {
-            let bb = box_of(&b.corners);
-            push(Node {
-                path: format!("/extents/{}", b.name),
-                name: b.name.clone(),
-                kind: NodeKind::Placed,
+        for d in &checked.model.domains {
+            let placed = checked.boxes.iter().find(|b| b.name == d.name);
+            let bb = placed.map(|b| box_of(&b.corners));
+            let mut detail = vec![("kind".into(), d.kind.clone())];
+            match (placed, bb) {
+                (Some(b), Some(bb)) => {
+                    detail.push(("bounds".into(), fmt_box(bb)));
+                    detail.push(("size".into(), fmt_span(bb)));
+                    detail.push(("origin".into(), fmt_point(b.corners[0])));
+                }
+                _ => detail.push(("extent".into(), "none: it is not at anywhere".into())),
+            }
+            let row = push(Node {
+                path: format!("/domains/{}", d.name),
+                name: d.name.clone(),
+                kind: NodeKind::Domain,
+                tag: Some(d.kind.clone()),
                 parent: Some(group),
                 depth: 2,
-                bounds: Some(bb),
+                bounds: bb,
                 unit: String::new(),
-                detail: vec![
-                    ("bounds".into(), fmt_box(bb)),
-                    ("size".into(), fmt_span(bb)),
-                    ("origin".into(), fmt_point(b.corners[0])),
-                ],
+                detail,
             });
+            for l in &d.lists {
+                let list = push(Node {
+                    path: format!("/domains/{}/{}", d.name, l.key),
+                    name: format!("{} ({})", title_case(&l.key), l.entries.len()),
+                    kind: NodeKind::List,
+                    tag: None,
+                    parent: Some(row),
+                    depth: 3,
+                    bounds: None,
+                    unit: String::new(),
+                    detail: vec![("entries".into(), l.entries.len().to_string())],
+                });
+                for (j, e) in l.entries.iter().enumerate() {
+                    push(Node {
+                        path: format!("/domains/{}/{}/{j}", d.name, l.key),
+                        name: e.clone(),
+                        kind: NodeKind::Entry,
+                        tag: None,
+                        parent: Some(list),
+                        depth: 4,
+                        bounds: None,
+                        unit: String::new(),
+                        detail: Vec::new(),
+                    });
+                }
+            }
         }
     }
 
@@ -1500,6 +1586,7 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
             path: "/run".into(),
             name: "Run".into(),
             kind: NodeKind::Group,
+            tag: None,
             parent: Some(root),
             depth: 1,
             bounds: None,
@@ -1619,6 +1706,7 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
                 path: format!("/run/{}", panel.name()),
                 name: panel.name().to_string(),
                 kind,
+                tag: None,
                 parent: Some(group),
                 depth: 2,
                 bounds: Some(world),
@@ -1635,6 +1723,7 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
             path: "/readings".into(),
             name: "Readings".into(),
             kind: NodeKind::Group,
+            tag: None,
             parent: Some(root),
             depth: 1,
             bounds: None,
@@ -1653,6 +1742,7 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
                 path: format!("/readings/{domain}"),
                 name: domain.to_string(),
                 kind: NodeKind::Group,
+                tag: None,
                 parent: Some(group),
                 depth: 2,
                 bounds: checked
@@ -1707,6 +1797,7 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
                     path: format!("/readings/{}/{}", r.domain, r.label),
                     name: r.label.clone(),
                     kind: NodeKind::Reading,
+                    tag: None,
                     parent: Some(d),
                     depth: 3,
                     bounds: None,
@@ -1718,6 +1809,16 @@ pub fn tree(checked: &Checked, run: Option<&viewer_core::Run>, frame: usize) -> 
     }
 
     Tree { nodes }
+}
+
+/// `cooling` as a row's name: `Cooling`. The key is the file's word, and only its first letter is
+/// the tree's.
+fn title_case(key: &str) -> String {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 fn box_of(corners: &[[f64; 3]; 8]) -> [f64; 6] {

@@ -1,6 +1,6 @@
 size=1500x950
-texts=82
-elided=1
+texts=110
+elided=3
 cut=0
 overlap=0
 unwritable=0
@@ -23,58 +23,86 @@ viewport=823,58 374x864
      594    30    24  play
      642    30     7  >
      673    30    11  >|
-     268    52   307  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
        8    54    48  Outliner
      227    54    24  solo
+     276    54    47  Settings
+     347    54    40  Source
      603    54    37  Assets
      760    54    38  rescan
     1214    54    54  Inspector
     1043    66   146  bracket peak 52.4420 C
     1043    80   146  bracket mean 43.7455 C
+     268    84   307  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
     1214    84   264  nothing selected — pick a row in the outliner, or click something in the viewport
       54    86   156  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
      611    86     7  +
      634    88   126  parts/heat-sink.stl
      221    88    30  Scene
     1023    94   166  bracket coldest 30.5449 C
-     268   100   313  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
     1057   108   132  bracket absorbed 0 J
-      66   110    85  Placed extents
+      66   110    51  Domains
      611   110     7  +
      634   110   126  parts/l-bracket.stl
      221   111    30  Group
     1010   122   179  bracket generated 4000.00 J
-      70   132    43  bracket
+      78   132    43  bracket
+     268   132   313  note: bracket/parts[0]: parts/l-bracket.stl filled 4100 cells at 2 mm — volume -0.61%, 38% of it in boundary cells, 0 thin run(s), 0 triangle(s) under a cell
      611   132     7  +
      634   134    93  parts/pipe.stl
-     215   134    36  Extent
-      66   156    23  Run
+     221   134    30  block
+      90   156    48  Parts (1)
      611   156     7  +
      634   156    99  parts/plate.stl
-     221   157    30  Group
-     276   159   297  {\n  "title": "a designed bracket carrying a module's heat along its own shape to its bolts",\n  "schedule": "multirate",\n  "duration_s": 200.0,\n  "frames": 13,\n  "conservation_tolerance": 1e-8,\n  "domains": [\n    {\n      "kind": "block",\n      "name": "bracket",\n      "cells": [26, 26, 12],\n      "cell_mm": 2.0,\n      "initial_c": 44.0,\n      "parts": [\n        { "stl": "parts/l-bracket.stl", "material": "aluminium" }\n      ],\n      "dissipation": [\n        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 12] }\n      ],\n      "cooling": [\n        { "face": "z-min", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 20000.0, "area_cm2": 0.96,\n          "from": [2, 21], "to": [8, 25] },\n        { "face": "z-max", "ambient_c": 20.0,\n          "convection_w_per_m2_k": 12.0, "area_cm2": 16.5 }\n      ]\n    }\n  ]\n}
-      70   178    43  bracket
+     227   157    24  List
+      94   178   118  parts/l-bracket.stl, aluminium
      611   178     7  +
      634   180    86  parts/rod.stl
-     221   180    30  Field
-      66   202    53  Readings
+     221   180    30  Entry
+     306   192   278  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
+     268   193    30  Scene
+      90   202    82  Dissipation (1)
      611   202     7  +
      634   202    99  parts/wedge.stl
-     221   203    30  Group
-      78   224    43  bracket
+     227   203    24  List
+     268   212   306  the scene itself — pick a row in the outliner to set up that part of it
+      94   224    72  dissipation 1
      611   224     7  +
      634   226   126  structures/1CRN.pdb
-     221   226    30  Group
-      82   248    28  peak
-     215   249    36  Scalar
-      82   270    32  mean
-     215   272    36  Scalar
-      82   294    42  coldest
-     215   295    36  Scalar
-      82   316    54  absorbed
-     215   318    36  Scalar
-      82   340    60  generated
-     215   341    36  Scalar
+     221   226    30  Entry
+      90   248    63  Cooling (2)
+     227   249    24  List
+     432   256   145  a designed bracket carrying a module's heat along its own shape to its bolts
+      94   270    31  z-min
+     221   272    30  Entry
+     268   280    33  title
+      94   294    34  z-max
+     221   295    30  Entry
+      66   316    23  Run
+     221   318    30  Group
+     432   324    54  multirate
+     268   326    53  schedule
+      70   340    43  bracket
+     221   341    30  Field
+     432   348    40  200.00
+     268   350    93  duration_s (s)
+      66   362    53  Readings
+     221   364    30  Group
+     436   372    15  13
+     268   374    40  frames
+      78   386    43  bracket
+     221   387    30  Group
+     432   396    58  1.0000e-8
+     268   398   146  conservation_tolerance
+      82   408    28  peak
+     215   410    36  Scalar
+      82   432    32  mean
+     215   433    36  Scalar
+      82   454    42  coldest
+     215   456    36  Scalar
+      82   478    54  absorbed
+     215   479    36  Scalar
+      82   500    60  generated
+     215   502    36  Scalar
      927   570    40  bracket
      927   584   248  field: false colour — nothing here is hot enough to glow
      831   780   181  0 triangles, 0 lines, 0 paints

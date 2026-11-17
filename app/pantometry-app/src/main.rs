@@ -131,7 +131,7 @@ fn main() {
 const DUMP_USAGE: &str = concat!(
     "usage: pantometry --ui-dump [scene.json] [--width W] [--height H] [--new [kind,kind]]",
     " [--open AREA] [--custom] [--click X,Y]... [--drag X0,Y0,X1,Y1]... [--ran] [--iso]",
-    " [--solo] [--run-after-clicks]"
+    " [--solo] [--run-after-clicks] [--source] [--select PATH]"
 );
 
 /// **`--ui-dump`'s arguments, every one accounted for.**
@@ -165,6 +165,8 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
         open: None,
         custom: false,
         run_after: false,
+        source: false,
+        select: None,
     };
     // A flag that sets one value is refused the second time, rather than one of the two winning.
     let mut once: Vec<&str> = Vec::new();
@@ -172,7 +174,7 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
     while i < rest.len() {
         let a = rest[i].as_str();
         let said = rest.get(i + 1).map(String::as_str);
-        if matches!(a, "--width" | "--height" | "--open" | "--new") {
+        if matches!(a, "--width" | "--height" | "--open" | "--new" | "--select") {
             if once.contains(&a) {
                 return Err(format!("{a} was given twice"));
             }
@@ -276,6 +278,24 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
             // `--run-after-clicks` runs whatever the clicks opened. `--ran` runs first, which
             // cannot reach a preset: a preset exists only once its tile has been clicked.
             "--run-after-clicks" => asked.run_after = true,
+            // The middle pane on its Source tab, where the scene's text is drawn.
+            "--source" => asked.source = true,
+            // **A row selected, by its path.** The settings pane is a form for the selection, so
+            // a frame with nothing selected can only ever show the scene's own form. A path the
+            // tree does not have is refused when the frame is built, for the reason `--open`'s
+            // bad index is: a selection of nothing looks exactly like no selection.
+            "--select" => {
+                match said.filter(|p| p.starts_with('/')) {
+                    Some(p) => asked.select = Some(p.to_string()),
+                    None => {
+                        return Err(format!(
+                            "--select takes a row's path, such as /domains/bracket; got {}",
+                            said.unwrap_or("nothing")
+                        ))
+                    }
+                }
+                took = 2;
+            }
             _ if i == 0 && !a.starts_with('-') => asked.path = Some(a.to_string()),
             _ if a.starts_with('-') => return Err(format!("--ui-dump does not take {a}")),
             _ => {

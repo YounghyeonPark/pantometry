@@ -347,3 +347,229 @@ pub fn timescale_span(kinds: &[&str]) -> f64 {
         _ => 1.0,
     }
 }
+
+/// One entry of a list a domain holds — a cooled face, a heat source, a region, a dose — as text.
+///
+/// The editor's model tree shows each list a domain states and offers to add to it, and an entry
+/// cannot be made up: `deny_unknown_fields` refuses a key the entry does not take, and a missing
+/// required one is refused as well. So the starting point lives here beside the format, for the
+/// reason [`TEMPLATES`] does, and is text for the same reason too: it is spliced into a file whose
+/// formatting the editor's whole write path exists to keep.
+///
+/// Each is one line, so it can be put into a list at any indentation without reflowing anything.
+pub struct Entry {
+    /// The `kind` of the domain that holds the list.
+    pub kind: &'static str,
+    /// The list's key, as the format spells it.
+    pub key: &'static str,
+    /// The entry itself, as text.
+    pub json: &'static str,
+}
+
+/// The entries, sorted by kind and then key.
+///
+/// **Every list in the format, not only the ones a scene uses.** Seventeen lists of objects across
+/// four kinds of domain, which is what the format's `Vec<…Spec>` fields come to; the shipped scenes
+/// use fifteen of them, and `infusions` and `pressed` appear in none. A test holds the shipped
+/// scenes' lists against this table, and another adds each entry to its kind's template and builds
+/// the result.
+///
+/// The names an entry refers to — a compartment's `into`, a link's `from` and `to` — are the
+/// template's own, so each builds there. In another scene they may name nothing, and the build
+/// says which name, which is the sentence a person can act on. What an entry says about *where in
+/// a grid* is different, and [`entry_for`] fits it to the grid the entry lands in.
+pub const ENTRIES: [Entry; 17] = [
+    Entry {
+        kind: "block",
+        key: "contact",
+        json: r#"{ "axis": "z", "at": 5, "w_per_m2_k": 5000.0 }"#,
+    },
+    Entry {
+        kind: "block",
+        key: "cooling",
+        json: r#"{ "face": "z-max", "ambient_c": 20.0, "convection_w_per_m2_k": 10.0, "area_cm2": 1.21 }"#,
+    },
+    Entry {
+        kind: "block",
+        key: "dissipation",
+        json: r#"{ "watts": 1.0, "from": [3, 3, 3], "to": [7, 7, 7] }"#,
+    },
+    Entry {
+        kind: "block",
+        key: "parts",
+        json: r#"{ "stl": "parts/rod.stl", "material": "aluminium" }"#,
+    },
+    Entry {
+        kind: "block",
+        key: "regions",
+        json: r#"{ "material": "aluminium", "from": [0, 0, 0], "to": [5, 5, 5] }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "boluses",
+        json: r#"{ "into": "plasma", "dose_mg": 100.0 }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "depots",
+        json: r#"{ "label": "gut", "into": "plasma", "absorption_per_h": 1.0, "bioavailability": 0.8 }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "infusions",
+        json: r#"{ "into": "plasma", "dose_mg": 100.0, "from_h": 0.0, "to_h": 1.0 }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "links",
+        json: r#"{ "between": ["plasma", "tissue"], "clearance_l_per_h": 1.0 }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "oral",
+        json: r#"{ "depot": "gut", "dose_mg": 100.0, "at_h": 0.0 }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "perfusions",
+        json: r#"{ "blood": "plasma", "tissue": "tissue", "flow_l_per_h": 10.0, "partition": 1.0 }"#,
+    },
+    Entry {
+        kind: "compartments",
+        key: "volumes",
+        json: r#"{ "label": "compartment", "volume_l": 1.0 }"#,
+    },
+    Entry {
+        kind: "network",
+        key: "links",
+        json: r#"{ "from": "winding", "to": "housing", "w_per_k": 0.5 }"#,
+    },
+    Entry {
+        kind: "network",
+        key: "nodes",
+        json: r#"{ "name": "node", "material": "aluminium", "volume_cm3": 10.0, "thickness_mm": 2.0, "initial_c": 25.0 }"#,
+    },
+    Entry {
+        kind: "structure",
+        key: "held",
+        json: r#"{ "face": "z-max", "as": "clamp" }"#,
+    },
+    Entry {
+        kind: "structure",
+        key: "pressed",
+        json: r#"{ "face": "z-max", "mpa": 1.0 }"#,
+    },
+    Entry {
+        kind: "structure",
+        key: "regions",
+        json: r#"{ "material": "aluminium", "from": [0, 0, 0], "to": [4, 4, 4] }"#,
+    },
+];
+
+/// The starting entry for `kind`'s list `key`, if the format has one.
+pub fn entry(kind: &str, key: &str) -> Option<&'static Entry> {
+    ENTRIES.iter().find(|e| e.kind == kind && e.key == key)
+}
+
+/// What [`entry_for`] fits an entry to: the domain it is being added to, as far as an entry cares.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fit<'a> {
+    /// The domain's `cells` and `cell_mm`, when it states both.
+    pub grid: Option<([usize; 3], f64)>,
+    /// The faces the domain's lists already name — every list, not only the one being added to:
+    /// a face a structure holds is not a face to press, and pressing a clamped face moves nothing.
+    pub faces: &'a [&'a str],
+    /// The domain's own `material`, when it states one.
+    pub material: Option<&'a str>,
+}
+
+/// The starting entry for `kind`'s list `key`, fitted to the domain it is added to.
+///
+/// [`ENTRIES`] is right for its kind's template and for no domain in particular, and for a block's
+/// cooled face that is not a refusal but a wrong answer. `area_cm2` is the face's **whole** area,
+/// which the domain shares out among its boundary cells, so the template's `1.21` added to scene
+/// 21's wax, 11 x 11 cells of 2 mm, would state its 4.84 cm² top as a quarter of that — and the
+/// build cannot know, because a stated area is the scene's to state. A box of cells beyond the
+/// grid is refused by name, which is better, and still a button that only ever produces an error.
+///
+/// So what an entry says about where in a grid — a face's area, a box of cells, the plane a
+/// contact sits on — is taken from [`Fit::grid`]: the whole of the first face no list holds yet,
+/// the middle third of the grid, the lower half of it, the plane halfway up. A region is made of
+/// something the domain is not, since a region of the block's own material changes nothing and
+/// says nothing about having changed nothing. Everything else is [`ENTRIES`]' as written, and for
+/// the template the two agree exactly, which is what `an_entry_fits_the_grid_it_is_added_to` pins
+/// so they cannot drift apart.
+///
+/// `None` when the format keeps no entry for that list.
+pub fn entry_for(kind: &str, key: &str, fit: &Fit) -> Option<String> {
+    let start = entry(kind, key)?;
+    // **A face nothing holds yet.** A block refuses a face cooled twice — "a face cannot lose heat
+    // to two different airs" — so a second cooled face added to the top would be refused, and a
+    // domain that has the top already wants the next face. The order is the top, the bottom, then
+    // the sides; with all six taken it is the top, and the build says why.
+    let face = FACES
+        .iter()
+        .find(|f| !fit.faces.contains(f))
+        .copied()
+        .unwrap_or("z-max");
+    let substance = if fit.material == Some("aluminium") {
+        "copper"
+    } else {
+        "aluminium"
+    };
+    match (kind, key) {
+        ("structure", "held") => {
+            return Some(format!(r#"{{ "face": "{face}", "as": "clamp" }}"#));
+        }
+        ("structure", "pressed") => {
+            return Some(format!(r#"{{ "face": "{face}", "mpa": 1.0 }}"#));
+        }
+        _ => {}
+    }
+    let Some(([a, b, c], mm)) = fit.grid else {
+        return Some(start.json.to_string());
+    };
+    let n = [a, b, c];
+    let lo = n.map(|k| k / 3);
+    let hi = [0, 1, 2].map(|i| (2 * n[i] / 3).max(lo[i] + 1));
+    let half = n.map(|k| (k / 2).max(1));
+    // The cells a face spans: the two counts that lie in it.
+    let across = match &face[..1] {
+        "x" => b * c,
+        "y" => a * c,
+        _ => a * b,
+    };
+    Some(match (kind, key) {
+        ("block", "cooling") => format!(
+            r#"{{ "face": "{face}", "ambient_c": 20.0, "convection_w_per_m2_k": 10.0, "area_cm2": {} }}"#,
+            decimal(across as f64 * mm * mm / 100.0)
+        ),
+        ("block", "dissipation") => format!(
+            r#"{{ "watts": 1.0, "from": [{}, {}, {}], "to": [{}, {}, {}] }}"#,
+            lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]
+        ),
+        ("block" | "structure", "regions") => format!(
+            r#"{{ "material": "{substance}", "from": [0, 0, 0], "to": [{}, {}, {}] }}"#,
+            half[0], half[1], half[2]
+        ),
+        ("block", "contact") => format!(
+            r#"{{ "axis": "z", "at": {}, "w_per_m2_k": 5000.0 }}"#,
+            half[2]
+        ),
+        _ => start.json.to_string(),
+    })
+}
+
+/// The six faces, in the order a new entry takes the first free one of: the top, the bottom, then
+/// the sides. Spelled as the format spells them.
+const FACES: [&str; 6] = ["z-max", "z-min", "x-max", "x-min", "y-max", "y-min"];
+
+/// A float that stays a float in the file: `4.84`, and `4.0` rather than `4`.
+fn decimal(v: f64) -> String {
+    let s = format!("{v}");
+    if s.contains(['.', 'e', 'E']) {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
