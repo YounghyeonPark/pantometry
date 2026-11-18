@@ -152,8 +152,8 @@ thick ones are what a lumped model cannot tell you: the peak is well above it.*
 `World::advance` made public, and the Python bindings are a third — and its first job was not to be
 a good application but to use the SDK the way a stranger would.
 [`app/pantometry-world/FRICTION.md`](app/pantometry-world/FRICTION.md) is what it came back with:
-**forty-nine findings, forty-three fixed and six argued down in writing** — forty-eight from
-building it and one from an example, which says so. Not one of the library's own tests could have
+**fifty findings, forty-three fixed and seven argued down in writing** — forty-eight from
+building it, one from an example and one from the editor, each of which says so. Not one of the library's own tests could have
 found any of them: a test is written by somebody who already knows the shape.
 
 ## Citation

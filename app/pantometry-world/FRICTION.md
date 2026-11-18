@@ -9,19 +9,21 @@ who already knows the shape. The count used to be here and it is not a number th
 
 Everything below was hit while building the smallest thing that loads a scene, runs it, couples
 two domains over a plain channel and two more over a shared boundary, and draws the result —
-everything except **finding 49**, which came from one of the library's own examples rather than
-from this crate. That is weaker evidence and the entry says so: an example is written by somebody
-who already knows the shape. It is here because it is a finding about the same public API, and the
-register for those is this file. None of it is a bug in the physics except finding 6, which is — and which no test inside the
+everything except **findings 49 and 50**. Finding 49 came from one of the library's own examples
+rather than from this crate. That is weaker evidence and the entry says so: an example is written by
+somebody who already knows the shape. Finding 50 came from the editor, which builds scenes in this
+crate's format rather than calling the SDK. Both are here because each is a finding about an API this
+file is the register for. None of it is a bug in the physics except finding 6, which is — and which no test inside the
 library could have found, because none of them was checking a rate.
 
-**Forty-three of the forty-nine are fixed**, and six are recorded rather than actioned. The
+**Forty-three of the fifty are fixed**, and seven are recorded rather than actioned. The
 reasons differ and are given in each: one because the kernel already refuses the mistake it
 describes and a second consumer would be needed to make the duplication worth removing, one because
 a domain may not know another so the library cannot close it, one because the shape of the answer
 is not obvious, one on scope, one because the alternative to a panic is a type that does not
-exist yet and wants a second consumer to justify, and one because a single drawing is not enough to
-say what the shape of the answer is.
+exist yet and wants a second consumer to justify, one because a single drawing is not enough to
+say what the shape of the answer is, and one because a stated area may differ from its cells' on
+purpose.
 
 **A fixed finding opens its resolution with `**Fixed`, at the start of a line**, because that is
 what `friction_counts.rs` counts and the summary above is pinned to that count. It said "forty
@@ -620,8 +622,8 @@ everything it had ever been handed was flat. The seventh domain found it in an a
 
 ## What this says about the exercise
 
-Forty-nine findings, and the source has shifted twelve times — the table below has thirteen rows
-and that sentence said "seven" through four of them. The last two rows are each a single finding,
+Fifty findings, and the source has shifted thirteen times — the table below has fourteen rows
+and that sentence said "seven" through four of them. The last three rows are each a single finding,
 and **48 had no row at all** until this edit: the table stopped at 47 while the sentence above it
 counted forty-eight, which is the shape of a count that moved and a table that did not.
 
@@ -639,7 +641,8 @@ counted forty-eight, which is the shape of a count that moved and a table that d
 | 34 | **reading a scene's own output at a scale nobody had run before** — nanoseconds and picojoules |
 | 35–47 | **auditing the shipped scenes against the physics they claim** — asking of each one whether it sets up a condition anybody would recognise, rather than whether it runs |
 | 48 | **wiring a domain that reads a file**, where what the constructor refuses is a property of the data rather than of the calling code |
-| 49 | **drawing an instrument rather than a graph** — the only row that is not this crate, and the only one where the thing being drawn is not a measurement |
+| 49 | **drawing an instrument rather than a graph** — the first row that is not this crate, and the only one where the thing being drawn is not a measurement |
+| 50 | **building an editor on the format**, whose button wrote the template's numbers into a domain they were not about |
 
 **Splitting into layers** and **making an unreachable domain reachable** are the two rows a reader
 should take away, because neither is "use the API and see what hurts". Building the next domain and
@@ -1703,6 +1706,36 @@ not a measurement. Each of those crosses the wire format, `viewer-core`, four hu
 report's JavaScript, glTF and USD, and nothing here says which is right. One instrument is not
 enough to choose. A second drawing that wants the same thing would be, and this entry is what that
 one should be compared against.
+
+## 50. A face's area is the grid's to know and the file's to state
+
+A cooled face states `area_cm2`, the **whole face's** area, and the block divides it among the solid
+cells on the face. The grid already knows that area: on a plain block it is the cells across times
+the cells up times a cell's face, and on a designed part it is the solid cells times a cell's face.
+The file has to state it anyway, and nothing compared the two.
+
+**How it was found.** Building the editor's model tree, whose `+ cooling` added the format's starting
+entry as written: `area_cm2: 1.21`, the top of the template's block. On scene 21's wax, 11 x 11 cells
+of 2 mm, the top is 4.84 cm², and the entry built without a word: a quarter of the face's
+conductance, and nothing to say so. The button fits the entry to the grid it lands in now
+(`templates::entry_for`), and to the faces its part reaches when a build has said. That fixes the
+button and not the format.
+
+**What a wrong area cost when nobody was looking.** Scene 29 shipped with 16.5 cm² of still air on a
+top face no solid cell was on: its bracket filled ten layers of a twelve-layer grid, and the block
+cools the twelfth. The format refused a patch that named only void and never counted a whole face,
+so the film acted on nothing from the day the scene shipped. Pointing at that face in the editor,
+which works an area out from the solid cells it covers, is what showed it. The format refuses a face
+of nothing now, and the scene's grid is the part's height.
+
+**Recorded rather than actioned, and the reason is that a stated area may be meant.** Scene 29 states
+16.5 cm², its STL's top, where its cells rasterise to 16.4: a designed part's real surface is not its
+cells', and the file is where the real one is said. A format that refused a difference would refuse
+that, and one that derived the area would discard it. So the mistake is closed at its two ends
+instead. The editor writes the cells' area when a face is picked and shows a stated one that differs
+beside the entry, and the one case that cannot be meant — a face with no solid cell on it — is
+refused by the build. A consumer stating areas by hand, rather than through the editor, is what
+would show whether the build should say more, and how far off an area has to be before it does.
 
 ## What this report does not cover
 
