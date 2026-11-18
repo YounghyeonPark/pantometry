@@ -23,6 +23,62 @@ protects nothing.
 
 ### Added
 
+- **The model is set up by pointing at it.** A cooled face, a held or pressed one, a pad where a
+  part is bolted and a box that dissipates were chosen by typing a word or six indices into a form.
+  - **An entry that says where.** Select one in the tree and its domain's faces toward the eye are
+    named on them, and what it states is drawn on the model. A click on a face sets the entry's
+    `face`. A shift-drag across one draws a patch for a cooled face, and the footprint of a heat
+    source or a region, which keep their depth.
+  - **The results panel.** On the Point, Slice, Line or Region tab, a click puts the probe there,
+    takes the plane through the point, or sets a line's start and then its end. A shift-drag draws
+    the line, or the region's box.
+  - **Under the pointer**, the face and cell or the coordinates it is over, and what a click and a
+    shift-drag would do there. Plain drags still turn the view.
+  - **A cooled face states the area it covers.** The block divides `area_cm2` among the solid cells
+    on the face, so a pick writes solid cells times a cell's face. On a plain block that equals the
+    format's own new entry to the bit. On scene 29's bracket it is 410 solid cells of 676 on
+    `z-min`, the solver's own count, read through the void map the build hands back. A face or
+    patch with no solid cell is refused. Pointing at the face an entry already has writes nothing.
+  - **Checked against closed forms** in `editor_core`'s `tests/a_face_is_picked_where_it_is_drawn.rs`:
+    - a ray along each axis enters through the face it points at, at the point and distance
+      subtraction gives;
+    - a quarter turn about z and a third of a turn about (1, 1, 1) send a known face to a known
+      side;
+    - a patch drawn and taken off gives the file back byte for byte.
+
+    `viewer_core::Camera::ray`, the projection read backwards, lands back on its pixel to 5.7e-14
+    over 129 204 points.
+  - **Driven through the window** by `--ui-dump --click`, the new `--shift-drag` and `--hover`. On
+    scene 25 the names the view draws are clicked and the file read back, and a drag writes the
+    cells the readout named under its two ends. `pantometry edit --select PATH` opens a window with
+    a row selected, as `--ui-dump` could.
+  - **Found on the way.** After any edit the dump counted the toolbar's `edited` over the file's
+    name, `overlap=1` on every edited frame. Its box ran from the row's left edge, the
+    wrapping-label layout the results panel's rows were fixed for: nothing was drawn over
+    anything, and the count could not tell. The toolbar lays its labels out whole now, which moves
+    the name's box three points and not its glyphs. Retaken, the protein's picture came back byte
+    for byte and the bracket's differs only in its paint count. Both captions move.
+  - **Three reviewers read it**, and each finding was reproduced before it was fixed.
+    - **Checks that could not fail.**
+      - The cell under the pointer was checked against a readout from the same code.
+      - No drag was made without Shift.
+      - A click "beside" the box could not show where it landed.
+      - A void map read with `i` and `j` swapped passed, because every part tested was symmetric
+        in them. Scene 30's crossing bars are not, and are counted by hand.
+      - The plane's status line spoke the clicked point's coordinate, not the stored one, so a
+        plane set along the wrong axis read back right.
+    - **Absences that said nothing.**
+      - With no build, a part's void cells were counted solid. Pointing scene 29's pad at its top
+        in a broken scene wrote 27.04 cm².
+      - A hidden domain's entry ignored clicks, and a missed click said nothing.
+  - **Scene 29's top film has cooled nothing since it shipped.** Its bracket fills layers 0 to 9
+    of a 12-layer grid, and the block cools `z-max` at layer 11, where no cell is solid: 16.5 cm² of
+    still air on nothing. The format refuses a patch of void, not a whole face of it. The scene is
+    unchanged here, since its numbers and `docs/editor.png` would move. The entry's form says the
+    film cools nothing.
+  - **Thirty-eight defects planted one at a time**, each caught by the check that claims it and
+    each file restored by its bytes.
+
 - **A run's results can be read as numbers, not only looked at.** A run on screen was a picture,
   a frame slider and a readout under the pointer. A panel now opens under everything but the tree
   once a run is on screen. **Window → Results** puts it away.

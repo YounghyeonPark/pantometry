@@ -110,6 +110,25 @@ pub struct Results {
     /// The region's statistics in every frame, and what they were computed from. A pass over
     /// every sample of every frame is not a thing to do sixty times a second.
     over_time: Option<(u64, OverTime)>,
+    /// Which end of the line a click in the view sets next: the start, then the end.
+    line_end: bool,
+}
+
+/// What the tab on screen lets the view set, and on which grid: the domain the panel is reading,
+/// its box in its own frame, and where that frame is.
+pub struct Aimed {
+    /// The tab.
+    pub tab: Tab,
+    /// The domain.
+    pub name: String,
+    /// Its box, `[x0, y0, z0, x1, y1, z1]` in metres, in its own frame.
+    pub extent: [f64; 6],
+    /// Where its frame sits in the world.
+    pub place: viewer_core::Placed,
+    /// The length unit its positions are said in, and metres to one of it.
+    pub unit: (&'static str, f64),
+    /// The slice's axis, for the slice tab's readout.
+    pub axis: usize,
 }
 
 /// A region's statistics in every frame: `(t in seconds, the statistics or None)`, as
@@ -139,6 +158,113 @@ impl Results {
         self.whole = true;
         self.lo = [g.extent[0], g.extent[1], g.extent[2]];
         self.hi = [g.extent[3], g.extent[4], g.extent[5]];
+    }
+
+    /// What the view can set for the tab on screen: the probe, a line's ends, a box, a plane.
+    ///
+    /// `None` for the readings, and until the panel has set its positions for the domain it is
+    /// reading — a click before that would be put back in the middle by [`Results::fit_to`] on the
+    /// next frame, which is a pick that does nothing and says nothing.
+    pub fn aimed(&self, run: &viewer_core::Run, frame: usize) -> Option<Aimed> {
+        let tab = self.tab.filter(|t| *t != Tab::Readings)?;
+        let name = self.domain.as_deref()?;
+        let now = run
+            .frames
+            .get(frame.min(run.frames.len().saturating_sub(1)))?;
+        let g = post::grid(now, name).ok()?;
+        let fitted = self.set_for.as_ref().map(|s| (s.0.as_str(), s.1));
+        if fitted != Some((name, g.extent.map(f64::to_bits))) {
+            return None;
+        }
+        Some(Aimed {
+            tab,
+            name: name.to_string(),
+            extent: g.extent,
+            place: g.place,
+            unit: length_of(&g),
+            axis: self.axis,
+        })
+    }
+
+    /// A click at `at`, a point on the domain's surface in its own frame: the probe goes there,
+    /// the plane goes through it, and a line's ends are set one click each, start then end.
+    /// Refused, with the sentence that says what does, on a tab a click sets nothing on.
+    pub fn clicked(&mut self, aimed: &Aimed, at: [f64; 3]) -> Result<String, String> {
+        let (unit, per) = aimed.unit;
+        match aimed.tab {
+            // **Each sentence says what was stored, not what was clicked.** The plane's said the
+            // clicked point's coordinate, so a plane set along the wrong axis read back right and
+            // a sabotage of exactly that passed.
+            Tab::Point => {
+                self.point = at;
+                Ok(format!("probe at {}", spelled(self.point, unit, per)))
+            }
+            Tab::Slice => {
+                self.at = at[self.axis];
+                Ok(format!(
+                    "plane at {} = {} {unit}",
+                    AXIS_NAMES[self.axis],
+                    short(self.at / per)
+                ))
+            }
+            Tab::Line => {
+                let end = if self.line_end { "end" } else { "start" };
+                if self.line_end {
+                    self.b = at;
+                } else {
+                    self.a = at;
+                }
+                self.line_end = !self.line_end;
+                let set = if end == "end" { self.b } else { self.a };
+                Ok(format!("line {end} at {}", spelled(set, unit, per)))
+            }
+            Tab::Region => {
+                Err("shift-drag across a face of the domain to draw the region's box".to_string())
+            }
+            Tab::Readings => Err(String::new()),
+        }
+    }
+
+    /// A shift-drag from `a` to `b`, both in the domain's own frame, begun on `face`: the line
+    /// between them, or the region's box over the rectangle they span on the face, as deep as the
+    /// box was. Other tabs take it as a click at `b`.
+    pub fn dragged(
+        &mut self,
+        aimed: &Aimed,
+        face: pantometry_world::FaceSpec,
+        a: [f64; 3],
+        b: [f64; 3],
+    ) -> Result<String, String> {
+        let (unit, per) = aimed.unit;
+        match aimed.tab {
+            Tab::Line => {
+                self.a = a;
+                self.b = b;
+                self.line_end = false;
+                Ok(format!(
+                    "line from {} to {}",
+                    spelled(self.a, unit, per),
+                    spelled(self.b, unit, per)
+                ))
+            }
+            Tab::Region => {
+                let [p, q] = face.axes();
+                if a[p] == b[p] || a[q] == b[q] {
+                    return Err("that box has no area on the face — drag across it".to_string());
+                }
+                self.whole = false;
+                for k in [p, q] {
+                    self.lo[k] = a[k].min(b[k]);
+                    self.hi[k] = a[k].max(b[k]);
+                }
+                Ok(format!(
+                    "region from {} to {}",
+                    spelled(self.lo, unit, per),
+                    spelled(self.hi, unit, per)
+                ))
+            }
+            _ => self.clicked(aimed, b),
+        }
     }
 
     /// The box the region tab reads, or `None` for the whole domain.
@@ -217,7 +343,7 @@ fn triple(ui: &mut egui::Ui, label: &str, p: &mut [f64; 3], g: &Grid, per: f64) 
 ///
 /// Not [`editor_core::magnitude`], which is for a value and gives every one the same width:
 /// a cell centre half a millimetre in read `0.500000`, three times over on one line.
-fn short(v: f64) -> String {
+pub(crate) fn short(v: f64) -> String {
     if !v.is_finite() {
         return "-".to_string();
     }
@@ -243,7 +369,7 @@ fn short(v: f64) -> String {
 }
 
 /// A point, in the display unit, for a caption.
-fn spelled(p: [f64; 3], unit: &str, per: f64) -> String {
+pub(crate) fn spelled(p: [f64; 3], unit: &str, per: f64) -> String {
     format!(
         "({}, {}, {}) {unit}",
         short(p[0] / per),

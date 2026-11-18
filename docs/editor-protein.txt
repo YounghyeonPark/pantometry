@@ -13,7 +13,7 @@ viewport=823,58 374x604
      231     4    45  Domain
      300     4    23  Run
      347     4    37  Watch
-       8    27   271  31-a-protein-shaking-at-body-temperature.json
+       8    30   271  31-a-protein-shaking-at-body-temperature.json
      309    30    20  run
      352    30    33  verify
      419    30    29  deep

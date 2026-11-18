@@ -4221,8 +4221,56 @@ pub enum FaceSpec {
 }
 
 impl FaceSpec {
-    /// Which of a block's three counts lie *in* this face, in x-y-z order.
-    fn axes(self) -> [usize; 2] {
+    /// All six, in the order the format's own variants are written.
+    pub const ALL: [FaceSpec; 6] = [
+        FaceSpec::XMin,
+        FaceSpec::XMax,
+        FaceSpec::YMin,
+        FaceSpec::YMax,
+        FaceSpec::ZMin,
+        FaceSpec::ZMax,
+    ];
+
+    /// The face across `axis`, at its far end when `high`.
+    pub fn across(axis: usize, high: bool) -> FaceSpec {
+        match (axis, high) {
+            (0, false) => FaceSpec::XMin,
+            (0, true) => FaceSpec::XMax,
+            (1, false) => FaceSpec::YMin,
+            (1, true) => FaceSpec::YMax,
+            (2, false) => FaceSpec::ZMin,
+            _ => FaceSpec::ZMax,
+        }
+    }
+
+    /// The axis this face is across, and whether it is the far end of it.
+    pub fn normal(self) -> (usize, bool) {
+        match self {
+            FaceSpec::XMin => (0, false),
+            FaceSpec::XMax => (0, true),
+            FaceSpec::YMin => (1, false),
+            FaceSpec::YMax => (1, true),
+            FaceSpec::ZMin => (2, false),
+            FaceSpec::ZMax => (2, true),
+        }
+    }
+
+    /// The word a scene writes for it, `x-min` and on. Written out, and held to serde's own
+    /// spelling by `every_list_that_says_where_is_one_a_click_can_set`.
+    pub fn spelled(self) -> &'static str {
+        match self {
+            FaceSpec::XMin => "x-min",
+            FaceSpec::XMax => "x-max",
+            FaceSpec::YMin => "y-min",
+            FaceSpec::YMax => "y-max",
+            FaceSpec::ZMin => "z-min",
+            FaceSpec::ZMax => "z-max",
+        }
+    }
+
+    /// Which of a block's three counts lie *in* this face, in x-y-z order — the two axes a
+    /// patch's `from` and `to` are read in.
+    pub fn axes(self) -> [usize; 2] {
         match self {
             FaceSpec::XMin | FaceSpec::XMax => [1, 2],
             FaceSpec::YMin | FaceSpec::YMax => [0, 2],

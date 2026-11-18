@@ -13,7 +13,7 @@ viewport=823,58 374x604
      231     4    45  Domain
      300     4    23  Run
      347     4    37  Watch
-       8    27   240  29-a-designed-bracket-becomes-cells.json
+       8    30   240  29-a-designed-bracket-becomes-cells.json
      278    30    20  run
      322    30    33  verify
      388    30    29  deep

@@ -889,6 +889,48 @@ impl Camera {
         }
     }
 
+    /// The line of sight through a point of the screen, in world metres: where the eye is, and
+    /// the unit direction it looks along through `(x, y)`.
+    ///
+    /// **The inverse of [`Camera::project`], through the same rotation.** A viewport that draws a
+    /// face with one camera and picks it with another puts a click on the face beside the one under
+    /// the pointer, and nothing on screen says which was meant. Every point `origin + t direction`
+    /// in front of the eye projects back to `(x, y)`, which `a_ray_lands_on_the_pixel_it_left`
+    /// measures over the same sweep of cameras the matrix is checked against.
+    ///
+    /// `x` and `y` are normalised device coordinates as [`Camera::project`] returns them: `-1..1`
+    /// across the width and up the height. The eye is `distance` spans behind the framing's
+    /// centre along the view direction, and the ray through `(0, 0)` passes through that centre.
+    ///
+    /// The near plane plays no part: a point closer than [`Camera::NEAR`] is on the ray and is not
+    /// drawn, which is [`Camera::sees`]'s business and not this one's.
+    pub fn ray(&self, x: f64, y: f64, frame: &Framing, aspect: f64) -> Ray {
+        let r = self.rotation();
+        let d = frame.span.max(1e-12);
+        let f = 0.6 * self.scale;
+        // In view coordinates the eye is at `(0, 0, -distance)` and a point at depth `D` on this
+        // pixel is at `(u D, w D, D - distance)`: `project` read backwards.
+        let (u, w) = (x * aspect.max(1e-6) / f, y / f);
+        let along = |a: f64, b: f64, c: f64| {
+            [
+                a * r[0][0] + b * r[1][0] + c * r[2][0],
+                a * r[0][1] + b * r[1][1] + c * r[2][1],
+                a * r[0][2] + b * r[1][2] + c * r[2][2],
+            ]
+        };
+        let eye = along(0.0, 0.0, -self.distance);
+        let dir = along(u, w, 1.0);
+        let length = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        Ray {
+            origin: [
+                frame.centre[0] + d * eye[0],
+                frame.centre[1] + d * eye[1],
+                frame.centre[2] + d * eye[2],
+            ],
+            direction: [dir[0] / length, dir[1] / length, dir[2] / length],
+        }
+    }
+
     /// How far one metre reaches across the screen, in normalised device `x`, at the framing's
     /// centre and square to the view. `None` when the centre is outside the clip planes or the
     /// answer is not a positive number.
@@ -931,6 +973,15 @@ impl Camera {
         let per = (b.x - a.x) / probe;
         (per.is_finite() && per > 0.0).then_some(per)
     }
+}
+
+/// A line of sight, from [`Camera::ray`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    /// Where the eye is, in world metres.
+    pub origin: [f64; 3],
+    /// Which way it looks, a unit vector.
+    pub direction: [f64; 3],
 }
 
 /// A projected point.

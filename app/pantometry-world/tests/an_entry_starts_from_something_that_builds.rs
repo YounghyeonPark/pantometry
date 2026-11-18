@@ -429,3 +429,94 @@ fn a_new_face_avoids_every_list_not_only_its_own() {
     let pressed = templates::entry_for("structure", "pressed", &fit).expect("an entry");
     assert!(pressed.contains("\"face\": \"x-max\""), "{pressed}");
 }
+
+/// **Every list that says where on a grid is one a click can set, and says it the way its type
+/// does.**
+///
+/// [`templates::SITES`] is a table kept by hand, like [`ENTRIES`], so it is held against the
+/// format three ways. Each entry naming a `face` is a face site and each naming three-cell `from`
+/// and `to` is a cells site, so a list that says where cannot be missing from the table; every
+/// site has an entry, so the table names no list the format lacks; and a face site takes a patch
+/// exactly when its type does — `from` and `to` added to a cooled face builds, and added to a held
+/// or pressed one is refused as an unknown field, which is what a click would otherwise write.
+#[test]
+fn every_list_that_says_where_is_one_a_click_can_set() {
+    use templates::Placing;
+    let mut faces = 0;
+    let mut boxes = 0;
+    for entry in &ENTRIES {
+        let item: serde_json::Value = serde_json::from_str(entry.json).expect("parses");
+        let three = |k: &str| item[k].as_array().is_some_and(|a| a.len() == 3);
+        let says = if item.get("face").is_some() {
+            faces += 1;
+            Some("face")
+        } else if three("from") && three("to") {
+            boxes += 1;
+            Some("cells")
+        } else {
+            None
+        };
+        let placing = templates::placing(entry.kind, entry.key);
+        match (says, placing) {
+            (Some("face"), Some(Placing::Face | Placing::FacePatch))
+            | (Some("cells"), Some(Placing::Cells))
+            | (None, None) => {}
+            _ => panic!(
+                "{} {}: the entry says {says:?} and the table says {placing:?}",
+                entry.kind, entry.key
+            ),
+        }
+        if !matches!(placing, Some(Placing::Face | Placing::FacePatch)) {
+            continue;
+        }
+        let mut patched = item.clone();
+        patched["from"] = serde_json::json!([0, 0]);
+        patched["to"] = serde_json::json!([1, 1]);
+        let json = serde_json::to_string(&patched).expect("serialises");
+        let with_patch = Entry {
+            kind: entry.kind,
+            key: entry.key,
+            json: Box::leak(json.into_boxed_str()),
+        };
+        let result = build(&with(scene_for(entry.kind), &with_patch));
+        match placing {
+            Some(Placing::FacePatch) => {
+                result.unwrap_or_else(|e| panic!("{} {} with a patch: {e}", entry.kind, entry.key));
+            }
+            _ => {
+                let e = result.expect_err("a whole-face entry took a patch");
+                assert!(
+                    e.contains("unknown field"),
+                    "{} {} with a patch was refused, but not for the patch: {e}",
+                    entry.kind,
+                    entry.key
+                );
+            }
+        }
+    }
+    for site in &templates::SITES {
+        assert!(
+            templates::entry(site.kind, site.key).is_some(),
+            "{} {} is a site with no entry in the format",
+            site.kind,
+            site.key
+        );
+    }
+    // Three face lists and three box lists when this was written; none would make it vacuous.
+    assert_eq!((faces, boxes), (3, 3), "face and cells entries");
+    // The words a click writes are the format's, and each face is across the axis it says.
+    for (n, face) in pantometry_world::FaceSpec::ALL.into_iter().enumerate() {
+        assert_eq!(
+            serde_json::to_value(face).expect("serialises"),
+            serde_json::Value::from(face.spelled()),
+            "{face:?}"
+        );
+        let (axis, high) = face.normal();
+        assert_eq!((axis, high), (n / 2, n % 2 == 1), "{face:?}");
+        assert_eq!(pantometry_world::FaceSpec::across(axis, high), face);
+        assert!(
+            !face.axes().contains(&axis),
+            "{face:?} lies across its own axis"
+        );
+    }
+}

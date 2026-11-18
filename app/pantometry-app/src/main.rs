@@ -32,6 +32,7 @@
 //! `pantometry-world` took, and a scene file is not the only thing with users. Anything this
 //! dispatcher does not recognise goes to the CLI unchanged.
 
+mod aim;
 mod cli;
 mod edit;
 mod glyphs;
@@ -132,7 +133,8 @@ fn main() {
 const DUMP_USAGE: &str = concat!(
     "usage: pantometry --ui-dump [scene.json] [--width W] [--height H] [--new [kind,kind]]",
     " [--open AREA] [--custom] [--click X,Y]... [--drag X0,Y0,X1,Y1]... [--ran] [--iso]",
-    " [--solo] [--run-after-clicks] [--source] [--select PATH] [--results TAB]"
+    " [--solo] [--run-after-clicks] [--source] [--select PATH] [--results TAB]",
+    " [--shift-drag X0,Y0,X1,Y1]... [--hover X,Y]"
 );
 
 /// **`--ui-dump`'s arguments, every one accounted for.**
@@ -160,6 +162,7 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
         choosing: None,
         click: Vec::new(),
         drag: Vec::new(),
+        hover: None,
         ran: false,
         iso: false,
         solo: false,
@@ -217,13 +220,34 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
                 }
                 took = 2;
             }
-            // `--drag x0,y0,x1,y1` may be given more than once too, after the clicks.
-            "--drag" => {
+            // `--drag x0,y0,x1,y1` may be given more than once too, after the clicks; and
+            // `--shift-drag` is the same with Shift held throughout, which is how a patch, a box
+            // or a line is drawn on the model. The two keep the order they are written in.
+            "--drag" | "--shift-drag" => {
                 match said.and_then(numbers).as_deref() {
-                    Some(&[x0, y0, x1, y1]) => asked.drag.push(((x0, y0), (x1, y1))),
+                    Some(&[x0, y0, x1, y1]) => {
+                        asked.drag.push(((x0, y0), (x1, y1), a == "--shift-drag"))
+                    }
                     _ => {
                         return Err(format!(
-                            "--drag takes x0,y0,x1,y1; got {}",
+                            "{a} takes x0,y0,x1,y1; got {}",
+                            said.unwrap_or("nothing")
+                        ))
+                    }
+                }
+                took = 2;
+            }
+            // **The pointer left over a place with no button pressed**, after every click and
+            // drag: what the view says about what is under it is drawn only while it is hovered.
+            "--hover" => {
+                if asked.hover.is_some() {
+                    return Err(String::from("--hover was given twice"));
+                }
+                match said.and_then(numbers).as_deref() {
+                    Some(&[x, y]) => asked.hover = Some((x, y)),
+                    _ => {
+                        return Err(format!(
+                            "--hover takes x,y; got {}",
                             said.unwrap_or("nothing")
                         ))
                     }
@@ -351,7 +375,8 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
     let points = asked
         .click
         .iter()
-        .chain(asked.drag.iter().flat_map(|(a, b)| [a, b]));
+        .chain(asked.drag.iter().flat_map(|(a, b, _)| [a, b]))
+        .chain(asked.hover.iter());
     for &(x, y) in points {
         if !(0.0..=asked.width).contains(&x) || !(0.0..=asked.height).contains(&y) {
             return Err(format!(

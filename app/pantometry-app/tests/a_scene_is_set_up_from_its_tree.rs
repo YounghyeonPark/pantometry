@@ -92,6 +92,43 @@ fn says(dump: &str, text: &str) -> bool {
     drawn(dump).iter().any(|d| d.text == text)
 }
 
+/// What is drawn outside the viewport. A selected cooled face's entry names its domain's faces in
+/// the view, so `x-min` is drawn there before any menu opens; a check about the panes reads them.
+fn off_view(dump: &str) -> Vec<Drawn> {
+    let (vx, vy, vw, vh) = dump
+        .lines()
+        .find_map(|l| l.strip_prefix("viewport="))
+        .and_then(|v| {
+            let (at, size) = v.split_once(' ')?;
+            let (x, y) = at.split_once(',')?;
+            let (w, h) = size.split_once('x')?;
+            Some((
+                x.parse::<f32>().ok()?,
+                y.parse::<f32>().ok()?,
+                w.parse::<f32>().ok()?,
+                h.parse::<f32>().ok()?,
+            ))
+        })
+        .unwrap_or_else(|| panic!("no viewport:\n{dump}"));
+    drawn(dump)
+        .into_iter()
+        .filter(|d| !(d.x >= vx && d.x <= vx + vw && d.y >= vy && d.y <= vy + vh))
+        .collect()
+}
+
+fn says_off_view(dump: &str, text: &str) -> bool {
+    off_view(dump).iter().any(|d| d.text == text)
+}
+
+fn at_off_view(dump: &str, text: &str) -> String {
+    let rows = off_view(dump);
+    let d = rows
+        .iter()
+        .find(|d| d.text == text)
+        .unwrap_or_else(|| panic!("nothing outside the view says {text:?}:\n{dump}"));
+    format!("{},{}", d.x + 3.0, d.y + 3.0)
+}
+
 fn scene() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../pantometry-world/scenes/29-a-designed-bracket-becomes-cells.json")
@@ -210,7 +247,7 @@ fn delete_takes_an_entry_out() {
     let entry = "/domains/bracket/cooling/1";
     let before = dump(&[&scene(), "--select", entry]);
     assert!(
-        says(&before, "z-max"),
+        says_off_view(&before, "z-max"),
         "z-max is drawn before the delete:\n{before}"
     );
     let after = dump(&[
@@ -222,7 +259,7 @@ fn delete_takes_an_entry_out() {
     ]);
     assert!(says(&after, "Cooling (1)"), "one face is left:\n{after}");
     assert!(
-        !says(&after, "z-max"),
+        !says_off_view(&after, "z-max"),
         "and it is the one that was not deleted:\n{after}"
     );
 }
@@ -235,12 +272,13 @@ fn a_face_picked_from_its_menu_is_written() {
     let before = dump(&[&scene(), "--select", entry]);
     let menu = beside(&before, "face", "z-min");
     let open = dump(&[&scene(), "--select", entry, "--click", &menu]);
-    // The menu's items are drawn once it is open, `x-min` among them; it was drawn nowhere before.
+    // The menu's items are drawn once it is open, `x-min` among them; it was drawn nowhere outside
+    // the view before, where the selected entry names its domain's faces.
     assert!(
-        !says(&before, "x-min") && says(&open, "x-min"),
+        !says_off_view(&before, "x-min") && says_off_view(&open, "x-min"),
         "the menu did not open:\n{open}"
     );
-    let pick = at(&open, "x-min");
+    let pick = at_off_view(&open, "x-min");
     let after = dump(&[
         &scene(),
         "--select",

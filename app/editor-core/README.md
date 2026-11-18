@@ -298,6 +298,91 @@ window. That sweep found:
   - A placed domain's positions not saying they are its own.
   - Two axes at the ends of the doubles that never returned.
 
+## Pointing at the model
+
+A cooled face, a held one, a pad where a part is bolted and a box of cells that dissipates were
+set by typing a word or six indices into a form, and checked by counting cells in one's head. A
+simulation tool is set up by pointing at the model, so now the view does what the selection asks:
+
+- **An entry that says where.** Select a cooled face, a held or pressed face, a heat source or a
+  region in the tree, and its domain's faces toward the eye are named on them. The face, patch or
+  box the entry states is drawn on the model. A click on a face sets the entry's `face`. A
+  shift-drag across one draws a patch on it for a cooled face, and the footprint of a heat source
+  or a region, which keep their depth.
+- **The results panel.** On the Point, Slice, Line or Region tab, the domain the panel reads is
+  what the pointer is over. A click puts the probe there, takes the plane through the point, or
+  sets a line's start and then its end. A shift-drag draws the line, or the region's box over the
+  rectangle it spans.
+
+Under the pointer, the face and cell or the coordinates it is over, and what a click and a
+shift-drag would do there. Plain drags still turn the view.
+
+`editor_core::pick` does the arithmetic and the shell only paints, so the browser editor can make
+the same calls. What it promises, and what holds each promise:
+
+- **What is drawn is what is hit.** The ray is `viewer_core::Camera::ray`, the projection read
+  backwards through the same rotation. Points along it project back onto the pixel it left, to
+  5.7e-14 over 129 204 points and a sweep of cameras.
+- **A face is the domain's own, however it is turned.** The ray is taken into the domain's frame
+  by undoing its pose, so `x-max` is the face the file means. A quarter turn about z sends the
+  box's `-y` to the world's `+x`, and a third of a turn about (1, 1, 1) sends `y` to `z`. Both are
+  held, with the point found put back on the ray.
+- **A cooled face states the area it covers.** The block divides `area_cm2` among the **solid**
+  cells on the face or patch, so that is what a pick writes: solid cells times a cell's face. On a
+  plain block it is the format's own new entry to the bit. On scene 29's bracket it is the 410
+  solid cells of 676 that the solver's own account measured on `z-min`, read through the void map
+  the build hands back. A face or patch with no solid cell is refused, because it cools nothing.
+- **Pointing again changes nothing.** A click on the face an entry already has writes nothing, not
+  even an area a person stated by hand. A patch drawn and taken off gives back the file byte for
+  byte, on a one-line entry and on scene 29's pad written across two lines.
+- **A held face is a whole face.** `from` and `to` on one is an unknown field, so a box drawn on
+  it is dropped and the status line says so. Which lists take a face, a patch or a box is the
+  format's answer, `templates::SITES`. It is held to the format's types: a patch added to a cooled
+  face builds, and added to a held face is refused.
+- **Only the aimed-at domain is hit.** Scene 25's structure is its block's own grid. A click meant
+  for the cooled face is not taken by the box in front of it, and a click beside it keeps the
+  entry rather than clearing the selection.
+
+`tests/a_face_is_picked_in_the_view.rs` drives all of it through `--ui-dump --click`,
+`--shift-drag` and `--hover`. It clicks the names the view draws and reads back the file. Each
+face of scene 25's module is 64 cells of 2.25 mm², 1.44 cm². A drag between two points writes the
+cells the readout named under each. The probe, the line and the region land on the coordinates the
+readout gave.
+
+**What three reviewers found**, each reproduced before it was fixed.
+
+- **Passes that could not fail.**
+  - The cell under the pointer was checked against the readout, and both come from the same code.
+    It is now held to division: 4.6 mm on 1.5 mm cells is cell 3.
+  - No test dragged without Shift. A plain drag over a selected face writing a patch would have
+    passed.
+  - A click "beside" the box could not tell beside from on, or from not reaching the view at all.
+    The test now hovers there first to show nothing is under it. A control with a domain row
+    selected shows the same click clears a selection.
+  - A void map read with `i` and `j` swapped passed every test, because each part the tests used
+    is the same with them swapped. Scene 30's crossing busbars are not, and their cells are counted
+    by hand from the scene's regions.
+  - A highlight's corners were checked at the grid's ends only. One patch inside it is now checked,
+    in order.
+  - The plane's status line said the coordinate clicked rather than the one stored, so a plane set
+    along the wrong axis read back right. Each sentence now says what was stored.
+- **Absent, and said nothing.**
+  - A part's void map comes from the build, and with no build every cell was counted solid.
+    Pointing scene 29's pad at its top in a scene that did not build wrote the grid face's
+    27.04 cm². A block with a part or a `void` region is now refused an area until it builds.
+  - An entry in a hidden domain took clicks and did nothing, and a click that missed said nothing.
+    Both say so now.
+- **Scene 29's top film cools nothing, and has not since it shipped.** The bracket fills layers 0
+  to 9 of a 12-layer grid, 410 cells each, and leaves layers 10 and 11 empty. The block cools its
+  `z-max` face at layer 11, which holds no solid cell, so the 16.5 cm² still-air film acts on
+  nothing. The format refuses a patch of void but not a whole face of it. The scene is left as it
+  is here, since its numbers and the figure drawn from it would move. The editor says so instead:
+  the entry's form reads "no solid cell of bracket is on z-max, so its film cools nothing".
+
+Not yet: the browser editor's view does not point. A contact's plane between cells is not
+something a click sets. A click on a domain the results panel is not reading selects it, and
+the probe takes a second click.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

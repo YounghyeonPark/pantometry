@@ -47,6 +47,7 @@ pub mod chart;
 pub mod diagram;
 pub mod edit;
 pub mod form;
+pub mod pick;
 pub mod post;
 
 pub use edit::{
@@ -170,6 +171,9 @@ pub struct Checked {
     /// Every `compartments` domain, laid out as a diagram for the viewport to colour from a run.
     /// Empty for a scene with none, and for one that does not parse.
     pub bodies: Vec<diagram::Body>,
+    /// Every domain a click can point at a face or a cell of — a block, a structure — with its
+    /// grid and, when the scene built, which of its cells are void. See [`pick`].
+    pub targets: Vec<pick::Target>,
     /// What the scene states, as the model tree shows it: every domain and the lists it holds.
     ///
     /// Read from the **JSON**, not from the parsed scene, so a scene the format refuses — an
@@ -318,8 +322,36 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
         }
     };
 
+    // Which cells of each block are void, read off the build while it is here: a cooled face's
+    // area is shared among its solid cells, and only the rasteriser knows which those are.
+    let mut voids: std::collections::BTreeMap<String, Vec<bool>> = Default::default();
     let (error, notes) = match World::build_with(scene.clone(), files) {
-        Ok(world) => (None, world.notes().to_vec()),
+        Ok(world) => {
+            for spec in &scene.domains {
+                let DomainSpec::Block { cells, .. } = spec else {
+                    continue;
+                };
+                let Some(solid) = world
+                    .simulation()
+                    .domain_as::<pantometry::thermal::Solid3D>(spec.name())
+                else {
+                    continue;
+                };
+                if solid.counts() != (cells[0], cells[1], cells[2]) {
+                    continue;
+                }
+                let mut void = Vec::with_capacity(cells[0] * cells[1] * cells[2]);
+                for k in 0..cells[2] {
+                    for j in 0..cells[1] {
+                        for i in 0..cells[0] {
+                            void.push(solid.is_void(i, j, k));
+                        }
+                    }
+                }
+                voids.insert(spec.name().to_string(), void);
+            }
+            (None, world.notes().to_vec())
+        }
         Err(e) => (Some(e), Vec::new()),
     };
     let mut out = Checked {
@@ -366,6 +398,37 @@ pub fn check(text: &str, files: &dyn Parts) -> Checked {
             name: spec.name().to_string(),
             corners,
         });
+        let grid = match spec {
+            DomainSpec::Block { cells, cell_mm, .. } => Some(("block", *cells, *cell_mm)),
+            DomainSpec::Structure { cells, cell_mm, .. } => Some(("structure", *cells, *cell_mm)),
+            _ => None,
+        };
+        if let Some((kind, cells, cell_mm)) = grid {
+            // **Solid throughout, when nothing in the file can make a cell void** — no part, no
+            // `void` region — which holds whether or not the scene builds. A block with either has
+            // its void map from the build or not at all: guessing it solid would write a face's
+            // whole grid area where the solver shares it among fewer cells.
+            let can_be_void = match spec {
+                DomainSpec::Block { parts, regions, .. } => {
+                    !parts.is_empty()
+                        || regions.iter().any(|r| r.material == pantometry_world::VOID)
+                }
+                _ => false,
+            };
+            let void = voids
+                .get(spec.name())
+                .cloned()
+                .or_else(|| (!can_be_void).then(|| vec![false; cells[0] * cells[1] * cells[2]]));
+            out.targets.push(pick::Target {
+                name: spec.name().to_string(),
+                kind: kind.to_string(),
+                extent: [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z],
+                cells,
+                cell_mm,
+                place: pantometry::scene::Placed::of(placement.pose),
+                void,
+            });
+        }
     }
 
     let mut bounds = [

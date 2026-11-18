@@ -78,10 +78,12 @@ fn open(passed: &[String]) -> eframe::Result {
     // reading the process's own arguments here would see `edit` as a filename.
     //
     // `--results TAB` opens the results panel on that tab, which is the same door `--ui-dump`
-    // has, so a screenshot of a tab and a caption of it are of one frame.
+    // has, so a screenshot of a tab and a caption of it are of one frame. `--select PATH` is the
+    // same again for a row of the tree: a cooled face selected is the view naming its faces.
     let mut path = None;
     let mut run_at_once = false;
     let mut tab = None;
+    let mut select: Option<String> = None;
     let mut args = passed.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -108,9 +110,24 @@ fn open(passed: &[String]) -> eframe::Result {
                     }
                 }
             }
+            "--select" if select.is_some() => {
+                eprintln!("pantometry edit: --select was given twice");
+                std::process::exit(2);
+            }
+            "--select" => match args.next().filter(|p| p.starts_with('/')) {
+                Some(p) => select = Some(p.clone()),
+                None => {
+                    eprintln!(
+                        "pantometry edit: --select takes a row's path, such as /domains/bracket"
+                    );
+                    std::process::exit(2);
+                }
+            },
             other if other.starts_with('-') => {
                 eprintln!("pantometry edit: unknown option {other}");
-                eprintln!("usage: pantometry edit [scene.json] [--run] [--results TAB]");
+                eprintln!(
+                    "usage: pantometry edit [scene.json] [--run] [--results TAB] [--select PATH]"
+                );
                 std::process::exit(2);
             }
             other => path = Some(other.to_string()),
@@ -144,6 +161,10 @@ fn open(passed: &[String]) -> eframe::Result {
             };
             app.run_at_once = run_at_once;
             app.results.tab = tab;
+            // A path the tree does not have is the settings pane saying so, on screen.
+            if select.is_some() {
+                app.selected = select;
+            }
             Ok(Box::new(app))
         }),
     )
@@ -223,6 +244,9 @@ pub fn drawn_extent(scene: Option<String>, run_path: &str) -> Result<String, Str
     ))
 }
 
+/// A drag `--ui-dump` makes: from, to, and whether Shift is held throughout.
+pub type DumpDrag = ((f32, f32), (f32, f32), bool);
+
 /// Which state to build the frame in.
 ///
 /// **A struct because the doors kept arriving.** Each field is a state the window can reach and a
@@ -252,7 +276,13 @@ pub struct Dump {
     /// moved past a threshold with the button held — then carries the payload until a release
     /// over the zone. One frame holding a press and a release at one point is none of that, so
     /// until this existed the drop path was code nothing here could reach.
-    pub drag: Vec<((f32, f32), (f32, f32))>,
+    ///
+    /// The third member holds Shift down throughout, which is how the view is drawn on rather than
+    /// turned: a patch on a face, a box, a line.
+    pub drag: Vec<DumpDrag>,
+    /// Leave the pointer here with no button pressed, after every click and drag: the readout of
+    /// what is under it is drawn only while the pointer is over the view.
+    pub hover: Option<(f32, f32)>,
     /// Run the scene first, so everything that only exists after a run does.
     pub ran: bool,
     /// Run, then turn the isosurface on at its default level.
@@ -311,6 +341,7 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
         choosing,
         click,
         drag,
+        hover,
         ran,
         iso,
         solo,
@@ -405,16 +436,27 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
     // source; twelve moves carry it to the target, each its own frame, which is well past egui's
     // six-point threshold for deciding a press is a drag; the release is its own frame over the
     // target; and one more frame lets whatever the drop changed be laid out and reported.
-    for &((x0, y0), (x1, y1)) in &drag {
+    for &((x0, y0), (x1, y1), shift) in &drag {
         let (from, to) = (egui::pos2(x0, y0), egui::pos2(x1, y1));
+        // Shift down before the press and up after the release, which is what a person holding
+        // the key sends: egui 0.37 keeps the modifiers a `ModifiersChanged` last said, and the
+        // button events carry their own.
+        let modifiers = egui::Modifiers {
+            shift,
+            ..Default::default()
+        };
         let button = |at, down| egui::Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
             pressed: down,
-            modifiers: egui::Modifiers::default(),
+            modifiers,
         };
         let mut press = input();
-        press.events = vec![egui::Event::PointerMoved(from), button(from, true)];
+        press.events = vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(from),
+            button(from, true),
+        ];
         ctx.run_ui(press, |ui| app.ui(ui))
             .drop_without_applying_deltas();
         const STEPS: usize = 12;
@@ -429,7 +471,15 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
         release.events = vec![egui::Event::PointerMoved(to), button(to, false)];
         ctx.run_ui(release, |ui| app.ui(ui))
             .drop_without_applying_deltas();
-        ctx.run_ui(input(), |ui| app.ui(ui))
+        let mut after = input();
+        after.events = vec![egui::Event::ModifiersChanged(egui::Modifiers::default())];
+        ctx.run_ui(after, |ui| app.ui(ui))
+            .drop_without_applying_deltas();
+    }
+    if let Some((x, y)) = hover {
+        let mut over = input();
+        over.events = vec![egui::Event::PointerMoved(egui::pos2(x, y))];
+        ctx.run_ui(over, |ui| app.ui(ui))
             .drop_without_applying_deltas();
     }
     if run_after {
@@ -941,6 +991,9 @@ struct App {
     /// does **not** turn — a gizmo that spun the view while you dragged along it would be
     /// unusable, and the two gestures are the same gesture as far as egui is concerned.
     grabbed: Option<usize>,
+    /// A shift-drag across a face that is drawing a patch, a box or a line rather than turning
+    /// the view: what it began on and where it has reached. See [`crate::aim`].
+    drawing: Option<crate::aim::Drag>,
 
     /// The framing this viewport is using, held still rather than recomputed from the geometry
     /// every frame.
@@ -1081,6 +1134,7 @@ impl App {
             gizmo: Gizmo::Move,
             grip: None,
             grabbed: None,
+            drawing: None,
             iso: None,
             framing_hold: None,
             start: false,
@@ -1934,6 +1988,11 @@ impl App {
             // at every width, and `nothing_is_drawn_past_the_right_edge` is the check that failed
             // before it and holds it now.
             ui.horizontal_wrapped(|ui| {
+                // **Labels laid out whole**, for the reason `results::row` gives: in a wrapping
+                // row egui lays a wrapping label out from the row's left edge, so once a scene was
+                // edited, `edited` claimed the box the file's name sat in and `--ui-dump` counted
+                // the two as one string over another — `overlap=1` on every edited frame.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 // **The name, not a field.** This was an editable path 220 points wide, and it
                 // was the only way into a file on disk — which is why it was a control at all.
                 // `Open…` and `Save as…` are that now, so what is left is the question it also
@@ -3044,6 +3103,157 @@ impl App {
         }
     }
 
+    /// What a click in the view would set: the selected entry, when its list says where on its
+    /// domain it is, and otherwise the results panel's probe, line, plane or box, when the panel
+    /// is on screen. `None` when the domain is hidden, since a face nobody can see is not one to
+    /// point at.
+    fn aim(&self) -> Option<crate::aim::Aim> {
+        if let Some(path) = self.selected.as_deref() {
+            if let Some(placing) = editor_core::pick::placing_of(&self.text, path) {
+                let (domain, key, index) = editor_core::pick::entry_of(path)?;
+                if !self.draws(&domain) {
+                    return None;
+                }
+                let target = self
+                    .checked
+                    .targets
+                    .iter()
+                    .find(|t| t.name == domain)?
+                    .clone();
+                return Some(crate::aim::Aim::Entry {
+                    stated: editor_core::pick::stated(&self.text, path),
+                    target,
+                    key,
+                    index,
+                    placing,
+                });
+            }
+        }
+        if !self.show_results || self.results_short_was {
+            return None;
+        }
+        let view = self.run.as_ref()?;
+        let aimed = self.results.aimed(&view.run, view.frame)?;
+        if !self.draws(&aimed.name) {
+            return None;
+        }
+        Some(crate::aim::Aim::Results(aimed))
+    }
+
+    /// Why the selected entry cannot be pointed at, when it says where and [`App::aim`] has nothing
+    /// for it: its domain hidden, or no grid of it in a scene that checks.
+    fn unaimed(&self) -> Option<String> {
+        let path = self.selected.as_deref()?;
+        editor_core::pick::placing_of(&self.text, path)?;
+        let (domain, _, _) = editor_core::pick::entry_of(path)?;
+        if !self.draws(&domain) {
+            return Some(format!(
+                "{domain} is hidden — show it to point at its faces"
+            ));
+        }
+        if !self.checked.targets.iter().any(|t| t.name == domain) {
+            return Some(format!(
+                "{domain} has no grid in the view to point at — the scene does not say where it is"
+            ));
+        }
+        None
+    }
+
+    /// A click on the domain aimed at, at `hit`.
+    fn pointed(&mut self, aim: &crate::aim::Aim, hit: editor_core::pick::Hit) {
+        use pantometry_world::templates::Placing;
+        match aim {
+            crate::aim::Aim::Entry {
+                target,
+                key,
+                index,
+                placing,
+                ..
+            } => match placing {
+                Placing::Face | Placing::FacePatch => {
+                    let set = editor_core::pick::set_face(
+                        &self.text, target, key, *index, hit.face, None,
+                    );
+                    // Read before the result is taken in: the note is about the file as it stands
+                    // when nothing is written.
+                    let note = editor_core::pick::area_note(&self.text, target, key, *index);
+                    self.picked(set, &format!("{} {key} {}", target.name, index + 1), note);
+                }
+                Placing::Cells => {
+                    self.status = format!(
+                        "shift-drag across a face of {} to draw this box there",
+                        target.name
+                    );
+                }
+            },
+            crate::aim::Aim::Results(a) => match self.results.clicked(a, hit.local) {
+                Ok(said) | Err(said) => {
+                    if !said.is_empty() {
+                        self.status = said;
+                    }
+                }
+            },
+        }
+    }
+
+    /// A shift-drag across the domain aimed at, now let go.
+    fn drew(&mut self, aim: &crate::aim::Aim, drag: &crate::aim::Drag) {
+        use pantometry_world::templates::Placing;
+        match aim {
+            crate::aim::Aim::Entry {
+                target,
+                key,
+                index,
+                placing,
+                ..
+            } => {
+                let Some(patch) = aim.patch(drag) else {
+                    return;
+                };
+                let set = match placing {
+                    Placing::Face | Placing::FacePatch => editor_core::pick::set_face(
+                        &self.text,
+                        target,
+                        key,
+                        *index,
+                        drag.face,
+                        Some(patch),
+                    ),
+                    Placing::Cells => editor_core::pick::set_cells(
+                        &self.text, target, key, *index, drag.face, patch,
+                    ),
+                };
+                self.picked(set, &format!("{} {key} {}", target.name, index + 1), None);
+            }
+            crate::aim::Aim::Results(a) => {
+                match self.results.dragged(a, drag.face, drag.start, drag.end) {
+                    Ok(said) | Err(said) => {
+                        if !said.is_empty() {
+                            self.status = said;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A pick's edit into the scene, or why there was none. `note` is said after "already says
+    /// that" when nothing was written — a stated area that is not its cells', for one.
+    fn picked(
+        &mut self,
+        result: Result<Option<(String, String)>, String>,
+        what: &str,
+        note: Option<String>,
+    ) {
+        match result {
+            Ok(Some((text, said))) => self.splice_in(Ok(text), None, said),
+            Ok(None) => {
+                self.status = format!("{what} already says that{}", note.unwrap_or_default())
+            }
+            Err(why) => self.status = why,
+        }
+    }
+
     /// The settings pane: the selected row of the model tree, as a form that writes the scene.
     ///
     /// With nothing selected it is the scene's own settings — its duration, its frames, its
@@ -3137,6 +3347,53 @@ impl App {
                         });
                 }
 
+                // **What pointing at the model can set for this entry, and what is wrong with what
+                // it says now.** The hint is where a person looking at the form looks; the note is
+                // the one a click on the face it already has gives, here before any click — a film
+                // on a face no solid cell is on cools nothing, and the file cannot say so.
+                if let (Some(domain), Some((key, j))) = (&form.domain, &form.entry) {
+                    if let Some(placing) = editor_core::pick::placing_of(&self.text, &path) {
+                        use pantometry_world::templates::Placing;
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(match placing {
+                                    Placing::Face => format!(
+                                        "in the view: click a face of {domain} to set this one"
+                                    ),
+                                    Placing::FacePatch => format!(
+                                        "in the view: click a face of {domain} to cool all of \
+                                         it, or shift-drag across one for a patch"
+                                    ),
+                                    Placing::Cells => format!(
+                                        "in the view: shift-drag across a face of {domain} to \
+                                         draw this box there; its depth stays"
+                                    ),
+                                })
+                                .weak(),
+                            )
+                            .wrap(),
+                        );
+                        let note = self
+                            .checked
+                            .targets
+                            .iter()
+                            .find(|t| t.name == *domain)
+                            .and_then(|t| editor_core::pick::area_note(&self.text, t, key, *j));
+                        if let Some(note) = note {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{domain} {key} {}{note}",
+                                        j + 1
+                                    ))
+                                    .color(egui::Color32::from_rgb(230, 180, 60)),
+                                )
+                                .wrap(),
+                            );
+                        }
+                    }
+                }
                 if let (Some(domain), Some((key, j))) = (&form.domain, &form.entry) {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
@@ -4035,6 +4292,99 @@ impl App {
                 }
             }
         }
+        // **Pointing at the model** -- see `crate::aim`. An entry that says where, or the results
+        // panel's probe, line, plane or box, decides what a click and a shift-drag set; the ray is
+        // the projection read backwards, so the face under the pointer is the face drawn there.
+        // Worked out before the camera, because a shift-drag that draws must not also turn it.
+        let aim = framing.and_then(|_| self.aim());
+        let shift = ui.input(|i| i.modifiers.shift);
+        let ndc = |at: egui::Pos2| {
+            (
+                ((at.x - rect.center().x) / (rect.width() * 0.5).max(1.0)) as f64,
+                ((rect.center().y - at.y) / (rect.height() * 0.5).max(1.0)) as f64,
+            )
+        };
+        let camera = self.camera;
+        let mut aimed_click: Option<editor_core::pick::Hit> = None;
+        let mut drawn: Option<crate::aim::Drag> = None;
+        // Whether the click was the aim's, so it does not also select what is under it.
+        let mut consumed = false;
+        match (framing, aim.as_ref()) {
+            (Some(framing), Some(aim)) => {
+                let ray = |at: egui::Pos2| {
+                    let (x, y) = ndc(at);
+                    camera.ray(x, y, &framing, aspect)
+                };
+                if response.drag_started() && shift && !holding && aim.drags() {
+                    // From where the button went down, not where the drag was recognised: egui
+                    // calls it a drag six points later, and a patch begun there would miss its
+                    // first cell.
+                    let from = ui
+                        .input(|i| i.pointer.press_origin())
+                        .or(response.interact_pointer_pos());
+                    if let Some(h) = from.and_then(|p| aim.hit(&ray(p))) {
+                        self.drawing = Some(crate::aim::Drag {
+                            face: h.face,
+                            start: h.local,
+                            end: h.local,
+                        });
+                    }
+                }
+                if let Some(d) = self.drawing.as_mut() {
+                    holding = true;
+                    if let Some(p) = response.interact_pointer_pos() {
+                        if let Some(end) = aim.end(d.face, &ray(p)) {
+                            d.end = end;
+                        }
+                    }
+                    if response.drag_stopped() {
+                        drawn = self.drawing.take();
+                    }
+                }
+                if response.clicked() && self.grabbed.is_none() {
+                    let h = response
+                        .interact_pointer_pos()
+                        .and_then(|p| aim.hit(&ray(p)));
+                    // An entry keeps the click even when it misses: a click beside the face meant
+                    // for it is not a request to select something else and lose the entry. It says
+                    // it missed, so a click that did nothing is not mistaken for one that did.
+                    match aim {
+                        crate::aim::Aim::Entry { target, .. } => {
+                            consumed = true;
+                            if h.is_none() {
+                                self.status = format!(
+                                    "that click missed {} — click one of its faces",
+                                    target.name
+                                );
+                            }
+                        }
+                        crate::aim::Aim::Results(_) => consumed = h.is_some(),
+                    }
+                    aimed_click = h;
+                }
+            }
+            _ => {
+                self.drawing = None;
+                // **An entry that cannot be pointed at says why**, and keeps the click: its domain
+                // hidden, or not a grid the view knows. Silent, a click did nothing with no run
+                // and took the entry's selection away with one.
+                if response.clicked() && self.grabbed.is_none() {
+                    if let Some(why) = self.unaimed() {
+                        consumed = true;
+                        self.status = why;
+                    }
+                }
+            }
+        }
+        if let Some(aim) = aim.as_ref() {
+            if let Some(h) = aimed_click {
+                self.pointed(aim, h);
+            }
+            if let Some(d) = drawn {
+                self.drew(aim, &d);
+            }
+        }
+
         if response.drag_stopped() {
             self.grabbed = None;
             self.grip = None;
@@ -4392,6 +4742,82 @@ impl App {
                     if seen(*mark) {
                         painter.circle_stroke(to_screen(*mark), 5.0, ink);
                     }
+                }
+            }
+        }
+
+        // **What is being pointed at, on the model.** The selected entry's face, patch or box; the
+        // names of the faces toward the eye, so `x-max` is a place and not a word; the drag's
+        // patch, box or line as it is drawn; and the face and cell under the pointer, with what a
+        // click there would do.
+        let mut aim_hover = false;
+        if let Some(aim) = aim.as_ref() {
+            let on_screen = |p: [f64; 3]| seen(p).then(|| to_screen(p));
+            let eye = camera.ray(0.0, 0.0, &framing, aspect).origin;
+            if let crate::aim::Aim::Entry {
+                target,
+                stated: Some(stated),
+                ..
+            } = aim
+            {
+                crate::aim::draw_stated(&painter, target, stated, eye, &on_screen);
+            }
+            if matches!(aim, crate::aim::Aim::Entry { .. }) {
+                for (face, centre) in aim.facing(eye) {
+                    if let Some(at) = on_screen(centre).filter(|at| rect.contains(*at)) {
+                        painter.text(
+                            at,
+                            egui::Align2::CENTER_CENTER,
+                            face.spelled(),
+                            egui::FontId::proportional(11.0),
+                            ui.visuals().weak_text_color(),
+                        );
+                    }
+                }
+            }
+            let cyan = egui::Color32::from_rgb(40, 200, 220);
+            if let Some(d) = self.drawing.as_ref() {
+                match aim.outline(d) {
+                    Some(corners) => crate::aim::quad(
+                        &painter,
+                        &corners,
+                        egui::Color32::from_rgba_unmultiplied(40, 200, 220, 70),
+                        egui::Stroke::new(2.0_f32, cyan),
+                        &on_screen,
+                    ),
+                    None => {
+                        let place = aim.place();
+                        if let (Some(a), Some(b)) = (
+                            on_screen(place.apply(d.start)),
+                            on_screen(place.apply(d.end)),
+                        ) {
+                            painter.line_segment([a, b], egui::Stroke::new(2.0_f32, cyan));
+                        }
+                    }
+                }
+            } else if let Some(at) = pointer.filter(|p| rect.contains(*p)) {
+                let (x, y) = ndc(at);
+                if let Some(h) = aim.hit(&camera.ray(x, y, &framing, aspect)) {
+                    aim_hover = true;
+                    if let crate::aim::Aim::Entry { target, .. } = aim {
+                        let [u, v] = target.on(h.face, target.cell_at(h.local));
+                        crate::aim::quad(
+                            &painter,
+                            &target.patch_corners(h.face, ([u, v], [u + 1, v + 1])),
+                            egui::Color32::from_rgba_unmultiplied(40, 200, 220, 90),
+                            egui::Stroke::new(1.5_f32, cyan),
+                            &on_screen,
+                        );
+                    } else if let Some(p) = on_screen(aim.place().apply(h.local)) {
+                        painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5_f32, cyan));
+                    }
+                    crate::aim::draw_readout(
+                        &painter,
+                        rect,
+                        at,
+                        &format!("{}\n{}", aim.readout(&h), aim.hint()),
+                        ui.visuals(),
+                    );
                 }
             }
         }
@@ -4808,12 +5234,16 @@ impl App {
         // on every click in the viewport — including the click that just selected something. It
         // was unreachable before the block above stopped being an early `return`, which is the
         // sort of thing removing a `return` quietly switches on.
-        if response.clicked() && self.grabbed.is_none() && self.run.is_some() {
+        if response.clicked() && self.grabbed.is_none() && self.run.is_some() && !consumed {
             // A click on nothing clears the selection, which is what every outliner does and is
             // the only way to get back to "no selection" without a keyboard.
             self.selected = probe.path.clone();
         }
-        probe.draw(&painter, ui.visuals());
+        // One readout at a time: over the domain being pointed at, the pointing's says what a
+        // click would do, which is the question the pointer is asking there.
+        if !aim_hover {
+            probe.draw(&painter, ui.visuals());
+        }
     }
 }
 
@@ -5609,5 +6039,25 @@ mod tests {
             app.geometry_key(&world),
             "two framings, one cache key: the meshes built in one are drawn in the other"
         );
+    }
+
+    /// **An entry that cannot be pointed at says why.** Scene 25's cooled face aims at the module;
+    /// with the module hidden there is nothing to aim at, and the reason is a sentence rather than
+    /// a click that does nothing — or, with a run on screen, one that takes the entry's selection
+    /// away. A domain row aims at nothing and has nothing to say.
+    #[test]
+    fn an_entry_that_cannot_be_pointed_at_says_why() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pantometry-world/scenes/25-what-140-kelvin-does-to-the-solder.json");
+        let mut app = App::new(Some(scene.to_string_lossy().into_owned()));
+        app.selected = Some("/domains/module/cooling/0".to_string());
+        assert!(app.aim().is_some(), "the cooled face aims at nothing");
+        assert_eq!(app.unaimed(), None);
+        app.hidden.insert("/domains/module".to_string());
+        assert!(app.aim().is_none(), "a hidden domain was aimed at");
+        let why = app.unaimed().expect("a hidden domain says nothing");
+        assert!(why.contains("module is hidden"), "{why}");
+        app.selected = Some("/domains/module".to_string());
+        assert_eq!(app.unaimed(), None);
     }
 }

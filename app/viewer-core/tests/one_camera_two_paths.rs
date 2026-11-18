@@ -204,3 +204,89 @@ fn a_metre_at_the_centre_is_what_the_projection_says() {
         );
     }
 }
+
+/// **A ray lands on the pixel it left.** `Camera::ray` is `Camera::project` read backwards, and a
+/// viewport picks with the one and draws with the other: points along the ray through a pixel,
+/// from just past the near plane to the far one, all project back onto that pixel.
+///
+/// Two closed forms beside the round trip. The eye is `distance` spans from the framing's centre,
+/// which is how far `project` puts it; and the ray through the middle of the screen passes through
+/// the centre itself, so its distance from the ray is zero to rounding.
+///
+/// The floor is f64 rounding through a dozen operations, scaled by the picture: a point a span
+/// across is order one in device units, so `1e-12` relative to that.
+#[test]
+fn a_ray_lands_on_the_pixel_it_left() {
+    let mut checked = 0usize;
+    let mut worst = 0.0f64;
+    for (camera, frame, aspect) in cases() {
+        let middle = camera.ray(0.0, 0.0, &frame, aspect);
+        let to_eye = [
+            middle.origin[0] - frame.centre[0],
+            middle.origin[1] - frame.centre[1],
+            middle.origin[2] - frame.centre[2],
+        ];
+        let eye_at = (to_eye[0] * to_eye[0] + to_eye[1] * to_eye[1] + to_eye[2] * to_eye[2]).sqrt();
+        assert!(
+            (eye_at - camera.distance * frame.span).abs() <= 1e-12 * camera.distance * frame.span,
+            "the eye is {eye_at:e} from the centre and project puts it {:e}, for {camera:?}",
+            camera.distance * frame.span
+        );
+        // The centre's distance from the middle ray: |to_eye x direction|.
+        let d = middle.direction;
+        let cross = [
+            to_eye[1] * d[2] - to_eye[2] * d[1],
+            to_eye[2] * d[0] - to_eye[0] * d[2],
+            to_eye[0] * d[1] - to_eye[1] * d[0],
+        ];
+        let off = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+        assert!(
+            off <= 1e-12 * frame.span,
+            "the middle ray misses the framing's centre by {off:e} m, for {camera:?} on {frame:?}"
+        );
+
+        for x in [-0.97, -0.4, 0.0, 0.31, 0.9] {
+            for y in [-0.88, -0.2, 0.0, 0.55, 0.99] {
+                let ray = camera.ray(x, y, &frame, aspect);
+                let [a, b, c] = ray.direction;
+                let length = (a * a + b * b + c * c).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 1e-14,
+                    "a direction of length {length}"
+                );
+                let mut previous = f64::NEG_INFINITY;
+                for step in 1..=16 {
+                    // From the near plane out to the far one, in metres along the ray: depth is
+                    // in spans and grows at most one span per span travelled.
+                    let t = frame.span * camera.far() * step as f64 / 16.0;
+                    let p = [
+                        ray.origin[0] + t * ray.direction[0],
+                        ray.origin[1] + t * ray.direction[1],
+                        ray.origin[2] + t * ray.direction[2],
+                    ];
+                    let q = camera.project(p, &frame, aspect);
+                    if q.depth <= Camera::NEAR {
+                        continue;
+                    }
+                    checked += 1;
+                    let e = (q.x - x).abs().max((q.y - y).abs());
+                    worst = worst.max(e);
+                    assert!(
+                        e <= 1e-12,
+                        "{t:e} m along the ray through ({x}, {y}) projects to ({}, {}), for \
+                         {camera:?} on {frame:?} at {aspect}",
+                        q.x,
+                        q.y
+                    );
+                    assert!(q.depth > previous, "depth fell along the ray");
+                    previous = q.depth;
+                }
+            }
+        }
+    }
+    println!("  {checked} points back on their pixels, worst {worst:.3e}");
+    assert!(
+        checked > 50_000,
+        "the sweep has to actually sweep: {checked}"
+    );
+}

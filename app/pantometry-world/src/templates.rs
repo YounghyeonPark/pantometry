@@ -471,6 +471,79 @@ pub fn entry(kind: &str, key: &str) -> Option<&'static Entry> {
     ENTRIES.iter().find(|e| e.kind == kind && e.key == key)
 }
 
+/// How an entry says where on its domain's grid it is, which is what a click in a viewport can
+/// set for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placing {
+    /// One whole face, by its `face`: a held or a pressed face.
+    Face,
+    /// A face, and a box of cells on it by `from` and `to` in the face's two axes, absent for the
+    /// whole face: a cooled face, whose `area_cm2` is the box's when there is one.
+    FacePatch,
+    /// A box of cells by `from` and `to`, three each: a heat source, a region of another material.
+    Cells,
+}
+
+/// One list whose entries say where on a grid they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Site {
+    /// The `kind` of the domain that holds the list.
+    pub kind: &'static str,
+    /// The list's key.
+    pub key: &'static str,
+    /// How its entries say where.
+    pub placing: Placing,
+}
+
+/// **The lists a viewport can point at**, by how each says where.
+///
+/// Read off the format's types, and held to them by
+/// `every_list_that_says_where_is_one_a_click_can_set`: an [`ENTRIES`] entry naming a `face` is a
+/// face site, one naming three-cell `from` and `to` is a cells site, and a face site takes a patch
+/// exactly when its type accepts `from` and `to` — `CoolingSpec` does, and a held or pressed face
+/// is refused one by `deny_unknown_fields`. A contact is a plane between cells rather than a face
+/// or a box, and is not here.
+pub const SITES: [Site; 6] = [
+    Site {
+        kind: "block",
+        key: "cooling",
+        placing: Placing::FacePatch,
+    },
+    Site {
+        kind: "block",
+        key: "dissipation",
+        placing: Placing::Cells,
+    },
+    Site {
+        kind: "block",
+        key: "regions",
+        placing: Placing::Cells,
+    },
+    Site {
+        kind: "structure",
+        key: "held",
+        placing: Placing::Face,
+    },
+    Site {
+        kind: "structure",
+        key: "pressed",
+        placing: Placing::Face,
+    },
+    Site {
+        kind: "structure",
+        key: "regions",
+        placing: Placing::Cells,
+    },
+];
+
+/// How `kind`'s list `key` says where its entries are, if it says.
+pub fn placing(kind: &str, key: &str) -> Option<Placing> {
+    SITES
+        .iter()
+        .find(|s| s.kind == kind && s.key == key)
+        .map(|s| s.placing)
+}
+
 /// What [`entry_for`] fits an entry to: the domain it is being added to, as far as an entry cares.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fit<'a> {

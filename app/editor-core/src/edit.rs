@@ -445,7 +445,7 @@ pub fn set_text(text: &str, pointer: &str, value: &str) -> Result<String, String
 /// `text` with `span` replaced by `rendered`, and every other byte copied.
 ///
 /// One place, so the two setters cannot differ about what "leaving the rest alone" means.
-fn splice(text: &str, span: Range<usize>, rendered: &str) -> String {
+pub(crate) fn splice(text: &str, span: Range<usize>, rendered: &str) -> String {
     let mut out = String::with_capacity(text.len() + rendered.len());
     out.push_str(&text[..span.start]);
     out.push_str(rendered);
@@ -766,7 +766,7 @@ fn faces_in(d: &serde_json::Value) -> Vec<&str> {
 }
 
 /// Where domain `name` is in the file, and the object itself.
-fn domain_at<'a>(
+pub(crate) fn domain_at<'a>(
     root: &'a serde_json::Value,
     name: &str,
 ) -> Result<(usize, &'a serde_json::Value), String> {
@@ -1197,7 +1197,7 @@ pub fn set_turn(text: &str, name: &str, axis: [f64; 3], degrees: f64) -> Result<
 }
 
 /// A float that stays a float: `3` would be a different literal, and `at_m` is three `f64`.
-fn as_float(v: f64) -> String {
+pub(crate) fn as_float(v: f64) -> String {
     let s = format!("{v}");
     if s.contains(['.', 'e', 'E']) {
         s
@@ -1211,7 +1211,11 @@ fn as_float(v: f64) -> String {
 /// Appended rather than inserted in sorted position, because the file's key order is the author's
 /// and this is not the code that gets to reorder it. The indentation is the object's own plus two
 /// spaces, which is what the scenes use.
-fn append_member(text: &str, object: Range<usize>, member: &str) -> Result<String, String> {
+pub(crate) fn append_member(
+    text: &str,
+    object: Range<usize>,
+    member: &str,
+) -> Result<String, String> {
     if !text[object.clone()].starts_with('{') {
         return Err(format!(
             "cannot add a key to {}, which is not an object",
