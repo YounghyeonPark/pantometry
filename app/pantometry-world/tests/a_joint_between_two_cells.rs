@@ -354,6 +354,32 @@ fn a_cooled_patch_that_cannot_be_meant_is_refused() {
         err.contains("names no solid cell"),
         "the message should say why: {err}"
     );
+
+    // **And a whole face its part does not reach**, which is what scene 29 shipped: the block's
+    // top layer voided, and the top cooled with no box named. Without a patch nothing was counted,
+    // so this built and its film acted on no cell.
+    let json = block(
+        r#", "regions": [{ "material": "void", "from": [0, 0, 7], "to": [4, 4, 8] }],
+             "cooling": [{ "face": "z-max", "ambient_c": 20.0,
+               "convection_w_per_m2_k": 12.0, "area_cm2": 0.16 }]"#,
+    );
+    let scene: Scene = serde_json::from_str(&json).expect("parses");
+    let Err(err) = World::build(scene) else {
+        panic!("a film on a face of nothing must be refused");
+    };
+    println!("  a face of void: {err}");
+    assert!(
+        err.contains("b/cooling[0]") && err.contains("no solid cell of b is on z-max"),
+        "the message should say which entry and why: {err}"
+    );
+    // One solid cell left on that layer is a face the film reaches, and it builds.
+    let json = block(
+        r#", "regions": [{ "material": "void", "from": [1, 0, 7], "to": [4, 4, 8] }],
+             "cooling": [{ "face": "z-max", "ambient_c": 20.0,
+               "convection_w_per_m2_k": 12.0, "area_cm2": 0.16 }]"#,
+    );
+    let scene: Scene = serde_json::from_str(&json).expect("parses");
+    World::build(scene).expect("a face with one solid cell on it builds");
 }
 
 /// **A block may say what fills its void, and a vacuum is what it was.**

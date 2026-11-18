@@ -3389,16 +3389,24 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 // area is divided among the cells on the face and a tenth of the area is a tenth
                 // of the conductance spread over all of it.
                 //
-                // Measured at steady state: **52.4420 °C at the module, 30.5449 at the bolts**,
-                // a 21.90 K spread over a path the shape decides.
+                // Measured at the end of the run: **51.8655 °C at the module, 30.2982 at the
+                // bolts**, a 21.57 K spread over a path the shape decides. Its top loses to still
+                // air as well, 16.5 cm² of it, and did not until the grid was cut to the part's
+                // height: the part filled ten layers of twelve, the top film sat on the empty
+                // twelfth and cooled nothing, and the answer was 52.4420 °C.
                 //
-                // # It starts at 44 °C, and that is what a run length is for
+                // # It starts at 43.7 °C, and that is what a run length is for
                 //
                 // From 20 °C this needed **900 s** to settle, because most of that was spent
                 // charging the bracket's mass rather than establishing the gradient the scene is
                 // about — and nine test binaries walk every shipped scene, so the cost was
-                // multiplied by nine. Starting near the answer leaves only the shape to settle:
-                // 200 s, within 0.09% of the fully settled peak, and seven times cheaper. An
+                // multiplied by nine. Starting near the answer leaves only the shape to settle.
+                // Settled, the mean is 43.2586 °C and the peak 51.8857. From 44 °C the peak
+                // overshot and fell, breaking the rise asserted below; from 43.7, 43.8 and 43.9 it
+                // did not, so the line is between 43.9 and 44 — measured, and not the mean, which
+                // all four starts are above: how the peak arrives is the slowest mode's, and that
+                // mode weighs the hot arm. From 43.7 the 200 s run ends 0.020 K short of the
+                // settled peak — 0.063% of the rise — and moves 0.0041 K over its last frame. An
                 // initial condition is a statement about when you start looking.
                 const AMBIENT_K: f64 = 293.15;
                 let at = |f: &pantometry_world::Frame, pick: fn(f64, f64) -> f64, seed: f64| {
@@ -3413,9 +3421,11 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                 let hottest = |f: &pantometry_world::Frame| at(f, f64::max, f64::MIN);
                 let coldest = |f: &pantometry_world::Frame| at(f, f64::min, f64::MAX);
 
-                // Warming towards a steady state, monotonically: a source that never stops and a
-                // sink that grows with temperature can do nothing else, and a scheme overshooting
-                // its own limit would break it while conserving perfectly.
+                // Warming towards a steady state, monotonically. From ambient a source that never
+                // stops and a sink that grows with temperature can do nothing else; from a start
+                // near the answer it is a property of the start, measured — 44 °C overshoots and
+                // 43.7 does not, above. A scheme overshooting its own limit would break it while
+                // conserving perfectly.
                 for pair in frames.windows(2) {
                     let (before, after) = (hottest(&pair[0]), hottest(&pair[1]));
                     assert!(
@@ -3433,8 +3443,8 @@ fn every_scene_that_ships_runs_and_says_something_true() {
 
                 // **And it arrived.** The last two frames are 15 s apart and the peak must have
                 // stopped moving, or the spread below is a number the run length chose. It moves
-                // by 0.0093 K across that gap, against a fully settled 52.4879 — so what is left
-                // is 0.09% of the rise.
+                // by 0.0041 K across that gap, against a fully settled 51.8857 — so what is left
+                // is 0.063% of the rise.
                 let end = hottest(frames.last().expect("frames"));
                 let earlier = hottest(&frames[frames.len() - 2]);
                 assert!(
@@ -3442,7 +3452,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     "{name}: still climbing at the end, {earlier:.4} then {end:.4} K"
                 );
 
-                // **The spread is the claim.** A lump would hold one number; this holds 21.90 K
+                // **The spread is the claim.** A lump would hold one number; this holds 21.57 K
                 // between the module's corner and the bolt pad, which is `verify`'s flat-field
                 // threshold by a factor of thirteen. Asserted against the rise above air rather
                 // than as a bare kelvin count, so it is the shape of the answer and not its size.

@@ -246,7 +246,7 @@ draw the same numbers from the same calls. What it promises, and what holds each
 The panel is held to the domains' own numbers rather than to `post` alone. On scene 29's bracket
 the region's max, min and mean match the block's own `peak`, `coldest` and `mean` readings. The
 domain computes those over the 4100 cells the STL filled, and the panel counts the same 4100 with
-the 4012 holes left out. On scene 15 the probe opens at the middle cell and reads the region's
+the 2660 holes left out. On scene 15 the probe opens at the middle cell and reads the region's
 maximum.
 
 **What sweeping it found.** Every shipped scene on every tab, and the built-in scene at nine widths
@@ -372,12 +372,11 @@ readout gave.
     27.04 cm². A block with a part or a `void` region is now refused an area until it builds.
   - An entry in a hidden domain took clicks and did nothing, and a click that missed said nothing.
     Both say so now.
-- **Scene 29's top film cools nothing, and has not since it shipped.** The bracket fills layers 0
-  to 9 of a 12-layer grid, 410 cells each, and leaves layers 10 and 11 empty. The block cools its
-  `z-max` face at layer 11, which holds no solid cell, so the 16.5 cm² still-air film acts on
-  nothing. The format refuses a patch of void but not a whole face of it. The scene is left as it
-  is here, since its numbers and the figure drawn from it would move. The editor says so instead:
-  the entry's form reads "no solid cell of bracket is on z-max, so its film cools nothing".
+- **Scene 29's top film cooled nothing from the day it shipped**, which pointing at it showed. The
+  bracket filled layers 0 to 9 of a 12-layer grid, and the block cools its `z-max` face at layer
+  11, where no cell was solid, so the 16.5 cm² still-air film acted on nothing. The format refused
+  a patch of void but not a whole face of it. It refuses both now, and the scene's grid is the
+  part's height; the CHANGELOG has what the answer moved by.
 
 Not yet: the browser editor's view does not point. A contact's plane between cells is not
 something a click sets. A click on a domain the results panel is not reading selects it, and

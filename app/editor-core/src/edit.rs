@@ -790,6 +790,19 @@ pub(crate) fn domain_at<'a>(
 /// Fails, and leaves the file alone, when the format has no starting entry for this list: a list
 /// written out of tree has no example to start from, and an entry made up here would be refused.
 pub fn add_entry(text: &str, domain: &str, key: &str) -> Result<String, String> {
+    add_entry_with(text, domain, key, None)
+}
+
+/// [`add_entry`], told how many solid cells each of the domain's faces holds, in
+/// [`pantometry_world::FaceSpec::ALL`]'s order — [`crate::pick::Target::solid_faces`] — so a new
+/// cooled face is one its part reaches and states its solid cells' area. A designed part need not
+/// reach every face of its grid, and a film on one it does not reach is refused by the build.
+pub fn add_entry_with(
+    text: &str,
+    domain: &str,
+    key: &str,
+    solid: Option<[usize; 6]>,
+) -> Result<String, String> {
     let root: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("this scene does not parse: {e}"))?;
     let (i, d) = domain_at(&root, domain)?;
@@ -799,6 +812,7 @@ pub fn add_entry(text: &str, domain: &str, key: &str) -> Result<String, String> 
         grid: grid_of(d),
         faces: &faces,
         material: d.get("material").and_then(|m| m.as_str()),
+        solid,
     };
     let start = pantometry_world::templates::entry_for(kind, key, &fit)
         .ok_or_else(|| format!("the scene format keeps no starting `{key}` entry for a {kind}"))?;

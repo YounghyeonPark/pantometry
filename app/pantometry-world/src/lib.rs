@@ -3624,12 +3624,22 @@ impl DomainSpec {
                     if let Some(h) = cool.contact_w_per_m2_k {
                         block = block.mounted_on(cool.face.to_face(), h);
                     }
-                    // **A patch that names only void loses nothing**, and an insulated block
+                    // **A film that names only void loses nothing**, and an insulated block
                     // answering a different question in silence is what every other refusal in
                     // this key exists to stop. A part rasterised from an STL is mostly not there,
                     // so a pad placed by eye can miss it entirely.
-                    if let (Some(lo), Some(hi)) = (cool.from, cool.to) {
+                    //
+                    // **And so can a whole face.** Scene 29's bracket filled ten layers of a
+                    // twelve-layer grid, and the 16.5 cm² of still air on its top acted on no
+                    // cell from the day it shipped: this refused a patch of void and not the face
+                    // it is a patch of. A whole face is the patch that spans it, so it is counted
+                    // the same way.
+                    {
                         let axes = cool.face.axes();
+                        let (lo, hi) = match (cool.from, cool.to) {
+                            (Some(lo), Some(hi)) => (lo, hi),
+                            _ => ([0, 0], [cells[axes[0]], cells[axes[1]]]),
+                        };
                         let on_face = |p: [usize; 3]| match cool.face {
                             FaceSpec::XMin => p[0] == 0,
                             FaceSpec::XMax => p[0] + 1 == cells[0],
@@ -3655,12 +3665,21 @@ impl DomainSpec {
                                 }
                             }
                         }
-                        if live == 0 {
+                        if live == 0 && cool.from.is_some() {
                             return Err(format!(
                                 "{site}: {lo:?}..{hi:?} names no solid cell of {:?}, so the \
                                  film it states would cool nothing and the block would run \
                                  insulated",
                                 cool.face
+                            ));
+                        }
+                        if live == 0 {
+                            return Err(format!(
+                                "{site}: no solid cell of {name} is on {}, so the film it \
+                                 states would cool nothing — the grid reaches past what fills \
+                                 it there; state the grid to the part, or cool a face the part \
+                                 reaches",
+                                cool.face.spelled()
                             ));
                         }
                     }

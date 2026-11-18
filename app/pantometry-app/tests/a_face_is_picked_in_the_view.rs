@@ -559,14 +559,14 @@ fn the_results_are_pointed_at_where_the_pointer_says() {
 
 /// **The form says how to point, and what is wrong with what is set.** A selected cooled face's
 /// form tells a person they can click a face or draw a patch, a heat source's that a drag draws its
-/// box. And scene 29's bracket, whose part fills ten of its grid's twelve layers, states a film on
-/// its top layer, which no solid cell is on: the form says it cools nothing, before any click.
+/// box. And scene 29's bracket states the 16.5 cm² of its STL's top for a top that rasterises to
+/// 410 cells, 16.4: the form says both, before any click.
 #[test]
 fn the_form_says_how_to_point_and_what_is_wrong() {
     let d = dump(&["--select", "/domains/module/cooling/0"]);
     said(&d, "in the view: click a face of module to cool all of it");
     assert!(
-        !d.contains("cools nothing"),
+        !d.contains("solid cells make"),
         "scene 25's film is on solid cells:\n{d}"
     );
     let d = dump(&["--select", "/domains/module/dissipation/0"]);
@@ -595,6 +595,6 @@ fn the_form_says_how_to_point_and_what_is_wrong() {
     let d = String::from_utf8_lossy(&out.stdout);
     said(
         &d,
-        "bracket cooling 2; no solid cell of bracket is on z-max",
+        "bracket cooling 2; its area_cm2 is 16.5 where its 410 solid cells make 16.4",
     );
 }

@@ -554,6 +554,14 @@ pub struct Fit<'a> {
     pub faces: &'a [&'a str],
     /// The domain's own `material`, when it states one.
     pub material: Option<&'a str>,
+    /// How many **solid** cells each face holds, in [`crate::FaceSpec::ALL`]'s order, when the
+    /// caller knows — which takes a build, since a designed part's cells are the rasteriser's.
+    ///
+    /// A part need not reach every face of its grid, and a film on a face it does not reach is
+    /// refused. Scene 29's bracket reaches neither `x-max` nor `y-max`, so the third cooled face this
+    /// would add there was refused by the build: a button that only ever produces an error. Given
+    /// the counts, a new face is one the part reaches, and its area is its solid cells'.
+    pub solid: Option<[usize; 6]>,
 }
 
 /// The starting entry for `kind`'s list `key`, fitted to the domain it is added to.
@@ -576,13 +584,21 @@ pub struct Fit<'a> {
 /// `None` when the format keeps no entry for that list.
 pub fn entry_for(kind: &str, key: &str, fit: &Fit) -> Option<String> {
     let start = entry(kind, key)?;
-    // **A face nothing holds yet.** A block refuses a face cooled twice — "a face cannot lose heat
-    // to two different airs" — so a second cooled face added to the top would be refused, and a
-    // domain that has the top already wants the next face. The order is the top, the bottom, then
-    // the sides; with all six taken it is the top, and the build says why.
+    // **A face nothing holds yet, and one there is something on.** A block refuses a face cooled
+    // twice — "a face cannot lose heat to two different airs" — so a second cooled face added to the
+    // top would be refused, and a domain that has the top already wants the next face. A face no
+    // solid cell is on is refused too, so it is passed over when the counts are known. The order is
+    // the top, the bottom, then the sides; with none left it is the top, and the build says why.
+    let solid_on = |f: &str| {
+        let at = crate::FaceSpec::ALL
+            .iter()
+            .position(|s| s.spelled() == f)
+            .unwrap_or(0);
+        fit.solid.map(|s| s[at])
+    };
     let face = FACES
         .iter()
-        .find(|f| !fit.faces.contains(f))
+        .find(|f| !fit.faces.contains(f) && solid_on(f) != Some(0))
         .copied()
         .unwrap_or("z-max");
     let substance = if fit.material == Some("aluminium") {
@@ -606,12 +622,13 @@ pub fn entry_for(kind: &str, key: &str, fit: &Fit) -> Option<String> {
     let lo = n.map(|k| k / 3);
     let hi = [0, 1, 2].map(|i| (2 * n[i] / 3).max(lo[i] + 1));
     let half = n.map(|k| (k / 2).max(1));
-    // The cells a face spans: the two counts that lie in it.
-    let across = match &face[..1] {
+    // The cells a face spans: the two counts that lie in it, or the solid ones on it when those are
+    // known, which is what the block shares the area among.
+    let across = solid_on(face).unwrap_or(match &face[..1] {
         "x" => b * c,
         "y" => a * c,
         _ => a * b,
-    };
+    });
     Some(match (kind, key) {
         ("block", "cooling") => format!(
             r#"{{ "face": "{face}", "ambient_c": 20.0, "convection_w_per_m2_k": 10.0, "area_cm2": {} }}"#,

@@ -8,14 +8,14 @@
     {
       "kind": "block",
       "name": "bracket",
-      "cells": [26, 26, 12],
+      "cells": [26, 26, 10],
       "cell_mm": 2.0,
-      "initial_c": 44.0,
+      "initial_c": 43.7,
       "parts": [
         { "stl": "parts/l-bracket.stl", "material": "aluminium" }
       ],
       "dissipation": [
-        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 12] }
+        { "watts": 20.0, "from": [20, 2, 0], "to": [25, 8, 10] }
       ],
       "cooling": [
         { "face": "z-min", "ambient_c": 20.0,

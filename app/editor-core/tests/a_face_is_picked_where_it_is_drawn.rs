@@ -248,6 +248,7 @@ fn a_cooled_face_states_the_area_it_covers() {
             grid: Some((wax.cells, wax.cell_mm)),
             faces: &[],
             material: None,
+            solid: None,
         };
         let entry = pantometry_world::templates::entry_for("block", "cooling", &fit).expect("one");
         let stated: serde_json::Value = serde_json::from_str(&entry).expect("parses");
@@ -491,8 +492,8 @@ fn a_held_face_takes_no_patch() {
 }
 
 /// **A box drawn on a face sets the box in that face's two axes and keeps its depth.** Scene 29's
-/// heat source is cells `[20, 2, 0]..[25, 8, 12]`; drawn on the top over `[1, 1]..[4, 4]` it is
-/// `[1, 1, 0]..[4, 4, 12]`, and drawn again it is unchanged.
+/// heat source is cells `[20, 2, 0]..[25, 8, 10]`; drawn on the top over `[1, 1]..[4, 4]` it is
+/// `[1, 1, 0]..[4, 4, 10]`, and drawn again it is unchanged.
 #[test]
 fn a_box_drawn_on_a_face_keeps_its_depth() {
     let text = scene("29-");
@@ -512,7 +513,7 @@ fn a_box_drawn_on_a_face_keeps_its_depth() {
         pick::stated(&out, "/domains/bracket/dissipation/0"),
         Some(Stated::Cells {
             from: [1, 1, 0],
-            to: [4, 4, 12]
+            to: [4, 4, 10]
         })
     );
     assert_eq!(
@@ -653,18 +654,17 @@ fn a_part_that_does_not_build_is_given_no_guessed_area() {
     );
 }
 
-/// **Pointing again at a face whose stated area is not its cells' says so, and a face no cell is on
-/// says it cools nothing.** Nothing is written either way — a stated area may be meant.
+/// **Pointing again at a face whose stated area is not its cells' says so, and writes nothing** — a
+/// stated area may be meant.
 ///
-/// Scene 29's bracket is the second case, and was shipped that way. The part fills layers `k =
-/// 0..10` of a 12-layer grid with 410 cells each and leaves the top two empty, so the top face,
-/// layer 11, has no solid cell, and the 16.5 cm² still-air film stated there acts on nothing. The
-/// format refuses a patch of void and not a whole face of it. Measured by counting the void map
-/// layer by layer; pinned here as 0, which also holds a high face's layer on a part.
+/// Scene 29's bracket states the 16.5 cm² of its STL's top for its `z-max` film, and its top layer
+/// rasterises to 410 solid cells of 4 mm², 16.4. The top is layer 9 of a grid as tall as the part;
+/// it was layer 11 of a twelve-layer grid, no cell of which was solid, until the format refused a
+/// film on a face of nothing. 410 on the top as on the bottom, since the bracket is its outline
+/// extruded, holds a high face's layer on a part.
 ///
-/// Its pad under the part is the first case only if its stated area differs, and it does not:
-/// 0.96 cm² is its 24 cells. A face whose area is its cells', the format's own new entry on the
-/// wax, has nothing to say.
+/// Its pad under the part states 0.96 cm², which is its 24 cells, and has nothing to say. A face
+/// whose area is its cells', the format's own new entry on the wax, has nothing to say either.
 #[test]
 fn pointing_again_says_when_an_area_is_not_its_cells() {
     let text = scene("29-");
@@ -675,11 +675,14 @@ fn pointing_again_says_when_an_area_is_not_its_cells() {
     );
     assert_eq!(
         bracket.area_cm2(FaceSpec::ZMax, None).1,
-        0,
+        410,
         "solid cells on the bracket's top"
     );
-    let note = pick::area_note(&text, &bracket, "cooling", 1).expect("the top says nothing");
-    assert!(note.contains("cools nothing"), "{note}");
+    let note = pick::area_note(&text, &bracket, "cooling", 1).expect("16.5 is not 410 cells");
+    assert!(
+        note.contains("16.5") && note.contains("410 solid cells") && note.contains("16.4"),
+        "{note}"
+    );
     assert_eq!(pick::area_note(&text, &bracket, "cooling", 0), None);
 
     // A stated area that is not its cells': the pad stated at 1.5 rather than its 0.96.

@@ -268,6 +268,12 @@ impl Target {
         n
     }
 
+    /// The solid cells on each whole face, in [`FaceSpec::ALL`]'s order: what
+    /// [`crate::edit::add_entry_with`] picks a new face by.
+    pub fn solid_faces(&self) -> [usize; 6] {
+        FaceSpec::ALL.map(|f| self.solid_on(f, self.whole(f)))
+    }
+
     /// The area a cooled `face` should state, in cm², and the solid cells it is made of: the
     /// patch's when there is one, the face's when not. See the module's account of what an area
     /// is.
@@ -638,14 +644,15 @@ pub fn set_face(
     Ok(Some((out, said)))
 }
 
-/// What a cooled entry's stated area is beside the area its solid cells give, when the two differ,
-/// and that it cools nothing when no solid cell is on its face: the sentence to add when pointing
-/// again at what is set writes nothing, and the one the entry's form shows.
+/// What a cooled entry's stated area is beside the area its solid cells give, when the two differ:
+/// the sentence to add when pointing again at what is set writes nothing, and the one the entry's
+/// form shows.
 ///
 /// `None` when they agree, when the entry states no area or no face, and when the solid cells are
-/// not known. A stated area that differs may be meant — a designed part's real surface beside its
-/// rasterised one — so this says so and changes nothing. A face with no solid cell is never meant:
-/// scene 29's bracket states a film on a top layer its part does not reach.
+/// not known. A stated area that differs may be meant — scene 29's bracket states the 16.5 cm² of
+/// its STL's top against 16.4 rasterised — so this says so and changes nothing. A face with no
+/// solid cell on it never gets here: the format refuses it, so the scene does not build and the
+/// void map is not known.
 pub fn area_note(text: &str, target: &Target, key: &str, index: usize) -> Option<String> {
     let root: serde_json::Value = serde_json::from_str(text).ok()?;
     let (_, entry) = entry_in(&root, target, key, index).ok()?;
@@ -657,18 +664,6 @@ pub fn area_note(text: &str, target: &Target, key: &str, index: usize) -> Option
         return None;
     };
     let (area, solid) = target.area_cm2(face, patch);
-    if solid == 0 {
-        return Some(format!(
-            "; no solid cell of {} is on {}{}, so its film cools nothing",
-            target.name,
-            face.spelled(),
-            if patch.is_some() {
-                " under its box"
-            } else {
-                ""
-            }
-        ));
-    }
     ((area - stated_area).abs() > 1e-9 * area.abs().max(stated_area.abs())).then(|| {
         format!(
             "; its area_cm2 is {} where its {solid} solid cells make {}",

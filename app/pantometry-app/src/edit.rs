@@ -3347,10 +3347,10 @@ impl App {
                         });
                 }
 
-                // **What pointing at the model can set for this entry, and what is wrong with what
-                // it says now.** The hint is where a person looking at the form looks; the note is
-                // the one a click on the face it already has gives, here before any click — a film
-                // on a face no solid cell is on cools nothing, and the file cannot say so.
+                // **What pointing at the model can set for this entry, and what its area says.**
+                // The hint is where a person looking at the form looks; the note is the one a
+                // click on the face it already has gives, here before any click — a stated area
+                // that is not the area of the solid cells it is shared among.
                 if let (Some(domain), Some((key, j))) = (&form.domain, &form.entry) {
                     if let Some(placing) = editor_core::pick::placing_of(&self.text, &path) {
                         use pantometry_world::templates::Placing;
@@ -3465,8 +3465,18 @@ impl App {
                                     ))
                                     .clicked()
                                 {
+                                    // Told which faces the part reaches, when the build said:
+                                    // a new cooled face on one it does not is refused.
+                                    let solid = self
+                                        .checked
+                                        .targets
+                                        .iter()
+                                        .find(|t| t.name == *domain && t.void.is_some())
+                                        .map(editor_core::pick::Target::solid_faces);
                                     action = Some((
-                                        editor_core::add_entry(&self.text, domain, key),
+                                        editor_core::edit::add_entry_with(
+                                            &self.text, domain, key, solid,
+                                        ),
                                         Some(format!("/domains/{domain}/{key}/{at}")),
                                         format!("added a {key} entry to {domain}"),
                                     ));

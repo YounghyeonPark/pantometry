@@ -30,15 +30,15 @@ viewport=823,58 374x604
      603    54    37  Assets
      760    54    38  rescan
     1214    54    54  Inspector
-    1043    66   146  bracket peak 52.4420 C
-    1043    80   146  bracket mean 43.7455 C
+    1043    66   146  bracket peak 51.8655 C
+    1043    80   146  bracket mean 43.2410 C
      268    84   307  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
     1214    84   264  nothing selected — pick a row in the outliner, or click something in the viewport
       54    86   156  a designed bracket carrying a module's heat along its own shape to its bolts: 1 domain(s), 200.000 s in 13 frames
      611    86     7  +
      634    88   126  parts/heat-sink.stl
      221    88    30  Scene
-    1023    94   166  bracket coldest 30.5449 C
+    1023    94   166  bracket coldest 30.2982 C
     1057   108   132  bracket absorbed 0 J
       66   110    51  Domains
      611   110     7  +
@@ -97,20 +97,20 @@ viewport=823,58 374x604
      215   410    36  Scalar
       82   432    32  mean
      215   433    36  Scalar
-     927   441    40  bracket
+     916   447    40  bracket
       82   454    42  coldest
-     927   455   248  field: false colour — nothing here is hot enough to glow
      215   456    36  Scalar
+     916   461   248  field: false colour — nothing here is hot enough to glow
       82   478    54  absorbed
      215   479    36  Scalar
       82   500    60  generated
      215   502    36  Scalar
      831   520   181  0 triangles, 0 lines, 0 paints
      987   548    66  bracket / K
-    1061   561    36  303.58
-    1103   561    36  314.59
-    1145   561    36  325.59
-     849   578    30  10 mm
+    1061   561    36  303.40
+    1103   561    36  314.21
+    1145   561    36  325.02
+     850   578    30  10 mm
      831   616    67  t = 200.00 s
      952   636    15  13
      987   636    35  frame
@@ -123,30 +123,30 @@ viewport=823,58 374x604
      649   676    43  bracket
      286   708   104  the whole domain
      268   730    24  max
-     325   730    63  325.59 K
+     325   730    63  325.02 K
      646   736     7  K
      268   754    18  at
-     325   754   110  (49, 9, 17) mm
-     620   759    20  325
+     325   754   102  (49, 9, 1) mm
+     620   756    20  325
     1399   760    73  bracket max
     1393   775    79  bracket mean
      268   776    22  min
-     325   776    63  303.69 K
-     620   788    20  320
+     325   776    63  303.45 K
+     620   785    20  320
     1399   790    73  bracket min
      268   800    18  at
      325   800   102  (9, 49, 1) mm
-     620   816    20  315
+     620   814    20  315
      268   822    32  mean
-     325   822    63  316.90 K
-     620   845    20  310
+     325   822    63  316.39 K
+     620   843    20  310
      268   846    45  integral
-     325   846   110  0.010394 K m^3
+     325   846   110  0.010378 K m^3
      268   868    43  volume
      325   868   102  3.2800e-5 m^3
-     620   873    20  305
+     620   872    20  305
      268   892    25  cells
-     325   892   243  4100 and 4012 not in the domain
+     325   892   243  4100 and 2660 not in the domain
      643   900     7  0
      892   900     7  1
     1142   900     7  2

@@ -71,11 +71,8 @@ protects nothing.
       - With no build, a part's void cells were counted solid. Pointing scene 29's pad at its top
         in a broken scene wrote 27.04 cm².
       - A hidden domain's entry ignored clicks, and a missed click said nothing.
-  - **Scene 29's top film has cooled nothing since it shipped.** Its bracket fills layers 0 to 9
-    of a 12-layer grid, and the block cools `z-max` at layer 11, where no cell is solid: 16.5 cm² of
-    still air on nothing. The format refuses a patch of void, not a whole face of it. The scene is
-    unchanged here, since its numbers and `docs/editor.png` would move. The entry's form says the
-    film cools nothing.
+  - **Scene 29's top film had cooled nothing since it shipped**, which pointing at it showed. It
+    is fixed under Fixed below.
   - **Thirty-eight defects planted one at a time**, each caught by the check that claims it and
     each file restored by its bytes.
 
@@ -537,6 +534,39 @@ protects nothing.
       holds erfc to 3.5 ulp at its 438 reference points, and fails only the table test.
 
 ### Fixed
+
+- **Scene 29's top film cooled nothing, from the day it shipped.** The bracket filled layers 0 to
+  9 of a 26 x 26 x 12 grid, 410 cells each, and the block cools its `z-max` face at layer 11, where
+  no cell was solid: 12 W/m²K of still air over 16.5 cm², acting on nothing. The format refused a
+  cooled *patch* that names only void and not a whole face of nothing, because a whole face was
+  never counted.
+  - **The format refuses it now**, a whole face being the patch that spans it: "no solid cell of
+    bracket is on z-max, so the film it states would cool nothing". The old scene is refused with
+    that sentence.
+  - **And a new cooled face is one the part reaches.** The refusal broke the form's `+ cooling` on
+    scene 29: the first face no list held was `x-max`, which the bracket does not reach, so the
+    button offered an entry the build refused. `templates::Fit` takes each face's solid cells now,
+    when a build has said, and the new face is the first one with any, stating their area —
+    `x-min`'s 250 cells, 10.0 cm², on the bracket. `an_entry_fits_the_grid_it_is_added_to` counts
+    those cells off the build for every shipped block.
+  - **The scene's grid is the part's height**, 26 x 26 x 10, which loses only void, and its heat
+    source's box ends at that height. Every shipped scene still builds.
+  - **The answer moves.** The top now sheds about half a watt of the 20, and the module sits at
+    51.8655 °C against 30.2982 at the bolts, where it was 52.4420 and 30.5449. The spread is
+    21.57 K of a 31.87 K rise.
+  - **It starts at 43.7 °C**, not 44. From 44 the peak overshot and fell, breaking the rise
+    `scene.rs` asserts; from 43.7, 43.8 and 43.9 it did not, so the line lies between 43.9 and 44.
+    It is not the settled mean, 43.26 °C, which all four are above: the peak arrives as the
+    slowest mode does, and that mode weighs the hot arm. From 43.7 the 200 s run moves 0.0041 K
+    over its last 15 s and ends 0.020 K under the settled 51.8857, 0.063% of the rise. It was
+    0.14%: the old comment's 0.09% was a fraction of 52.49 °C rather than of the rise.
+  - **The rise `scene.rs` asserts is a property of the start**, and its comment said otherwise. A
+    steady source and sinks growing with temperature must rise monotonically from ambient. From
+    near the answer it holds only for a start that was measured to keep it.
+  - `docs/editor.png` and scene 29's preset tile are of this scene, and are retaken. Regenerating
+    the tiles also moved `09-atoms-liquid`'s by one pixel, at (96, 44). Its run and its render come
+    out byte for byte the same twice here, so the committed tile was stale, from some change since
+    2026-09-04 that nothing regenerated, and it goes in with the others.
 
 - **A moved checkout's test binaries passed `counts_in_prose` and `documented_version` over
   nothing.** `CARGO_MANIFEST_DIR` is fixed at compile time, and a crate directory that was gone

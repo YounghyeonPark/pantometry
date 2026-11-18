@@ -234,13 +234,50 @@ fn faces_in(d: &serde_json::Value) -> Vec<&str> {
         .collect()
 }
 
-/// What `entry_for` is told about domain `d`.
-fn fit_of<'a>(d: &'a serde_json::Value, faces: &'a [&'a str]) -> templates::Fit<'a> {
+/// What `entry_for` is told about domain `d`, and how many solid cells each face of it holds.
+fn fit_of<'a>(
+    d: &'a serde_json::Value,
+    faces: &'a [&'a str],
+    solid: Option<[usize; 6]>,
+) -> templates::Fit<'a> {
     templates::Fit {
         grid: grid_of(d),
         faces,
         material: d.get("material").and_then(|m| m.as_str()),
+        solid,
     }
+}
+
+/// The solid cells on each face of block `name` in `scene`, in `FaceSpec::ALL`'s order, counted
+/// here off the build's own block rather than by the code under test: on each face's layer, every
+/// cell that is not void.
+fn solid_faces(scene: &serde_json::Value, name: &str) -> [usize; 6] {
+    let text = serde_json::to_string(scene).expect("serialises");
+    let parsed: Scene = serde_json::from_str(&text).expect("parses");
+    let world = World::build_with(parsed, &Beside(scenes())).expect("the shipped scene builds");
+    let block = world
+        .simulation()
+        .domain_as::<pantometry::thermal::Solid3D>(name)
+        .expect("a block");
+    let (nx, ny, nz) = block.counts();
+    let n = [nx, ny, nz];
+    pantometry_world::FaceSpec::ALL.map(|face| {
+        let (axis, high) = face.normal();
+        let [a, b] = face.axes();
+        let mut count = 0;
+        for u in 0..n[a] {
+            for v in 0..n[b] {
+                let mut c = [0; 3];
+                c[axis] = if high { n[axis] - 1 } else { 0 };
+                c[a] = u;
+                c[b] = v;
+                if !block.is_void(c[0], c[1], c[2]) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    })
 }
 
 /// Every shipped scene, parsed, with its file name.
@@ -281,7 +318,7 @@ fn an_entry_fits_the_grid_it_is_added_to() {
             .expect("the kind is in its own scene");
         let faces = faces_in(d);
         assert_eq!(
-            templates::entry_for(e.kind, e.key, &fit_of(d, &faces)).as_deref(),
+            templates::entry_for(e.kind, e.key, &fit_of(d, &faces, None)).as_deref(),
             Some(e.json),
             "{} {}: fitted to its own template, an entry should be the table's",
             e.kind,
@@ -304,9 +341,15 @@ fn an_entry_fits_the_grid_it_is_added_to() {
                 .collect();
             let mm = d["cell_mm"].as_f64().expect("a block states its cell");
             let faces = faces_in(d);
+            let name = d["name"].as_str().expect("a name");
+            // Which faces the block's part reaches, from the build: a designed part need not reach
+            // them all, and a film on one it does not is refused. Scene 29's bracket reaches neither
+            // `x-max` nor `y-max`, which is what this was told about after a third cooled face added
+            // there stopped building.
+            let solid = solid_faces(&value, name);
             let fitted = |key: &str| -> serde_json::Value {
-                let text =
-                    templates::entry_for("block", key, &fit_of(d, &faces)).expect("an entry");
+                let text = templates::entry_for("block", key, &fit_of(d, &faces, Some(solid)))
+                    .expect("an entry");
                 serde_json::from_str(&text).unwrap_or_else(|e| panic!("{file} {key}: {e}"))
             };
 
@@ -318,15 +361,29 @@ fn an_entry_fits_the_grid_it_is_added_to() {
                 "{file} {}: a new cooled face on {side}, which {taken:?} already holds",
                 d["name"]
             );
-            // The two counts that lie in the face, worked out here rather than by the code under
-            // test: an x face spans y and z, a y face x and z, a z face x and y.
+            // The solid cells on that face, counted above off the build: on a block with nothing
+            // void, the two counts that lie in the face — an x face spans y and z, a y face x and
+            // z, a z face x and y — and on a part, the cells it puts there.
+            let at = pantometry_world::FaceSpec::ALL
+                .iter()
+                .position(|f| f.spelled() == side)
+                .expect("a face of the format's");
+            assert!(
+                solid[at] > 0,
+                "{file} {}: a new cooled face on {side}, where no solid cell is",
+                d["name"]
+            );
             let (p, q) = match &side[..1] {
                 "x" => (n[1], n[2]),
                 "y" => (n[0], n[2]),
                 _ => (n[0], n[1]),
             };
+            assert!(
+                solid[at] <= p * q,
+                "{file}: more solid cells than the face has"
+            );
             let area = cooled["area_cm2"].as_f64().expect("an area");
-            let face = p as f64 * q as f64 * mm * mm / 100.0;
+            let face = solid[at] as f64 * mm * mm / 100.0;
             assert!(
                 (area - face).abs() <= 1e-12 * face,
                 "{file} {}: a cooled {side} face states {area} cm² of a {face} cm² face",
@@ -390,6 +447,7 @@ fn every_face_states_its_own_area() {
             grid: Some((n, 1.0)),
             faces: &held,
             material: None,
+            solid: None,
         };
         let text = templates::entry_for("block", "cooling", &fit).expect("an entry");
         let entry: serde_json::Value = serde_json::from_str(&text).expect("parses");
@@ -425,6 +483,7 @@ fn a_new_face_avoids_every_list_not_only_its_own() {
         grid: None,
         faces: &held,
         material: None,
+        solid: None,
     };
     let pressed = templates::entry_for("structure", "pressed", &fit).expect("an entry");
     assert!(pressed.contains("\"face\": \"x-max\""), "{pressed}");
@@ -519,4 +578,30 @@ fn every_list_that_says_where_is_one_a_click_can_set() {
             "{face:?} lies across its own axis"
         );
     }
+}
+
+/// **A new face is one the part reaches, and its area is the solid cells on it.** On 3 x 5 x 7
+/// cells of 1 mm, told that no solid cell is on the top and twelve are on the bottom, a new cooled
+/// face skips the top it would otherwise take and states the bottom's twelve cells, 0.12 cm², not
+/// its whole 15 — the area the block shares among those twelve. Told nothing, it is the top, whole.
+#[test]
+fn a_new_face_is_one_the_part_reaches() {
+    let n = [3usize, 5, 7];
+    let fit = |solid| templates::Fit {
+        grid: Some((n, 1.0)),
+        faces: &[],
+        material: None,
+        solid,
+    };
+    let entry = |solid| -> serde_json::Value {
+        let text = templates::entry_for("block", "cooling", &fit(solid)).expect("an entry");
+        serde_json::from_str(&text).expect("parses")
+    };
+    // FaceSpec::ALL: x-min, x-max, y-min, y-max, z-min, z-max.
+    let reached = entry(Some([35, 35, 21, 21, 12, 0]));
+    assert_eq!(reached["face"], "z-min");
+    assert_eq!(reached["area_cm2"].as_f64(), Some(0.12));
+    let told_nothing = entry(None);
+    assert_eq!(told_nothing["face"], "z-max");
+    assert_eq!(told_nothing["area_cm2"].as_f64(), Some(0.15));
 }
