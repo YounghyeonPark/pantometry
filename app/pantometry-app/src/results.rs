@@ -310,7 +310,7 @@ fn coordinate(ui: &mut egui::Ui, value: &mut f64, g: &Grid, axis: usize, per: f6
 /// its text at the cursor, so each label's box covers every widget before it on the line. Nothing
 /// is drawn over anything, and `--ui-dump` cannot tell: the first frames of this panel reported
 /// sixty overlaps on the line tab, every one of them a label's box over the controls to its left.
-fn row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal_wrapped(|ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         add(ui);
@@ -978,7 +978,7 @@ fn readings(ui: &mut egui::Ui, r: &mut Results, run: &viewer_core::Run, now: &vi
 const CHART_MIN: egui::Vec2 = egui::vec2(320.0, 100.0);
 
 /// Whether a chart fits in `room`.
-fn chart_fits(room: egui::Vec2) -> bool {
+pub(crate) fn chart_fits(room: egui::Vec2) -> bool {
     room.x >= CHART_MIN.x && room.y >= CHART_MIN.y
 }
 
@@ -987,10 +987,10 @@ fn chart_fits(room: egui::Vec2) -> bool {
 /// **Said, not left blank.** Under 921 points the inspector goes and the outliner narrows, and
 /// the region's chart and the readings' had less than [`CHART_MIN`] beside their tables: each
 /// was a table and an empty half, which is what a chart with nothing to draw looks like too.
-const NO_ROOM: &str = "the chart needs a wider or taller panel";
+pub(crate) const NO_ROOM: &str = "the chart needs a wider or taller panel";
 
 /// A chart drawn into whatever room is left. The caller has asked [`chart_fits`].
-fn chart_in(ui: &mut egui::Ui, chart: &chart::Chart, cursor: Option<f64>) {
+pub(crate) fn chart_in(ui: &mut egui::Ui, chart: &chart::Chart, cursor: Option<f64>) {
     let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
     let drawing = chart.draw(f64::from(rect.width()), f64::from(rect.height()), cursor);
     paint(&ui.painter_at(rect), rect.min, &drawing);

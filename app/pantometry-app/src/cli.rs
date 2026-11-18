@@ -52,6 +52,101 @@ fn build(scene: Scene, beside: &str) -> Result<World, String> {
     World::build_with_accelerator(scene, &Beside::of(beside), &pantometry_gpu::OnTheGpu)
 }
 
+/// `pantometry sweep`: one number of a scene at several values, a run for each, and the last
+/// frame's readings tabulated as CSV — on stdout, or in a file when one is named.
+///
+/// The number is named as the settings form names it, `particle.width_nm`, or by its pointer,
+/// `/domains/0/width_nm`; `--list` prints both for every number the scene states. The values are
+/// written out, `5,10,20`, or spaced, `5:20:4` and `1:1000:4:log`. Each point's progress goes to
+/// stderr as it runs, so the table on stdout is only the table.
+///
+/// The arithmetic is [`editor_core::sweep`]'s, the editor's own, so a sweep here and one in the
+/// window are one sweep. A value the scene refuses stays in the table with the reason, and the exit
+/// is 0 when at least one value ran.
+pub fn sweep(args: &[String]) -> i32 {
+    match sweep_work(args) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+const SWEEP_USAGE: &str = "usage: pantometry sweep scene.json NAME=5,10,20 [out.csv]\n\
+     \x20      pantometry sweep scene.json NAME=from:to:count[:log] [out.csv]\n\
+     \x20      pantometry sweep scene.json --list";
+
+fn sweep_work(args: &[String]) -> Result<(), String> {
+    use editor_core::sweep;
+    let (Some(path), rest) = (args.first(), args.get(1..).unwrap_or_default()) else {
+        return Err(SWEEP_USAGE.to_string());
+    };
+    let text = read(path)?;
+    let parameters = sweep::parameters(&text);
+    if rest == ["--list"] {
+        if parameters.is_empty() {
+            return Err(format!("{path} states no number to sweep — does it parse?"));
+        }
+        for p in &parameters {
+            // `0.0000000000002` is a 2e-13 s duration written so nobody can read it.
+            let now = if p.now != 0.0 && !(1e-3..1e6).contains(&p.now.abs()) {
+                format!("{:e}", p.now)
+            } else {
+                format!("{}", p.now)
+            };
+            println!("{}\t{}\t{now}\t{}", p.label, p.pointer, p.unit);
+        }
+        return Ok(());
+    }
+    let (spec, out) = match rest {
+        [spec] => (spec, None),
+        [spec, out] => (spec, Some(out)),
+        _ => return Err(SWEEP_USAGE.to_string()),
+    };
+    let (p, values) = sweep::asked(&text, spec)?;
+    let n = values.len();
+    let files = Beside::of(path);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let points = sweep::run_all(
+        &text,
+        &p.pointer,
+        &values,
+        &files,
+        &stop,
+        |i, point| match &point.error {
+            None => eprintln!("  {} of {n}: {} = {} ran", i + 1, p.label, point.value),
+            Some(e) => eprintln!(
+                "  {} of {n}: {} = {} refused: {e}",
+                i + 1,
+                p.label,
+                point.value
+            ),
+        },
+    );
+    // **A scene with no readings has no table**, and saying so beats a CSV of one column: scene 06's
+    // orbits ran at every value and wrote `1e0,` and `2e0,`, exit 0.
+    if sweep::ran(&points) > 0 && sweep::columns(&points).is_empty() {
+        return Err(format!(
+            "{} value(s) of {} ran, and {path} reports no readings: there is nothing to tabulate",
+            sweep::ran(&points),
+            p.label
+        ));
+    }
+    let csv = sweep::csv(&p.label, &points);
+    match out {
+        Some(out) => {
+            std::fs::write(out, &csv).map_err(|e| format!("{out}: {e}"))?;
+            eprintln!("  wrote {out} ({} values)", points.len());
+        }
+        None => print!("{csv}"),
+    }
+    if points.iter().all(|pt| pt.error.is_some()) {
+        return Err(format!("no value of {} ran", p.label));
+    }
+    Ok(())
+}
+
 /// Read a file, saying **which** file when it cannot be read.
 ///
 /// `std::fs::read_to_string(path)?` propagates an `io::Error` that names the reason and not the

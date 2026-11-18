@@ -178,6 +178,10 @@ enum Job {
     RunEnded(Result<editor_core::RunEnd, String>),
     /// The battery's rendered report and its findings count, or why it could not start.
     Verified(Result<(String, usize), String>),
+    /// One value of a sweep, run — see [`crate::sweeping`].
+    Swept(editor_core::sweep::Point),
+    /// The sweep is over: every value ran, or it was stopped between two.
+    SweepEnded,
 }
 
 /// Where the shaded pass actually puts a run's geometry, in world metres.
@@ -305,6 +309,9 @@ pub struct Dump {
     pub select: Option<String>,
     /// Open the results panel on this tab rather than the one it chooses for itself.
     pub results: Option<crate::results::Tab>,
+    /// Sweep this, `NAME=5,10,20`, in the sweep window, run before the frame is built — the
+    /// window's own sweep, synchronously, as `ran` is the run button's.
+    pub sweep: Option<String>,
 }
 
 /// One frame of the editor's interface, as text: every string it drew and where.
@@ -351,6 +358,7 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
         source,
         select,
         results,
+        sweep,
     } = asked;
     // The same two doors the window opens by, so what this reports is what a person would see.
     let mut app = match path {
@@ -397,6 +405,21 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
             ));
         }
         app.selected = Some(path);
+    }
+    if let Some(spec) = sweep {
+        let (p, values) =
+            editor_core::sweep::asked(&app.text, &spec).map_err(|e| format!("--sweep: {e}"))?;
+        app.sweeping.set(&p, &values);
+        app.sweeping.started(p.clone(), values.len());
+        let stop = AtomicBool::new(false);
+        app.sweeping.points = editor_core::sweep::run_all(
+            &app.text,
+            &p.pointer,
+            &values,
+            &app.files(),
+            &stop,
+            |_, _| {},
+        );
     }
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
@@ -474,6 +497,29 @@ pub fn ui_dump(asked: Dump) -> Result<String, String> {
         let mut after = input();
         after.events = vec![egui::Event::ModifiersChanged(egui::Modifiers::default())];
         ctx.run_ui(after, |ui| app.ui(ui))
+            .drop_without_applying_deltas();
+    }
+    // **A sweep a click started is waited for**, and drained the way the editor drains it, a
+    // point at a time through `poll_jobs`. `App::ui` does not poll — `logic` does, on a window's
+    // clock — so the window's own Run sweep button started a thread no frame here would read, and
+    // only the synchronous `--sweep` door could be tested. Only a sweep: a run or a verify a click
+    // starts is left as it was, which is what every dump before this one was built against.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    while app
+        .busy
+        .as_ref()
+        .is_some_and(|(label, _)| *label == "sweeping")
+    {
+        app.poll_jobs();
+        if std::time::Instant::now() > deadline {
+            return Err(String::from(
+                "the sweep a click started had not ended after 300 s",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if !app.sweeping.points.is_empty() {
+        ctx.run_ui(input(), |ui| app.ui(ui))
             .drop_without_applying_deltas();
     }
     if let Some((x, y)) = hover {
@@ -1062,6 +1108,8 @@ struct App {
     results_short_was: bool,
     /// What the results panel is asking, and where. See [`crate::results`].
     results: crate::results::Results,
+    /// The sweep window: what it sweeps and what came back. See [`crate::sweeping`].
+    sweeping: crate::sweeping::Sweeping,
     /// Counts the runs that have arrived and the frames they have grown by, so anything cached
     /// from a run knows when it is stale without hashing the run.
     run_generation: u64,
@@ -1152,6 +1200,7 @@ impl App {
             show_results: true,
             results_short_was: false,
             results: crate::results::Results::default(),
+            sweeping: crate::sweeping::Sweeping::default(),
             run_generation: 0,
             squeezed_was: Vec::new(),
             assets: assets_beside(&scanned),
@@ -1284,6 +1333,27 @@ impl App {
         self.status = format!("{label}…");
     }
 
+    /// Sweep `p` over `values` in the background, a run per value, each point sent back as it
+    /// finishes. The scene as it is now, with the stop flag the Stop button raises between runs.
+    fn start_sweep(&mut self, p: editor_core::sweep::Parameter, values: Vec<f64>) {
+        if self.busy.is_some() {
+            self.status = String::from("still busy with the last job; the sweep not started");
+            return;
+        }
+        let text = self.text.clone();
+        let files = self.files();
+        self.stop = Arc::new(AtomicBool::new(false));
+        let stop = self.stop.clone();
+        let pointer = p.pointer.clone();
+        self.sweeping.started(p, values.len());
+        self.spawn("sweeping", move |tx| {
+            editor_core::sweep::run_all(&text, &pointer, &values, &files, &stop, |_, point| {
+                let _ = tx.send(Job::Swept(point.clone()));
+            });
+            let _ = tx.send(Job::SweepEnded);
+        });
+    }
+
     fn start_run(&mut self) {
         let text = self.text.clone();
         // The path travels with the text, because a `parts` entry is resolved beside the scene
@@ -1344,14 +1414,23 @@ impl App {
         let Some((_, rx)) = &self.busy else { return };
         let mut ended = None;
         let mut streamed = Vec::new();
+        let mut swept = Vec::new();
         while let Ok(job) = rx.try_recv() {
             match job {
                 Job::Frames(s) => streamed.push(s),
+                Job::Swept(p) => swept.push(p),
                 other => {
                     ended = Some(other);
                     break;
                 }
             }
+        }
+        // A sweep's points fill its table as each value finishes, which is what a progress count
+        // beside an empty table would only promise.
+        if !swept.is_empty() {
+            let asked = self.sweeping.asked;
+            self.sweeping.points.extend(swept);
+            self.status = format!("sweeping: {} of {asked}", self.sweeping.points.len());
         }
         // **Every payload, in order.** This kept only the latest, which was right while each
         // one was the whole run so far; a frame now is only itself, and skipping one is a hole.
@@ -1462,7 +1541,16 @@ impl App {
                     self.start_run();
                 }
             }
-            Some(Job::Frames(_)) => unreachable!("frames are drained above"),
+            Some(Job::SweepEnded) => {
+                self.busy = None;
+                self.status = self.sweeping.finished();
+                if std::mem::take(&mut self.rerun_owed) {
+                    self.start_run();
+                }
+            }
+            Some(Job::Frames(_)) | Some(Job::Swept(_)) => {
+                unreachable!("frames and points are drained above")
+            }
         }
     }
 
@@ -1969,6 +2057,11 @@ impl App {
                         ui.close();
                     }
                     ui.checkbox(&mut self.deep, "Deep");
+                    ui.separator();
+                    if ui.button("Sweep a value…").clicked() {
+                        self.sweeping.open = true;
+                        ui.close();
+                    }
                 });
                 menu(ui, "Watch", |ui| {
                     ui.checkbox(&mut self.watch, "Watch file");
@@ -2406,6 +2499,24 @@ impl App {
                 });
             }
             self.verify_open = open;
+        }
+
+        let sweeping = self
+            .busy
+            .as_ref()
+            .is_some_and(|(label, _)| *label == "sweeping");
+        // Why a sweep cannot start now, said beside its button rather than only on the status bar
+        // after a press that did nothing.
+        let blocked = self
+            .busy
+            .as_ref()
+            .filter(|_| !sweeping)
+            .map(|(label, _)| *label);
+        if let Some(asked) = self.sweeping.show(ctx, &self.text, sweeping, blocked) {
+            match asked {
+                crate::sweeping::Asked::Run(p, values) => self.start_sweep(p, values),
+                crate::sweeping::Asked::Stop => self.stop.store(true, Ordering::Relaxed),
+            }
         }
 
         // Declared after the other left panels so it sits **against the viewport**: the drag
@@ -6069,5 +6180,148 @@ mod tests {
         assert!(why.contains("module is hidden"), "{why}");
         app.selected = Some("/domains/module".to_string());
         assert_eq!(app.unaimed(), None);
+    }
+
+    /// **A sweep in the background arrives point by point, and ends.** The window's own path: the
+    /// job runs each value on a thread, `poll_jobs` drains each point into the table as it lands,
+    /// and the end frees the editor and says what ran. Two widths of scene 28, in order.
+    #[test]
+    fn a_sweep_in_the_background_fills_its_table_and_ends() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pantometry-world/scenes/28-an-eigenstate-that-does-not-move.json");
+        let mut app = App::new(Some(scene.to_string_lossy().into_owned()));
+        let (p, values) = editor_core::sweep::asked(&app.text, "particle.width_nm=5,10")
+            .expect("the width sweeps");
+        app.start_sweep(p, values);
+        assert!(
+            app.busy.is_some(),
+            "the sweep did not start: {}",
+            app.status
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while app.busy.is_some() {
+            app.poll_jobs();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sweep had not ended after 120 s: {}",
+                app.status
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let ran: Vec<f64> = app.sweeping.points.iter().map(|p| p.value).collect();
+        assert_eq!(ran, [5.0, 10.0]);
+        // **Each point is its own width's run**, not only its own label: the value a point carries
+        // is the one asked for, copied, and a job that swept the wrong number would still carry it.
+        // The energy is the third level's discrete eigenvalue at that width.
+        const HBAR: f64 = 1.054_571_817e-34;
+        const ELECTRON_KG: f64 = 9.109_383_701_5e-31;
+        let s = (3.0 * std::f64::consts::PI / 402.0).sin();
+        for p in &app.sweeping.points {
+            let dx = p.value * 1e-9 / 201.0;
+            let want = 2.0 * HBAR * HBAR / (ELECTRON_KG * dx * dx) * s * s;
+            let got = p
+                .readings
+                .iter()
+                .find(|r| r.label == "<E>")
+                .unwrap_or_else(|| panic!("{} nm: {:?}", p.value, p.error))
+                .value;
+            assert!(
+                (got / want - 1.0).abs() < 1e-9,
+                "{} nm: {got:e} against {want:e}",
+                p.value
+            );
+        }
+        assert_eq!(app.status, "swept 2 value(s)");
+        assert_eq!(app.sweeping.ended.as_deref(), Some("swept 2 value(s)"));
+
+        // **A second sweep is its own table**, not the first's with more rows under it.
+        let (p, values) =
+            editor_core::sweep::asked(&app.text, "particle.width_nm=20").expect("one width");
+        app.start_sweep(p, values);
+        drain(&mut app);
+        let ran: Vec<f64> = app.sweeping.points.iter().map(|p| p.value).collect();
+        assert_eq!(ran, [20.0], "the first sweep's rows stayed");
+        assert_eq!(app.status, "swept 1 value(s)");
+    }
+
+    /// Poll a job to its end, as `logic` does on a window's clock.
+    fn drain(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while app.busy.is_some() {
+            app.poll_jobs();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the job had not ended after 120 s: {}",
+                app.status
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// **Stop reaches a sweep, between two runs, and says what ran.** Raised the moment the sweep
+    /// starts, over forty values of scene 15: the job's stop is the editor's, so it ends after at
+    /// most the one value already running, and the status says it stopped rather than finished. A
+    /// flag the job did not share would let all forty run.
+    #[test]
+    fn stop_ends_a_sweep_between_runs() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pantometry-world/scenes/15-a-hot-spot-in-a-block.json");
+        let mut app = App::new(Some(scene.to_string_lossy().into_owned()));
+        let p = editor_core::sweep::parameters(&app.text)
+            .into_iter()
+            .find(|p| p.pointer.starts_with("/domains/") && !p.integral)
+            .expect("a number of the block's");
+        let values: Vec<f64> = (0..40).map(|i| p.now + i as f64).collect();
+        app.start_sweep(p, values);
+        app.stop.store(true, Ordering::Relaxed);
+        drain(&mut app);
+        let ran = app.sweeping.points.len();
+        assert!(ran < 40, "all forty ran: the stop never reached the job");
+        assert!(
+            app.status
+                .starts_with(&format!("stopped after {ran} of 40")),
+            "{}",
+            app.status
+        );
+        // And the window keeps saying so after the status bar has moved on.
+        assert_eq!(app.sweeping.ended.as_deref(), Some(app.status.as_str()));
+    }
+
+    /// **The reading a sweep's table opens on is worked out as its points arrive.** It was worked
+    /// out on the first frame drawn with a point in, when one point could not have moved, and kept:
+    /// every sweep opened on its first reading — scene 28's norm, a flat line at one. Drawn after the
+    /// first point and again at the end, nothing is kept that nobody chose, and the end opens on the
+    /// position, the first reading that moves.
+    #[test]
+    fn a_sweeps_reading_is_chosen_as_its_points_arrive() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pantometry-world/scenes/28-an-eigenstate-that-does-not-move.json");
+        let mut app = App::new(Some(scene.to_string_lossy().into_owned()));
+        app.sweeping.open = true;
+        let (p, values) = editor_core::sweep::asked(&app.text, "particle.width_nm=5,10,20")
+            .expect("the width sweeps");
+        app.start_sweep(p, values);
+        let ctx = egui::Context::default();
+        let frame = |app: &mut App| {
+            ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui))
+                .drop_without_applying_deltas();
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while app.sweeping.points.is_empty() {
+            app.poll_jobs();
+            assert!(std::time::Instant::now() < deadline, "no point arrived");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        frame(&mut app);
+        drain(&mut app);
+        frame(&mut app);
+        assert_eq!(
+            app.sweeping.column, None,
+            "a reading was kept that nobody chose"
+        );
+        let cols = editor_core::sweep::columns(&app.sweeping.points);
+        let opens =
+            editor_core::sweep::moving(&app.sweeping.points, &cols).map(|k| cols[k].label.clone());
+        assert_eq!(opens.as_deref(), Some("<x>"));
     }
 }

@@ -49,6 +49,7 @@ pub mod edit;
 pub mod form;
 pub mod pick;
 pub mod post;
+pub mod sweep;
 
 pub use edit::{
     add_domain, add_domain_json, add_entry, asset_domain, domain_named, drag_along_axis,
@@ -496,6 +497,19 @@ pub fn fit(files: &Uploaded, budget_cells: usize, material: &str) -> Result<Stri
 /// writes, which is the format `viewer-core` reads. A violation is the error, worded by the
 /// kernel.
 pub fn run(text: &str, files: &dyn Parts) -> Result<String, String> {
+    let (title, frames) = run_frames(text, files)?;
+    Ok(pantometry::view::to_json(&title, &frames))
+}
+
+/// The scene's title and its frames, run: what [`run`] writes out, before it is written out.
+///
+/// One place, so the run button and a sweep's points are one run. The sweep reads its readings
+/// here rather than back out of [`run`]'s JSON, which writes seven significant figures — enough for
+/// a picture and not for a table a design is read off.
+pub(crate) fn run_frames(
+    text: &str,
+    files: &dyn Parts,
+) -> Result<(String, Vec<pantometry_world::Frame>), String> {
     let scene: Scene =
         serde_json::from_str(text).map_err(|e| format!("{}:{}: {e}", e.line(), e.column()))?;
     let title = scene.title.clone();
@@ -506,7 +520,7 @@ pub fn run(text: &str, files: &dyn Parts) -> Result<String, String> {
             world.time().to_si()
         )
     })?;
-    Ok(pantometry::view::to_json(&title, &frames))
+    Ok((title, frames))
 }
 
 /// How a streamed run ended, when it did not fail.

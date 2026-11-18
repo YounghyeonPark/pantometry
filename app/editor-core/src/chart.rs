@@ -51,14 +51,24 @@ pub struct Axis {
 
 /// What a chart's horizontal axis measures.
 ///
-/// The readings are against time and a profile along a line is against distance. One chart and
-/// two axes, rather than a second chart that would be a second chance to place a point wrong.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The readings are against time, a profile along a line is against distance, and a sweep's
+/// readings are against the value it swept. One chart and three axes, rather than a second chart
+/// that would be a second chance to place a point wrong.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Across {
     /// Seconds, labelled in whatever unit the span is said in: `time / h`.
     Time,
     /// Metres, labelled the same way: `distance / mm`.
     Distance,
+    /// A value as the scene states it, in the unit its key names and not rescaled: a sweep's
+    /// `particle.width_nm / nm`. The scene's own unit, because that is the number a person typed
+    /// and will type again.
+    Stated {
+        /// What the value is called.
+        name: String,
+        /// The unit its key names, or empty.
+        unit: String,
+    },
 }
 
 /// A run's readings, ready to draw.
@@ -564,9 +574,10 @@ impl Chart {
     pub fn draw(&self, width: f64, height: f64, cursor: Option<f64>) -> Drawing {
         let mut d = Drawing::default();
         let plots = self.plots(width, height);
-        let (quantity, (unit, per)) = match self.across {
+        let (quantity, (unit, per)) = match &self.across {
             Across::Time => ("time", time_unit(self.x1 - self.x0)),
             Across::Distance => ("distance", length_unit(self.x1 - self.x0)),
+            Across::Stated { name, unit } => (name.as_str(), (unit.as_str(), 1.0)),
         };
         let x = |r: &[f64; 4], t: f64| r[0] + self.place_x(t) * (r[2] - r[0]);
         for (axis, r) in self.axes.iter().zip(&plots) {
@@ -652,7 +663,12 @@ impl Chart {
             }
             d.texts.push(Text {
                 at: [last[2], last[3] + 20.0],
-                text: format!("{quantity} / {unit}"),
+                // A count has no unit, and `cells / ` would be a slash dividing by nothing.
+                text: if unit.is_empty() {
+                    quantity.to_string()
+                } else {
+                    format!("{quantity} / {unit}")
+                },
                 anchor: Anchor::TopRight,
                 colour: INK,
             });

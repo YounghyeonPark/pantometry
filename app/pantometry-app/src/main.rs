@@ -39,6 +39,7 @@ mod glyphs;
 mod render;
 mod results;
 mod start;
+mod sweeping;
 mod view;
 
 fn main() {
@@ -55,6 +56,7 @@ fn main() {
         Some("check") => cli::run(&with("--check", &rest)),
         Some("emit") => cli::run(&with("--emit-default", &rest)),
         Some("run") => cli::run(&rest),
+        Some("sweep") => cli::sweep(&rest),
 
         Some("--help" | "-h" | "help") => {
             print!("{}", usage());
@@ -134,7 +136,7 @@ const DUMP_USAGE: &str = concat!(
     "usage: pantometry --ui-dump [scene.json] [--width W] [--height H] [--new [kind,kind]]",
     " [--open AREA] [--custom] [--click X,Y]... [--drag X0,Y0,X1,Y1]... [--ran] [--iso]",
     " [--solo] [--run-after-clicks] [--source] [--select PATH] [--results TAB]",
-    " [--shift-drag X0,Y0,X1,Y1]... [--hover X,Y]"
+    " [--shift-drag X0,Y0,X1,Y1]... [--hover X,Y] [--sweep NAME=VALUES]"
 );
 
 /// **`--ui-dump`'s arguments, every one accounted for.**
@@ -172,6 +174,7 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
         source: false,
         select: None,
         results: None,
+        sweep: None,
     };
     // A flag that sets one value is refused the second time, rather than one of the two winning.
     let mut once: Vec<&str> = Vec::new();
@@ -181,7 +184,7 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
         let said = rest.get(i + 1).map(String::as_str);
         if matches!(
             a,
-            "--width" | "--height" | "--open" | "--new" | "--select" | "--results"
+            "--width" | "--height" | "--open" | "--new" | "--select" | "--results" | "--sweep"
         ) {
             if once.contains(&a) {
                 return Err(format!("{a} was given twice"));
@@ -343,6 +346,21 @@ fn dump_args(rest: &[String]) -> Result<edit::Dump, String> {
                 }
                 took = 2;
             }
+            // **A sweep, run before the frame**, in the sweep window: `NAME=5,10,20`. Whether the
+            // name and the values mean anything is the scene's to say, so it is checked when the
+            // frame is built, as `--select` is.
+            "--sweep" => {
+                match said.filter(|s| s.contains('=')) {
+                    Some(s) => asked.sweep = Some(s.to_string()),
+                    None => {
+                        return Err(format!(
+                            "--sweep takes NAME=5,10,20; got {}",
+                            said.unwrap_or("nothing")
+                        ))
+                    }
+                }
+                took = 2;
+            }
             _ if i == 0 && !a.starts_with('-') => asked.path = Some(a.to_string()),
             _ if a.starts_with('-') => return Err(format!("--ui-dump does not take {a}")),
             _ => {
@@ -422,6 +440,10 @@ fn usage() -> String {
          \x20 pantometry run     scene.json out.html  run it and write an asset, by extension:\n\
          \x20                                         .html .svg .csv .json .gltf .usda\n\
          \x20 pantometry verify  scene.json [--deep]  the battery: margins, determinism, sweeps, geometry\n\
+         \x20 pantometry sweep   scene.json NAME=5,10,20 [out.csv]\n\
+         \x20                                         run it once per value of one number, and\n\
+         \x20                                         tabulate each run's last readings; --list names\n\
+         \x20                                         the numbers, and from:to:count[:log] spaces them\n\
          \x20 pantometry emit    scene.json           write the built-in scene out to start from\n\
          \x20 pantometry fit     part.stl ...         choose a cell size by measuring the geometry\n\
          \x20 pantometry view    run.json             a window: rotate, zoom, scrub\n\

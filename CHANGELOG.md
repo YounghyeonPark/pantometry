@@ -23,6 +23,37 @@ protects nothing.
 
 ### Added
 
+- **A number can be swept: several runs, one value apart, and the readings against it.** **Run →
+  Sweep a value…** opens a window. Choose any number the scene states, give it a range or the
+  values written out, and run.
+  - **In the background.** One run per value, with a stop between runs. A table and a chart of one
+    reading against the value fill in as each run lands.
+  - **From a shell.** `pantometry sweep scene.json NAME=5,10,20 [out.csv]` runs the same sweep and
+    prints a CSV. It takes `from:to:count[:log]` for spaced values and `--list` to name the
+    numbers. `editor_core::sweep` is all of it but the widgets.
+  - **Checked against a closed form.** On scene 28 every point's energy is its width's discrete
+    eigenvalue to `1e-9`, at 5, 10 and 20 nm and at 100, 200 and 300 points. The position
+    expectation the window opens its table on is the middle of the well at each width. At the
+    scene's own value the variant is the file byte for byte.
+  - **Full precision.** A point's readings come off its run's frames, not the run file's seven
+    figures. The 100-point level read back through the file was off by 4.8e-8.
+  - **Found on the way: the settings form labelled rates by their last word.** The film
+    coefficient read `(K)`, the stiffness `(m)`, the link conductance `(K)`. Every `_per_` key
+    in the format now has its unit whole, and a test holds the next one to a ratio.
+  - **Three reviewers read it**, and each finding was reproduced before it was fixed.
+    - **Checks that could not fail.** No test pressed the window's Run sweep or Stop; the dump
+      now waits for a sweep a click starts. Scene 28's readings are stationary, so the first
+      frame passed for the last. The chart was checked by its label, not its points.
+    - **Columns by place.** A reading only some values report shifted every column after it:
+      scene 25 swept from 0 W lost its structure readings at 45 W. Columns are by name now.
+    - **Absences that said nothing.** A scene with no readings swept to a one-column CSV and
+      exit 0. The window chose its reading before two points existed. A stopped sweep said so
+      only on the status bar. A panicking run left the editor waiting forever.
+    - **Bits that move.** Log spacing used the platform's `ln` and `exp` for values that become
+      literals in the scene; it uses the kernel's. A count's fractional end is refused.
+  - **Twenty-eight defects planted one at a time**: twenty-seven caught here. The twenty-eighth,
+    the platform's `ln` and `exp` back in the log spacing, gives the kernel's bits on this
+    machine, so its pin guards CI's other platforms rather than this one.
 - **The model is set up by pointing at it.** A cooled face, a held or pressed one, a pad where a
   part is bolted and a box that dissipates were chosen by typing a word or six indices into a form.
   - **An entry that says where.** Select one in the tree and its domain's faces toward the eye are

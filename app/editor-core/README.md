@@ -382,6 +382,75 @@ Not yet: the browser editor's view does not point. A contact's plane between cel
 something a click sets. A click on a domain the results panel is not reading selects it, and
 the probe takes a second click.
 
+## A sweep: one value, several runs
+
+A design question is rarely what a scene does. It is what the scene does as one number changes:
+the film coefficient a heatsink needs, the width at which a level crosses an energy. **Run → Sweep a
+value…** answers it.
+
+- **Choose a number.** Any number the scene states, named as the settings form names it
+  (`particle.width_nm`, `module.cooling[0].convection_w_per_m2_k`).
+- **Give it values.** A range — from, to, how many, evenly or by ratio — or the values written out,
+  `5, 10, 20`.
+- **Run it.** One run per value, in the background, with a stop between runs. The table and a
+  chart of one reading against the value fill in as each run lands.
+
+`pantometry sweep scene.json NAME=5,10,20 [out.csv]` is the same sweep from a shell, with the
+values written out or spaced (`5:20:4`, `1:1000:4:log`) and `--list` to name the numbers.
+`editor_core::sweep` is the whole of it but the widgets, so the window, the CLI and the browser make
+the same calls. What it promises, and what holds each promise:
+
+- **Each value is the run a person would get by typing it in.** The variant is the file with that
+  one literal spliced, every other byte as it was. At the value the file already has it *is* the
+  file, and its readings are the run button's.
+- **Readings at full precision.** A point's readings come off its run's frames, not back out of the
+  run file, which writes seven figures. On scene 28 each width's energy is the discrete
+  Hamiltonian's eigenvalue to `1e-9`: `(2ℏ²/m·dx²)·sin²(3π/402)` with `dx = width/201`. That closed
+  form is what the tests hold every point to: 5, 10 and 20 nm, and 100, 200 and 300 points.
+- **A whole number stays whole.** A count is swept by whole numbers, and ten asked between 2 and 5
+  are the four there are. A fraction for one is refused before anything runs, not rounded into a
+  different question.
+- **A refusal is an answer.** A value where the scene stops building stays in the table with the
+  build's reason, and the sweep goes on. A stopped sweep is the prefix it ran.
+- **The table is of the sweep that ran.** Changing the value or the range afterwards leaves the
+  table and the chart labelled with what they swept, until the next sweep replaces them.
+- **A rate is labelled as a rate.** The form read a key's unit off its last word, so a film
+  coefficient said `K` and a stiffness `m`. Sweeping against those would have labelled an axis
+  wrong. Every `_per_` key has its unit whole now, and a test holds the next one to a ratio.
+- **A reading is a column by its name.** A frame need not report the same readings at every value.
+  Scene 25's block reports `generated` only while its source is on. Matched by place, a sweep of the
+  source from 0 W left every structure reading blank at 45 W, one place over from where it was. By
+  name, each reading lands in its own column, and the table says how many values reported it.
+- **A sweep's values are the same bits everywhere.** They become literals in the scene, so a log
+  sweep uses the kernel's `ln` and `exp`, not the platform's. A count's ends must be whole. A
+  fractional end is refused, where `150.5:150.5:1` used to run 151.
+- **The chart runs in the value's order and breaks where a value refused.** Values written
+  `20, 5, 10` drew a line from right to left and back. A refused value was joined across.
+
+**What three reviewers found**, each reproduced before it was fixed:
+
+- **Passes that could not fail.**
+  - No test pressed the window's Run sweep or Stop. The dump's `--sweep` called the sweep itself.
+    The dump now waits for a sweep a click starts, and a test presses the button. Stop has its own
+    test, raised as a sweep of forty values starts.
+  - Scene 28's readings are all stationary, so a point read off the first frame passed. Scene 15's
+    cooling peak now holds a point to its last frame.
+  - The background test checked only the value each point carried, which is the one asked for.
+  - The chart was checked by its axis label, not by what it plotted.
+- **Absent, and said nothing.**
+  - A scene with no readings swept to a one-column CSV, exit 0. Scene 06's orbits do that. It is a
+    refusal now, and the window says the scene reports nothing to tabulate.
+  - The window chose the reading to open on when the first point arrived, before anything could
+    move, and kept it: every sweep opened on its first reading.
+  - A stopped sweep said so only on the status bar, which the next thing the editor does
+    overwrites. It is said above the table now.
+  - A run that panicked took the sweep's thread with it, and the editor waited forever. A panic is
+    that value's refusal now.
+
+Not yet: the browser editor has no sweep window. The CLI's normal run honours `"device": "gpu"` and a
+sweep's runs do not, so a GPU scene's points are refused with the format's own reason. A sweep is
+not saved with the scene.
+
 ## The viewport is shaded, on the GPU, with a depth buffer
 
 **View → Shaded surfaces** is the default. A field is drawn as the *boundary of the cells that

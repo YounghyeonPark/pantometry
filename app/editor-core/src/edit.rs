@@ -105,9 +105,23 @@ pub enum Value {
 /// Longest suffix first, because `_m` matches the tail of `_mm` and would win otherwise. Keys
 /// this does not recognise get no unit at all rather than a plausible one.
 fn unit_of(key: &str) -> &'static str {
-    const SUFFIXES: [(&str, &str); 14] = [
+    // **A rate is named whole, before its last word can be.** This read the suffix alone, so
+    // `convection_w_per_m2_k` was labelled `K`, `stiffness_n_per_m` `m` and `w_per_k` `K` — on the
+    // settings form since it existed, and on a sweep's axis the moment one was drawn against them.
+    // Every `_per_` key the format has is here, and `a_rate_is_labelled_as_a_rate` holds the next
+    // one to having a ratio for a unit.
+    const SUFFIXES: [(&str, &str); 23] = [
         ("_per_s2", "m/s²"),
         ("_per_m_k", "W/m·K"),
+        ("w_per_m2_k", "W/m²·K"),
+        ("l_per_h", "L/h"),
+        ("w_per_k", "W/K"),
+        ("v_per_m", "V/m"),
+        ("n_per_m", "N/m"),
+        ("m_per_s", "m/s"),
+        ("_per_nm", "1/nm"),
+        ("_per_h", "1/h"),
+        ("_nm", "nm"),
         ("_um", "µm"),
         ("_mm", "mm"),
         ("_hz", "Hz"),
