@@ -566,6 +566,33 @@ protects nothing.
 
 ### Fixed
 
+- **A bed read between two steps was not the bed there.** The puck's field at one pascal is
+  the answer on one face list. The flow balance, the stability limit, the flow and the outlet
+  temperature are all read from the two together, and between steps the pair was wrong twice
+  over.
+  - **The step walked its face list by taking it**, and nothing put it back. `flow_balance`
+    compared two flows of exactly zero and reported exactly zero, so `espresso_shot`'s
+    `< 1e-9` could not fail; it prints `3.71e-14` now. And `max_stable_dt` saw conduction
+    alone.
+  - **The step solved at its start**, so with the list kept, everything read between steps
+    came from the temperatures one step back. On a cold bed under a hot inlet the limit read
+    6.4% to 13.5% over what the next step enforced, across nine steps, and a step of exactly
+    the reported length was refused every time. The step solves at its end now, so between
+    steps the bed is solved for the temperatures it has, as it is after every mutator. It
+    refuses a field that did not converge before anything moves, and reports a failure of its
+    own solve. `flow_rate` after a step is the flow at the temperatures the step left, which is
+    the flow the next step carries, rather than the one it just carried.
+  - **Every bed a test or a scene stepped was limited by its steel**, whose cells carry no
+    flow, so the limit read the same with either defect. An inscribed basket's corner cell
+    limits at `dx²/4α` = 6.17e-2 s at 1 mm, and an inner wall cell of the 2 mm baskets the
+    scenes use at `(2 mm)²/6α` = 0.165 s. A filter grind, 800 µm at nine bar, is limited by its
+    flow: after a step it reported the steel's 6.17e-2 s where the step enforced 2.19e-2, and
+    `Schedule::Multirate`, which sizes each window's substeps from that limit, ran the first
+    window and had the second refused.
+  - **A checkpoint holds the face list and the solve's verdict with the field.** A restore
+    measures the flow from them at the drive it finds. With the pump turned down to half
+    between the two, a restore gives the saved field at the new pressure and exactly half the
+    flow.
 - **A drive switched off was refused, because three solvers could not solve a zero.** A `bar`
   stage of `0.0` was accepted by the format and stopped the run: scene 18 with its pump switched
   off at 11.1 s ended with `the audit stopped the run at t = 11.1111 s — pressure residual

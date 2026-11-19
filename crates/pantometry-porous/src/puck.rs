@@ -97,6 +97,11 @@ pub struct Puck {
     lambda: Vec<f64>,
     /// The face list, rebuilt at the start of every solve. Rebuilding it inside the CG loop cost
     /// more than the solve did.
+    ///
+    /// **Kept until the next solve**, because it is half of what was solved: `unit` is the answer
+    /// on these faces, and the flow balance, the stability limit and the flow are all read from
+    /// the two together. A step that walked it by taking it left an empty list behind, and all
+    /// three then read a bed with nothing flowing through it.
     face_cache: Vec<(Side, Side, f64)>,
     /// Solute dissolved in this cell's pore liquid, kg.
     dissolved: Vec<f64>,
@@ -123,7 +128,12 @@ pub struct Puck {
 #[derive(Clone, Debug)]
 struct Saved {
     unit: Vec<f64>,
-    flow: f64,
+    /// The faces `unit` was solved on, and what that solve reached. Saved with the field rather
+    /// than rebuilt from the temperatures beside it: the field, its faces and its verdict are one
+    /// result, and the step being rolled back has replaced all three with its own.
+    faces: Vec<(Side, Side, f64)>,
+    residual: f64,
+    converged: bool,
     temperature: Vec<f64>,
     solids: Vec<f64>,
     dissolved: Vec<f64>,
@@ -312,8 +322,9 @@ impl Puck {
     ///
     /// The flow problem is solved at one pascal and scaled, so nothing in the solve depends on
     /// this: a pump switched off is the same field times zero, with no pressure anywhere and
-    /// nothing flowing, exactly. It still re-solves, because every mutator ends solved and the
-    /// temperatures — the viscosity — may have moved since the last one.
+    /// nothing flowing, exactly. It still re-solves, as every mutator does: from a field that
+    /// already answers the bed that is one residual and at most a few iterations, and after a step
+    /// whose own solve failed it is what puts the field right.
     pub fn set_drive(&mut self, p: Pressure) {
         self.drive = p.to_si();
         self.resolve();
@@ -402,7 +413,11 @@ impl Puck {
     /// It was measured. `repack` widening the ring to 0.60 left `flow_rate` reporting the even
     /// bed's flow to the last digit — a 42% error, and 1.0000 where the closed form says 1.4188.
     /// Nothing in the suite saw it, because every test stepped the puck before reading anything
-    /// from it and a step re-solves.
+    /// from it and a step re-solved first.
+    ///
+    /// It is a harder rule now than it was then. A step solves at its end and trusts what it is
+    /// given at its start, so a mutator that skipped the solve would not merely be read wrong: the
+    /// next step would carry the heat and the solute along the field from before it.
     ///
     /// Re-solving costs one warm-started conjugate-gradient run, which from the previous field is
     /// a handful of iterations. None of these methods is in a hot loop.
@@ -926,16 +941,11 @@ impl Puck {
     /// The flow is then *measured* from the scaled field, across the inlet faces, rather than
     /// scaled itself — the same sum it always was, so a pump at zero measures exactly zero.
     fn rescale(&mut self) {
-        self.scale_pressure();
-        self.flow = self.boundary_flow(true);
-    }
-
-    /// The pressure at the drive, from the field at one pascal, and nothing else.
-    fn scale_pressure(&mut self) {
         let drive = self.drive;
         for (p, u) in self.pressure.iter_mut().zip(&self.unit) {
             *p = drive * u;
         }
+        self.flow = self.boundary_flow(true);
     }
 
     // --- the discretisation ------------------------------------------------
@@ -1210,14 +1220,21 @@ impl Domain for Puck {
         })
     }
 
+    /// Move the heat and the solute along the field the bed holds, then **solve for the field the
+    /// new temperatures make**.
+    ///
+    /// The solve is at the end, not the start, so that between two steps the bed is solved for
+    /// the temperatures it has, as it is after every mutator. Solved at the start, everything read
+    /// between steps came from the temperatures one step back: on a cold bed under a hot inlet the
+    /// limit [`Domain::max_stable_dt`] reported was 6.4% to 13.5% longer than the one the next
+    /// step enforced, over nine steps, and a step of exactly the reported length was refused every
+    /// time. Now the limit read and the limit enforced are one computation on one state.
+    ///
+    /// A field that is not converged is refused before anything moves. One that fails to converge
+    /// at the end is refused after the step has moved the heat and the solute, which is the same
+    /// as the run stopping there.
     fn step(&mut self, _t: Time, dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
-        // The viscosity moved with the temperature, so the flow field is not the one from last
-        // step. Re-solve. Warm-started from the previous field at one pascal, this is a few
-        // iterations, and none of them depends on the drive.
-        let budget = self
-            .max_iterations
-            .unwrap_or(ITERATION_BUDGET * self.pressure.len() + 32);
-        if !self.solve_within(self.tolerance, budget) {
+        if !self.converged {
             return Err(Violation::at(
                 self.name.clone(),
                 "pressure residual",
@@ -1247,7 +1264,7 @@ impl Domain for Puck {
             (0.0, 0.0, 0.0, 0.0);
 
         // --- flow, in flux form so that whatever leaves one cell arrives in another ---------
-        for (a, b, g) in std::mem::take(&mut self.face_cache) {
+        for &(a, b, g) in &self.face_cache {
             if g <= 0.0 {
                 continue;
             }
@@ -1386,6 +1403,20 @@ impl Domain for Puck {
         self.delivered_solute += out_solute;
         self.delivered_enthalpy += out_enthalpy;
         self.admitted_enthalpy += in_enthalpy;
+
+        // The viscosity moved with the temperature, so the field is no longer the answer for this
+        // bed. Warm-started from the last field at one pascal this is a few iterations, and none
+        // of them depends on the drive.
+        let budget = self
+            .max_iterations
+            .unwrap_or(ITERATION_BUDGET * self.pressure.len() + 32);
+        if !self.solve_within(self.tolerance, budget) {
+            return Err(Violation::at(
+                self.name.clone(),
+                "pressure residual",
+                self.residual,
+            ));
+        }
         Ok(())
     }
 
@@ -1467,7 +1498,9 @@ impl Domain for Puck {
     fn checkpoint(&mut self) {
         self.saved = Some(Box::new(Saved {
             unit: self.unit.clone(),
-            flow: self.flow,
+            faces: self.face_cache.clone(),
+            residual: self.residual,
+            converged: self.converged,
             temperature: self.temperature.clone(),
             solids: self.solids.clone(),
             dissolved: self.dissolved.clone(),
@@ -1480,14 +1513,18 @@ impl Domain for Puck {
 
     fn restore(&mut self) {
         if let Some(s) = self.saved.take() {
-            // The field at one pascal, rescaled to the drive — which a checkpoint does not hold
-            // and a restore does not touch.
+            // The field at one pascal **and the faces it was solved on**, rescaled to the drive —
+            // which a checkpoint does not hold and a restore does not touch. Measured again from
+            // the pair rather than saved, so that the flow is the one at the drive the pressure
+            // now has.
             self.unit = s.unit;
-            self.scale_pressure();
-            // **The flow as the checkpoint had it**, not measured again. `rescale` measures it
-            // across the face list, and the step being rolled back has consumed that list: a
-            // restore that measured read exactly zero beside a pressure field that was not.
-            self.flow = s.flow;
+            self.face_cache = s.faces;
+            self.rescale();
+            // And whether that field converged. A step trusts it rather than solving again, so a
+            // restore that kept the rolled-back step's verdict would refuse a good field after a
+            // failed step, and pass a bad one after a good step.
+            self.residual = s.residual;
+            self.converged = s.converged;
             self.temperature = s.temperature;
             self.solids = s.solids;
             self.dissolved = s.dissolved;

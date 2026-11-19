@@ -4,7 +4,7 @@
 //! compares against another run of the same solver, and none compares against a number that was
 //! read off this implementation and pasted back in.
 
-use pantometry_core::{Domain, Exchange, Substance};
+use pantometry_core::{Domain, Exchange, Schedule, Simulation, Substance};
 use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck};
 use pantometry_units::{Length, Pressure, Temperature, Time};
 
@@ -1037,8 +1037,10 @@ fn the_outlet_temperature_is_what_the_outlet_flow_carries() {
         hottest - 273.15
     );
 
-    // Re-solved at the temperatures it has now, so the read and the step see one field.
-    p.set_drive(Pressure::from_si(9.0e5));
+    // **Not re-solved first.** A step ends solved for the temperatures it leaves, so what is read
+    // after one and what the next one carries are the same field. This said `set_drive` here,
+    // because a step solved at its start: read between two steps, the outlet's weights were the
+    // field of the temperatures one step back.
     let carried = p.thermal_power_out().to_si() * dt.to_si();
     let balance = p.flow_balance();
     let before = p.delivered_enthalpy().to_si();
@@ -1073,8 +1075,10 @@ fn the_outlet_temperature_is_what_the_outlet_flow_carries() {
 ///
 /// `restore` put the field at one pascal back and measured the flow across the face list again —
 /// and the step being rolled back had consumed that list, so a restored bed read **exactly zero**
-/// flow beside a pressure field that was not zero. The kernel always steps after a restore, which
-/// re-solves and hides it; a caller reading the bed in between saw a pump that had stopped.
+/// flow beside a pressure field that was not zero: a pump that had stopped, to anyone reading the
+/// bed after a restore. Nothing in the kernel restores a puck, which does not claim
+/// `supports_restore`, so only such a caller could see it. It measures again now, across the list
+/// the checkpoint saved; see `a_restore_puts_back_the_faces_with_the_field`.
 #[test]
 fn a_restored_bed_is_the_bed_that_was_checkpointed() {
     let mut p = bed((8, 6, 8), 0.4, 9.0e5);
@@ -1097,4 +1101,256 @@ fn a_restored_bed_is_the_bed_that_was_checkpointed() {
         pressure.to_bits(),
         "the pressure after a restore is {held:e} Pa against {pressure:e} checkpointed"
     );
+}
+
+/// A filter grind at nine bar: 800 µm, in an 8 x 6 x 8 basket of 1 mm cells.
+///
+/// **The flow sets this bed's stability limit**, which it does for no other bed here. The limit is
+/// the shortest time in which some cell could lose everything it holds, and for every other bed
+/// that cell is steel. A corner cell outside the inscribed circle has four steel neighbours and
+/// limits at `dx²/4α` = 6.17e-2 s; an inner wall cell of the 2 mm baskets the scenes use has six
+/// and limits at `(2 mm)²/6α` = 0.165 s. No face of a steel cell carries flow, so their limit read
+/// the same with a face list as without one, which is how an emptied list went unnoticed. This
+/// grind passes enough that a cell of bed, emptied by the flow, beats the steel: 2.19e-2 s at
+/// 93 °C.
+fn flow_limited() -> Puck {
+    Puck::new(
+        "puck",
+        Basket {
+            counts: (8, 6, 8),
+            cell: Length::from_si(DX),
+            radius: Length::from_si(4.0 * DX),
+            porosity: 0.45,
+            grind: Grind::sieved(Length::from_si(800e-6)),
+            ..Basket::espresso()
+        },
+    )
+}
+
+/// The same bed at 20 °C under a 93 °C inlet, so that the limit moves under the steps: the
+/// viscosity falls as the bed warms, the flow rises with it, and the limit falls from 6.15e-2 s.
+fn warming() -> Puck {
+    let mut p = flow_limited();
+    p.set_temperature(Temperature::celsius(20.0));
+    p.set_inlet_temperature(Temperature::celsius(93.0));
+    p
+}
+
+/// A precondition every test below shares: with the pump switched off this bed's limit is longer,
+/// so the flow is what sets it. On a bed the steel limits, an empty or a stale face list reads
+/// exactly as a right one does, and these tests would pass over either.
+fn assert_the_flow_sets_the_limit(p: &Puck, when: &str) {
+    let t = Time::from_si(0.0);
+    let limit = p.max_stable_dt(t).to_si();
+    let mut idle = p.clone();
+    idle.set_drive(Pressure::from_si(0.0));
+    let without = idle.max_stable_dt(t).to_si();
+    assert!(
+        limit < without,
+        "precondition, {when}: the flow must set this bed's limit, and it is {limit:e} s with the \
+         flow against {without:e} s without"
+    );
+}
+
+/// **A step as long as the limit a bed reports is a step the bed takes.**
+///
+/// `max_stable_dt` is what `Schedule::Multirate` and every caller here size their steps from, and
+/// the step refuses anything longer with no slack. So the two must be one number, after a step as
+/// well as before the first. They were not, for two reasons:
+///
+/// - **The step walked its face list by taking it** and nothing put it back, so between steps the
+///   limit saw no flow at all, and read the steel's.
+/// - **The step solved at its start**, so between steps the limit described the temperatures one
+///   step back. On this bed it read 6.4% to 13.5% over what the next step enforced, across nine
+///   steps, and a step of exactly that length was refused every time.
+///
+/// After each step, too: the faces the bed holds must be the faces of its temperatures.
+/// `solve(1.0)` rebuilds the list from them and, from a field converged to `1e-13`, takes no
+/// iteration, so it changes nothing but the list. Nothing read from the bed may then move: a stale
+/// list moves the flow balance from a rounding residue to tenths, and an empty one makes it
+/// exactly zero.
+#[test]
+fn a_step_as_long_as_the_limit_a_bed_reports_is_taken() {
+    let t = Time::from_si(0.0);
+    let mut p = warming();
+    for k in 0..8 {
+        assert_the_flow_sets_the_limit(&p, &format!("before step {k}"));
+        let limit = p.max_stable_dt(t);
+        p.step(t, limit, &mut Exchange::new()).unwrap_or_else(|v| {
+            panic!(
+                "step {k}, exactly the {:e} s the bed reported, was refused: {v}",
+                limit.to_si()
+            )
+        });
+        let mut rebuilt = p.clone();
+        assert!(rebuilt.solve(1.0));
+        let (got, want) = (p.max_stable_dt(t).to_si(), rebuilt.max_stable_dt(t).to_si());
+        assert_eq!(
+            got.to_bits(),
+            want.to_bits(),
+            "after step {k} the limit is {got:e} s, and {want:e} on the faces of the bed's own \
+             temperatures"
+        );
+        let (got, want) = (p.flow_balance(), rebuilt.flow_balance());
+        assert_eq!(
+            got.to_bits(),
+            want.to_bits(),
+            "after step {k} in and out disagree by {got:e}, and by {want:e} on the faces of the \
+             bed's own temperatures"
+        );
+    }
+}
+
+/// **And so the kernel can subcycle it.** `Schedule::Multirate` sizes each window's substeps from
+/// `max_stable_dt`, read after the last window's step. With the face list emptied the second window
+/// was refused — "transport step ... 2.194e-2 became 5.485e-2" — its substeps sized from a limit
+/// with no flow in it.
+///
+/// At one temperature, on purpose. A warming bed's limit also falls *inside* a window, and the
+/// kernel sizes all of a window's substeps from one read: on the warming bed, a window of two and a
+/// half limits is refused within its first. That is the kernel's question, and a separate one.
+///
+/// Two and a half limits rather than a whole number of them: at exactly three, `dt / 3` can land an
+/// ulp above the limit, which the puck refuses with no slack — a question of its own as well.
+#[test]
+fn a_flow_limited_bed_runs_multirate() {
+    let bed = flow_limited();
+    assert_the_flow_sets_the_limit(&bed, "at the start");
+    let window = Time::from_si(2.5 * bed.max_stable_dt(Time::from_si(0.0)).to_si());
+    let mut sim = Simulation::new(Schedule::Multirate).with(bed);
+    for k in 0..4 {
+        sim.advance(window)
+            .unwrap_or_else(|v| panic!("window {k} was refused: {v}"));
+    }
+}
+
+/// **A restore puts back the faces with the field, and whether it converged.** The field at one
+/// pascal is the answer on one face list, and the step being rolled back has replaced both, and the
+/// solve's verdict, with its own. A restore that put back the field and kept the newer list read
+/// one beside the other: a flow, a flow balance and a limit that belonged to neither. One that kept
+/// the newer verdict would have the next step trust it in place of the field's own.
+///
+/// The warming bed, stepped once before the checkpoint, so the second step solves on other faces.
+#[test]
+fn a_restore_puts_back_the_faces_with_the_field() {
+    let t = Time::from_si(0.0);
+    let mut p = warming();
+    p.step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect("stable");
+    assert_the_flow_sets_the_limit(&p, "at the checkpoint");
+
+    let (flow, balance, limit, residual) = (
+        p.flow_rate().to_si(),
+        p.flow_balance(),
+        p.max_stable_dt(t).to_si(),
+        p.residual(),
+    );
+    p.checkpoint();
+    p.step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect("stable");
+    assert_ne!(
+        p.flow_rate().to_si().to_bits(),
+        flow.to_bits(),
+        "precondition: the step rolled back must solve on faces the checkpoint does not hold"
+    );
+    p.restore();
+    let got = (
+        p.flow_rate().to_si(),
+        p.flow_balance(),
+        p.max_stable_dt(t).to_si(),
+        p.residual(),
+    );
+    assert_eq!(
+        got.0.to_bits(),
+        flow.to_bits(),
+        "the flow after a restore is {:e} kg/s against {flow:e} checkpointed",
+        got.0
+    );
+    assert_eq!(
+        got.1.to_bits(),
+        balance.to_bits(),
+        "the flow balance after a restore is {:e} against {balance:e} checkpointed",
+        got.1
+    );
+    assert_eq!(
+        got.2.to_bits(),
+        limit.to_bits(),
+        "the limit after a restore is {:e} s against {limit:e} checkpointed",
+        got.2
+    );
+    assert_eq!(
+        got.3.to_bits(),
+        residual.to_bits(),
+        "the residual after a restore is {:e} against {residual:e} checkpointed",
+        got.3
+    );
+    assert!(p.converged(), "the checkpointed field converged");
+}
+
+/// **And a restore measures the flow at the drive it finds.** A checkpoint holds the field at one
+/// pascal and not the drive, which is a control rather than state, so a restore after the pump was
+/// turned down is the saved field at the pressure the pump now gives. Halving the drive halves every
+/// term of the flow exactly, so the flow after the restore is the checkpointed one over two, to the
+/// bit. A restore that put back a saved flow would report the old pump's.
+#[test]
+fn a_restore_measures_the_flow_at_the_drive_it_finds() {
+    let t = Time::from_si(0.0);
+    let mut p = warming();
+    p.step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect("stable");
+    let flow = p.flow_rate().to_si();
+    p.checkpoint();
+    p.step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect("stable");
+    p.set_drive(Pressure::from_si(4.5e5));
+    p.restore();
+    let got = p.flow_rate().to_si();
+    assert_eq!(
+        got.to_bits(),
+        (0.5 * flow).to_bits(),
+        "at half the drive a restore reads {got:e} kg/s, against half the checkpointed {flow:e}"
+    );
+}
+
+/// **A field that did not converge is refused before anything moves.** A step trusts the field it
+/// is given rather than solving first, so it must refuse one whose solve did not finish, and leave
+/// the bed as it found it. No iterations cannot reach a residual of `1e-300`, which marks the
+/// field as not converged without changing it.
+#[test]
+fn a_field_that_did_not_converge_is_refused_before_anything_moves() {
+    let t = Time::from_si(0.0);
+    let mut p = flow_limited();
+    assert!(!p.solve_within(1e-300, 0));
+    let refused = p
+        .step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect_err("a field that did not converge must not be stepped on");
+    assert!(
+        refused.to_string().contains("pressure residual"),
+        "refused for another reason: {refused}"
+    );
+    assert_eq!(
+        p.delivered().to_si(),
+        0.0,
+        "a refused step delivered {:e} kg",
+        p.delivered().to_si()
+    );
+}
+
+/// **And a step whose own solve fails says so.** The solve is the last thing a step does, and a
+/// step that ignored it would return `Ok` beside a field that answers nothing. An inlet that is not
+/// a number reaches the first layer in one step, and its viscosity with it, so the solve the step
+/// ends with cannot converge.
+#[test]
+fn a_step_whose_own_solve_fails_says_so() {
+    let t = Time::from_si(0.0);
+    let mut p = flow_limited();
+    p.set_inlet_temperature(Temperature::from_si(f64::NAN));
+    let refused = p
+        .step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect_err("a step whose solve failed must say so");
+    assert!(
+        refused.to_string().contains("pressure residual"),
+        "refused for another reason: {refused}"
+    );
+    assert!(!p.converged());
 }
