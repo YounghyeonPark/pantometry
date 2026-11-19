@@ -407,3 +407,173 @@ fn a_detour_needs_the_transverse_faces() {
     );
     let _ = dx;
 }
+
+/// **A busbar's resistance is `ρL/A` at every drive, switched off included.**
+///
+/// The solve was at the drive, so its tolerance was relative to the drive. Turned down a
+/// millionfold from a warm start it stopped with the 1 V field's error still in it, `2.5e-9` from
+/// `ρL/A` — which every other test here holds to `1e-12`. Switched off, the right-hand side was
+/// zero and the residual was taken against `|b|` floored at `f64::MIN_POSITIVE`: the solve
+/// "converged" only because its recursive residual underflowed first, and left `1e-16 V` and
+/// `−5.3e-14 A` behind it, and the resistance was `0/0`. Now the field at one volt is solved and
+/// scaled, and a resistance, which is a property of the shape, has a value at every drive.
+///
+/// So the drive is walked down through 1 V, 1 µV, 0 and −1 mV, and then **up**, through 1 mV to
+/// 1 V. At every one the field is **bit for bit** a fresh busbar's at that drive, read straight
+/// after `set_drive` and again after a solve: a switch that left anything of the last drive
+/// behind would show there. The way up is the half that needs it — a start a thousandth of the
+/// answer is a good warm start, and a solve at the drive takes it: measured, its first cell lands
+/// 55 units in the last place from a fresh busbar's. The resistance is `ρL/A` to `1e-12`
+/// throughout, and at zero the potential, the current and the dissipation are exactly zero.
+#[test]
+fn a_busbar_has_its_resistance_at_every_drive_including_none() {
+    let counts = (20, 4, 4);
+    let dx = 1e-3;
+    let want = COPPER * (counts.0 as f64 * dx) / ((counts.1 * counts.2) as f64 * dx * dx);
+    let mut c = block(counts);
+    let same_as_fresh = |c: &Conductor, volts: f64, when: &str| {
+        let fresh = Conductor::new("bar", counts, Length::mm(1.0), copper(), Voltage::v(volts));
+        for k in 0..counts.2 {
+            for j in 0..counts.1 {
+                for i in 0..counts.0 {
+                    assert_eq!(
+                        c.potential_at(i, j, k).to_si().to_bits(),
+                        fresh.potential_at(i, j, k).to_si().to_bits(),
+                        "at {volts} V {when}, cell ({i},{j},{k}) differs from a fresh busbar"
+                    );
+                }
+            }
+        }
+    };
+    for volts in [1.0, 1e-6, 0.0, -1e-3, 1e-3, 1.0] {
+        c.set_drive(Voltage::v(volts));
+        same_as_fresh(&c, volts, "before a solve");
+        assert!(
+            c.solve(1e-12),
+            "at {volts} V: residual {:.3e}",
+            c.residual()
+        );
+        same_as_fresh(&c, volts, "after a solve");
+        let got = c.resistance().to_si();
+        assert!(
+            (got / want - 1.0).abs() < 1e-12,
+            "at {volts} V: {got:.9e} ohm against rho*L/A = {want:.9e}"
+        );
+        assert!(
+            c.current_balance() < 1e-10,
+            "at {volts} V: the electrodes disagree by {:.3e}",
+            c.current_balance()
+        );
+        // The resistance and the balance are read from the field at one volt and cannot see the
+        // drive, so the field *at* the drive is held to its two closed forms as well — Ohm's law
+        // at the electrode, to the `1e-12` the uniform block is held to, and Tellegen's
+        // `∫σ|∇φ|² = V·I`, to the `1e-10` its own test uses. A field scaled by `|V|`, or a
+        // current that lost its sign, passes every check above and neither of these.
+        if volts != 0.0 {
+            let (v, i) = (volts, c.current().to_si());
+            assert!(
+                (i * want / v - 1.0).abs() < 1e-12,
+                "at {volts} V: I*R/V is {:.15}",
+                i * want / v
+            );
+            let field = c.dissipation().to_si();
+            assert!(
+                (field / (v * i) - 1.0).abs() < 1e-10,
+                "at {volts} V: field {field:.9e} W against terminals {:.9e} W",
+                v * i
+            );
+        }
+        if volts == 0.0 {
+            for k in 0..counts.2 {
+                for j in 0..counts.1 {
+                    for i in 0..counts.0 {
+                        assert_eq!(c.potential_at(i, j, k).to_si(), 0.0, "cell ({i},{j},{k})");
+                    }
+                }
+            }
+            assert_eq!(c.current().to_si(), 0.0);
+            assert_eq!(c.dissipation().to_si(), 0.0);
+        }
+    }
+}
+
+/// **A busbar cut through at its driven end is an open circuit, and an open circuit is an answer.**
+///
+/// A perfect insulator across the driven layer, after a solve that conducted. The right-hand side
+/// at one volt is then exactly zero — nothing reaches the electrode — and the warm start is the
+/// conducting field, which answers nothing about this one. Every cell with a path to ground has
+/// the zero solution, and a warm start is the one start that cannot reach it: the residual is
+/// relative to `|b|`, floored at `f64::MIN_POSITIVE`. So the solve must start from zero, and then:
+/// converged, no current, a resistance that is infinite rather than `NaN`, and every cell still
+/// joined to the grounded electrode at exactly its potential.
+#[test]
+fn a_busbar_cut_at_its_driven_end_is_an_open_circuit() {
+    let counts = (12, 3, 3);
+    let mut c = block(counts);
+    assert!(c.converged(), "the busbar conducts first");
+    c.set_region(
+        |i, _, _| i == counts.0 - 1,
+        Resistivity::ohm_m(f64::INFINITY),
+    );
+    assert!(
+        c.solve(1e-12),
+        "an open circuit solves; residual {:.3e}",
+        c.residual()
+    );
+    assert_eq!(c.current().to_si(), 0.0);
+    assert_eq!(c.resistance().to_si(), f64::INFINITY);
+    for k in 0..counts.2 {
+        for j in 0..counts.1 {
+            for i in 0..counts.0 - 1 {
+                assert_eq!(c.potential_at(i, j, k).to_si(), 0.0, "cell ({i},{j},{k})");
+            }
+        }
+    }
+}
+
+/// **A material that is not a number gives a field that says so, and the copper put back gives
+/// the busbar back.**
+///
+/// One cell given a resistivity that is not a number makes `A·x` `NaN` from any start, so the
+/// residual is `NaN`, and `NaN > tolerance` is false: taken as it stood, the solve stopped before
+/// its first iteration and left **the last field standing** — refused, and shaped exactly like an
+/// answer, which is what the committed solver did. A residual that is not a number now sends the
+/// solve back to zero, where it runs, and the field it leaves is `NaN`, which is the truth about
+/// it. Then the copper is put back, the warm start is that `NaN` field, and it is no start either:
+/// from zero the busbar solves, and is bit for bit a fresh one.
+#[test]
+fn a_field_that_stopped_being_a_number_does_not_poison_the_next_solve() {
+    let counts = (8, 3, 3);
+    let mut c = block(counts);
+    c.set_resistivity(3, 1, 1, Resistivity::ohm_m(f64::NAN));
+    assert!(
+        !c.solve(1e-12),
+        "a material that is not a number is refused"
+    );
+    let poisoned = (0..counts.2).any(|k| {
+        (0..counts.1).any(|j| (0..counts.0).any(|i| c.potential_at(i, j, k).to_si().is_nan()))
+    });
+    assert!(
+        poisoned,
+        "a refused material must leave a field that says so, not the last one standing"
+    );
+
+    c.set_resistivity(3, 1, 1, copper());
+    assert!(
+        c.solve(1e-12),
+        "the copper is back and the busbar must solve; residual {:e}",
+        c.residual()
+    );
+    let fresh = block(counts);
+    for k in 0..counts.2 {
+        for j in 0..counts.1 {
+            for i in 0..counts.0 {
+                assert_eq!(
+                    c.potential_at(i, j, k).to_si().to_bits(),
+                    fresh.potential_at(i, j, k).to_si().to_bits(),
+                    "cell ({i},{j},{k})"
+                );
+            }
+        }
+    }
+}

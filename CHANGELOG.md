@@ -566,6 +566,71 @@ protects nothing.
 
 ### Fixed
 
+- **A drive switched off was refused, because three solvers could not solve a zero.** A `bar`
+  stage of `0.0` was accepted by the format and stopped the run: scene 18 with its pump switched
+  off at 11.1 s ended with `the audit stopped the run at t = 11.1111 s — pressure residual
+  destroyed at even: NaN became NaN`. The puck, the conductor and the fluid channel each warm-start
+  their conjugate gradients from the last field and measure the residual against `|b|`, floored at
+  `f64::MIN_POSITIVE`. With no drive `b` is zero, so the iterate had to reach
+  `tolerance × 2.2e-308`.
+  - **The puck** reported not converged at a residual of 6.4e153 while the flow it had reached was
+    `−4.8e-19 kg/s`, and every step after it was refused.
+  - **The fluid channel** refused a shear flow `u(y)`, which is divergence-free exactly on its
+    grid, after any step that had needed a pressure: a residual of 8.5e303.
+  - **The conductor** "converged" at 0 V only because its recursive residual underflowed to zero
+    first, and left `1e-16 V` and `−5.3e-14 A` behind it, and a resistance of `0/0`.
+  - **Zero was only the extreme.** A drive turned down rather than off kept the warm start's error
+    at the old drive's scale, which the tolerance, relative to the new one, never asked about.
+    Measured from 1 V, a busbar's resistance came out `5.9e-12` from `ρL/A` at a thousandth,
+    `2.5e-9` at a millionth and `8.5e-7` at a billionth, reporting a residual of `2.8e-23` there;
+    a fresh solve is within `7.6e-15` at all three. A bed turned down to `9e-4 Pa` from 9 bar was
+    `3.7e-7` from Darcy's `Q ∝ ΔP`. A channel step needing a billionth of the last one's pressure
+    was refused at a relative residual of 18140.
+  - **The conductor and the puck now solve the field at one volt and one pascal**, and scale it.
+    The drive enters their systems only on the right-hand side, so nothing they solve depends on
+    it: a switched-off bed holds no pressure and passes nothing, and a busbar carries no current,
+    exactly. Walked down through 1 V, 1 µV, 0 and −1 mV and back up, a busbar is bit for bit a
+    fresh one at each drive, with its resistance `ρL/A`, `I·R/V` one and Tellegen's `P = V·I`
+    holding; a bed walked through 0, 9 bar, 9 bar over `2³⁰` and back up is bit for bit a fresh
+    one, with `Q/ΔP` bit for bit 9 bar's. What only the shape decides now has a value with the
+    drive off: the resistance, the current and flow balances, and the outlet temperature, which
+    was the inlet's whenever nothing flowed, because its weights were the flow. Weighted by the
+    flow per pascal, it carries out exactly the enthalpy a step delivers face by face, to the flow
+    balance.
+  - **All three replace a warm start no closer than zero with zero**, whose residual is `b`
+    itself. That answers a zero `b` — the fluid's shear flow, a conductor whose driven end is
+    insulated — and the channel's billionth, whose step is now bit for bit a fresh channel's. A
+    residual that is not a number goes back to zero too: a material that is not a number stopped
+    the solve before its first iteration, since `NaN > tolerance` is false, and left the last field
+    standing, refused and shaped exactly like an answer. It now runs, and leaves a field that says
+    `NaN`, and the copper put back solves to the busbar it was.
+  - **`Block::solve` in `pantometry-elastic` is a fourth copy of this loop**, with its own answer
+    to a zero `b`: it measures against the larger of `|b|` and the first residual, because
+    displacement control has no loads at all. Whether one solver should serve all four is a change
+    of its own.
+- **The conservation audit passed a ledger that had stopped being a number.** `audit` compared
+  `|after − before| / scale > tolerance`, which is false for `NaN`, and `f64::max` discards a `NaN`
+  operand, so a total that was `NaN` at both ends had a scale of zero and was skipped as two
+  denormals. Energy going from 1.0 to `NaN` audited `Ok`. The bus audit's `|left| > tolerance` had
+  the same blind spot. `pantometry-world`'s verification battery knew, said so, and caught it from
+  its own copy of the audit's arithmetic, which an unverified run never ran — and that copy took
+  the scale before testing, so a quantity `NaN` at both ends with nothing finite beside it came
+  out *unaudited* there too. It tests the totals first now.
+  - **A total or a channel amount that is not finite is refused**, at the step that made it so,
+    on a plain channel and on every face of a spatial one.
+  - **And the refusal reads as one.** `Violation`'s message took a `NaN` for a direction and said
+    "destroyed"; it says "is not finite" now. `Violation::at`, which stores its detail twice, was
+    recognised by `before == after`, false for `NaN`, so a solve whose residual was `NaN` read as
+    a conservation law nobody stated. It is recognised by the bits.
+  - **An infinite entry was the same blindness, and two things leaned on it.** A `Winding` nobody
+    drives may keep its default infinite reserve — `step` asks for one only of a winding that
+    publishes — and its `inf` made the whole simulation's energy `inf`, so a domain beside it
+    leaking a joule a step went unseen. Refusing non-finite totals turned that into every such run
+    stopped at its first step; the winding now reports no entry while it has no reserve, and
+    beside a leak the audit names the leak. And `multirate_timing`'s lamp, documented as "a
+    steady source with a finite tank", had `reserve: f64::INFINITY`: that test's energy books had
+    never been read. It has a 10 kJ tank, of which its 600 s use 1200 J.
+
 - **Scene 29's top film cooled nothing, from the day it shipped.** The bracket filled layers 0 to
   9 of a 26 x 26 x 12 grid, 410 cells each, and the block cools its `z-max` face at layer 11, where
   no cell was solid: 12 W/m²K of still air over 16.5 cm², acting on nothing. The format refused a

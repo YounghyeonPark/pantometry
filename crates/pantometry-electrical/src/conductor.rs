@@ -54,6 +54,17 @@
 //! That last one is deliberate and is the failure this workspace keeps finding. An iterative
 //! solver that stops at its iteration cap returns something shaped exactly like an answer: smooth,
 //! bounded, roughly right in the middle and wrong at the edges. Nothing downstream can tell.
+//!
+//! # The field at one volt, scaled
+//!
+//! The drive enters the system only through its right-hand side, so the potential at any drive is
+//! the potential at one volt times the drive. **That is what is solved**, and the field at the
+//! actual drive is a multiplication. It was solved at the actual drive, and the solve's tolerance
+//! was then relative to whatever the drive happened to be: a busbar switched off had a right-hand
+//! side of zero and nothing to measure a residual against, and was refused; one turned down a
+//! millionfold kept the warm start's error at the old drive's scale and came out `2.5e-9` from
+//! `ρL/A`, where a fresh solve is `6.9e-15` from it. Now neither has anything to converge, and a
+//! resistance, which is a property of the shape, has a value at every drive including none.
 
 use glam::DVec3;
 use pantometry_core::conserved::quantity;
@@ -87,7 +98,10 @@ pub struct Conductor {
     dx: f64,
     /// Conductivity per cell, S/m.
     sigma: Vec<f64>,
-    /// Potential per cell, V. The solve's output.
+    /// Potential per cell with one volt across the electrodes. **The solve's output**, and
+    /// independent of the drive: see the module's notes on the field at one volt.
+    unit: Vec<f64>,
+    /// Potential per cell, V: the drive times `unit`, rescaled whenever either moves.
     phi: Vec<f64>,
     drive: f64,
     residual: f64,
@@ -116,6 +130,7 @@ impl Conductor {
             counts,
             dx: dx.to_si(),
             sigma: vec![sigma; cells],
+            unit: vec![0.0; cells],
             phi: vec![0.0; cells],
             drive: drive.to_si(),
             residual: f64::INFINITY,
@@ -177,14 +192,25 @@ impl Conductor {
     /// Put a different potential across them.
     ///
     /// The field is quasi-static — charge relaxes in `ε/σ`, 1.5e-19 s for copper — so there is no
-    /// state to carry across the change and the next [`solve`](Conductor::solve) answers the new
-    /// drive completely. That is what makes a switched load expressible: a busbar at 1 mV and then
-    /// at 0 is two solves, not a transient.
+    /// state to carry across the change. And it is linear in the drive, which is the only place the
+    /// drive enters, so **nothing is solved here**: the field at one volt is scaled to the new
+    /// drive, [`converged`](Conductor::converged) and [`residual`](Conductor::residual) are the
+    /// ones the material earned, and at zero every potential is exactly zero. That is what makes
+    /// a switched load expressible: a busbar at 1 mV and then at 0 is one solve and two products.
     ///
     /// The dissipation ledger is untouched. What it has already paid out stays paid, which is what
     /// lets the books close across a switch.
     pub fn set_drive(&mut self, drive: Voltage) {
         self.drive = drive.to_si();
+        self.rescale();
+    }
+
+    /// The field at the drive, from the field at one volt.
+    fn rescale(&mut self) {
+        let drive = self.drive;
+        for (phi, unit) in self.phi.iter_mut().zip(&self.unit) {
+            *phi = drive * unit;
+        }
     }
 
     /// Give one cell a different material.
@@ -279,7 +305,12 @@ impl Conductor {
     /// that disagreed with the one measured at the other electrode, which is exactly the check
     /// [`Conductor::current_balance`] makes.
     pub fn current(&self) -> Current {
-        Current::from_si(self.electrode_current(true))
+        Current::from_si(electrode_current(
+            &self.faces(),
+            &self.phi,
+            self.drive,
+            true,
+        ))
     }
 
     /// How much the current in disagrees with the current out, relative to the current itself.
@@ -287,10 +318,17 @@ impl Conductor {
     /// Zero for a converged solve, because charge does not accumulate. This is the number that
     /// says whether the answer is an answer — and it is measured from the two electrodes
     /// independently rather than being a residual the solver reports about itself.
+    ///
+    /// Read from the field at one volt, because it is a ratio and the drive cancels: so it is
+    /// defined with the drive switched off, when the currents it compares are both zero.
     pub fn current_balance(&self) -> f64 {
         // In at the driven electrode against out at the grounded one, which is the negative of
         // what flows *into* the block there.
-        let (a, b) = (self.electrode_current(true), -self.electrode_current(false));
+        let faces = self.faces();
+        let (a, b) = (
+            electrode_current(&faces, &self.unit, 1.0, true),
+            -electrode_current(&faces, &self.unit, 1.0, false),
+        );
         let scale = a.abs().max(b.abs());
         if scale <= 0.0 {
             0.0
@@ -304,12 +342,17 @@ impl Conductor {
     /// **Not stated anywhere.** For a uniform block this comes out as `ρL/A` to machine
     /// precision; for anything else it comes out as whatever the shape gives, which is the reason
     /// the domain exists.
+    ///
+    /// A property of the shape and not of the drive, so it is read from the field at one volt and
+    /// has the same value at every drive, **including none**: a busbar switched off still has its
+    /// resistance. Infinite only for a block with no conducting path between its electrodes, which
+    /// is an open circuit and not a division by zero.
     pub fn resistance(&self) -> Resistance {
-        let i = self.electrode_current(true);
-        if i.abs() <= 0.0 {
+        let i = electrode_current(&self.faces(), &self.unit, 1.0, true);
+        if i <= 0.0 {
             return Resistance::from_si(f64::INFINITY);
         }
-        Resistance::from_si(self.drive / i)
+        Resistance::from_si(1.0 / i)
     }
 
     /// The power dissipated, `∫σ|∇φ|²dV`, summed over the faces where the gradient actually is.
@@ -366,10 +409,10 @@ impl Conductor {
         let n = self.phi.len();
         let budget = max_iterations;
 
-        // b holds what the electrodes inject; A is the interior coupling plus the electrode
-        // conductances on the diagonal.
+        // b holds what the electrodes inject at one volt; A is the interior coupling plus the
+        // electrode conductances on the diagonal. The drive is not in it: see `rescale`.
         let b = self.source();
-        let mut x = std::mem::take(&mut self.phi);
+        let mut x = std::mem::take(&mut self.unit);
         if x.len() != n {
             x = vec![0.0; n];
         }
@@ -378,14 +421,27 @@ impl Conductor {
         for (ri, axi) in r.iter_mut().zip(&ax) {
             *ri -= axi;
         }
-        let mut p = r.clone();
         let mut rr: f64 = r.iter().map(|v| v * v).sum();
-        let scale: f64 = b
-            .iter()
-            .map(|v| v * v)
-            .sum::<f64>()
-            .sqrt()
-            .max(f64::MIN_POSITIVE);
+        let bb: f64 = b.iter().map(|v| v * v).sum();
+        // **A warm start no closer than zero is replaced by zero**, whose residual is `b` itself.
+        // The residual is relative to `|b|`, so a start whose error is larger than the answer has
+        // to work off an error the tolerance never asked about, and the true residual stagnates
+        // near `ε` times the *start*. At its extreme `b` is zero — the driven electrode insulated
+        // — the floor below makes the target `tolerance × 2.2e-308`, and the zero solution is the
+        // one place a warm start cannot reach.
+        //
+        // **A residual that is not a number lands here too.** A material that is not a number
+        // makes `A·x` `NaN` from any start, `NaN > tolerance` is false, and taken as it stood the
+        // solve stopped before its first iteration with the last field standing: refused, and
+        // shaped exactly like an answer. From zero it runs, and leaves a field that is `NaN`,
+        // which is the truth about it — and that field is then no start for the solve after it.
+        if rr >= bb || rr.is_nan() {
+            x.fill(0.0);
+            r.clone_from(&b);
+            rr = bb;
+        }
+        let mut p = r.clone();
+        let scale: f64 = bb.sqrt().max(f64::MIN_POSITIVE);
 
         let mut iterations = 0;
         while rr.sqrt() / scale > tolerance && iterations < budget {
@@ -412,7 +468,8 @@ impl Conductor {
             iterations += 1;
         }
 
-        self.phi = x;
+        self.unit = x;
+        self.rescale();
         self.residual = rr.sqrt() / scale;
         self.converged = self.residual <= tolerance;
         self.converged
@@ -511,45 +568,47 @@ impl Conductor {
         y
     }
 
-    /// What the electrodes inject: `G·φ_electrode` for each face touching one.
+    /// What the electrodes inject at one volt: `G·φ_electrode` for each face touching one, which
+    /// is `G` at the driven electrode and nothing at the grounded one.
     fn source(&self) -> Vec<f64> {
-        let mut b = vec![0.0; self.phi.len()];
+        let mut b = vec![0.0; self.unit.len()];
         for (a, c, g) in self.faces() {
             match (a, c) {
-                (Side::Electrode(high), Side::Cell(i)) | (Side::Cell(i), Side::Electrode(high)) => {
-                    b[i] += g * if high { self.drive } else { 0.0 };
+                (Side::Electrode(true), Side::Cell(i)) | (Side::Cell(i), Side::Electrode(true)) => {
+                    b[i] += g;
                 }
                 _ => {}
             }
         }
         b
     }
+}
 
-    /// The current flowing **from** one electrode **into** the block.
-    ///
-    /// One convention, stated once. Positive at the driven electrode, which sources; negative at
-    /// the grounded one, which sinks. The first version of this carried a per-face sign *and* a
-    /// negation at the end, and the two cancelled into an answer of exactly the right magnitude
-    /// and the wrong sign — which every closed-form test caught immediately, because a resistance
-    /// cannot be negative.
-    fn electrode_current(&self, high: bool) -> f64 {
-        let phi_e = if high { self.drive } else { 0.0 };
-        let mut total = 0.0;
-        for (a, b, g) in self.faces() {
-            let cell = match (a, b) {
-                (Side::Electrode(h), Side::Cell(i)) | (Side::Cell(i), Side::Electrode(h))
-                    if h == high =>
-                {
-                    Some(i)
-                }
-                _ => None,
-            };
-            if let Some(i) = cell {
-                total += g * (phi_e - self.phi[i]);
+/// The current flowing **from** one electrode **into** the block, in a field whose driven
+/// electrode is at `applied` — the drive for the field itself, one for the field at one volt.
+///
+/// One convention, stated once. Positive at the driven electrode, which sources; negative at
+/// the grounded one, which sinks. The first version of this carried a per-face sign *and* a
+/// negation at the end, and the two cancelled into an answer of exactly the right magnitude
+/// and the wrong sign — which every closed-form test caught immediately, because a resistance
+/// cannot be negative.
+fn electrode_current(faces: &[(Side, Side, f64)], field: &[f64], applied: f64, high: bool) -> f64 {
+    let phi_e = if high { applied } else { 0.0 };
+    let mut total = 0.0;
+    for (a, b, g) in faces {
+        let cell = match (*a, *b) {
+            (Side::Electrode(h), Side::Cell(i)) | (Side::Cell(i), Side::Electrode(h))
+                if h == high =>
+            {
+                Some(i)
             }
+            _ => None,
+        };
+        if let Some(i) = cell {
+            total += g * (phi_e - field[i]);
         }
-        total
     }
+    total
 }
 
 /// One end of a face: an interior cell, or one of the two electrodes.

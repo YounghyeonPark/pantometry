@@ -440,3 +440,118 @@ fn past_the_viscous_limit_is_refused() {
     c.step(Time::from_si(0.0), Time::from_si(closed), &mut bus)
         .expect("at the limit is stable");
 }
+
+/// **A flow that needs no pressure gets none, whatever pressure the last step needed.**
+///
+/// The projection's solve warm-starts from the last step's pressure and measured its residual
+/// against `|∇·u*|` floored at `f64::MIN_POSITIVE`. A shear flow `u(y)` is divergence-free exactly
+/// on this grid, so its right-hand side is zero, and from a non-zero start the residual had to
+/// fall to `1e-12 × 2.2e-308`: the step was refused. A zero right-hand side has the zero solution.
+///
+/// Checked against a channel that never needed a pressure: the same shear, the same step, from a
+/// fresh box. The two must agree **bit for bit**, because the pressure correction is the only
+/// thing the history could leave behind.
+#[test]
+fn a_flow_that_needs_no_pressure_gets_none() {
+    let counts = (8, 8, 4);
+    let h = 2e-3;
+    let walls = Walls::Sliding {
+        low: 0.0,
+        high: 0.0,
+    };
+    let length = counts.0 as f64 * h;
+    let width = counts.1 as f64 * h;
+    let shear = move |p: DVec3| DVec3::new(0.01 * (p.y / width) * (1.0 - p.y / width), 0.0, 0.0);
+
+    // A history: one step of a flow that does need a pressure, so the solve is warm.
+    let mut c = Channel::new("box", counts, Length::from_si(h), syrup(1e-3), walls);
+    c.set_velocity(|p: DVec3| {
+        let s = (std::f64::consts::TAU * p.x / length).sin();
+        DVec3::new(0.01 * s, 0.0, 0.0)
+    });
+    let dt = Time::from_si(0.4 * c.max_stable_dt(Time::from_si(0.0)).to_si());
+    let mut bus = Exchange::new();
+    c.step(Time::from_si(0.0), dt, &mut bus)
+        .expect("a divergent start projects");
+
+    c.set_velocity(shear);
+    c.step(dt, dt, &mut bus)
+        .unwrap_or_else(|e| panic!("a divergence-free flow was refused: {e}"));
+    assert!(c.converged());
+    assert_eq!(c.residual(), 0.0);
+
+    let mut fresh = Channel::new("box", counts, Length::from_si(h), syrup(1e-3), walls);
+    fresh.set_velocity(shear);
+    fresh
+        .step(dt, dt, &mut Exchange::new())
+        .expect("from rest of pressure");
+    for k in 0..counts.2 {
+        for j in 0..counts.1 {
+            for i in 0..counts.0 {
+                let (a, b) = (c.velocity_at(i, j, k), fresh.velocity_at(i, j, k));
+                assert_eq!(
+                    [a.x.to_bits(), a.y.to_bits(), a.z.to_bits()],
+                    [b.x.to_bits(), b.y.to_bits(), b.z.to_bits()],
+                    "cell ({i},{j},{k}): the last step's pressure was left in the flow"
+                );
+            }
+        }
+    }
+}
+
+/// **A flow that needs a billionth of the last step's pressure gets a billionth.**
+///
+/// The same divergent field twice, the second time a billion times weaker. The warm start is the
+/// first step's pressure, a billion times the answer, so its residual is larger than the
+/// right-hand side it is measured against — no closer than starting from zero. Warm-started anyway,
+/// the solve had to work off an error the tolerance never asked about, and **the step was refused
+/// at a relative residual of 18140**: a zero right-hand side was only the extreme of this. A start
+/// no better than zero is now replaced by zero, so the step is the one a channel that never saw
+/// the strong flow takes, **bit for bit**.
+#[test]
+fn a_flow_that_needs_a_billionth_of_the_pressure_gets_a_billionth() {
+    let counts = (8, 8, 4);
+    let h = 2e-3;
+    let walls = Walls::Sliding {
+        low: 0.0,
+        high: 0.0,
+    };
+    let length = counts.0 as f64 * h;
+    let divergent = move |amplitude: f64| {
+        move |p: DVec3| {
+            let s = (std::f64::consts::TAU * p.x / length).sin();
+            DVec3::new(amplitude * s, 0.0, 0.0)
+        }
+    };
+    let weak = 0.01 * 1e-9;
+
+    let mut c = Channel::new("box", counts, Length::from_si(h), syrup(1e-3), walls);
+    c.set_velocity(divergent(0.01));
+    let dt = Time::from_si(0.4 * c.max_stable_dt(Time::from_si(0.0)).to_si());
+    let mut bus = Exchange::new();
+    c.step(Time::from_si(0.0), dt, &mut bus)
+        .expect("a divergent start projects");
+
+    c.set_velocity(divergent(weak));
+    c.step(dt, dt, &mut bus)
+        .unwrap_or_else(|e| panic!("the weak step was refused: {e}"));
+    assert!(c.converged(), "residual {:e}", c.residual());
+
+    let mut fresh = Channel::new("box", counts, Length::from_si(h), syrup(1e-3), walls);
+    fresh.set_velocity(divergent(weak));
+    fresh
+        .step(dt, dt, &mut Exchange::new())
+        .expect("from rest of pressure");
+    for k in 0..counts.2 {
+        for j in 0..counts.1 {
+            for i in 0..counts.0 {
+                let (a, b) = (c.velocity_at(i, j, k), fresh.velocity_at(i, j, k));
+                assert_eq!(
+                    [a.x.to_bits(), a.y.to_bits(), a.z.to_bits()],
+                    [b.x.to_bits(), b.y.to_bits(), b.z.to_bits()],
+                    "cell ({i},{j},{k}): the strong step's pressure was left in the weak one"
+                );
+            }
+        }
+    }
+}

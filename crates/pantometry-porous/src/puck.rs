@@ -76,7 +76,14 @@ pub struct Puck {
     packed: Vec<bool>,
     porosity: Vec<f64>,
     grind: Vec<Grind>,
-    /// Pressure, Pa. The solve's output.
+    /// Pressure per pascal of drive. **The solve's output**, and independent of the drive, which
+    /// enters the flow problem only through its right-hand side: the pressure at any drive is
+    /// this times the drive. Solving at the actual drive made the tolerance relative to it, so a
+    /// pump switched off had no residual to measure and was refused, and one turned down to
+    /// `9e-4 Pa` from 9 bar kept the warm start's error at 9 bar's scale: a flow `3.7e-7` from
+    /// Darcy's `Q ∝ ΔP`, where a fresh solve is at rounding.
+    unit: Vec<f64>,
+    /// Pressure, Pa: the drive times `unit`, rescaled whenever either moves.
     pressure: Vec<f64>,
     /// Temperature, K.
     temperature: Vec<f64>,
@@ -115,7 +122,8 @@ pub struct Puck {
 
 #[derive(Clone, Debug)]
 struct Saved {
-    pressure: Vec<f64>,
+    unit: Vec<f64>,
+    flow: f64,
     temperature: Vec<f64>,
     solids: Vec<f64>,
     dissolved: Vec<f64>,
@@ -260,6 +268,7 @@ impl Puck {
                 .collect(),
             grind: vec![grind; cells],
             packed,
+            unit: vec![0.0; cells],
             pressure: vec![0.0; cells],
             temperature: vec![temperature.to_si(); cells],
             initial_solids: solids.clone(),
@@ -300,6 +309,11 @@ impl Puck {
     }
 
     /// The pressure across the bed.
+    ///
+    /// The flow problem is solved at one pascal and scaled, so nothing in the solve depends on
+    /// this: a pump switched off is the same field times zero, with no pressure anywhere and
+    /// nothing flowing, exactly. It still re-solves, because every mutator ends solved and the
+    /// temperatures — the viscosity — may have moved since the last one.
     pub fn set_drive(&mut self, p: Pressure) {
         self.drive = p.to_si();
         self.resolve();
@@ -663,6 +677,12 @@ impl Puck {
     }
 
     /// The temperature of the liquid leaving the basket, weighted by where it leaves.
+    ///
+    /// Weighted by the flow **per pascal**, which is where the liquid leaves whatever the drive:
+    /// so with the pump switched off this is the limit of the flow-weighted mean as the drive goes
+    /// to zero — the temperature the bed's outlet face has — and not a fallback. It fell back to
+    /// the inlet's temperature, because the weights were the flow itself and summed to nothing: a
+    /// bed with no drive reported the water arriving rather than the bed it was sitting in.
     pub fn outlet_temperature(&self) -> Temperature {
         let (nx, ny, nz) = self.counts;
         let (mut num, mut den) = (0.0, 0.0);
@@ -672,7 +692,7 @@ impl Puck {
                 if !self.packed[idx] {
                     continue;
                 }
-                let q = self.outlet_conductance(idx) * self.pressure[idx];
+                let q = self.outlet_conductance(idx) * self.unit[idx];
                 num += q * self.temperature[idx];
                 den += q;
             }
@@ -787,8 +807,14 @@ impl Puck {
     /// from the solver's own residual, which is the same check
     /// [`Conductor::current_balance`](https://docs.rs/pantometry-electrical) makes and for the same
     /// reason: an iterative solver's opinion of itself is not evidence.
+    ///
+    /// Read from the field at one pascal, because it is a ratio and the drive cancels: so it is
+    /// defined with the pump switched off, when the two flows it compares are both zero.
     pub fn flow_balance(&self) -> f64 {
-        let (a, b) = (self.boundary_flow(true), self.boundary_flow(false));
+        let (a, b) = (
+            boundary_flow(&self.face_cache, &self.unit, 1.0, true),
+            boundary_flow(&self.face_cache, &self.unit, 1.0, false),
+        );
         let scale = a.abs().max(b.abs());
         if scale <= 0.0 {
             0.0
@@ -838,8 +864,9 @@ impl Puck {
         let n = self.pressure.len();
         self.refresh_faces();
         let faces = std::mem::take(&mut self.face_cache);
-        let b = source(&faces, n, self.drive);
-        let mut x = std::mem::take(&mut self.pressure);
+        // At one pascal: the drive is not in the system, only in `rescale`.
+        let b = source(&faces, n);
+        let mut x = std::mem::take(&mut self.unit);
         if x.len() != n {
             x = vec![0.0; n];
         }
@@ -848,14 +875,20 @@ impl Puck {
         for (ri, axi) in r.iter_mut().zip(&ax) {
             *ri -= axi;
         }
-        let mut p = r.clone();
         let mut rr: f64 = r.iter().map(|v| v * v).sum();
-        let scale: f64 = b
-            .iter()
-            .map(|v| v * v)
-            .sum::<f64>()
-            .sqrt()
-            .max(f64::MIN_POSITIVE);
+        let bb: f64 = b.iter().map(|v| v * v).sum();
+        // **A warm start no closer than zero is replaced by zero**, for the reason `Conductor`
+        // writes down: the residual is relative to `|b|`, and a start whose error is larger than
+        // the answer leaves a true residual stagnating near `ε` times the start. A residual that
+        // is not a number lands here too, so that a refused solve leaves a `NaN` field rather
+        // than the last one standing, and that field is no start for the next.
+        if rr >= bb || rr.is_nan() {
+            x.fill(0.0);
+            r.clone_from(&b);
+            rr = bb;
+        }
+        let mut p = r.clone();
+        let scale: f64 = bb.sqrt().max(f64::MIN_POSITIVE);
 
         let mut iterations = 0;
         while rr.sqrt() / scale > tolerance && iterations < max_iterations {
@@ -880,12 +913,29 @@ impl Puck {
             iterations += 1;
         }
 
-        self.pressure = x;
+        self.unit = x;
         self.face_cache = faces;
         self.residual = rr.sqrt() / scale;
         self.converged = self.residual <= tolerance;
-        self.flow = self.boundary_flow(true);
+        self.rescale();
         self.converged
+    }
+
+    /// The pressure and the flow at the drive, from the field at one pascal.
+    ///
+    /// The flow is then *measured* from the scaled field, across the inlet faces, rather than
+    /// scaled itself — the same sum it always was, so a pump at zero measures exactly zero.
+    fn rescale(&mut self) {
+        self.scale_pressure();
+        self.flow = self.boundary_flow(true);
+    }
+
+    /// The pressure at the drive, from the field at one pascal, and nothing else.
+    fn scale_pressure(&mut self) {
+        let drive = self.drive;
+        for (p, u) in self.pressure.iter_mut().zip(&self.unit) {
+            *p = drive * u;
+        }
     }
 
     // --- the discretisation ------------------------------------------------
@@ -1003,16 +1053,7 @@ impl Puck {
 
     /// Total volumetric flow across the inlet (`true`) or the outlet.
     fn boundary_flow(&self, inlet: bool) -> f64 {
-        let mut total = 0.0;
-        for (a, b, g) in &self.face_cache {
-            let (a, b, g) = (*a, *b, *g);
-            match (a, b) {
-                (Side::Inlet, _) if inlet => total += g * (self.drive - self.pressure_of(b)),
-                (_, Side::Outlet) if !inlet => total += g * (self.pressure_of(a) - 0.0),
-                _ => {}
-            }
-        }
-        total
+        boundary_flow(&self.face_cache, &self.pressure, self.drive, inlet)
     }
 
     /// The largest step every cell stays positive at, from the last solve.
@@ -1097,17 +1138,38 @@ impl Puck {
     }
 }
 
-/// `b` for the finite-volume system: what the driven boundary injects.
-fn source(faces: &[(Side, Side, f64)], n: usize, drive: f64) -> Vec<f64> {
+/// `b` for the finite-volume system at one pascal: what the driven boundary injects, which is its
+/// conductance.
+fn source(faces: &[(Side, Side, f64)], n: usize) -> Vec<f64> {
     let mut b = vec![0.0; n];
     for (a, c, g) in faces {
         match (a, c) {
-            (Side::Inlet, Side::Cell(i)) => b[*i] += g * drive,
-            (Side::Cell(i), Side::Inlet) => b[*i] += g * drive,
+            (Side::Inlet, Side::Cell(i)) => b[*i] += g,
+            (Side::Cell(i), Side::Inlet) => b[*i] += g,
             _ => {}
         }
     }
     b
+}
+
+/// Total volumetric flow across the inlet (`true`) or the outlet, in a field whose inlet is held at
+/// `applied` — the drive for the pressure itself, one for the field at one pascal.
+fn boundary_flow(faces: &[(Side, Side, f64)], field: &[f64], applied: f64, inlet: bool) -> f64 {
+    let at = |s: Side| match s {
+        Side::Cell(i) => field[i],
+        Side::Inlet => applied,
+        Side::Outlet => 0.0,
+    };
+    let mut total = 0.0;
+    for (a, b, g) in faces {
+        let (a, b, g) = (*a, *b, *g);
+        match (a, b) {
+            (Side::Inlet, _) if inlet => total += g * (applied - at(b)),
+            (_, Side::Outlet) if !inlet => total += g * (at(a) - 0.0),
+            _ => {}
+        }
+    }
+    total
 }
 
 /// `A·x`: the sum over faces of `G·(x_a − x_b)`, with the boundaries on the diagonal.
@@ -1150,7 +1212,8 @@ impl Domain for Puck {
 
     fn step(&mut self, _t: Time, dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
         // The viscosity moved with the temperature, so the flow field is not the one from last
-        // step. Re-solve. Warm-started from the previous pressure, this is a few iterations.
+        // step. Re-solve. Warm-started from the previous field at one pascal, this is a few
+        // iterations, and none of them depends on the drive.
         let budget = self
             .max_iterations
             .unwrap_or(ITERATION_BUDGET * self.pressure.len() + 32);
@@ -1403,7 +1466,8 @@ impl Domain for Puck {
 
     fn checkpoint(&mut self) {
         self.saved = Some(Box::new(Saved {
-            pressure: self.pressure.clone(),
+            unit: self.unit.clone(),
+            flow: self.flow,
             temperature: self.temperature.clone(),
             solids: self.solids.clone(),
             dissolved: self.dissolved.clone(),
@@ -1416,7 +1480,14 @@ impl Domain for Puck {
 
     fn restore(&mut self) {
         if let Some(s) = self.saved.take() {
-            self.pressure = s.pressure;
+            // The field at one pascal, rescaled to the drive — which a checkpoint does not hold
+            // and a restore does not touch.
+            self.unit = s.unit;
+            self.scale_pressure();
+            // **The flow as the checkpoint had it**, not measured again. `rescale` measures it
+            // across the face list, and the step being rolled back has consumed that list: a
+            // restore that measured read exactly zero beside a pressure field that was not.
+            self.flow = s.flow;
             self.temperature = s.temperature;
             self.solids = s.solids;
             self.dissolved = s.dissolved;

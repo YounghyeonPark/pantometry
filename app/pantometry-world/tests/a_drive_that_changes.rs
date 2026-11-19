@@ -382,3 +382,73 @@ fn a_profile_that_cannot_be_followed_says_why() {
     .expect_err("a misspelled drive must not parse");
     assert!(e.to_string().contains("unknown field `wats`"), "{e}");
 }
+
+/// **A drive switched off is a drive of zero**, for the two kinds whose drive is a solve.
+///
+/// A `bar` stage of `0.0` was accepted by the format and refused by the run: at the next step the
+/// bed's pressure solve reported a residual it could not measure, and the audit stopped the shot
+/// with `pressure residual destroyed at even: NaN became NaN`. Scene 18 with its pump switched off
+/// at 11.1 s did exactly that. A `volts` stage of `0.0` survived on this machine only because a
+/// recursive residual happened to underflow to zero first.
+///
+/// What a switched-off drive means has a closed form with no discretisation in it: no pressure
+/// difference, no flow; no potential difference, no current. So every frame after the stage reads
+/// **exactly** zero, and the cup holds **exactly** what it held when the pump stopped. And what
+/// the drive does not enter is unmoved by it: the busbar's resistance, which is its shape's, reads
+/// the same with no volts across it as with a millivolt — where a `V/I` of two zeros has no value.
+#[test]
+fn a_drive_switched_off_is_a_drive_of_zero() {
+    let text = r#"{
+  "title": "a shot and a busbar, both switched off halfway", "duration_s": 10.0, "frames": 10,
+  "schedule": "multirate",
+  "domains": [
+    { "kind": "puck", "name": "shot", "cells": [9, 6, 9], "cell_mm": 2.0, "radius_mm": 9.0,
+      "grind_um": 250.0, "porosity": 0.45, "bar": 9.0, "brew_c": 93.0 },
+    { "kind": "conductor", "name": "busbar", "cells": [12, 5, 5], "cell_mm": 1.0,
+      "resistivity_ohm_m": 1.724e-8, "volts": 0.001 },
+    { "kind": "lump", "name": "heatsink", "volume_cm3": 2.0, "thickness_mm": 6.0,
+      "initial_c": 20.0, "ambient_c": 20.0, "area_cm2": 12.0 }
+  ],
+  "stages": {
+    "shot": [ { "at_s": 5.0, "bar": 0.0 } ],
+    "busbar": [ { "at_s": 5.0, "volts": 0.0 } ]
+  }
+}"#;
+    let mut world = World::build(scene(text)).expect("it builds");
+    let frames = world
+        .run()
+        .unwrap_or_else(|e| panic!("a pump switched off was refused: {e}"));
+    assert_eq!(frames.len(), 11);
+
+    for f in &frames[1..5] {
+        assert!(read(f, "shot", "flow") > 0.0, "the pump is on before 5 s");
+        assert!(read(f, "busbar", "current") > 0.0, "and so is the busbar");
+    }
+    let resistance = read(&frames[1], "busbar", "resistance");
+    assert!(resistance.is_finite() && resistance > 0.0, "{resistance}");
+    // Frame 5 is taken at 5 s, before the advance that applies the stage at 5 s: the last frame
+    // with the pump on, and so the cup's final weight. Every frame after it is past the switch.
+    let held = read(&frames[5], "shot", "delivered");
+    assert!(
+        held > 0.0,
+        "something reached the cup before the pump stopped"
+    );
+    for (n, f) in frames.iter().enumerate().skip(6) {
+        assert_eq!(
+            read(f, "shot", "delivered"),
+            held,
+            "frame {n}: the cup holds what it held when the pump stopped"
+        );
+        assert_eq!(
+            read(f, "shot", "flow"),
+            0.0,
+            "frame {n}: nothing flows with no drive"
+        );
+        assert_eq!(read(f, "busbar", "current"), 0.0, "frame {n}");
+        assert_eq!(
+            read(f, "busbar", "resistance"),
+            resistance,
+            "frame {n}: the busbar's shape did not change when its drive did"
+        );
+    }
+}

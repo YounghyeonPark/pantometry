@@ -184,8 +184,21 @@ impl fmt::Display for Violation {
         // iteration that never converged. Those carry a *message* in `quantity`, not a
         // quantity, and reading it as one produced the first error a consumer ever saw from
         // this library: "substance has no heat capacity is not conserved at plate: inf".
-        if self.tolerance == 0.0 && self.before == self.after {
+        //
+        // Recognised by the bits, not by `==`: a detail that is `NaN` — a solve whose residual
+        // stopped being a number — is not equal to itself, and fell through to a sentence about
+        // a conservation law, "pressure residual destroyed at puck: NaN became NaN".
+        if self.tolerance == 0.0 && self.before.to_bits() == self.after.to_bits() {
             return write!(f, "at {}: {} ({})", self.site, self.quantity, self.before);
+        }
+        // An amount that is not one has no direction to have moved in, so neither "created" nor
+        // "destroyed" is true of it.
+        if !(self.before.is_finite() && self.after.is_finite()) {
+            return write!(
+                f,
+                "{} at {} is not finite: {:.6e} became {:.6e}",
+                self.quantity, self.site, self.before, self.after
+            );
         }
         if self.before == self.after {
             return write!(
@@ -342,12 +355,27 @@ pub fn audit_with(
             .max(a.abs())
             .max(before.scale_of(name).unwrap_or(0.0))
             .max(after.scale_of(name).unwrap_or(0.0));
+        let rel_tol = tolerances.for_quantity(name);
+        // **A total that is not finite is not conserved**, and is refused before anything is
+        // measured against it. Every comparison with `NaN` is false, so the test below passed a
+        // total that had become `NaN`; and `f64::max` discards a `NaN`, so a total that was `NaN`
+        // at both ends had a scale of zero and was skipped as two denormals. Either way a run
+        // whose books were poisoned audited clean to its last step.
+        if !(b.is_finite() && a.is_finite()) {
+            return Err(Violation {
+                quantity: name.to_string(),
+                site: site.to_string(),
+                before: b,
+                after: a,
+                scale,
+                tolerance: rel_tol,
+            });
+        }
         // Two numbers that are both denormal are equal for every purpose a
         // simulation has.
         if scale < 1e-300 {
             continue;
         }
-        let rel_tol = tolerances.for_quantity(name);
         if (a - b).abs() / scale > rel_tol {
             return Err(Violation {
                 quantity: name.to_string(),

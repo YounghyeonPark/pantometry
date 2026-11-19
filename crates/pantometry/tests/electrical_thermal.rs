@@ -74,12 +74,14 @@ fn a_winding_warms_a_plate_by_the_joules_it_dissipated() {
     assert!((coil.reserve().to_si() - (1_000.0 - watts * seconds)).abs() < 1e-9);
 }
 
-/// **A source with an unlimited supply is refused by the domain, because the audit cannot.**
+/// **A source with an unlimited supply is refused by the domain, and by name.**
 ///
 /// This test was written expecting the *audit* to catch it and it did not: the ledger reported
 /// `inf` before and `inf` after, `inf` equals itself, and a winding pouring joules into a plate
 /// ran green. An infinite reserve is not a large number; it is a number that cannot be
-/// subtracted, so it switches the check off rather than failing it.
+/// subtracted, so it switched the check off rather than failing it. The audit now refuses a total
+/// that is not finite, but a winding with no reserve reports no entry rather than an infinite
+/// one — see the next test for why — so the refusal is still the domain's.
 ///
 /// The same shape as `pantometry-world`'s lamp, where a skipped `with_reserve` left a scene
 /// auditing clean at tolerance zero with the lamp doing nothing. So `Winding::step` refuses
@@ -116,4 +118,80 @@ fn a_winding_with_no_reserve_is_caught_by_the_audit() {
         violation.quantity
     );
     assert_eq!(sim.time().to_si(), 0.0, "a refused step keeps the clock");
+}
+
+/// A store of joules that loses one a step to nowhere: the leak an audit exists to catch.
+struct Leaky {
+    held: f64,
+}
+
+impl Domain for Leaky {
+    fn name(&self) -> &str {
+        "leaky"
+    }
+    fn kind(&self) -> Kind {
+        Kind::Evolving
+    }
+    fn step(&mut self, _t: Time, _dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
+        self.held -= 1.0;
+        Ok(())
+    }
+    fn ledger(&self) -> Ledger {
+        Ledger::new().with(quantity::ENERGY, self.held)
+    }
+}
+
+/// **A winding nobody drives, with no reserve set, neither stops a run nor hides a leak in it.**
+///
+/// `Winding::step` deliberately demands a reserve only of a winding that would publish, so one at
+/// zero current may leave it infinite. Its ledger reported that `inf`, and two things followed
+/// from one entry. While the audit compared `inf` with itself, the energy total of the *whole*
+/// simulation was `inf`, so a domain beside it destroying a joule a step went unseen. Once the
+/// audit refused a total that is not finite, the same winding stopped every run it was in, at its
+/// first step, for books that were not a number. It now reports no entry: it publishes nothing,
+/// so there is nothing to account for.
+///
+/// So beside a plate the run is clean, and beside a leak the audit names the leak.
+#[test]
+fn an_undriven_winding_with_no_reserve_leaves_the_audit_to_the_rest() {
+    let idle = || {
+        Winding::of_resistance(
+            "coil",
+            Resistance::ohm(2.0),
+            0.0,
+            Temperature::celsius(20.0),
+        )
+    };
+    let start = Temperature::celsius(20.0);
+    let plate = LumpedMass::new(
+        "plate",
+        Substance::aluminium_6061(),
+        Volume::from_si(1e-4),
+        Length::mm(1.5),
+        start,
+        Environment::still_air(start, Area::from_si(0.0)),
+    );
+    let mut sim = Simulation::new(Schedule::Staggered)
+        .conservation_tolerance(1e-9)
+        .with(idle())
+        .with(plate);
+    for n in 0..10 {
+        sim.advance(Time::s(0.1))
+            .unwrap_or_else(|e| panic!("step {n} beside an idle winding was refused: {e}"));
+    }
+
+    let mut sim = Simulation::new(Schedule::Staggered)
+        .conservation_tolerance(1e-9)
+        .with(idle())
+        .with(Leaky { held: 1000.0 });
+    let violation = sim
+        .advance(Time::s(0.1))
+        .expect_err("a joule a step from nowhere is a leak");
+    let said = violation.to_string();
+    assert_eq!(violation.quantity, quantity::ENERGY, "{said}");
+    assert!(
+        violation.before.is_finite() && violation.after.is_finite(),
+        "the leak is judged as numbers, not refused as not being any: {said}"
+    );
+    assert!(violation.after < violation.before, "{said}");
 }

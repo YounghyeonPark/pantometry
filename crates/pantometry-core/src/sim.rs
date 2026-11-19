@@ -589,8 +589,10 @@ impl Exchange {
     /// exactly right, so a total-only check would pass the one bug the spatial coupling
     /// exists to prevent. The failure names the face.
     pub fn audit_transfers(&self, site: &str, abs_tol: f64) -> Result<(), Violation> {
+        // `NaN` is named because it compares false against every tolerance, so `|left| > tol`
+        // alone passed it — and an amount on the bus that is not a number is not nothing.
         for (channel, left) in self.published.iter() {
-            if left.abs() > abs_tol {
+            if left.is_nan() || left.abs() > abs_tol {
                 return Err(Violation {
                     quantity: (*channel).to_string(),
                     site: format!("{site} (published but not consumed)"),
@@ -605,7 +607,7 @@ impl Exchange {
         }
         for ((interface, channel), flux) in self.spatial.iter() {
             for (face, left) in flux.per_face().iter().enumerate() {
-                if left.abs() > abs_tol {
+                if left.is_nan() || left.abs() > abs_tol {
                     return Err(Violation {
                         quantity: format!("{interface}/{channel} face {face}"),
                         site: format!("{site} (published but not consumed)"),

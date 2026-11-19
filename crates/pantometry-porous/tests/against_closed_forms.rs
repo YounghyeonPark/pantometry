@@ -873,3 +873,228 @@ fn every_observable_returns_its_own_field() {
         }
     }
 }
+
+/// **A pump switched off leaves no pressure in the bed and nothing flowing: exactly zero.**
+///
+/// The pressure solve was at the drive and measured its residual against the drive's right-hand
+/// side floored at `f64::MIN_POSITIVE`. At zero drive that is the floor, the warm start from 9 bar
+/// had to fall to `tolerance × 2.2e-308`, and it could not: the bed reported **not converged at a
+/// residual of 6.4e153** while the flow it had reached was `−4.8e-19 kg/s`. Turned down to
+/// `9e-4 Pa` instead, it converged with 9 bar's error still in it, `3.7e-7` from Darcy's
+/// `Q ∝ ΔP`. Now the bed at one pascal is solved, which the drive does not enter, and scaled.
+///
+/// So the drive is walked through 0, 9 bar and 9 bar over `2³⁰` — `8.4e-4 Pa` — then **up**
+/// through a quarter of 9 bar to 9 bar, and off. At each the bed is **bit for bit** a fresh bed at
+/// that drive: on the way up too, where a start a quarter of the answer is a good warm start that
+/// a solve at the drive takes — measured, it lands a unit in the last place from a fresh bed. And
+/// `Q/ΔP` is **bit for bit** 9 bar's, which is why the drives are 9 bar over powers of two:
+/// scaling by a power of two is exact in every product, difference and sum the
+/// flow is measured with, so Darcy's `Q ∝ ΔP` leaves no rounding to allow for. At zero no cell
+/// holds any pressure and nothing flows, exactly, and the flow balance — a ratio of two zeros — is
+/// still defined. Then the bed steps at zero drive, and still nothing flows.
+#[test]
+fn a_pump_switched_off_leaves_nothing_flowing() {
+    let counts = (8, 6, 8);
+    let nine_bar = 9.0e5;
+    let mut p = bed(counts, 0.4, nine_bar);
+    assert!(p.converged());
+    let darcy = p.flow_rate().to_si() / nine_bar;
+    assert!(darcy > 0.0, "9 bar drives a flow");
+
+    let two_to_30 = 1_073_741_824.0;
+    for drive in [
+        0.0,
+        nine_bar,
+        nine_bar / two_to_30,
+        nine_bar / 4.0,
+        nine_bar,
+        0.0,
+    ] {
+        p.set_drive(Pressure::from_si(drive));
+        assert!(p.converged(), "at {drive} Pa: residual {:e}", p.residual());
+        let fresh = bed(counts, 0.4, drive);
+        for k in 0..counts.2 {
+            for j in 0..counts.1 {
+                for i in 0..counts.0 {
+                    assert_eq!(
+                        p.pressure_at(i, j, k).to_si().to_bits(),
+                        fresh.pressure_at(i, j, k).to_si().to_bits(),
+                        "at {drive} Pa, cell ({i},{j},{k}) differs from a fresh bed"
+                    );
+                }
+            }
+        }
+        assert!(
+            p.flow_balance() < 1e-10,
+            "at {drive} Pa: in and out disagree by {:e}",
+            p.flow_balance()
+        );
+        if drive == 0.0 {
+            for k in 0..counts.2 {
+                for j in 0..counts.1 {
+                    for i in 0..counts.0 {
+                        assert_eq!(p.pressure_at(i, j, k).to_si(), 0.0, "cell ({i},{j},{k})");
+                    }
+                }
+            }
+            assert_eq!(p.flow_rate().to_si(), 0.0);
+        } else {
+            let got = p.flow_rate().to_si() / drive;
+            assert_eq!(
+                got.to_bits(),
+                darcy.to_bits(),
+                "at {drive} Pa, Q/dp is {got:e} against 9 bar's {darcy:e}"
+            );
+        }
+    }
+
+    let mut bus = Exchange::new();
+    let dt = Time::from_si(0.5 * p.max_stable_dt(Time::from_si(0.0)).to_si());
+    for n in 0..4 {
+        p.step(Time::from_si(n as f64 * dt.to_si()), dt, &mut bus)
+            .unwrap_or_else(|e| panic!("step {n} at zero drive refused: {e}"));
+        assert_eq!(p.flow_rate().to_si(), 0.0, "step {n}");
+    }
+}
+
+/// **With the pump off, the outlet reads the bed it is sitting in, not the water that is not
+/// arriving.**
+///
+/// The outlet temperature is a flow-weighted mean over the outlet face, and its weights were the
+/// flow itself: with no drive — a bed built that way, whose solve from zero reaches zero — they
+/// summed to nothing and it fell back to the *inlet's* temperature. Measured with the weights put
+/// back, a bed at 60 °C fed 93 °C water reported 93 °C with nothing flowing. Weighted by the flow
+/// per pascal it is the limit as the drive goes to zero, which for a bed at one temperature is
+/// that temperature, to the rounding of a weighted mean over the outlet face, about `nx·nz·ε`.
+///
+/// One temperature cannot say whether the weights are the *right* ones — any positive weighting
+/// of a constant is that constant. The next test can.
+#[test]
+fn a_bed_with_the_pump_off_reads_its_own_outlet_temperature() {
+    let counts = (8, 6, 8);
+    let mut p = bed(counts, 0.4, 9.0e5);
+    p.set_temperature(Temperature::celsius(60.0));
+    p.set_inlet_temperature(Temperature::celsius(93.0));
+    p.set_drive(Pressure::from_si(0.0));
+    let bed_k = Temperature::celsius(60.0).to_si();
+    let got = p.outlet_temperature().to_si();
+    let rounding = 4.0 * (counts.0 * counts.2) as f64 * f64::EPSILON;
+    assert!(
+        (got / bed_k - 1.0).abs() <= rounding,
+        "the outlet of a 60 C bed with the pump off read {:.6} C",
+        got - 273.15
+    );
+}
+
+/// **The outlet temperature is the temperature the outlet flow carries away**, and it stays that
+/// with the pump off.
+///
+/// `thermal_power_out` is the flow times `ρc` times the outlet temperature, and a step adds to
+/// `delivered_enthalpy` face by face, each outlet face's flow times its own cell's temperature.
+/// Those are two computations, and they agree only if the outlet temperature is weighted by the
+/// flow through each face — not by its conductance, not evenly. So the outlet face is made to
+/// disagree with itself: a bed at 60 °C fed 93 °C water, with half its inlet layer packed tight,
+/// so that after ten steps the outlet spans about 60 to 82 °C and the cold half passes less of the
+/// flow than its conductance would say. Weighted by conductance alone it reads 72.8 °C against
+/// the flow's 79.9 °C, measured.
+///
+/// The two sides then differ by where the flow is measured — `thermal_power_out` at the inlet, a
+/// step at the outlet — which is the flow balance, plus the rounding of a weighted sum over the
+/// outlet face on each side, `2·nx·nz·ε`, and of recovering one step's enthalpy from a running
+/// total, `ε` times their ratio. Measured: `3.99e-14` beside a balance of `4.01e-14`.
+///
+/// Switched off at the same temperatures, the outlet temperature is unchanged, bit for bit: the
+/// weights are the field at one pascal, which the drive does not enter, and nothing flows to carry
+/// any power.
+#[test]
+fn the_outlet_temperature_is_what_the_outlet_flow_carries() {
+    let counts = (8, 2, 8);
+    let mut p = bed(counts, 0.4, 9.0e5);
+    p.set_temperature(Temperature::celsius(60.0));
+    p.set_inlet_temperature(Temperature::celsius(93.0));
+    p.repack(0.1, |i, j, _| j == 0 && i < counts.0 / 2);
+    let mut bus = Exchange::new();
+    let dt = Time::from_si(0.5 * p.max_stable_dt(Time::from_si(0.0)).to_si());
+    let mut t = 0.0;
+    for _ in 0..10 {
+        p.step(Time::from_si(t), dt, &mut bus).expect("stable");
+        t += dt.to_si();
+    }
+    let (mut coldest, mut hottest) = (f64::INFINITY, f64::NEG_INFINITY);
+    for k in 0..counts.2 {
+        for i in 0..counts.0 {
+            if p.is_packed(i, counts.1 - 1, k) {
+                let v = p.temperature_at(i, counts.1 - 1, k).to_si();
+                coldest = coldest.min(v);
+                hottest = hottest.max(v);
+            }
+        }
+    }
+    assert!(
+        hottest - coldest > 10.0,
+        "the outlet face must disagree with itself: {:.3} to {:.3} C",
+        coldest - 273.15,
+        hottest - 273.15
+    );
+
+    // Re-solved at the temperatures it has now, so the read and the step see one field.
+    p.set_drive(Pressure::from_si(9.0e5));
+    let carried = p.thermal_power_out().to_si() * dt.to_si();
+    let balance = p.flow_balance();
+    let before = p.delivered_enthalpy().to_si();
+    let mut stepped = p.clone();
+    stepped
+        .step(Time::from_si(t), dt, &mut Exchange::new())
+        .expect("stable");
+    let total = stepped.delivered_enthalpy().to_si();
+    let delta = total - before;
+    let rounding = (2.0 * (counts.0 * counts.2) as f64 + total / delta) * f64::EPSILON;
+    let off = (carried / delta - 1.0).abs();
+    assert!(
+        off <= balance + rounding,
+        "the outlet carried {carried:.12e} J by its temperature and {delta:.12e} J face by face: \
+         {off:.3e} apart, against a flow balance of {balance:.3e} and rounding of {rounding:.1e}"
+    );
+
+    let on = p.outlet_temperature().to_si();
+    p.set_drive(Pressure::from_si(0.0));
+    let off_drive = p.outlet_temperature().to_si();
+    assert_eq!(
+        off_drive.to_bits(),
+        on.to_bits(),
+        "switched off, the outlet read {:.9} C against {:.9} C on",
+        off_drive - 273.15,
+        on - 273.15
+    );
+    assert_eq!(p.thermal_power_out().to_si(), 0.0);
+}
+
+/// **A restored bed is the bed that was checkpointed**, flow and all.
+///
+/// `restore` put the field at one pascal back and measured the flow across the face list again —
+/// and the step being rolled back had consumed that list, so a restored bed read **exactly zero**
+/// flow beside a pressure field that was not zero. The kernel always steps after a restore, which
+/// re-solves and hides it; a caller reading the bed in between saw a pump that had stopped.
+#[test]
+fn a_restored_bed_is_the_bed_that_was_checkpointed() {
+    let mut p = bed((8, 6, 8), 0.4, 9.0e5);
+    let flow = p.flow_rate().to_si();
+    let pressure = p.pressure_at(4, 2, 4).to_si();
+    assert!(flow > 0.0);
+    p.checkpoint();
+    let dt = Time::from_si(0.5 * p.max_stable_dt(Time::from_si(0.0)).to_si());
+    p.step(Time::from_si(0.0), dt, &mut Exchange::new())
+        .expect("stable");
+    p.restore();
+    let (got, held) = (p.flow_rate().to_si(), p.pressure_at(4, 2, 4).to_si());
+    assert_eq!(
+        got.to_bits(),
+        flow.to_bits(),
+        "the flow after a restore is {got:e} kg/s against {flow:e} checkpointed"
+    );
+    assert_eq!(
+        held.to_bits(),
+        pressure.to_bits(),
+        "the pressure after a restore is {held:e} Pa against {pressure:e} checkpointed"
+    );
+}

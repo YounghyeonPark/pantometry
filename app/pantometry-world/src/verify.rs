@@ -161,9 +161,12 @@ pub struct Measured {
     /// itself off. A flat orbit's `momentum_z` is the live example.
     pub unaudited: Vec<String>,
     /// Ledger arithmetic that stopped being arithmetic: a non-finite total or drift. The audit
-    /// itself cannot see these — `NaN > tol` is false — so a run can pass while poisoned, and a
-    /// verification battery is where that blindness stops being mirrored. Each entry becomes a
-    /// finding.
+    /// could not see these until it refused a total that is not finite — `NaN > tol` is false —
+    /// and for that time this battery saw all but one shape of them: a quantity NaN at both ends
+    /// with nothing finite beside it was dropped by `f64::max` into a scale of zero and listed as
+    /// unaudited instead. It still
+    /// checks, because a mirror of the audit's arithmetic is the wrong place to assume the
+    /// original is right. Each entry becomes a finding.
     pub anomalies: Vec<String>,
     /// Per evolving domain: the smallest stability limit it reported at any frame boundary, in
     /// seconds, and the largest substep count one advance asked of it.
@@ -292,6 +295,21 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
                 seen.insert(name.to_string());
                 let b = before.get(name).unwrap_or(0.0);
                 let a = after.get(name).unwrap_or(0.0);
+                // **Before the scale, not after it.** The audit refuses a total that is not
+                // finite, so a step that reached here should not have one, and this mirror checks
+                // anyway. It took the scale first and tested the ratio, and `f64::max` drops a
+                // NaN: a quantity NaN at both ends with no finite entry beside it had a scale of
+                // zero, was skipped below as too small to judge, and came out *unaudited* rather
+                // than poisoned — the one case the ratio test existed for. Recorded as an anomaly rather than folded into
+                // the maximum, which `f64::max` would silently discard it from.
+                if !(b.is_finite() && a.is_finite()) {
+                    poisoned.insert(name.to_string());
+                    anomalies.insert(format!(
+                        "the {name} ledger is not a number ({b} to {a}) — arithmetic upstream \
+                         is poisoned, on a step the audit passed"
+                    ));
+                    continue;
+                }
                 let scale = b
                     .abs()
                     .max(a.abs())
@@ -301,18 +319,6 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
                     continue;
                 }
                 let rel = (a - b).abs() / scale;
-                // The audit itself is blind here: `NaN > tol` is false, so a poisoned ledger
-                // passes every step. Recorded as an anomaly rather than folded into the maximum,
-                // which `f64::max` would silently discard it from.
-                if !rel.is_finite() {
-                    poisoned.insert(name.to_string());
-                    anomalies.insert(format!(
-                    "the {name} ledger's step change is not a number ({b} to {a}) — arithmetic \
-                     upstream is poisoned, and the audit cannot see it because NaN compares \
-                     false against every tolerance"
-                ));
-                    continue;
-                }
                 let tol = world.sim.tolerances().for_quantity(name);
                 let entry = drift.entry(name.to_string()).or_insert((0.0, tol));
                 entry.0 = entry.0.max(rel);

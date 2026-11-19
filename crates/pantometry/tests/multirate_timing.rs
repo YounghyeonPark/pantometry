@@ -83,7 +83,10 @@ fn rise_after(schedule: Schedule, outer: Time, steps: usize) -> f64 {
         .conservation_tolerance(1e-6)
         .with(Lamp {
             watts: 2.0,
-            reserve: f64::INFINITY,
+            // A finite tank, as the type says: 2 W for 600 s is 1200 J, so this never runs dry.
+            // It was `f64::INFINITY`, which the audit passed by comparing `inf` with itself —
+            // this test's books were never read — and now refuses as a total that is not a number.
+            reserve: 1.0e4,
             saved: None,
         })
         .with(plate());

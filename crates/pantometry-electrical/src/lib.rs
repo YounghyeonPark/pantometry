@@ -48,10 +48,12 @@
 //! nothing every step.
 //!
 //! **The domain refuses that itself rather than leaving it to the audit**, and the reason is
-//! worth stating: an infinite reserve does not fail the audit, it *disables* it. The ledger
-//! reports `inf` before and `inf` after, `inf` compares equal to itself, and a winding pouring
-//! joules into a plate runs green at any tolerance. This test was written expecting the audit to
-//! catch it and it did not.
+//! worth stating: an infinite reserve did not fail the audit, it *disabled* it. The ledger
+//! reported `inf` before and `inf` after, `inf` compared equal to itself, and a winding pouring
+//! joules into a plate ran green at any tolerance. This test was written expecting the audit to
+//! catch it and it did not. The audit now refuses a total that is not finite; a winding with no
+//! reserve reports no entry rather than an infinite one, so the refusal that names the missing
+//! [`with_reserve`](Winding::with_reserve) is still the domain's.
 //!
 //! What the audit cannot check is whether `I²R` is the right number of watts. Both sides of the
 //! bus agree perfectly about whatever is published, so a resistance wrong by a factor of two
@@ -330,15 +332,16 @@ impl Domain for Winding {
     }
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
-        // An infinite reserve does not merely go uncaught — it turns the audit *off*. The ledger
-        // reports `inf` before and `inf` after, `inf` compares equal to itself, and a winding
-        // pouring joules into a plate produces a run that is green at any tolerance. This
+        // An infinite reserve did not merely go uncaught — it turned the audit *off*. The ledger
+        // reported `inf` before and `inf` after, `inf` compared equal to itself, and a winding
+        // pouring joules into a plate produced a run that was green at any tolerance. This
         // repository has shipped that failure once already, in `pantometry-world`'s lamp, where a
         // skipped `with_reserve` left the reserve infinite and a scene audited clean at
         // tolerance zero with the lamp doing nothing.
         //
-        // So the domain refuses rather than trusting the audit to notice, because the audit
-        // structurally cannot.
+        // The audit now refuses a total that is not finite, but `ledger` below reports none for
+        // an infinite reserve, so it is still this refusal that stands between a missing
+        // `with_reserve` and energy from nowhere — and it names the call that is missing.
         let watts = self.dissipation().to_si();
         if !watts.is_finite() || watts < 0.0 {
             return Err(Violation::at(
@@ -348,8 +351,9 @@ impl Domain for Winding {
             ));
         }
         // Refused when it would actually publish, rather than on construction: a winding sitting
-        // at zero current puts nothing on the bus and blinds nothing, so demanding a reserve of
-        // it would be a rule about the API instead of about the physics. The drive is fixed at
+        // at zero current puts nothing on the bus and has nothing to account for — its ledger
+        // has no entry — so demanding a reserve of it would be a rule about the API instead of
+        // about the physics. The drive is fixed at
         // construction — `driven_at` and `driven_from` consume `self` — so a winding that
         // publishes nothing on the first step publishes nothing ever, and this cannot be dodged
         // by starting at zero.
@@ -375,8 +379,18 @@ impl Domain for Winding {
     /// Adding them back would make the total grow by the heat that moved, which this workspace
     /// has written down more than once as the most common way to author a domain that audits
     /// green and is wrong.
+    ///
+    /// **No entry at all while the reserve is infinite**, which `step` allows only for a winding
+    /// that publishes nothing. An `inf` entry used to pass the audit by comparing equal to itself;
+    /// the audit now refuses a total that is not a number, and a winding at zero current with no
+    /// reserve set — which `step` deliberately does not demand one of — was refused with it. With
+    /// nothing published there is nothing to account for, and an absent entry says exactly that.
     fn ledger(&self) -> Ledger {
-        Ledger::new().with(quantity::ENERGY, self.reserve)
+        if self.reserve.is_finite() {
+            Ledger::new().with(quantity::ENERGY, self.reserve)
+        } else {
+            Ledger::new()
+        }
     }
 
     /// What it is dissipating, at what resistance, and what it has spent.

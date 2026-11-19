@@ -639,14 +639,23 @@ impl Channel {
         }
         let ax = self.laplacian(&x);
         let mut r: Vec<f64> = b.iter().zip(&ax).map(|(bi, axi)| bi - axi).collect();
-        let mut p = r.clone();
         let mut rr: f64 = r.iter().map(|v| v * v).sum();
-        let scale = b
-            .iter()
-            .map(|v| v * v)
-            .sum::<f64>()
-            .sqrt()
-            .max(f64::MIN_POSITIVE);
+        let bb: f64 = b.iter().map(|v| v * v).sum();
+        // **A warm start no closer than zero is replaced by zero**, whose residual is `b` itself.
+        // The residual is relative to `|b|`, and `|b|` is this step's divergence, which owes
+        // nothing to the last one's: a step whose flow needs a billionth of the pressure the last
+        // one did starts from an error a billion times the answer, and was refused at a relative
+        // residual of 18140. At the extreme the flow is divergence-free on this grid, `b` is zero,
+        // the floor below makes the target `tolerance × 2.2e-308`, and a shear flow was refused
+        // after any step that had needed a pressure. A residual that is not a number lands here
+        // too, for the reason `Conductor` writes down.
+        if rr >= bb || rr.is_nan() {
+            x.fill(0.0);
+            r.clone_from(&b);
+            rr = bb;
+        }
+        let mut p = r.clone();
+        let scale = bb.sqrt().max(f64::MIN_POSITIVE);
         let budget = ITERATION_BUDGET * cells + 64;
         let mut iterations = 0;
         while rr.sqrt() / scale > self.tolerance && iterations < budget {
