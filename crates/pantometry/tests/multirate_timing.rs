@@ -143,7 +143,8 @@ fn multirate_now_beats_staggered_because_a_substep_takes_only_its_share() {
     );
 
     // What the fix does *not* change: the substep, not the outer step, now sets the answer.
-    // `substeps_for` gives `ceil(dt / max_stable_dt)`, so a 300 s and a 150 s outer step both
+    // `substeps_for` gives `ceil(dt / max_stable_dt)`, one more only where that substep would be
+    // an ulp over, so a 300 s and a 150 s outer step both
     // land on a 50 s substep — and produce bit-identical results, which they should, because a
     // substep receiving its own share does not care how the outer steps were grouped. That is
     // the property the front-loading version could not have: there, the grouping was the whole

@@ -4,6 +4,7 @@
 //! compares against another run of the same solver, and none compares against a number that was
 //! read off this implementation and pasted back in.
 
+use pantometry_core::integrator::substeps_for;
 use pantometry_core::{Domain, Exchange, Schedule, Simulation, Substance};
 use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck};
 use pantometry_units::{Length, Pressure, Temperature, Time};
@@ -1201,26 +1202,64 @@ fn a_step_as_long_as_the_limit_a_bed_reports_is_taken() {
     }
 }
 
-/// **And so the kernel can subcycle it.** `Schedule::Multirate` sizes each window's substeps from
-/// `max_stable_dt`, read after the last window's step. With the face list emptied the second window
-/// was refused — "transport step ... 2.194e-2 became 5.485e-2" — its substeps sized from a limit
-/// with no flow in it.
+/// **And so the kernel can subcycle it**, at one temperature and warming, at a whole number of
+/// limits and at a fraction of one. `Schedule::Multirate` sizes a window's substeps from
+/// `max_stable_dt`, and three things have each had a window here refused:
 ///
-/// At one temperature, on purpose. A warming bed's limit also falls *inside* a window, and the
-/// kernel sizes all of a window's substeps from one read: on the warming bed, a window of two and a
-/// half limits is refused within its first. That is the kernel's question, and a separate one.
+/// - **The step emptied its face list**, so the second window's substeps were sized from a limit
+///   with no flow in it: "transport step ... 2.194e-2 became 5.485e-2".
+/// - **The kernel read the limit once a window.** The warming bed's limit falls under its own
+///   substeps, and a window of two and a half limits was refused inside the first, by `7.0e-3`, and
+///   one of three by 10.4%. The kernel asks before every substep now.
+/// - **And by an ulp, at one temperature.** At exactly three, five and ten limits the first window
+///   was refused by `9.5e-16`: the bed solves at the end of every step, its limit comes back an ulp
+///   shorter, and the substeps after the first, sized from the first read, were an ulp too long
+///   for a check with no slack. The same defect as the warming bed's, a rounding wide. At this
+///   bed's limit the window's own division is not over at any of the three, and that is asserted,
+///   so this is not where `substeps_for`'s extra substep is checked.
 ///
-/// Two and a half limits rather than a whole number of them: at exactly three, `dt / 3` can land an
-/// ulp above the limit, which the puck refuses with no slack — a question of its own as well.
+/// The warming bed at two and a half limits must also have divided its first window again, or a
+/// bed that stopped warming would pass it.
 #[test]
 fn a_flow_limited_bed_runs_multirate() {
-    let bed = flow_limited();
-    assert_the_flow_sets_the_limit(&bed, "at the start");
-    let window = Time::from_si(2.5 * bed.max_stable_dt(Time::from_si(0.0)).to_si());
-    let mut sim = Simulation::new(Schedule::Multirate).with(bed);
-    for k in 0..4 {
-        sim.advance(window)
-            .unwrap_or_else(|v| panic!("window {k} was refused: {v}"));
+    for (name, bed, limits) in [
+        ("at one temperature", flow_limited(), 2.5),
+        ("at one temperature", flow_limited(), 3.0),
+        ("at one temperature", flow_limited(), 5.0),
+        ("at one temperature", flow_limited(), 10.0),
+        ("warming", warming(), 2.5),
+        ("warming", warming(), 3.0),
+    ] {
+        assert_the_flow_sets_the_limit(&bed, &format!("{name}, at the start"));
+        let limit = bed.max_stable_dt(Time::from_si(0.0)).to_si();
+        let window = Time::from_si(limits * limit);
+        if limits == limits.ceil() {
+            assert!(
+                window.to_si() / limits <= limit,
+                "precondition, {name}, {limits} limits: the window's own division is within it"
+            );
+        }
+        let planned = substeps_for(window, Time::from_si(limit));
+        let mut sim = Simulation::new(Schedule::Multirate).with(bed);
+        let mut first = 0;
+        for k in 0..4 {
+            let report = sim
+                .advance(window)
+                .unwrap_or_else(|v| panic!("{name}, {limits} limits: window {k} was refused: {v}"));
+            if k == 0 {
+                first = report.substeps[0].1;
+            }
+        }
+        // The first window only: a later one starts from a shorter limit, and plans more
+        // substeps from its first read whether or not anything divides it again. And not at a
+        // whole number of limits, where the ulp a solve takes off the limit divides it alone.
+        if name == "warming" && limits != limits.ceil() {
+            assert!(
+                first > planned,
+                "{name}, {limits} limits: the first window took {first} substeps, the {planned} \
+                 its first read planned"
+            );
+        }
     }
 }
 

@@ -585,6 +585,49 @@ protects nothing.
 
 ### Fixed
 
+- **`Schedule::Multirate` sized a window's substeps from one read of each limit, and could hand a
+  substep an ulp over it** (`pantometry-core`).
+  - **One read a window.** `Domain::max_stable_dt` is the largest step from the state a domain is
+    in, and its own substeps move that state. A puck limited by its flow and warming under a hot
+    inlet has a limit that falls as the viscosity does: a window of two and a half of its limits
+    was refused inside the first, by `7.0e-3`, and one of three by 10.4%. At one temperature its
+    limit still comes back an ulp shorter after each step's solve, and windows of exactly three,
+    five and ten limits were refused by `9.5e-16`. The scheduler asks again before every substep
+    after a window's first, and when the planned substep is longer than a positive answer it
+    divides what is left of the window again, from that limit, into equal substeps. A limit that
+    never falls below the plan never moves it, and such a run takes the same substeps to the bit.
+  - **A plan only tightens**, which has a price: a limit that dips for one read and recovers holds
+    the rest of the window at the dip — four substeps of a quarter whose limit reads `1e-3` once
+    become 751. Dividing again whichever way the limit moves would change the bits of every run
+    whose limit rises.
+  - **A limit that cannot be met is refused, not followed.** One falling toward a point inside the
+    window, as a fixed fraction of the time left to it, is divided until four billion substeps of
+    what is left would not be within it, and the window is refused there, naming the domain; so is
+    a window whose first read cannot be met. Before, a domain that does not check its own step was
+    stepped past such a limit, and under the re-read with no refusal one was divided again at the
+    cap before every substep, a million of them before the test stopped it.
+  - **An ulp over.** `substeps_for` took the ceiling of `dt / limit`, and when that quotient
+    rounds down onto a whole number, `dt / n` comes out an ulp over the limit: in 367 of 32 000
+    whole and fractional multiples sampled. A domain that checks its step by the same expression
+    it reports, with no slack, as the puck, the channel and the cavity do, refuses that. The count
+    is one more where that division comes out over. No domain here has been seen refused by it:
+    the puck's refusals above were its limit moving, and at its limit `dt / n` is not over at
+    three, five or ten. `Molecule`'s step in `pantometry-forcefield` cuts a frame into dynamics
+    steps with it too, so a frame of a whole number of time steps whose quotient rounded down takes
+    one step more; every example prints what it printed before.
+  - **And a limit too short to divide by** made `dt / limit` infinite, which `substeps_for` read
+    as no limit at all and answered with one substep of everything. It is the cap now, and the
+    scheduler refuses it.
+  - **Under `Schedule::Iterative`**, which sweeps the same way, a limit that moves can divide a
+    window differently from one iteration to the next, each following its own trajectory; the plan
+    used to be the restored state's in all of them. No test in the tree divides a window again
+    under it, counted.
+  - **The cost** is one more `max_stable_dt` per substep, and the block's limit was made cheaper
+    first, for this. Pinned to a P-core, best of seven runs of each interleaved, as a share of the
+    time before both changes: scene 24 0.88, 29 0.84, 30 0.99, 25 0.97, 18 and 27 1.00; and
+    `23-a-part-radiating-to-its-lid` 1.13, best of 21, the one scene slower. Its block has air in
+    its voids, so its limit is still a pass over every cell. Against the commit before, 24 1.09,
+    29 1.13, 30 1.20. All 34 scenes write the same bytes as before.
 - **A bed read between two steps was not the bed there.** The puck's field at one pascal is
   the answer on one face list. The flow balance, the stability limit, the flow and the outlet
   temperature are all read from the two together, and between steps the pair was wrong twice

@@ -183,6 +183,32 @@ pub fn velocity_verlet<N: Newtonian>(
 /// to whatever the local error asks for, take an integer number of equal ones.
 /// Two runs of the same scene take the same count, so the arithmetic follows the
 /// same path.
+///
+/// # `dt / n` is never longer than `limit`, in floating point
+///
+/// Not only in exact arithmetic. `dt / limit` rounds, and when it rounds down onto a whole
+/// number the count is one short: a window of exactly five limits divides into a quotient of
+/// exactly `5.0`, and `dt / 5.0` can then come out an ulp over `limit`. Over 32 000 whole and
+/// fractional multiples sampled, a ceiling alone did so in 367. A domain that checks its step
+/// against the same expression it reports its limit by — the puck, the channel and the cavity
+/// all do, with no slack, because none is needed — refuses that step. So the count is checked
+/// against the very division the caller will make, and is one more when it comes out over, which
+/// it then cannot: `n/(n+1)` is further below one than a rounding reaches.
+///
+/// No domain here has been seen refused by it. A flow-limited puck refused windows of three, five
+/// and ten of its limits by `9.5e-16`, and that was its limit coming back an ulp shorter after a
+/// substep, which [`Schedule::Multirate`](crate::Schedule::Multirate)'s reading of the limit
+/// before every substep is for: at that puck's limit `dt / n` is not over at any of the three.
+///
+/// Except at the cap. A count is a `u32`, and a `limit` more than four billion times shorter
+/// than `dt` is answered with `u32::MAX` substeps that are each longer than it — including one so
+/// short that `dt / limit` is not a finite number at all, which answered 1, the longest substep
+/// there is. [`Schedule::Multirate`](crate::Schedule::Multirate) refuses such a window rather
+/// than take it.
+///
+/// `Molecule`'s step in `pantometry-forcefield` cuts a frame into dynamics steps with this too,
+/// so a frame that is a whole number of time steps with a quotient that rounded down takes one
+/// step more than it did.
 pub fn substeps_for(dt: Time, limit: Time) -> u32 {
     let (dt, limit) = (dt.to_si(), limit.to_si());
     // An infinite limit means "no limit", a NaN one means the domain does not know,
@@ -191,10 +217,18 @@ pub fn substeps_for(dt: Time, limit: Time) -> u32 {
         return 1;
     }
     let n = (dt / limit).ceil();
-    if !n.is_finite() || n < 1.0 {
-        1
+    if n.is_nan() || n < 1.0 {
+        return 1;
+    }
+    // An infinite quotient is a limit too short to divide by, not no limit at all.
+    if n >= u32::MAX as f64 {
+        return u32::MAX;
+    }
+    let n = n as u32;
+    if dt / n as f64 > limit {
+        n + 1
     } else {
-        n.min(u32::MAX as f64) as u32
+        n
     }
 }
 
@@ -366,5 +400,84 @@ mod tests {
             let n = substeps_for(Time::s(dt), Time::s(limit));
             assert!(n as f64 * limit >= dt - 1e-12, "{n} x {limit} < {dt}");
         }
+    }
+
+    /// **The substep the count gives is not longer than the limit, to the bit** — and the count is
+    /// one more than the ceiling only where the ceiling's substep is over, so this is not bought by
+    /// subdividing everything once more.
+    ///
+    /// Whole multiples are where it fails: `dt / limit` comes out exactly `k`, and `dt / k` an ulp
+    /// over. The pair below is one, found by search, and a ceiling alone gives it five substeps.
+    ///
+    /// The ceiling can also round the other way and give one substep more than the least that
+    /// would do — 1001 for a window of a thousand limits of `1.004278e-6` — which costs a substep
+    /// and no stability, and is left as it was.
+    #[test]
+    fn a_substep_is_never_an_ulp_over_the_limit() {
+        let (limit, dt) = (0.11305311647662632, 0.5652655823831316);
+        assert_eq!(
+            dt / limit,
+            5.0,
+            "precondition: the quotient rounds onto five"
+        );
+        assert!(
+            dt / 5.0 > limit,
+            "precondition: and five substeps are an ulp over"
+        );
+        assert_eq!(substeps_for(Time::s(dt), Time::s(limit)), 6);
+
+        // Whole and fractional multiples of limits at two scales six decades apart, every one
+        // checked against the division the scheduler makes.
+        let mut over = 0;
+        for i in 1..=4000u32 {
+            let limit = 1e-3 * (1.0 + i as f64 * 7.13e-4) * if i % 2 == 0 { 1e-3 } else { 1e3 };
+            for multiple in [1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 2.5, 1e3] {
+                let dt = multiple * limit;
+                let n = substeps_for(Time::s(dt), Time::s(limit));
+                let ceiling = (dt / limit).ceil() as u32;
+                assert!(dt / n as f64 <= limit, "{dt:e} / {n} is over {limit:e}");
+                assert!(
+                    ceiling <= n && n <= ceiling + 1,
+                    "{n} for {dt:e} over {limit:e}, ceiling {ceiling}"
+                );
+                if n > ceiling {
+                    assert!(
+                        dt / ceiling as f64 > limit,
+                        "{n} for {dt:e} over {limit:e}, where {ceiling} were within it"
+                    );
+                    over += 1;
+                }
+            }
+        }
+        // Common, not a curiosity. Only `+ × ÷` and a ceiling went into it, so the count is the
+        // same on every platform, and it is the number the documentation gives.
+        assert_eq!(
+            over, 367,
+            "of 32000, a ceiling alone was an ulp over in this many"
+        );
+
+        // The ceiling rounding the other way is left as it was: a thousand would do here.
+        let limit = 1e-3 * (1.0 + 6.0 * 7.13e-4) * 1e-3;
+        let dt = 1e3 * limit;
+        assert!(
+            dt / 1000.0 <= limit,
+            "precondition: a thousand substeps are within it"
+        );
+        assert_eq!(substeps_for(Time::s(dt), Time::s(limit)), 1001);
+    }
+
+    /// **At the cap, the cap**: four billion substeps, each longer than a limit too short for
+    /// them — and the scheduler refuses such a window. Without its own branch the cap overflowed:
+    /// `n as u32` saturates, the substep is over, and `n + 1` wraps to zero in a release build,
+    /// where the scheduler then steps the domain no times at all. And a limit so short that
+    /// `dt / limit` is not finite is the cap too, not the one substep of everything it was.
+    #[test]
+    fn the_cap_is_the_cap() {
+        assert_eq!(substeps_for(Time::s(1.0), Time::s(1e-10)), u32::MAX);
+        assert_eq!(
+            substeps_for(Time::s(2.0), Time::from_si(f64::MIN_POSITIVE / 4.0)),
+            u32::MAX
+        );
+        assert_eq!(substeps_for(Time::s(1.0), Time::from_si(5e-324)), u32::MAX);
     }
 }

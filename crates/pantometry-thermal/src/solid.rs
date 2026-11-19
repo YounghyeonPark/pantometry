@@ -2844,8 +2844,8 @@ impl Domain for Solid3D {
     /// audit stays exact to the last bit. At half this step it is 1.005×.
     ///
     /// So take a fraction of it when the initial condition is sharp. `Schedule::Multirate` divides
-    /// by `ceil(dt / limit)` and so usually lands comfortably inside, but a caller stepping by
-    /// hand can sit exactly on it. `cargo run --example heat_in_three_dimensions` is the
+    /// by `ceil(dt / limit)`, or one more where that is an ulp over, and so usually lands
+    /// comfortably inside, but a caller stepping by hand can sit exactly on it. `cargo run --example heat_in_three_dimensions` is the
     /// measurement.
     fn max_stable_dt(&self, _now: Time) -> Time {
         let rate = self.worst_rate_now();

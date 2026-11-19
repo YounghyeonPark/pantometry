@@ -24,7 +24,9 @@
 //!   `SurfaceOptics` were already doing before there was a scheduler to notice.
 //! - **[`Schedule::Multirate`]** — each evolving domain takes as many equal
 //!   substeps of the shared window as its own stability limit requires, so the
-//!   slow domain is not dragged down to the fast one's step.
+//!   slow domain is not dragged down to the fast one's step. The limit is asked
+//!   again before every substep, so one that tightens as the domain runs divides
+//!   the rest of the window again rather than being stepped past.
 //!
 //! # Coupling, and why it goes through a bus
 //!
@@ -93,6 +95,14 @@ pub trait Domain {
     ///
     /// Infinite means "no limit", which is the honest answer for a quasi-static
     /// domain and for a linear one being solved implicitly.
+    ///
+    /// **From the state the domain is in now**, and [`Schedule::Multirate`] takes it at that word:
+    /// it asks again before every substep after a window's first, and no substep it hands over is
+    /// longer than a positive, finite answer it got just before. One it cannot meet in four
+    /// billion substeps of what is left of the window it refuses, naming the domain. So a domain
+    /// whose `step` refuses a step over this limit, computed by the same expression, needs no slack
+    /// for the scheduler's sake. It is asked once per substep, which is the price of a limit that
+    /// moves, and worth keeping cheaper than the step it bounds.
     fn max_stable_dt(&self, now: Time) -> Time {
         let _ = now;
         Time::from_si(f64::INFINITY)
@@ -804,6 +814,44 @@ pub enum Schedule {
     /// As [`Schedule::Staggered`], but each evolving domain takes as many equal
     /// substeps as its own stability limit needs.
     ///
+    /// # The limit is asked before every substep, not once a window
+    ///
+    /// [`Domain::max_stable_dt`] is the largest step from the state the domain is in, and its own
+    /// substeps move that state. Sized once at the start of the window, a domain whose limit
+    /// tightens as it runs was stepped past it: a puck warming under a hot inlet, whose limit falls
+    /// with the viscosity, was refused inside its first window, by 10.4% on a window of three
+    /// limits; at one temperature its limit came back an ulp shorter after a step, and windows of
+    /// three, five and ten limits were refused by `9.5e-16`. Now a substep longer than the limit
+    /// read just before it is not taken: what is left of the window is divided again from that
+    /// limit, into equal substeps. Every substep is at most a positive, finite limit read just
+    /// before it, and [`substeps_for`] makes that exact, not only within a rounding. A zero, NaN or
+    /// infinite one changes no plan and is left to the domain's own refusal.
+    ///
+    /// A limit that never falls below the plan never moves it, and such a run takes the same
+    /// substeps, to the bit, that it took when the limit was read once.
+    ///
+    /// # What it costs, and where it stops
+    ///
+    /// One more call to `max_stable_dt` per substep. And **a plan only ever tightens**: a limit
+    /// that dips for one read and recovers holds the rest of the window at the dip's substep: four
+    /// substeps of a quarter whose limit reads `1e-3` once, after the first, become 751. Dividing
+    /// again only when the limit falls keeps a limit that does not move to the bit; dividing again
+    /// whenever it moves would not.
+    ///
+    /// **A limit that cannot be met is refused, not followed.** One that falls toward a point
+    /// inside the window, as a fixed fraction of the time left to it, is divided ever finer; that
+    /// is the shape `NBody`'s limit takes for two unsoftened bodies closing head on, by its formula,
+    /// not by a run. When what is left of the window would take more than four billion substeps of
+    /// it, the window is refused, naming the domain, the limit and the substep: measured on such a
+    /// limit at half the time left, within a hundred substeps, where going on dividing at the cap
+    /// ran a million and was stopped. So is a window whose first read cannot be met. Before, the
+    /// first read set the plan and nothing else did, so a domain that does not refuse its own step
+    /// was stepped straight through.
+    ///
+    /// **Under [`Schedule::Iterative`]**, which sweeps the same way, each iteration follows its own
+    /// trajectory, so a limit that moves can divide a window differently from one iteration to the
+    /// next. The plan used to come from the restored state and be the same in all of them.
+    ///
     /// # It does not refine a coupled quantity, and the audit cannot tell you
     ///
     /// Read this before choosing it for accuracy, because that is the obvious reason to and it
@@ -1091,12 +1139,15 @@ impl Simulation {
         for domain in self.domains.iter_mut() {
             // A quasi-static domain has no state to march, so subdividing its
             // step would just solve the same problem several times.
-            let n = if multirate && domain.kind() == Kind::Evolving {
-                substeps_for(dt, domain.max_stable_dt(now))
-            } else {
-                1
-            };
-            let h = dt / n as f64;
+            let subcycles = multirate && domain.kind() == Kind::Evolving;
+            let mut planned = 1;
+            let mut h = dt;
+            if subcycles {
+                let limit = domain.max_stable_dt(now);
+                planned = substeps_for(dt, limit);
+                h = dt / planned as f64;
+                out_of_reach(domain.name(), limit, h)?;
+            }
             let mut t = now;
             // Which channels had already been drawn on before this domain's turn.
             let before: Vec<(&'static str, u32)> = self.bus.takes_per_channel().collect();
@@ -1111,9 +1162,34 @@ impl Simulation {
             // else received a gigajoule differences to nothing, and the check would accuse the
             // domain that received it.
             self.bus.mark();
-            for _ in 0..n {
+            // **The limit is asked again before every substep after the first**, because it is the
+            // largest step *from here* and the domain's own substeps move what it is computed from.
+            // See `Schedule::Multirate`. When the planned substep is longer than the limit now,
+            // what is left of the window is divided again, from this limit, into equal substeps. A
+            // limit that never falls below the plan never moves it, so such a run takes `dt / n`,
+            // `n` times, to the bit as it always did.
+            //
+            // `left` is counted down by the substeps taken rather than recomputed from the clock,
+            // the way the bus counts each channel's unclaimed time down, so a plan made again
+            // divides the time the bus also has left.
+            let mut left = dt;
+            let mut taken: u32 = 0;
+            while planned > 0 {
+                if subcycles && taken > 0 {
+                    let limit = domain.max_stable_dt(t);
+                    // A limit of zero, NaN or infinity says nothing a plan can use, and is left to
+                    // the domain's own refusal, as at the start of the window.
+                    if limit > Time::ZERO && h > limit {
+                        planned = substeps_for(left, limit);
+                        h = left / planned as f64;
+                        out_of_reach(domain.name(), limit, h)?;
+                    }
+                }
                 domain.step(t, h, &mut self.bus)?;
                 t += h;
+                left -= h;
+                taken = taken.saturating_add(1);
+                planned -= 1;
             }
             if let (Some(books), Some(traffic)) = (books_before, traffic_before) {
                 let closest = attribute(
@@ -1224,7 +1300,7 @@ impl Simulation {
                 }
                 *moved.entry(channel).or_insert(0.0) += net.abs();
             }
-            substeps.push((domain.name().to_string(), n));
+            substeps.push((domain.name().to_string(), taken));
         }
         let residual = self
             .domains
@@ -1283,6 +1359,30 @@ impl Simulation {
             tolerance: tol,
         })
     }
+}
+
+/// Refuse a planned substep `h` still longer than a positive `limit`, which happens only at
+/// [`substeps_for`]'s cap: four billion substeps of what is left would not be within the limit.
+///
+/// Refused rather than taken, because nothing else stops it. A domain that does not check its own
+/// step would be stepped past the limit, and one whose limit keeps falling toward a point inside
+/// the window would be divided again at the cap before every substep, for ever.
+fn out_of_reach(name: &str, limit: Time, h: Time) -> Result<(), Violation> {
+    if limit > Time::ZERO && h > limit {
+        return Err(Violation {
+            quantity: "stability limit".to_string(),
+            site: format!(
+                "{name} (out of reach: what is left of the window would take more than {} \
+                 substeps of it)",
+                u32::MAX
+            ),
+            before: limit.to_si(),
+            after: h.to_si(),
+            scale: limit.to_si(),
+            tolerance: 0.0,
+        });
+    }
+    Ok(())
 }
 
 /// Check one domain's books against its own traffic on the bus.
@@ -1514,6 +1614,347 @@ mod tests {
             report.substeps,
             vec![("lamp".to_string(), 1), ("block".to_string(), 1)]
         );
+    }
+
+    /// An evolving domain whose limit is whatever `limit` says after so many steps, and which
+    /// records each step it took beside the limit it reported just before. `strict` refuses a step
+    /// over that limit with no slack, as the puck, the channel and the cavity do: they check the
+    /// step by the same expression they report.
+    struct Moving {
+        limit: Limit,
+        strict: bool,
+        taken: Vec<(f64, f64)>,
+    }
+
+    /// A limit, in seconds, as a function of how many steps have been taken.
+    type Limit = fn(u32) -> f64;
+
+    impl Moving {
+        fn new(limit: Limit, strict: bool) -> Moving {
+            Moving {
+                limit,
+                strict,
+                taken: Vec::new(),
+            }
+        }
+    }
+
+    impl Domain for Moving {
+        fn name(&self) -> &str {
+            "moving"
+        }
+        fn max_stable_dt(&self, _now: Time) -> Time {
+            Time::from_si((self.limit)(self.taken.len() as u32))
+        }
+        fn step(&mut self, _t: Time, dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
+            let (h, limit) = (dt.to_si(), (self.limit)(self.taken.len() as u32));
+            if self.strict && h > limit {
+                return Err(Violation {
+                    quantity: "stability".to_string(),
+                    site: format!("moving (substep {})", self.taken.len()),
+                    before: limit,
+                    after: h,
+                    scale: limit,
+                    tolerance: 0.0,
+                });
+            }
+            self.taken.push((h, limit));
+            Ok(())
+        }
+        fn as_any(&self) -> Option<&dyn Any> {
+            Some(self)
+        }
+    }
+
+    fn steps_of(sim: &Simulation) -> Vec<(f64, f64)> {
+        sim.domain_as::<Moving>("moving").unwrap().taken.clone()
+    }
+
+    /// **A limit that tightens inside a window is honoured inside it.** The limit is the largest
+    /// step from the state the domain is in, and here it is `1/(1 + k/4)` after `k` steps, down to
+    /// a floor of `0.4`, as a warming puck's falls and settles. Sized once from the first read, the
+    /// window of three is three steps of one, and the second is refused: the limit is `0.8` by
+    /// then.
+    ///
+    /// Every step taken is at most what the domain said just before it, the steps cover the window,
+    /// and there are more of them than the first read planned. The floor is so that a scheduler
+    /// that divided the whole window again, rather than what is left of it, covers too much and
+    /// says so here, rather than following a limit that never stops falling for ever.
+    #[test]
+    fn a_limit_that_tightens_inside_a_window_is_honoured() {
+        let mut sim = Simulation::new(Schedule::Multirate).with(Moving::new(
+            |k| (1.0 / (1.0 + 0.25 * k as f64)).max(0.4),
+            true,
+        ));
+        let report = sim
+            .advance(Time::s(3.0))
+            .expect("every substep is within the limit read before it");
+        let steps = steps_of(&sim);
+        for (k, (h, limit)) in steps.iter().enumerate() {
+            assert!(h <= limit, "substep {k} was {h:e} against {limit:e}");
+        }
+        let covered: f64 = steps.iter().map(|(h, _)| h).sum();
+        // A sum and a subtraction from what is left per substep, each of numbers under 4, so each
+        // rounds by at most `ε·4`; charged `ε·3` twice over, which is more.
+        let rounding = 2.0 * steps.len() as f64 * f64::EPSILON * 3.0;
+        assert!(
+            (covered - 3.0).abs() <= rounding,
+            "the substeps cover {covered:e} of 3 s"
+        );
+        // **And which substeps.** Three of one are planned; the limit is 0.8 after the first, so
+        // the 2 s left is three of 2/3; 2/3 after the second, which is that substep exactly and
+        // keeps the plan; 4/7 after the third, so the 2/3 left is two of 1/3; and 1/2 after the
+        // fourth, which keeps it. Dividing the whole window again, or one substep more than it
+        // takes, or a substep that only meets the limit, each covers the window within it too, in
+        // another five substeps.
+        let want = [1.0, 2.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
+        assert_eq!(steps.len(), want.len(), "{steps:?}");
+        for (k, ((h, _), want)) in steps.iter().zip(want).enumerate() {
+            assert!(
+                (h - want).abs() <= rounding,
+                "substep {k} is {h:e}, and {want:e} divides what was left"
+            );
+        }
+        assert_eq!(
+            report.substeps,
+            vec![("moving".to_string(), steps.len() as u32)]
+        );
+    }
+
+    /// **A substep exactly at the limit is kept**, not divided again: `2/3` is what `2/3` reads as,
+    /// so a window of two takes three substeps of it, to the bit. A scheduler that divided again
+    /// when a substep only met its limit would take four here, and would move the bits of every
+    /// window that is a whole number of its limits.
+    #[test]
+    fn a_substep_exactly_at_the_limit_is_kept() {
+        let mut sim = Simulation::new(Schedule::Multirate).with(Moving::new(|_| 2.0 / 3.0, true));
+        sim.advance(Time::s(2.0)).unwrap();
+        let steps = steps_of(&sim);
+        assert_eq!(steps.len(), 3, "{steps:?}");
+        for (k, (h, _)) in steps.iter().enumerate() {
+            assert_eq!(
+                h.to_bits(),
+                (2.0f64 / 3.0).to_bits(),
+                "substep {k} is {h:e}"
+            );
+        }
+    }
+
+    /// **A plan only ever tightens**, and that has a price, pinned here because it is the price
+    /// the design chose. The limit reads `1e-3` once, after the first of four substeps of a
+    /// quarter, and a quarter again after that: the rest of the window is 750 substeps of a
+    /// thousandth. Dividing again whenever the limit moved, either way, would take five, and
+    /// would move the bits of every run whose limit rises.
+    #[test]
+    fn a_limit_that_dips_once_holds_the_rest_of_the_window() {
+        let mut sim = Simulation::new(Schedule::Multirate)
+            .with(Moving::new(|k| if k == 1 { 1e-3 } else { 0.25 }, true));
+        sim.advance(Time::s(1.0)).unwrap();
+        assert_eq!(steps_of(&sim).len(), 751);
+    }
+
+    /// **And a limit that does not move is read and kept**, so the substeps are what they were when
+    /// the limit was read once a window: `n` of `dt / n`, to the bit. A scheduler that divided what
+    /// is left again before every substep would still cover the window, and every run with a limit
+    /// on it would move in its last bits: here ten of the fifteen substeps. A window and a limit
+    /// whose substep is exact, a quarter of a second, would not show it.
+    #[test]
+    fn a_limit_that_does_not_move_changes_no_substep() {
+        let mut sim = Simulation::new(Schedule::Multirate).with(Moving::new(|_| 0.07, true));
+        sim.advance(Time::s(1.0)).unwrap();
+        let steps = steps_of(&sim);
+        assert_eq!(steps.len(), 15, "ceil(1.0/0.07)");
+        for (k, (h, _)) in steps.iter().enumerate() {
+            assert_eq!(
+                h.to_bits(),
+                (1.0f64 / 15.0).to_bits(),
+                "substep {k} is {h:e}"
+            );
+        }
+    }
+
+    /// **A window of a whole number of limits is not refused for a rounding.** The quotient below
+    /// rounds onto exactly five, and five substeps of the window are each an ulp over the limit, so
+    /// a domain that checks with no slack refused the first. Six are not.
+    #[test]
+    fn a_whole_number_of_limits_is_not_an_ulp_over() {
+        const LIMIT: f64 = 0.11305311647662632;
+        let window = 0.5652655823831316;
+        assert_eq!(
+            window / LIMIT,
+            5.0,
+            "precondition: the quotient rounds onto five"
+        );
+        assert!(
+            window / 5.0 > LIMIT,
+            "precondition: five substeps are an ulp over"
+        );
+        let mut sim = Simulation::new(Schedule::Multirate).with(Moving::new(|_| LIMIT, true));
+        sim.advance(Time::s(window))
+            .expect("no substep is over the limit, even by an ulp");
+        assert_eq!(steps_of(&sim).len(), 6);
+    }
+
+    /// **A limit of zero says nothing a plan can use**, and the plan is kept: dividing what is left
+    /// by a zero limit gives one substep of all of it, which is the longest step there is, taken
+    /// because the domain said no step was stable. Left to the domain to refuse.
+    #[test]
+    fn a_limit_that_collapses_to_zero_does_not_lengthen_the_step() {
+        let mut sim = Simulation::new(Schedule::Multirate)
+            .with(Moving::new(|k| if k == 0 { 0.25 } else { 0.0 }, false));
+        sim.advance(Time::s(1.0)).unwrap();
+        let steps = steps_of(&sim);
+        assert_eq!(
+            steps.len(),
+            4,
+            "the plan from the first read, kept: {steps:?}"
+        );
+        assert!(steps.iter().all(|(h, _)| *h == 0.25), "{steps:?}");
+    }
+
+    /// **A positive limit too short to reach is refused, not stepped past.** After the first of
+    /// four substeps the limit reads `1e-12`, then the smallest subnormal, either far below what
+    /// four billion substeps of the 0.75 s left could meet. The second is too short to divide
+    /// by at all, and `substeps_for` once answered that with one substep of everything left.
+    #[test]
+    fn a_limit_out_of_reach_is_refused() {
+        let cases: [(&str, f64, Limit); 2] = [
+            ("1e-12", 1e-12, |k| if k == 0 { 0.25 } else { 1e-12 }),
+            (
+                "a subnormal",
+                5e-324,
+                |k| if k == 0 { 0.25 } else { 5e-324 },
+            ),
+        ];
+        for (name, tiny, limit) in cases {
+            let mut sim = Simulation::new(Schedule::Multirate).with(Moving::new(limit, false));
+            let refused = sim
+                .advance(Time::s(1.0))
+                .expect_err(&format!("a limit of {name} cannot be met"));
+            assert!(refused.site.contains("out of reach"), "{name}: {refused}");
+            assert_eq!(refused.before, tiny, "{name}: {refused}");
+            let steps = steps_of(&sim);
+            assert_eq!(
+                steps.len(),
+                1,
+                "{name}: nothing past the first substep: {steps:?}"
+            );
+        }
+        // And from the first read: a window that cannot be met is not begun.
+        // Strict, so that a scheduler that began it is refused by the domain at once, rather than
+        // made to record four billion substeps.
+        let mut sim = Simulation::new(Schedule::Multirate).with(Moving::new(|_| 1e-12, true));
+        let refused = sim.advance(Time::s(1.0)).expect_err("1e-12 from the start");
+        assert!(refused.site.contains("out of reach"), "{refused}");
+        assert!(steps_of(&sim).is_empty());
+    }
+
+    /// A domain whose limit is half the time left to `t = 0.5`, a point inside a window of one —
+    /// the shape of a pair closing on each other with nothing to soften the contact — and whose
+    /// step, like `NBody`'s, does not refuse. It stops itself after a million steps, so that a
+    /// scheduler that followed it would end.
+    struct Closing {
+        t: f64,
+        taken: u32,
+    }
+
+    impl Domain for Closing {
+        fn name(&self) -> &str {
+            "closing"
+        }
+        fn max_stable_dt(&self, _now: Time) -> Time {
+            Time::from_si(0.5 * (0.5 - self.t))
+        }
+        fn step(&mut self, _t: Time, dt: Time, _bus: &mut Exchange) -> Result<(), Violation> {
+            self.t += dt.to_si();
+            self.taken += 1;
+            if self.taken > 1_000_000 {
+                return Err(Violation::at(
+                    "closing",
+                    "a million steps",
+                    self.taken as f64,
+                ));
+            }
+            Ok(())
+        }
+        fn as_any(&self) -> Option<&dyn Any> {
+            Some(self)
+        }
+    }
+
+    /// **A limit that falls toward a point inside the window is refused, not followed.** Each
+    /// substep halves the time left to the point, so the plan grows until four billion substeps
+    /// of what is left would not be within the limit, and the scheduler refuses there. A scheduler
+    /// that went on dividing at the cap took the capped substep past the point, where the limit is
+    /// negative and plans nothing, and had some four billion substeps left in the window.
+    #[test]
+    fn a_limit_closing_on_a_point_is_refused() {
+        let mut sim = Simulation::new(Schedule::Multirate).with(Closing { t: 0.0, taken: 0 });
+        let refused = sim
+            .advance(Time::s(1.0))
+            .expect_err("a limit that reaches zero inside the window cannot be met");
+        assert!(refused.site.contains("out of reach"), "{refused}");
+        let taken = sim.domain_as::<Closing>("closing").unwrap().taken;
+        assert!(taken < 100, "{taken} substeps before the refusal");
+    }
+
+    /// Publishes a kilojoule each window.
+    struct Source;
+
+    impl Domain for Source {
+        fn name(&self) -> &str {
+            "source"
+        }
+        fn kind(&self) -> Kind {
+            Kind::QuasiStatic
+        }
+        fn step(&mut self, _t: Time, _dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
+            bus.publish("heat", 1.0e3);
+            Ok(())
+        }
+    }
+
+    /// Takes its share of the heat every substep, with a limit that tightens twice in every window
+    /// of three seconds: one, then 0.7 from half a second in, then 0.55 from a second and a half.
+    struct Drinker;
+
+    impl Domain for Drinker {
+        fn name(&self) -> &str {
+            "drinker"
+        }
+        fn max_stable_dt(&self, now: Time) -> Time {
+            let phase = now.to_si() % 3.0;
+            Time::from_si(if phase < 0.5 {
+                1.0
+            } else if phase < 1.5 {
+                0.7
+            } else {
+                0.55
+            })
+        }
+        fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
+            let _ = bus.take_share("heat", dt);
+            Ok(())
+        }
+    }
+
+    /// **A window divided again still hands its consumer all of its share**, late in a run too.
+    /// What is left is counted down by the substeps taken, as the bus counts each channel's
+    /// unclaimed time, rather than worked out from the clock: late in a run the clock's rounding of
+    /// one substep is over the bus's `1e-12` of a 3 s window, and a remainder taken from the clock
+    /// left `1.6e-9` J of a kilojoule on the channel in window 21 845, the first to cross 65 536 s.
+    /// Forty thousand windows, which is 120 000 s, each divided again twice.
+    #[test]
+    fn a_window_divided_again_late_in_a_run_still_empties_the_channel() {
+        let mut sim = Simulation::new(Schedule::Multirate)
+            .with(Source)
+            .with(Drinker);
+        for k in 0..40_000 {
+            let report = sim
+                .advance(Time::s(3.0))
+                .unwrap_or_else(|v| panic!("window {k}: {v}"));
+            assert_eq!(report.substeps[1].1, 5, "window {k}: {:?}", report.substeps);
+        }
     }
 
     /// Iterative coupling converges and reports how many passes it took.
