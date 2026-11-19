@@ -368,6 +368,25 @@ protects nothing.
 
 ### Changed
 
+- **A block's stability limit visits the cells of its cooled faces, and no others, and every bit
+  is as it was** (`pantometry-thermal`). `Solid3D`'s limit said it cost "a pass over the boundary
+  cells" and passed over every cell, computing each one's loss to throw away the ones that came
+  back zero. Without air in the voids only a cell on an exposed face can lose anything: on
+  `24-a-power-module-junction-to-ambient` that is 64 of 512 cells. The step asks for the limit
+  before it moves anything, so the pass was part of every step: 0.26 of a step's cost on scene 24
+  and 0.36 on `29-a-designed-bracket-becomes-cells`.
+  - **The same answer, by argument, and checked in every debug build.** The cells skipped are the
+    ones whose loss was zero, and a maximum does not depend on the order its terms come in. With
+    air a cell touching a void can be anywhere, and the pass is the whole block as it was. A debug
+    build computes the whole pass beside the planes and asserts the two agree to the bit, so a
+    loss term added off the faces later fails any test that cools a block, rather than leaving
+    the limit too long, which oscillates and does not diverge.
+  - **The scenes are not the evidence.** All 34 write the same bytes as before, and with the plane
+    loop emptied 33 of them still do.
+  - **What it gave**, pinned to a P-core, best of seven runs of each interleaved, as a share of
+    the time it took: scene 24 0.80, 29 0.75, 30 0.83, 25 0.96; 18 and 23 within 4%, either way.
+    A run before the last revision gave the same shares within four points, at absolute times
+    a fifth to a third shorter on both binaries.
 - **The reciprocal sum is computed on several threads as well, by the classical sum and by the
   particle mesh, and every bit is as it was on one** (`pantometry-forcefield`). No sum is split:
   the classical sum's structure factors go to the threads by wave, each over every atom in order,

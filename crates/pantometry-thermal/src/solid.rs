@@ -223,6 +223,27 @@ impl Face {
             Face::ZMax => k + 1 == nz,
         }
     }
+
+    /// Every cell [`holds`](Face::holds) says lies on this face, once each, without visiting the
+    /// ones it says do not — a plane of the block rather than all of it.
+    fn cells(self, counts: (usize, usize, usize)) -> impl Iterator<Item = (usize, usize, usize)> {
+        let (nx, ny, nz) = counts;
+        let [a, b] = self.axes();
+        let n = [nx, ny, nz];
+        // An empty block has no face to hold anything. Without this a low face of a block with no
+        // cells along x yields a cell at the origin, and a high face's `n - 1` underflows.
+        let rows = if nx * ny * nz == 0 { 0 } else { n[b] };
+        (0..rows).flat_map(move |q| {
+            (0..n[a]).map(move |p| match self {
+                Face::XMin => (0, p, q),
+                Face::XMax => (nx - 1, p, q),
+                Face::YMin => (p, 0, q),
+                Face::YMax => (p, ny - 1, q),
+                Face::ZMin => (p, q, 0),
+                Face::ZMax => (p, q, nz - 1),
+            })
+        })
+    }
 }
 
 /// the arithmetic one, and the difference is not a refinement away.
@@ -1972,8 +1993,10 @@ impl Solid3D {
     /// stiffer at the start than at the end, and a limit that ignored that would be correct
     /// only at the end.
     ///
-    /// Costs a pass over the boundary cells and nothing at all for an unexposed block, which is
-    /// every scene that existed before this.
+    /// Costs a pass over the cells of the exposed faces, over the whole block only when it has air
+    /// in its voids, and for a block with neither only its gaps' pairs, if it has any. This said
+    /// "the boundary cells" while the pass was over every cell, and the step asks for it before it
+    /// moves anything, so on a small block that pass was 0.26 to 0.36 of what a step cost.
     fn worst_rate_now(&self) -> f64 {
         // Gaps as well as films: a pair of plates facing each other across void may have no
         // conducting face at all, so the radiative exchange is the *only* thing setting their
@@ -1984,8 +2007,6 @@ impl Solid3D {
         {
             return self.worst_rate;
         }
-        let (nx, ny, nz) = self.counts;
-        let dx = self.dx.to_si();
         let mut worst = self.worst_rate;
         // A gap's radiative conductance, linearised at the **hotter** of the pair, which is the
         // conservative end: `dq/dT = 4σA T³/(1/ε₁+1/ε₂−1)` grows with temperature, so the hotter
@@ -2000,19 +2021,60 @@ impl Solid3D {
                 }
             }
         }
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let c = i + nx * (j + ny * k);
-                    let loss = self.loss_conductance_at(self.temperature_at(i, j, k), (i, j, k));
-                    if loss == 0.0 {
-                        continue;
-                    }
-                    worst = worst.max(self.mobility[c] * (self.face_sum[c] + loss / dx));
-                }
+        // With air, a cell touching a void can be anywhere in the block, and the pass is the
+        // whole block.
+        if self.air.is_some() {
+            return self.charge(worst, self.every_cell());
+        }
+        // **Without it, only the cells on an exposed face**: any other cell's loss is a sum over
+        // no face, exactly zero, and the pass over every cell spent most of its time finding that
+        // out. A block's stability limit cost 0.26 of its step on
+        // `24-a-power-module-junction-to-ambient`, whose one cooled face is 64 of its 512 cells,
+        // and 0.36 on `29-a-designed-bracket-becomes-cells`.
+        //
+        // Exact, not near: the cells skipped are the ones the whole pass skipped by `loss == 0`
+        // after computing their loss, and a maximum does not depend on the order its terms come
+        // in. `worst` is not NaN here, and `max` returns the other side of a NaN, so it stays so.
+        // A cell on two exposed faces is charged twice and counts once.
+        let planes = self
+            .exposed
+            .keys()
+            .fold(worst, |w, face| self.charge(w, face.cells(self.counts)));
+        // **And checked, on every debug run of every test that builds a block.** The plane path
+        // rests on `loss_conductance_at` having no term off the exposed faces, and the shipped
+        // scenes barely see the plane path at all: with its loop emptied, 33 of the 34 wrote the
+        // same bytes. A term added there off the faces, the way the air was, would be left out of
+        // the limit and make it too long, which does not diverge: it oscillates while the books
+        // balance.
+        debug_assert_eq!(
+            planes.to_bits(),
+            self.charge(worst, self.every_cell()).to_bits(),
+            "{}: the exposed faces' cells set {planes:e}, and every cell {:e}",
+            self.name,
+            self.charge(worst, self.every_cell())
+        );
+        planes
+    }
+
+    /// `worst`, raised by each of `cells` whose loss is not zero: its conduction and its loss at
+    /// its own temperature, as a rate.
+    fn charge(&self, mut worst: f64, cells: impl Iterator<Item = (usize, usize, usize)>) -> f64 {
+        let (nx, ny, _) = self.counts;
+        let dx = self.dx.to_si();
+        for (i, j, k) in cells {
+            let c = i + nx * (j + ny * k);
+            let loss = self.loss_conductance_at(self.temperature_at(i, j, k), (i, j, k));
+            if loss != 0.0 {
+                worst = worst.max(self.mobility[c] * (self.face_sum[c] + loss / dx));
             }
         }
         worst
+    }
+
+    /// Every cell of the block, in index order.
+    fn every_cell(&self) -> impl Iterator<Item = (usize, usize, usize)> {
+        let (nx, ny, nz) = self.counts;
+        (0..nz).flat_map(move |k| (0..ny).flat_map(move |j| (0..nx).map(move |i| (i, j, k))))
     }
 
     /// The film's flux out of a cell, in the sweep's own units — a conductivity times a
@@ -2280,6 +2342,10 @@ impl Solid3D {
     /// film inside the same explicit update — see `film_flux`, called from the sweep — makes
     /// them one operator, and `tests/the_cooled_boundary_order.rs` measures four per doubling at
     /// `Bi = 1.7` and at `Bi = 17`.
+    ///
+    /// **Without air, nothing here may be non-zero off an exposed face.** `worst_rate_now` visits
+    /// only those faces' cells then, and a term reaching any other cell must widen that pass, or
+    /// the limit leaves it out. Its debug assertion is what says so.
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
         self.air_conductance(cell)
             + self
@@ -3428,6 +3494,43 @@ impl Solid3D {
             sum / weight
         } else {
             f64::NAN
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Face;
+
+    /// **A face visits the cells it holds**, each once, on blocks of every shape up to four on a
+    /// side, flat and empty ones included. `cells` is what the stability limit visits, and a plane
+    /// picked wrong or a face's two axes swapped need not show in a block whose face cells are all
+    /// alike: every middle cell sets the same limit there, and a cell read past the end of a row is
+    /// the start of the next.
+    #[test]
+    fn a_face_visits_the_cells_it_holds() {
+        for nx in 0..=4 {
+            for ny in 0..=4 {
+                for nz in 0..=4 {
+                    let counts = (nx, ny, nz);
+                    for face in Face::ALL {
+                        let mut visited: Vec<_> = face.cells(counts).collect();
+                        visited.sort();
+                        let mut held = Vec::new();
+                        for k in 0..nz {
+                            for j in 0..ny {
+                                for i in 0..nx {
+                                    if face.holds((i, j, k), counts) {
+                                        held.push((i, j, k));
+                                    }
+                                }
+                            }
+                        }
+                        held.sort();
+                        assert_eq!(visited, held, "{face:?} on {counts:?}");
+                    }
+                }
+            }
         }
     }
 }

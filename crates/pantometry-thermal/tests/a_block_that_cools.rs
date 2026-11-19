@@ -622,6 +622,132 @@ fn a_stiff_film_tightens_the_limit_and_the_limit_is_enforced() {
         .expect_err("a step past the limit must be refused");
 }
 
+/// A box of PLA with no two sides the same length, so each face divides its area among a
+/// different number of cells, and every face has cells in its middle with five neighbours. The
+/// cell is `2⁻⁹` m, so that division is exact whatever the number.
+fn pla_box() -> Solid3D {
+    Solid3D::new(
+        "part",
+        Substance::from_name("pla").expect("the catalogue has it"),
+        (4, 3, 5),
+        Length::from_si(1.0 / 512.0),
+        Temperature::celsius(300.0),
+    )
+}
+
+/// A film on `face` of [`pla_box`], at `w_per_m2_k` over the face's whole area.
+fn film_on(face: Face, w_per_m2_k: f64) -> (Face, Environment) {
+    let (nx, ny, nz) = (4.0, 3.0, 5.0);
+    let cells = match face {
+        Face::XMin | Face::XMax => ny * nz,
+        Face::YMin | Face::YMax => nx * nz,
+        Face::ZMin | Face::ZMax => nx * ny,
+    };
+    let dx = 1.0 / 512.0;
+    (
+        face,
+        Environment {
+            ambient: Temperature::celsius(20.0),
+            convection_w_per_m2_k: w_per_m2_k,
+            area: Area::from_si(cells * dx * dx),
+        },
+    )
+}
+
+/// The face across the block from `face`.
+fn opposite(face: Face) -> Face {
+    match face {
+        Face::XMin => Face::XMax,
+        Face::XMax => Face::XMin,
+        Face::YMin => Face::YMax,
+        Face::YMax => Face::YMin,
+        Face::ZMin => Face::ZMax,
+        Face::ZMax => Face::ZMin,
+    }
+}
+
+/// [`pla_box`]'s limit with the given films.
+fn limit_with(films: &[(Face, f64)]) -> f64 {
+    films
+        .iter()
+        .fold(pla_box(), |block, &(face, h)| {
+            let (face, film) = film_on(face, h);
+            block.losing_from(face, film)
+        })
+        .max_stable_dt(Time::ZERO)
+        .to_si()
+}
+
+/// **Whichever face is cooled, the limit is the same.** A stiff film on a face sets the limit at
+/// the cells in that face's middle: five neighbours of the same material and the same film behind
+/// each, at the same temperature. So all six faces set one limit, to the bit, and each a shorter
+/// one than the bare box's: 0.872 of it, where the half cell of solid behind the film puts the
+/// floor for any film at 6/7, and a film this test misses entirely reads 1.
+///
+/// The limit visits only the cells on an exposed face, and this sees a far face visited on the
+/// near plane, or no plane visited at all: either reads the bare limit for that face. It does not
+/// see a face's two axes swapped, which still reaches a middle cell on five faces of this box and
+/// reads past the end of the sixth. `a_face_visits_the_cells_it_holds` in `solid.rs` is what sees
+/// that.
+#[test]
+fn a_stiff_film_on_any_face_sets_the_same_limit() {
+    let bare = limit_with(&[]);
+    let first = limit_with(&[(Face::XMin, 2000.0)]);
+    for face in Face::ALL {
+        let limit = limit_with(&[(face, 2000.0)]);
+        assert!(
+            limit < bare * 0.9,
+            "a stiff film on {face:?} must shorten the step: {limit:e} against {bare:e} bare"
+        );
+        assert_eq!(
+            limit.to_bits(),
+            first.to_bits(),
+            "{face:?} sets {limit:e}, XMin sets {first:e}"
+        );
+    }
+}
+
+/// **A second cooled face moves the limit only where the two faces meet.** A cell's rate is its
+/// conduction and the films of the faces it lies on, and the limit is the largest of them.
+///
+/// - **A weak second film leaves the limit to the bit.** The cells that set it, in the stiff
+///   face's middle, lie on no other face, and the weak film raises no cell past them. A limit
+///   that visited only one of two exposed faces' cells keeps the edge the two share and loses the
+///   stiff face's middle, and reads a longer limit.
+/// - **A stiff second film on a face beside the first shortens it**, because the edge the two
+///   share carries both films over four neighbours, which is more than either face's middle.
+///   **Across from the first it leaves the limit to the bit**, because the two share no cell.
+#[test]
+fn a_second_cooled_face_moves_the_limit_only_where_the_two_meet() {
+    for stiff in Face::ALL {
+        let alone = limit_with(&[(stiff, 2000.0)]);
+        for other in Face::ALL.into_iter().filter(|&f| f != stiff) {
+            let weak = limit_with(&[(stiff, 2000.0), (other, 5.0)]);
+            assert_eq!(
+                weak.to_bits(),
+                alone.to_bits(),
+                "a weak film on {other:?} moved the limit {stiff:?} set: {weak:e} against \
+                 {alone:e}"
+            );
+            let both = limit_with(&[(stiff, 2000.0), (other, 2000.0)]);
+            if other == opposite(stiff) {
+                assert_eq!(
+                    both.to_bits(),
+                    alone.to_bits(),
+                    "a stiff film across the block on {other:?} moved the limit {stiff:?} set: \
+                     {both:e} against {alone:e}"
+                );
+            } else {
+                assert!(
+                    both < alone,
+                    "a stiff film beside it on {other:?} did not shorten the limit {stiff:?} \
+                     set: {both:e} against {alone:e}"
+                );
+            }
+        }
+    }
+}
+
 /// **A gentle film does not move the limit, and that is not a bug.** The other side of the same
 /// fact, pinned so nobody "fixes" the limit into being pessimistic: still air on copper is
 /// nowhere near the conduction it stands in for, so the interior cell still sets the step.
