@@ -334,6 +334,12 @@ pub struct Solid3D {
     /// How many solid cells lie on each face, in `Face` order. Filled by `resolve`; see
     /// [`Solid3D::cells_on`] for why it is a cache and not a count.
     solid_on: [usize; 6],
+    /// The solid cells with at least one face on the void, in index order, when the block has
+    /// [air](Solid3D::air_in) — the only solid cells off the exposed faces whose loss can be
+    /// anything but zero. Empty without air. Filled by `resolve`, which every mutator of the void
+    /// or the air calls, so the cells it lists are the ones the void has now — see
+    /// `worst_rate_now`, which reads it.
+    facing_air: Vec<(usize, usize, usize)>,
     /// Pairs of solid cells that face each other across a run of void, with the radiative
     /// exchange coefficient between them. Rebuilt whenever the void or the materials change.
     ///
@@ -544,6 +550,7 @@ impl Solid3D {
             worst_rate: 0.0,
             void: vec![false; counts.0 * counts.1 * counts.2],
             solid_on: [0; 6],
+            facing_air: Vec::new(),
             source: vec![0.0; counts.0 * counts.1 * counts.2],
             supplied: 0.0,
             saved_supplied: 0.0,
@@ -1048,6 +1055,39 @@ impl Solid3D {
             self.worst_rate = f64::NAN;
         }
         self.find_gaps();
+        self.find_facing_air();
+    }
+
+    /// Which solid cells have a face on the void, when there is air in it to lose to.
+    ///
+    /// A neighbour that is void, counted the way `air_conductance` counts it — six axis
+    /// neighbours, none past the block's own outer faces — so the cells listed are exactly the
+    /// solid ones whose air conductance is not zero for a finite, non-zero coefficient.
+    fn find_facing_air(&mut self) {
+        self.facing_air.clear();
+        if self.air.is_none() {
+            return;
+        }
+        let (nx, ny, nz) = self.counts;
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let c = i + nx * (j + ny * k);
+                    if self.void[c] {
+                        continue;
+                    }
+                    let faces = (i > 0 && self.void[c - 1])
+                        || (i + 1 < nx && self.void[c + 1])
+                        || (j > 0 && self.void[c - nx])
+                        || (j + 1 < ny && self.void[c + nx])
+                        || (k > 0 && self.void[c - nx * ny])
+                        || (k + 1 < nz && self.void[c + nx * ny]);
+                    if faces {
+                        self.facing_air.push((i, j, k));
+                    }
+                }
+            }
+        }
     }
 
     /// Which solid cells face each other across void, and how strongly they radiate.
@@ -1993,8 +2033,9 @@ impl Solid3D {
     /// stiffer at the start than at the end, and a limit that ignored that would be correct
     /// only at the end.
     ///
-    /// Costs a pass over the cells of the exposed faces, over the whole block only when it has air
-    /// in its voids, and for a block with neither only its gaps' pairs, if it has any. This said
+    /// Costs a pass over the cells of the exposed faces and, when it has air in its voids, over the
+    /// solid cells facing them; for a block with neither, only its gaps' pairs, if it has any. With
+    /// air it was a pass over every cell, 0.26 to 0.29 of a step. This said
     /// "the boundary cells" while the pass was over every cell, and the step asks for it before it
     /// moves anything, so on a small block that pass was 0.26 to 0.36 of what a step cost.
     fn worst_rate_now(&self) -> f64 {
@@ -2021,39 +2062,42 @@ impl Solid3D {
                 }
             }
         }
-        // With air, a cell touching a void can be anywhere in the block, and the pass is the
-        // whole block.
-        if self.air.is_some() {
-            return self.charge(worst, self.every_cell());
-        }
-        // **Without it, only the cells on an exposed face**: any other cell's loss is a sum over
-        // no face, exactly zero, and the pass over every cell spent most of its time finding that
-        // out. A block's stability limit cost 0.26 of its step on
+        // **Only the cells on an exposed face, and with air the solid cells facing the void**: any
+        // other cell's loss is a sum over no face, exactly zero, and the pass over every cell spent
+        // most of its time finding that out. A block's stability limit cost 0.26 of its step on
         // `24-a-power-module-junction-to-ambient`, whose one cooled face is 64 of its 512 cells,
         // and 0.36 on `29-a-designed-bracket-becomes-cells`.
         //
         // Exact, not near: the cells skipped are the ones the whole pass skipped by `loss == 0`
         // after computing their loss, and a maximum does not depend on the order its terms come
         // in. `worst` is not NaN here, and `max` returns the other side of a NaN, so it stays so.
-        // A cell on two exposed faces is charged twice and counts once.
+        // A cell on two exposed faces, or on one and facing the air, is charged twice and counts
+        // once.
         let planes = self
             .exposed
             .keys()
             .fold(worst, |w, face| self.charge(w, face.cells(self.counts)));
-        // **And checked, on every debug run of every test that builds a block.** The plane path
-        // rests on `loss_conductance_at` having no term off the exposed faces, and the shipped
-        // scenes barely see the plane path at all: with its loop emptied, 33 of the 34 wrote the
-        // same bytes. A term added there off the faces, the way the air was, would be left out of
-        // the limit and make it too long, which does not diverge: it oscillates while the books
-        // balance.
+        // **The void's own cells are left out, and the whole pass charged them.** A void cell
+        // beside more void has an air conductance, so its loss is not zero, but its mobility is:
+        // its term is a zero, which does not raise a maximum that started at zero, or a NaN, which
+        // `max` passes over. That holds for a coefficient that is finite and not negative, which
+        // is all a scene can state; `air_in` itself refuses neither. A negative one makes the term
+        // `-0.0`, which a maximum standing at exactly `+0.0` may return in its place, and an
+        // infinite one makes every buried cell's air term `inf * 0`, a NaN both paths pass over.
+        let near = self.charge(planes, self.facing_air.iter().copied());
+        // **And checked, on every debug run of every test that builds a block.** The two paths
+        // rest on `loss_conductance_at` having no term anywhere else, and the shipped scenes barely
+        // see the plane path at all: with its loop emptied, 33 of the 34 wrote the same bytes. A
+        // term added there off the faces, the way the air was, would be left out of the limit and
+        // make it too long, which does not diverge: it oscillates while the books balance.
         debug_assert_eq!(
-            planes.to_bits(),
+            near.to_bits(),
             self.charge(worst, self.every_cell()).to_bits(),
-            "{}: the exposed faces' cells set {planes:e}, and every cell {:e}",
+            "{}: the exposed faces' cells and those facing the air set {near:e}, and every cell {:e}",
             self.name,
             self.charge(worst, self.every_cell())
         );
-        planes
+        near
     }
 
     /// `worst`, raised by each of `cells` whose loss is not zero: its conduction and its loss at
@@ -2343,9 +2387,10 @@ impl Solid3D {
     /// them one operator, and `tests/the_cooled_boundary_order.rs` measures four per doubling at
     /// `Bi = 1.7` and at `Bi = 17`.
     ///
-    /// **Without air, nothing here may be non-zero off an exposed face.** `worst_rate_now` visits
-    /// only those faces' cells then, and a term reaching any other cell must widen that pass, or
-    /// the limit leaves it out. Its debug assertion is what says so.
+    /// **Nothing here may be non-zero for a solid cell off an exposed face that does not face the
+    /// air.** `worst_rate_now` visits only those faces' cells and, with air, `facing_air`, and a
+    /// term reaching any other cell must widen that pass, or the limit leaves it out. Its debug
+    /// assertion is what says so.
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
         self.air_conductance(cell)
             + self
@@ -3500,7 +3545,11 @@ impl Solid3D {
 
 #[cfg(test)]
 mod tests {
-    use super::Face;
+    use super::{Face, Solid3D};
+    use pantometry_core::{
+        units::{Length, Temperature},
+        Substance,
+    };
 
     /// **A face visits the cells it holds**, each once, on blocks of every shape up to four on a
     /// side, flat and empty ones included. `cells` is what the stability limit visits, and a plane
@@ -3532,5 +3581,79 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The cells listed as facing the air are the solid ones with an air conductance, each
+    /// once, and asking again rebuilds the list rather than adding to it.**
+    ///
+    /// The stability limit reads this list in place of every cell, so a cell it leaves out is one
+    /// whose loss the limit never sees. A direction checked wrong need not show in a limit: a
+    /// cavity's stiffest cells are its corners, which face the void three ways at once and between
+    /// them all six. So the list is checked cell by cell against `air_conductance`, which the flux
+    /// and the limit both read, on a block whose void is scattered so that each of the six
+    /// neighbours is the only void beside at least three cells. `resolve` runs every step for a
+    /// two-phase block, and a list it did not clear would grow by itself each step.
+    #[test]
+    fn the_cells_facing_the_air_are_those_with_an_air_conductance() {
+        let (nx, ny, nz) = (4, 5, 3);
+        let mut block = Solid3D::new(
+            "scattered",
+            Substance::copper(),
+            (nx, ny, nz),
+            Length::from_si(1e-3),
+            Temperature::celsius(20.0),
+        )
+        .empty(|i, j, k| (i + 2 * j + k) % 4 == 0)
+        .air_in(Temperature::celsius(20.0), 1.0);
+
+        let mut conducting = Vec::new();
+        let mut alone = [0usize; 6];
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    if block.is_void(i, j, k) {
+                        continue;
+                    }
+                    if block.air_conductance((i, j, k)) > 0.0 {
+                        conducting.push((i, j, k));
+                    }
+                    // Out of range reads as solid, so only the low side needs a guard.
+                    let beside = [
+                        i > 0 && block.is_void(i - 1, j, k),
+                        block.is_void(i + 1, j, k),
+                        j > 0 && block.is_void(i, j - 1, k),
+                        block.is_void(i, j + 1, k),
+                        k > 0 && block.is_void(i, j, k - 1),
+                        block.is_void(i, j, k + 1),
+                    ];
+                    if beside.iter().filter(|b| **b).count() == 1 {
+                        if let Some(way) = beside.iter().position(|b| *b) {
+                            alone[way] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            alone.iter().all(|n| *n >= 3),
+            "each way the only void beside three cells: {alone:?}"
+        );
+        assert_eq!(
+            block.facing_air, conducting,
+            "the list against the air's own conductance"
+        );
+
+        // Asked again, twice over: a fill that changes no cell, and the air stated again.
+        block.fill(Substance::copper(), |_, _, _| false);
+        let block = block.air_in(Temperature::celsius(20.0), 1.0);
+        assert_eq!(
+            block.facing_air.len(),
+            conducting.len(),
+            "asked again, the list grew"
+        );
+        assert_eq!(
+            block.facing_air, conducting,
+            "asked again, the list changed"
+        );
     }
 }

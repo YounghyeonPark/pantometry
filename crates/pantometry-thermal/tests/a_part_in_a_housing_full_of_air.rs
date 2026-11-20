@@ -344,3 +344,227 @@ fn a_core_in_a_cavity_sheds_from_the_inside_and_the_ledger_hears_it() {
         core.lost_energy().to_si()
     );
 }
+
+/// The 5x5x5 block of `a_core_in_a_cavity_sheds_from_the_inside_and_the_ledger_hears_it`: a 3x3x3
+/// copper core, every cell of it off the block's outer faces, in air at `h`.
+fn cavity(h: f64) -> Solid3D {
+    Solid3D::new(
+        "core",
+        grey(),
+        (5, 5, 5),
+        Length::from_si(4e-3),
+        Temperature::celsius(300.0),
+    )
+    .empty(|i, j, k| ![i, j, k].iter().all(|a| (1..4).contains(a)))
+    .air_in(Temperature::celsius(20.0), h)
+}
+
+/// **A core in a cavity takes the step its corners allow, and its corners are inside the block.**
+///
+/// The limit is the stiffest cell's, `1/max(dx·(Σk_f + G_air/dx)/C)`, and for a cell with `f`
+/// faces on the void and the rest on copper that is `ρc dx²/((6 − f)k + f·h·dx)`. Above
+/// `h·dx = k` the corners, with three faces on the air, are the stiffest: `ρc dx²/(3(k + h·dx))`.
+/// At `h = 4e5`, in W/m/K, that denominator is 6003 against an edge's 4804, a face's 3605 and
+/// the centre's 2406.
+///
+/// The limit with air was a pass over every cell. It is a pass over the cells facing the void
+/// now, which are read from a list `resolve` fills, and a list that missed the corners would hand
+/// the core the edge's limit, 1.25 times too long; one that missed them all, the centre's, 2.5
+/// times. Every one of these cells is off the outer faces, so the faces' own pass cannot find them.
+///
+/// The tolerance is rounding, not physics: the closed form is the limit's own arithmetic in
+/// another order: twelve roundings on the limit's side and seven on the closed form's, twenty
+/// at half an epsilon each at worst, against a bound of 32 epsilon. It measured one.
+#[test]
+fn a_core_in_a_cavity_takes_the_step_its_corners_allow() {
+    let (h, dx) = (4e5, 4e-3);
+    let copper = grey();
+    let thermal = copper.thermal.expect("copper conducts");
+    let (k, rho, c) = (
+        thermal.conductivity.to_si(),
+        copper.density.to_si(),
+        thermal.specific_heat.to_si(),
+    );
+    assert!(h * dx > k, "the corners set the limit only above h·dx = k");
+    let corners = rho * c * dx * dx / (3.0 * (k + h * dx));
+    let centre = rho * c * dx * dx / (6.0 * k);
+
+    let limit = cavity(h).max_stable_dt(Time::ZERO).to_si();
+    println!(
+        "  limit {limit:.9e} s, {:.1} epsilon from the corners' {corners:.9e}; the centre's {centre:.9e}",
+        (limit / corners - 1.0).abs() / f64::EPSILON
+    );
+    assert!(
+        (limit / corners - 1.0).abs() <= 32.0 * f64::EPSILON,
+        "the core took {limit:.12e} s and its corners allow {corners:.12e}"
+    );
+    assert!(corners < 0.5 * centre, "the air must be what sets it");
+}
+
+/// **The cells facing the air are the void's as it is now, whatever order made it.**
+///
+/// `resolve` fills the list of them, and `empty`, `fill` and `air_in` each call it. Built three
+/// ways — void then air, air then void, and air, then a void around one cell, then the core filled
+/// back in — the same block reports the same limit to the bit. A list filled only where the air
+/// was stated would be empty for the second and the third, and one filled again by `empty` but
+/// not by `fill` would list one buried cell for the third; each hands the core its centre's limit
+/// rather than its corners'.
+#[test]
+fn the_cells_facing_the_air_are_the_void_it_has_now() {
+    let h = 4e5;
+    let core = |i: usize, j: usize, k: usize| [i, j, k].iter().all(|a| (1..4).contains(a));
+    let block = || {
+        Solid3D::new(
+            "core",
+            grey(),
+            (5, 5, 5),
+            Length::from_si(4e-3),
+            Temperature::celsius(300.0),
+        )
+    };
+    let first = cavity(h).max_stable_dt(Time::ZERO).to_si();
+
+    let air_first = block()
+        .air_in(Temperature::celsius(20.0), h)
+        .empty(move |i, j, k| !core(i, j, k))
+        .max_stable_dt(Time::ZERO)
+        .to_si();
+
+    let mut refilled = block()
+        .air_in(Temperature::celsius(20.0), h)
+        .empty(|i, j, k| (i, j, k) != (2, 2, 2));
+    refilled.fill(grey(), core);
+    assert_eq!(
+        refilled.void_cells(),
+        125 - 27,
+        "the core is back and nothing else"
+    );
+    let refilled = refilled.max_stable_dt(Time::ZERO).to_si();
+
+    println!(
+        "  void then air {first:.9e} s, air then void {air_first:.9e}, refilled {refilled:.9e}"
+    );
+    assert_eq!(
+        air_first.to_bits(),
+        first.to_bits(),
+        "air stated before the void"
+    );
+    assert_eq!(
+        refilled.to_bits(),
+        first.to_bits(),
+        "the core filled back into the void"
+    );
+}
+
+/// **A film that sets the limit still sets it when the void has air.**
+///
+/// The limit with air visits two sets of cells, the exposed faces' and those facing the void, and
+/// a block that has both can be set by either. A copper slab three cells square, four deep, with
+/// its top layer void and a stiff film under it: the film's cells, which face no void, are the
+/// stiffest — five copper faces and the film's `2k·h·dx/(2k + h·dx)`, 2673 W/m/K against the
+/// centre's six faces, 2406, and the cells under the void's five and a still air's `h·dx`, 2005.
+/// Air in the void moves none of that, so the limit is the same to the bit with it and without.
+/// A limit that read only the cells facing the air, once there was air, would hand the slab the
+/// centre's step, 1.11 times too long, and the one scene that ships with air takes its limit from
+/// a cell that only conducts, so it would not see it.
+#[test]
+fn a_film_that_sets_the_limit_still_sets_it_with_air() {
+    let dx = 4e-3;
+    let slab = |film: bool, air: bool| {
+        let mut b = Solid3D::new(
+            "slab",
+            grey(),
+            (3, 3, 4),
+            Length::from_si(dx),
+            Temperature::celsius(300.0),
+        )
+        .empty(|_, _, k| k == 3);
+        if film {
+            b = b.losing_from(
+                Face::ZMin,
+                Environment {
+                    ambient: Temperature::celsius(20.0),
+                    convection_w_per_m2_k: 1e6,
+                    area: Area::from_si(9.0 * dx * dx),
+                },
+            );
+        }
+        if air {
+            b = b.air_in(Temperature::celsius(20.0), 8.0);
+        }
+        b.max_stable_dt(Time::ZERO).to_si()
+    };
+    let (bare, film, both) = (slab(false, false), slab(true, false), slab(true, true));
+    println!("  conduction {bare:.9e} s, with the film {film:.9e}, and air as well {both:.9e}");
+    assert!(
+        film < bare / 1.1,
+        "the film must set the limit: {film:e} against {bare:e}"
+    );
+    assert_eq!(
+        both.to_bits(),
+        film.to_bits(),
+        "air moved a limit the film sets"
+    );
+}
+
+/// Which outer layer of a block is void.
+type Layer = fn(usize, usize, usize) -> bool;
+
+/// **A cell that faces the air one way only is charged for it, whichever way that is.**
+///
+/// In the cavity above the stiffest cells are its corners, which face the void three ways at once
+/// and between them all six, so a list that looked one way only would still find a corner and the
+/// limit would not move. Here the void is one outer layer of a 3x3x3 copper block, and the block's
+/// centre then has five copper faces and one on the air, on whichever axis and side the layer is:
+/// `ρc dx²/(5k + h·dx)`. Every other cell has a face fewer, so the centre sets the limit, and a list
+/// blind to that direction hands the block `ρc dx²/(5k)`, 1.8 times too long. The six are one
+/// arithmetic over exact terms in a different order, so they agree to the bit; the closed form is
+/// held to the 32 epsilon above.
+#[test]
+fn a_cell_facing_the_air_one_way_sets_the_limit_whichever_way() {
+    let (h, dx) = (4e5, 4e-3);
+    let copper = grey();
+    let thermal = copper.thermal.expect("copper conducts");
+    let (k, rho, c) = (
+        thermal.conductivity.to_si(),
+        copper.density.to_si(),
+        thermal.specific_heat.to_si(),
+    );
+    let closed = rho * c * dx * dx / (5.0 * k + h * dx);
+    let layers: [(&str, Layer); 6] = [
+        ("x = 0", |i, _, _| i == 0),
+        ("x = 2", |i, _, _| i == 2),
+        ("y = 0", |_, j, _| j == 0),
+        ("y = 2", |_, j, _| j == 2),
+        ("z = 0", |_, _, k| k == 0),
+        ("z = 2", |_, _, k| k == 2),
+    ];
+    let mut first = None;
+    for (layer, void) in layers {
+        let limit = Solid3D::new(
+            "block",
+            grey(),
+            (3, 3, 3),
+            Length::from_si(dx),
+            Temperature::celsius(300.0),
+        )
+        .empty(void)
+        .air_in(Temperature::celsius(20.0), h)
+        .max_stable_dt(Time::ZERO)
+        .to_si();
+        println!(
+            "  void at {layer}: {limit:.9e} s, {:.1} epsilon from {closed:.9e}",
+            (limit / closed - 1.0).abs() / f64::EPSILON
+        );
+        assert!(
+            (limit / closed - 1.0).abs() <= 32.0 * f64::EPSILON,
+            "void at {layer}: the block took {limit:.12e} s and its centre allows {closed:.12e}"
+        );
+        let first = *first.get_or_insert(limit);
+        assert_eq!(
+            limit.to_bits(),
+            first.to_bits(),
+            "void at {layer} against x = 0"
+        );
+    }
+}

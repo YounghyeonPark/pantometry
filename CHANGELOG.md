@@ -368,6 +368,36 @@ protects nothing.
 
 ### Changed
 
+- **A block with air in its voids takes its stability limit from the solid cells facing them,
+  and every bit is as it was** (`pantometry-thermal`). Air makes any cell beside the void lose
+  heat, so after the entry below made the limit a pass over the exposed faces' cells, with air it
+  was still a pass over every cell. `resolve` lists the solid cells with a face on the void now —
+  `empty`, `fill` and `air_in`, the three things that change which those are, each call it — and
+  the limit visits them and the exposed faces' cells. As a share of a step, which reads the limit
+  before it moves anything: `23-a-part-radiating-to-its-lid` 0.29 before and 0.16 to 0.20 now,
+  and a copper core in a cavity of 16³, 32³ and 48³ cells 0.26 to 0.27 before and 0.06, 0.05 and
+  0.04 now.
+  - **Exact by the faces' argument, and one more.** The whole pass also charged the void's own
+    cells, which beside more void have an air conductance and no mobility: each gave a zero, which
+    does not raise a maximum that starts at zero, or a NaN, which `max` passes over — for a
+    coefficient that is finite and not negative, which is all a scene can state. The debug
+    assertion compares the two paths together with the whole pass, with air or without.
+  - **The scenes are not the evidence here either.** All 34 write the same bytes, and the one
+    with air still does with the list not read at all, because a cell that only conducts sets its
+    limit. A core in a cavity with `h·dx > k` takes its corners' limit, `ρc dx²/(3(k + h·dx))`,
+    measured one epsilon from it; a list missing the corners hands it an edge's limit, 1.25 times
+    too long, and missing them all the centre's, 2.5. The same core built three ways — void then
+    air, air then void, and air, a void around one cell and the core filled back in — takes one
+    limit to the bit. That core's corners face the void three ways at once and between them all
+    six, so a list looking one way only would still find one: a block whose void is one outer
+    layer takes its centre's `ρc dx²/(5k + h·dx)` with the layer on each of the six sides, and the
+    list is checked cell by cell against the air conductance on a block whose void is scattered so
+    that each way is the only void beside three cells. And a slab whose stiffest cells are under a
+    film and face no void takes the film's limit with air in its void, to the bit.
+  - **What it gave**, on `23-a-part-radiating-to-its-lid` at ten times its duration, so that the
+    run rather than starting the process is the time, pinned to a P-core and best of nine runs of
+    each interleaved: 0.83 of the time at the commit before, and 1.045 of the time before the limit
+    was read before every substep. What is left is that second read, now 0.16 to 0.20 of a step.
 - **A block's stability limit visits the cells of its cooled faces, and no others, and every bit
   is as it was** (`pantometry-thermal`). `Solid3D`'s limit said it cost "a pass over the boundary
   cells" and passed over every cell, computing each one's loss to throw away the ones that came
@@ -377,10 +407,10 @@ protects nothing.
   and 0.36 on `29-a-designed-bracket-becomes-cells`.
   - **The same answer, by argument, and checked in every debug build.** The cells skipped are the
     ones whose loss was zero, and a maximum does not depend on the order its terms come in. With
-    air a cell touching a void can be anywhere, and the pass is the whole block as it was. A debug
-    build computes the whole pass beside the planes and asserts the two agree to the bit, so a
-    loss term added off the faces later fails any test that cools a block, rather than leaving
-    the limit too long, which oscillates and does not diverge.
+    air a cell touching a void can be anywhere, and the pass stayed the whole block until the
+    entry above. A debug build computes the whole pass beside the planes and asserts the two agree
+    to the bit, so a loss term added off the faces later fails any test that cools a block, rather
+    than leaving the limit too long, which oscillates and does not diverge.
   - **The scenes are not the evidence.** All 34 write the same bytes as before, and with the plane
     loop emptied 33 of them still do.
   - **What it gave**, pinned to a P-core, best of seven runs of each interleaved, as a share of
@@ -625,9 +655,11 @@ protects nothing.
   - **The cost** is one more `max_stable_dt` per substep, and the block's limit was made cheaper
     first, for this. Pinned to a P-core, best of seven runs of each interleaved, as a share of the
     time before both changes: scene 24 0.88, 29 0.84, 30 0.99, 25 0.97, 18 and 27 1.00; and
-    `23-a-part-radiating-to-its-lid` 1.13, best of 21, the one scene slower. Its block has air in
-    its voids, so its limit is still a pass over every cell. Against the commit before, 24 1.09,
-    29 1.13, 30 1.20. All 34 scenes write the same bytes as before.
+    `23-a-part-radiating-to-its-lid` 1.13, best of 21, the one scene slower, because its block has
+    air in its voids and its limit was a pass over every cell. That was at the scene's own length,
+    where starting the process is most of its 0.12 s: at ten times the length the price was 1.26,
+    and the entry under Changed brings it to 1.045. Against the commit before, 24 1.09, 29 1.13,
+    30 1.20. All 34 scenes write the same bytes as before.
 - **A bed read between two steps was not the bed there.** The puck's field at one pascal is
   the answer on one face list. The flow balance, the stability limit, the flow and the outlet
   temperature are all read from the two together, and between steps the pair was wrong twice
