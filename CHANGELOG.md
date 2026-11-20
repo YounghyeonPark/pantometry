@@ -615,6 +615,64 @@ protects nothing.
 
 ### Fixed
 
+- **`Waves`' restore used up its checkpoint, and six more domains' restores gave back less than
+  they had saved** (`pantometry-elastic`, `pantometry-acoustic`, `pantometry-thermal`,
+  `pantometry-molecular`). `Schedule::Iterative` checkpoints every domain once an advance and
+  restores it before every sweep after the first. `Waves` claimed `Domain::supports_restore` and
+  took its checkpoint as it went, as the puck had, so a second restore did nothing and the third
+  sweep began where the second ended. It copies now. One test holds every claimant to the
+  schedule's use of a restore, and it found the rest:
+  - **`Tube`, `Room` and `Hall` put back neither of two things only their energy reads**: the
+    startup offset their first step sets, and the pressure a step before, which they set to the
+    pressure now and the energy is a product with. Three steps in, a restored room reported 2.2%
+    less energy than the same field had at its checkpoint, a hall 12.4% and a tube 5.4%. The room
+    and the hall audit their own books, and a coupling's first checkpoint is taken before the
+    first step, so the missing offset had `Iterative` refuse the second sweep of the first window
+    either was given — `1.1987e-5` J held against `1.1959e-5`, at `1e-9` — and with the offset
+    put back the missing pressure refused the second window. Both claimed a restore and neither
+    could be iterated past one sweep. Their checkpoints carry everything a step writes now, the
+    tube's what its ends radiated as well, in named structs rather than tuples.
+  - **Totals a thrown-away sweep had added to**: `Bar1D` and `Solid3D` what they had absorbed
+    (three windows of three sweeps read 0.09 J for the 0.03 J a bar took), `Tube` what it had
+    radiated, and `Fluid` the work its thermostat had done, which its ledger subtracts — 108 atoms
+    restored to a checkpoint before their first step held `-494.9` where they had held `-491.3`.
+  - **A melting `Solid3D` kept the operator its last step derived.** A two-phase block's step ends
+    by re-deriving the capacities, the conductances and the limit from the fractions it leaves,
+    and the restore put the fractions back and not what follows from them: ice at its melting
+    point, fed and restored, reported a limit of 0.439 s where it had reported 0.423 s. A restore
+    re-derives them now.
+  - **`crates/pantometry/tests/a_restore_can_be_repeated.rs`.** Each of the eighteen claimants,
+    built moving, the melting block as a second entry, is checkpointed, stepped three times and
+    restored three times. Every restore gives back what the checkpoint showed — readings, ledger,
+    bodies, limit, residual and, where those do not show the state, the domain's own accessors —
+    and every three steps after it are the first three, with what they left on the bus, to the
+    bit. Then a second checkpoint has to replace the first. Once checkpointed before the first
+    step, as an advance from a fresh domain is, and once after three; every step has to move
+    something the test can see. A second test reads every `impl Domain for` in `crates/` and fails
+    on a claim the list has not got, a listing that does not claim, and a header or body it cannot
+    read.
+  - **Its first version missed three of these**, because its entries never moved what they had
+    lost: no heat reached the block, and the fluid was a lattice at 1.2 K where its units put a
+    liquid at 8.7e22 K, so the bath's work sat below an ulp of the ledger. Two reviews found them;
+    the entries are fed now, slip, damp and are thermostatted, and each total has a sabotage of its
+    own.
+  - **And end to end**: a room and a hall beside a domain that forces three sweeps an advance end
+    each of three windows on the readings and books one sweep a window gives under
+    `Schedule::Multirate`. One `Waves` checkpoint restored three times gives back its displacement
+    and energy each time, and a second checkpoint replaces the first.
+  - **`Domain::restore` states the contract** it had left unsaid: a restore keeps the checkpoint,
+    and gives back everything a step writes, including what only the ledger and the readings read.
+    `Domain::checkpoint`: a second replaces the first.
+  - **Fifty-three sabotages, one at a time**, after a control in which every test they name passed
+    with nothing changed, each failing the named test with the message that names it: each of the
+    eighteen claimants' restores made to use its checkpoint up; each field the new checkpoints
+    carry left out alone; the pressure a step before set to the pressure now, as it shipped, which
+    only the pass after three steps reports, while the missing offset only the pass before the
+    first step does; the totals the entries now move left out of the restores that already had
+    them; under the coupling, the room's and the hall's offset, pressure and shipped form, refused
+    in the first window and the second; a second checkpoint that keeps the first; and for the scan,
+    a claim it has not got, a listing that does not claim, an entry removed, and a body, a
+    signature and a header it cannot read.
 - **A puck's restore used up its checkpoint, and the puck could not be iterated**
   (`pantometry-porous`). `Schedule::Iterative` checkpoints every domain once and restores it
   before every sweep after the first. `Puck::restore` took the checkpoint as it went, so a second

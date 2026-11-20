@@ -407,6 +407,77 @@ fn an_undisturbed_body_sits_still_and_a_checkpoint_carries_the_velocity() {
     );
 }
 
+/// **A checkpoint outlives its restore.**
+///
+/// `Schedule::Iterative` checkpoints once an advance and restores before every sweep after the
+/// first, so a coupling that takes three sweeps restores one checkpoint twice. `Waves::restore`
+/// took the checkpoint as it went, so a second restore found none and did nothing, and the third
+/// sweep began where the second ended — while `Waves` claimed `supports_restore`, so `iterate`
+/// let it in. The test above restores once and could not see it.
+///
+/// So one checkpoint is restored three times, each followed by the same ten steps. Every restore
+/// gives back every node's displacement and the energy, which needs the step before as well, to
+/// the bit, and every ten steps from it give the same body; and a second checkpoint replaces the
+/// first.
+#[test]
+fn a_checkpoint_outlives_its_restore() {
+    fn state(w: &Waves, dt: Time) -> Vec<u64> {
+        let (nx, ny, nz) = w.node_counts();
+        let mut bits = Vec::new();
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    bits.extend(w.displacement_at(i, j, k).map(f64::to_bits));
+                }
+            }
+        }
+        bits.push(w.total_energy(dt).to_si().to_bits());
+        bits
+    }
+    let mut w = column(16, [Axis::X, Axis::Y]);
+    w.release_mode(1, Axis::Z, Axis::Z, Length::from_si(1e-9));
+    let dt = Time::from_si(w.max_stable_dt(Time::from_si(0.0)).to_si() * 0.5);
+    let march = |w: &mut Waves, from: usize| {
+        for n in from..from + 10 {
+            w.step(
+                Time::from_si(n as f64 * dt.to_si()),
+                dt,
+                &mut Exchange::new(),
+            )
+            .expect("stable");
+        }
+    };
+    // Moving, so that the displacement and the one a step before differ.
+    march(&mut w, 0);
+    w.checkpoint();
+    let mark = state(&w, dt);
+    march(&mut w, 10);
+    let stepped = state(&w, dt);
+    assert!(
+        stepped != mark,
+        "it should have moved on before being restored"
+    );
+    for again in 1..=3 {
+        w.restore();
+        assert!(
+            state(&w, dt) == mark,
+            "restore {again} did not give back the checkpointed body"
+        );
+        march(&mut w, 10);
+        assert!(
+            state(&w, dt) == stepped,
+            "the ten steps after restore {again} are not the ten after the checkpoint"
+        );
+    }
+    w.checkpoint();
+    march(&mut w, 20);
+    w.restore();
+    assert!(
+        state(&w, dt) == stepped,
+        "a restore after a second checkpoint did not go back to the second"
+    );
+}
+
 /// **The field the analysis layer draws is the displacement magnitude, and it is not empty.**
 ///
 /// A domain that offers `as_field` and returns nothing useful is the failure this workspace hunts by

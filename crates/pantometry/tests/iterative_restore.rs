@@ -190,6 +190,77 @@ fn a_rewound_lumped_mass_does_not_invent_the_heat_it_shed() {
     );
 }
 
+/// **A room and a hall that audit their own books can be iterated.**
+///
+/// Both claim `books_balance`, so every sweep compares the energy each holds at the start of its
+/// turn with what it holds after and what crossed the bus. Their restores put back neither of two
+/// things only the energy reads. The startup offset, which the first step sets, while an advance's
+/// first checkpoint is taken before it: the second sweep of the first window was refused, at the
+/// default 1e-9, a room reporting 1.1987e-5 J against the 1.1959e-5 it held. And the pressure a step
+/// before, which the energy is a product with: with the offset put back, the second window was
+/// refused instead. Each claimed `supports_restore` and neither could be iterated past one sweep.
+///
+/// So each runs beside `Converging` for three windows of three sweeps, and ends every window on the
+/// readings and the books one sweep a window gives under `Schedule::Multirate`, to the bit. More
+/// than one, because the first is checkpointed before any step, where the pressure a step before is
+/// the pressure now, and a window of half a limit is one substep, which leaves it there: leaving it
+/// out of the restore costs nothing until the second window.
+#[test]
+fn a_room_that_audits_its_own_books_can_be_iterated() {
+    let released = |name: &str| -> Box<dyn Domain> {
+        if name == "room" {
+            Box::new(
+                Room::of_air("room", Length::m(4.4), Length::m(3.1), 21).released_in_mode(
+                    1,
+                    1,
+                    Pressure::from_si(1.0),
+                ),
+            )
+        } else {
+            Box::new(
+                Hall::of_air("hall", Length::m(4.4), Length::m(3.1), Length::m(2.4), 9)
+                    .released_in_mode((1, 1, 1), Pressure::from_si(1.0)),
+            )
+        }
+    };
+    let view = |sim: &Simulation, name: &str| -> Vec<u64> {
+        let d = sim.domain(name).expect("it is there");
+        let mut bits: Vec<u64> = d.readings().iter().map(|r| r.value.to_bits()).collect();
+        bits.extend(d.ledger().quantities().map(|(_, v)| v.to_bits()));
+        bits
+    };
+    for name in ["room", "hall"] {
+        let (alone, coupled) = (released(name), released(name));
+        assert!(
+            alone.books_balance(),
+            "{name}, precondition: it audits its own books"
+        );
+        let window = alone.max_stable_dt(Time::ZERO) * 0.5;
+        let mut once = Simulation::new(Schedule::Multirate).with_boxed(alone);
+        let mut sim = Simulation::new(Schedule::Iterative {
+            max_iter: 8,
+            tol: 0.2,
+        })
+        .with(Converging::new())
+        .with_boxed(coupled);
+        for advance in 1..=3 {
+            once.advance(window).expect("one window");
+            let report = sim
+                .advance(window)
+                .unwrap_or_else(|v| panic!("{name}, advance {advance}: refused: {v:?}"));
+            assert_eq!(
+                report.iterations, 3,
+                "{name}, advance {advance}: three sweeps, so two restores"
+            );
+            assert!(
+                view(&sim, name) == view(&once, name),
+                "{name}, advance {advance}: three sweeps and two restores did not end where one \
+                 sweep does"
+            );
+        }
+    }
+}
+
 /// A warming espresso bed: 8 x 6 x 8 cells of 1 mm at 20 C under a 93 C inlet, so a step moves its
 /// viscosity, its flow and its stability limit, which falls as it warms.
 fn warming_puck() -> Puck {

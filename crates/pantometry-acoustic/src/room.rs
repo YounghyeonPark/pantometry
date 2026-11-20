@@ -37,12 +37,24 @@ use pantometry_units::{
     Area, Density, Energy, Frequency, Length, LengthVec, Pressure, Time, Velocity,
 };
 
-/// Everything [`Room::checkpoint`] has to put back: the pressure, both velocity components,
-/// and whether the velocity has been staggered yet.
+/// Everything a [`Domain::checkpoint`] has to put back, which is everything a step writes.
 ///
-/// A named type because clippy is right that four things in a tuple is where a reader starts
-/// counting commas.
-type Snapshot = (Vec<f64>, Vec<f64>, Vec<f64>, bool);
+/// Two of them only the energy reads, and the room audits its own books: every sweep compares
+/// what it holds at the start of its turn with what it holds after. The startup offset, which the
+/// first step sets, and a coupling's first checkpoint is taken before the first step: a restore
+/// that left it reported 0.23% more energy than the field held, and the second sweep of the first
+/// window was refused. And the pressure a step before, which the energy is a product with and the
+/// next step overwrites before reading: a restore that set it to the pressure now reported 2.2%
+/// less, three steps in on a 21-cell room, and with the offset put back the second window was
+/// refused instead.
+struct Snapshot {
+    pressure: Vec<f64>,
+    pressure_prev: Vec<f64>,
+    vx: Vec<f64>,
+    vy: Vec<f64>,
+    velocity_staggered: bool,
+    energy_offset: f64,
+}
 
 /// A rectangular room, discretised on a uniform grid with rigid walls.
 pub struct Room {
@@ -482,21 +494,26 @@ impl Domain for Room {
     }
 
     fn checkpoint(&mut self) {
-        self.saved = Some((
-            self.pressure.clone(),
-            self.vx.clone(),
-            self.vy.clone(),
-            self.velocity_staggered,
-        ));
+        self.saved = Some(Snapshot {
+            pressure: self.pressure.clone(),
+            pressure_prev: self.pressure_prev.clone(),
+            vx: self.vx.clone(),
+            vy: self.vy.clone(),
+            velocity_staggered: self.velocity_staggered,
+            energy_offset: self.energy_offset,
+        });
     }
 
+    /// Copied from the checkpoint, which stays, so a coupling that sweeps three times can
+    /// restore it twice.
     fn restore(&mut self) {
-        if let Some((p, vx, vy, staggered)) = self.saved.clone() {
-            self.pressure_prev.copy_from_slice(&p);
-            self.pressure = p;
-            self.vx = vx;
-            self.vy = vy;
-            self.velocity_staggered = staggered;
+        if let Some(s) = &self.saved {
+            self.pressure.clone_from(&s.pressure);
+            self.pressure_prev.clone_from(&s.pressure_prev);
+            self.vx.clone_from(&s.vx);
+            self.vy.clone_from(&s.vy);
+            self.velocity_staggered = s.velocity_staggered;
+            self.energy_offset = s.energy_offset;
         }
     }
 

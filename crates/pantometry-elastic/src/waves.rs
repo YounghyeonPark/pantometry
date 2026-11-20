@@ -653,10 +653,15 @@ impl Domain for Waves {
         self.saved = Some(Box::new((self.u.clone(), self.prev.clone())));
     }
 
+    /// Copied from the checkpoint, which stays: [`Schedule::Iterative`] restores one checkpoint
+    /// before every sweep after an advance's first, so a restore that moved it out would find
+    /// nothing the second time and the third sweep would begin where the second ended.
+    ///
+    /// [`Schedule::Iterative`]: pantometry_core::Schedule::Iterative
     fn restore(&mut self) {
-        if let Some(s) = self.saved.take() {
-            self.u = s.0;
-            self.prev = s.1;
+        if let Some(s) = self.saved.as_deref() {
+            self.u.clone_from(&s.0);
+            self.prev.clone_from(&s.1);
         }
     }
 

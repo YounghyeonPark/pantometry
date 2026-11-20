@@ -428,6 +428,10 @@ pub struct Bar1D {
     /// Temperatures at the cell centres.
     cells: Vec<f64>,
     saved: Vec<f64>,
+    /// What [`Bar1D::absorbed_energy`] said at the checkpoint. A restore that left it counted a
+    /// sweep thrown away as heat received: three windows of three sweeps read 0.09 J for the
+    /// 0.03 J the bar had taken, with the temperatures and the books right.
+    saved_absorbed: f64,
     dx: Length,
     /// Cross-sectional area, for turning joules into a temperature.
     area: Area,
@@ -455,6 +459,7 @@ impl Bar1D {
             substance,
             cells: temps.clone(),
             saved: temps,
+            saved_absorbed: 0.0,
             dx,
             area,
             boundary: None,
@@ -631,11 +636,13 @@ impl Domain for Bar1D {
     }
 
     fn checkpoint(&mut self) {
-        self.saved = self.cells.clone();
+        self.saved.clone_from(&self.cells);
+        self.saved_absorbed = self.absorbed;
     }
 
     fn restore(&mut self) {
-        self.cells = self.saved.clone();
+        self.cells.clone_from(&self.saved);
+        self.absorbed = self.saved_absorbed;
     }
 
     fn supports_restore(&self) -> bool {

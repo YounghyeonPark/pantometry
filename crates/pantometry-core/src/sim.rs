@@ -131,9 +131,21 @@ pub trait Domain {
     /// point. A domain that does not implement this cannot take part in
     /// [`Schedule::Iterative`], and [`Simulation::advance`] says so rather than
     /// silently iterating from the wrong state.
+    ///
+    /// A second checkpoint replaces the first: the schedule takes one an advance.
     fn checkpoint(&mut self) {}
 
-    /// Restore the last [`Domain::checkpoint`].
+    /// Restore the last [`Domain::checkpoint`], **and keep it**.
+    ///
+    /// [`Schedule::Iterative`] checkpoints once an advance and restores before every sweep after
+    /// the first, so one checkpoint is restored once for each sweep after the first. A restore
+    /// that moved the checkpoint out rather than copying it finds nothing the second time and does
+    /// nothing, and the third sweep begins where the second ended.
+    ///
+    /// Everything a step writes comes back, including what only the ledger and the readings read:
+    /// a domain that audits its own books is compared, at the start of its turn in every sweep,
+    /// against what it reports just after this. `crates/pantometry/tests/a_restore_can_be_repeated.rs`
+    /// holds every domain in the library that claims [`Domain::supports_restore`] to both.
     fn restore(&mut self) {}
 
     /// Whether this domain's books are **exact**: its ledger changes by precisely what it takes

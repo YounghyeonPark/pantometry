@@ -89,7 +89,21 @@ pub struct Fluid {
     virial: f64,
     /// Work the thermostat has done, in joules. Positive means it put energy in.
     thermostat_work: f64,
-    saved: Option<(Vec<DVec3>, Vec<DVec3>, u64)>,
+    saved: Option<Saved>,
+}
+
+/// Everything a [`Domain::checkpoint`] has to put back, which is everything a step writes but the
+/// forces, recomputed from the positions.
+///
+/// The thermostat's work is in it because the ledger subtracts it. A restore that left it had a
+/// Langevin bath's work from a sweep thrown away still on the books: 108 atoms at a reduced 1.2,
+/// restored to a checkpoint taken before their first step, held -494.9 where they had held -491.3,
+/// and since the step count comes back too, every sweep drew the same kicks and counted them again.
+struct Saved {
+    positions: Vec<DVec3>,
+    velocities: Vec<DVec3>,
+    step_count: u64,
+    thermostat_work: f64,
 }
 
 impl Fluid {
@@ -502,18 +516,22 @@ impl Domain for Fluid {
     }
 
     fn checkpoint(&mut self) {
-        self.saved = Some((
-            self.positions.clone(),
-            self.velocities.clone(),
-            self.step_count,
-        ));
+        self.saved = Some(Saved {
+            positions: self.positions.clone(),
+            velocities: self.velocities.clone(),
+            step_count: self.step_count,
+            thermostat_work: self.thermostat_work,
+        });
     }
 
+    /// Copied from the checkpoint, which stays, so a coupling that sweeps three times can
+    /// restore it twice; the forces are recomputed from the positions rather than saved.
     fn restore(&mut self) {
-        if let Some((p, v, s)) = self.saved.clone() {
-            self.positions = p;
-            self.velocities = v;
-            self.step_count = s;
+        if let Some(s) = &self.saved {
+            self.positions.clone_from(&s.positions);
+            self.velocities.clone_from(&s.velocities);
+            self.step_count = s.step_count;
+            self.thermostat_work = s.thermostat_work;
             self.recompute_forces();
         }
     }

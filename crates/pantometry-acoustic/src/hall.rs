@@ -89,7 +89,19 @@ pub struct Hall {
     saved: Option<Snapshot>,
 }
 
-type Snapshot = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, bool);
+/// Everything a [`Domain::checkpoint`] has to put back, which is everything a step writes: the
+/// pressure a step before as well, which the energy is a product with, and the startup offset the
+/// first step sets. See `Room`'s, which is the same and says what leaving them out cost.
+#[derive(Clone, Debug)]
+struct Snapshot {
+    pressure: Vec<f64>,
+    pressure_prev: Vec<f64>,
+    vx: Vec<f64>,
+    vy: Vec<f64>,
+    vz: Vec<f64>,
+    velocity_staggered: bool,
+    energy_offset: f64,
+}
 
 impl Hall {
     /// A room of the given size, at rest, with rigid surfaces.
@@ -534,23 +546,28 @@ impl Domain for Hall {
     }
 
     fn checkpoint(&mut self) {
-        self.saved = Some((
-            self.pressure.clone(),
-            self.vx.clone(),
-            self.vy.clone(),
-            self.vz.clone(),
-            self.velocity_staggered,
-        ));
+        self.saved = Some(Snapshot {
+            pressure: self.pressure.clone(),
+            pressure_prev: self.pressure_prev.clone(),
+            vx: self.vx.clone(),
+            vy: self.vy.clone(),
+            vz: self.vz.clone(),
+            velocity_staggered: self.velocity_staggered,
+            energy_offset: self.energy_offset,
+        });
     }
 
+    /// Copied from the checkpoint, which stays, so a coupling that sweeps three times can
+    /// restore it twice.
     fn restore(&mut self) {
-        if let Some((p, vx, vy, vz, staggered)) = self.saved.clone() {
-            self.pressure_prev.copy_from_slice(&p);
-            self.pressure = p;
-            self.vx = vx;
-            self.vy = vy;
-            self.vz = vz;
-            self.velocity_staggered = staggered;
+        if let Some(s) = &self.saved {
+            self.pressure.clone_from(&s.pressure);
+            self.pressure_prev.clone_from(&s.pressure_prev);
+            self.vx.clone_from(&s.vx);
+            self.vy.clone_from(&s.vy);
+            self.vz.clone_from(&s.vz);
+            self.velocity_staggered = s.velocity_staggered;
+            self.energy_offset = s.energy_offset;
         }
     }
 

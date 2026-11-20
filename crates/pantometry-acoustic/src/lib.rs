@@ -156,8 +156,21 @@ pub struct Tube {
     energy_offset: f64,
     /// The physical energy at release, the datum the reported energy is measured against.
     energy_datum: f64,
-    saved: Option<(Vec<f64>, Vec<f64>, bool)>,
+    saved: Option<Saved>,
     /// Energy handed to the bus by absorbing ends, in joules.
+    radiated: f64,
+}
+
+/// Everything a [`Domain::checkpoint`] has to put back, which is everything a step writes: the
+/// pressure a step before as well, which the energy is a product with, the startup offset the
+/// first step sets, and what the ends have radiated, which a sweep thrown away had counted. See
+/// `Room`'s, which says what leaving the first of them out cost.
+struct Saved {
+    pressure: Vec<f64>,
+    pressure_prev: Vec<f64>,
+    velocity: Vec<f64>,
+    velocity_staggered: bool,
+    energy_offset: f64,
     radiated: f64,
 }
 
@@ -536,19 +549,26 @@ impl Domain for Tube {
     }
 
     fn checkpoint(&mut self) {
-        self.saved = Some((
-            self.pressure.clone(),
-            self.velocity.clone(),
-            self.velocity_staggered,
-        ));
+        self.saved = Some(Saved {
+            pressure: self.pressure.clone(),
+            pressure_prev: self.pressure_prev.clone(),
+            velocity: self.velocity.clone(),
+            velocity_staggered: self.velocity_staggered,
+            energy_offset: self.energy_offset,
+            radiated: self.radiated,
+        });
     }
 
+    /// Copied from the checkpoint, which stays, so a coupling that sweeps three times can
+    /// restore it twice.
     fn restore(&mut self) {
-        if let Some((pressure, velocity, staggered)) = self.saved.clone() {
-            self.pressure_prev.copy_from_slice(&pressure);
-            self.pressure = pressure;
-            self.velocity = velocity;
-            self.velocity_staggered = staggered;
+        if let Some(s) = &self.saved {
+            self.pressure.clone_from(&s.pressure);
+            self.pressure_prev.clone_from(&s.pressure_prev);
+            self.velocity.clone_from(&s.velocity);
+            self.velocity_staggered = s.velocity_staggered;
+            self.energy_offset = s.energy_offset;
+            self.radiated = s.radiated;
         }
     }
 

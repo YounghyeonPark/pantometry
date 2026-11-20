@@ -401,6 +401,11 @@ pub struct Solid3D {
     /// iteration, and the audit reports energy created from nothing. Measured there at 1567.6 J
     /// becoming 1600.9 J over forty advances.
     saved_lost: f64,
+    /// The saved counterpart of what [`Solid3D::absorbed_energy`] reads. Not in the books, which
+    /// are the cells, so nothing refused its absence: a block fed a hundredth of a joule a step
+    /// read 0.03 J absorbed straight after being restored to a checkpoint at which it had taken
+    /// none, and an iterated window counted every sweep it threw away.
+    saved_absorbed: f64,
     /// Whether any material names a **liquid** phase whose properties differ from its solid.
     ///
     /// The one thing that decides whether the sweep has to rebuild its operator each step. A block of
@@ -562,6 +567,7 @@ impl Solid3D {
             air: None,
             lost: 0.0,
             saved_lost: 0.0,
+            saved_absorbed: 0.0,
             two_phase: false,
             old: Vec::new(),
             latent_anywhere: false,
@@ -3187,6 +3193,7 @@ impl Domain for Solid3D {
         // per iteration, and the audit reports energy created from nothing.
         self.saved_lost = self.lost;
         self.saved_supplied = self.supplied;
+        self.saved_absorbed = self.absorbed;
     }
 
     fn restore(&mut self) {
@@ -3194,6 +3201,15 @@ impl Domain for Solid3D {
         self.melted.clone_from(&self.saved_melted);
         self.lost = self.saved_lost;
         self.supplied = self.saved_supplied;
+        self.absorbed = self.saved_absorbed;
+        // A two-phase block's step ends by re-deriving the capacities, the conductances and the
+        // limit from the fractions it leaves, so the ones a sweep thrown away left are re-derived
+        // from the fractions just put back. Without it the next sweep began on the thrown-away
+        // sweep's operator: ice at its melting point, fed and restored to a checkpoint before its
+        // first step, reported a limit of 0.439 s where it had reported 0.423 s.
+        if self.two_phase {
+            self.resolve();
+        }
     }
 
     fn supports_restore(&self) -> bool {
