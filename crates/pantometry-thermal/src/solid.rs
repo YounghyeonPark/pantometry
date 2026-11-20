@@ -321,14 +321,32 @@ pub struct Solid3D {
     /// one-phase model.
     cap_liquid: Vec<f64>,
     /// How much of each cell has melted, `0` solid and `1` liquid. Derived from the temperature by
-    /// [`resolve`](Solid3D::resolve) and then carried by the sweep.
+    /// [`resolve`](Solid3D::resolve) and then carried by the sweep, and by the mutators between
+    /// steps, each of which re-derives what a fraction it moved decides — see
+    /// [`rederive_cell`](Solid3D::rederive_cell).
     melted: Vec<f64>,
     /// The phase at the last [`checkpoint`](Domain::checkpoint), alongside `saved`.
     saved_melted: Vec<f64>,
     /// `max_i dx·Σ_f k_f / C_i`, the reciprocal of the largest stable step. See
     /// [`max_stable_dt`](Domain::max_stable_dt) for why it is a maximum over cells and not a
     /// function of the fastest material.
+    ///
+    /// Read only through [`conduction_rate`](Solid3D::conduction_rate), because between a
+    /// mutator moving a phase and the next `resolve` it is not the answer.
     worst_rate: f64,
+    /// Whether `worst_rate` is out of date: set when a mutator between steps moved one cell's
+    /// phase and re-derived that cell, cleared by every `resolve`.
+    ///
+    /// The cell's faces and sums are put right on the spot, and the maximum is the one thing that
+    /// is not, because finding it again is a pass over every cell, and a caller setting a region
+    /// one cell at a time would pay a pass per cell. A full re-derivation per cell would have been
+    /// worse: 6.2 ms on a two-phase block at 64³, so 27 minutes to declare every cell of one that
+    /// way. So the pass is left to whoever next asks for the limit.
+    worst_stale: bool,
+    /// Per substance, the solid phase's and the liquid phase's conductivity and capacity per cell,
+    /// `((k_s, C_s), (k_l, C_l))` — the pairs a cell's phase mixes between. Kept from `resolve` so
+    /// one cell can be re-derived without rebuilding the rest.
+    phase_props: Vec<((f64, f64), (f64, f64))>,
     /// Cells that are **not part of the block** — see [`Solid3D::empty`].
     void: Vec<bool>,
     /// How many solid cells lie on each face, in `Face` order. Filled by `resolve`; see
@@ -512,6 +530,86 @@ impl GapPatch {
     }
 }
 
+/// The phase a temperature names: liquid above the melting point, and at it or below, solid.
+///
+/// A temperature is not a state for a substance that melts — 0 °C is ice, water, or any mixture of
+/// the two — so naming one has to name a phase too, and the choice is the unmelted one at the point
+/// itself: a caller clamping a face below freezing means ice, and a caller clamping it above means
+/// liquid. One rule for the constructor, `fill` and `set_temperature`.
+fn phase_named_by(t: f64, point: f64) -> f64 {
+    if t > point {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// A running maximum of stability rates, raised by `rate`. `NaN` once any rate is.
+///
+/// NaN loses every comparison, so `max` alone would step straight past a substance that does not
+/// say what it conducts, find the other cells' rates, and let the sweep write `NaN` into the cells
+/// that have none. `a_block_that_cannot_be_stepped_still_cannot_after_a_phase_moves` holds the
+/// search after a mutator to the refusal the derivation gives.
+fn worse(worst: f64, rate: f64) -> f64 {
+    if worst.is_nan() || rate.is_nan() {
+        f64::NAN
+    } else {
+        worst.max(rate)
+    }
+}
+
+/// A cell's conductivity and capacity, `phi` of the way from its substance's solid pair to its
+/// liquid pair — see [`Solid3D::mixed_at`].
+fn mix((solid, liquid): ((f64, f64), (f64, f64)), phi: f64) -> (f64, f64) {
+    (
+        solid.0 + phi * (liquid.0 - solid.0),
+        solid.1 + phi * (liquid.1 - solid.1),
+    )
+}
+
+/// The series mean of the two half cells either side of a face. Written as `2ab/(a+b)` and guarded
+/// at zero, because a perfect insulator is a legitimate fill and `0/0` is not a boundary condition.
+fn series(a: f64, b: f64) -> f64 {
+    let sum = a + b;
+    if sum > 0.0 {
+        2.0 * a * b / sum
+    } else {
+        0.0
+    }
+}
+
+/// **A stated contact, in series with the two half cells.** `k` is the resistance
+/// `dx/(2k_L) + dx/(2k_R)` written as a conductivity; a contact adds `1/h` to it, so
+///
+/// ```text
+/// 1/k_face = 1/k_series + 1/(dx·h)
+/// ```
+///
+/// `h = +∞` is the unstated face and returns `k` bit for bit, which is why an untouched block
+/// cannot be perturbed by this existing. `h = 0` is a clearance and carries nothing. A `NaN`
+/// conductance makes the face `NaN`, which reaches the limit and refuses the sweep — the same road
+/// a substance that does not say what it conducts already takes.
+fn contact(k: f64, h: f64, dx: f64) -> f64 {
+    if h == f64::INFINITY {
+        return k;
+    }
+    // A **negative** conductance is not a poor joint, it is a mistake: a face that would carry
+    // heat up its own gradient. `NaN` reaches the limit and refuses the sweep, which is the road a
+    // substance that does not say what it conducts already takes. Clamping it to an insulator
+    // instead would model something nobody asked for and never say so — and an insulator is a
+    // plausible enough answer to go unnoticed.
+    if h.is_nan() || h < 0.0 {
+        return f64::NAN;
+    }
+    // `h = 0` needs no case of its own: `1/(dx·0)` is `+∞` and `1/∞` is zero, which is the
+    // clearance. Guarded on `k` because a void's conductivity is zero and `0/0` is not a boundary
+    // condition.
+    if k <= 0.0 {
+        return 0.0;
+    }
+    1.0 / (1.0 / k + 1.0 / (dx * h))
+}
+
 impl Solid3D {
     /// A block of `counts` cubic cells of side `dx`, all starting at `initial`.
     ///
@@ -553,6 +651,8 @@ impl Solid3D {
             cap_solid: Vec::new(),
             cap_liquid: Vec::new(),
             worst_rate: 0.0,
+            worst_stale: false,
+            phase_props: Vec::new(),
             void: vec![false; counts.0 * counts.1 * counts.2],
             solid_on: [0; 6],
             facing_air: Vec::new(),
@@ -597,6 +697,19 @@ impl Solid3D {
     /// Ignored for a substance that does not melt, and out of range is ignored, matching
     /// `set_temperature`.
     ///
+    /// # The next step conducts through the phase declared here
+    ///
+    /// For a substance with a [liquid](pantometry_core::substance::FusionProps::liquid) phase, a
+    /// cell's conductivity and capacity follow its fraction, so declaring one changes the
+    /// operator, and this re-derives the cell and the faces it shares before it returns; the limit
+    /// is found again by whatever next asks for it. It did not: the operator the constructor had
+    /// derived from the temperature stayed
+    /// until the end of the first step. Ice and water, built as water at 5 °C and declared ice at
+    /// its melting point, reported a limit of 3.206 s for a block whose own was 0.423 s, and one
+    /// step at the limit it reported took a cell set to −20 °C up to 0 °C and its neighbour down
+    /// to −20.4 °C — past each other and out of the range the block had started in, with the
+    /// books exact.
+    ///
     /// # Supercooling is not representable, and this keeps it that way
     ///
     /// The state is one monotone number, so a fraction and a temperature cannot disagree: asking for
@@ -611,6 +724,7 @@ impl Solid3D {
         if self.latent[idx] <= 0.0 {
             return;
         }
+        let before = self.melted[idx];
         let phi = fraction.clamp(0.0, 1.0);
         self.melted[idx] = phi;
         let point = self.melt_point[idx];
@@ -621,6 +735,7 @@ impl Solid3D {
         } else {
             self.cells[idx] = point;
         }
+        self.rephased(idx, before);
     }
 
     /// The volume that has melted, summed over every cell.
@@ -673,6 +788,18 @@ impl Solid3D {
     /// A uniform block pays the same. That is deliberate: a fast path for one material would be a
     /// second implementation of the same physics, exercised by the tests that came before this
     /// method and by nothing after it.
+    ///
+    /// # A cell that changes substance takes the phase its temperature names
+    ///
+    /// As it would have in a block built of that substance, and as
+    /// [`set_temperature`](Solid3D::set_temperature) names one. A cell that keeps its substance
+    /// keeps its phase, so a block that has been melting can be filled again elsewhere without
+    /// losing its front.
+    ///
+    /// It used to carry the old substance's fraction into the new one. Aluminium at 40 °C with a
+    /// cell filled with a wax that melts at 28.15 °C held the wax as a solid at 40 °C, opened its
+    /// books 0.199 J short — that cell's latent heat — and, with nothing flowing, came out of one
+    /// step at 28.15 °C and 9.4% melted.
     pub fn fill(
         &mut self,
         substance: Substance,
@@ -686,11 +813,16 @@ impl Solid3D {
             }
         };
         let (nx, ny, nz) = self.counts;
+        let mut rephase = vec![false; self.cells.len()];
         for k in 0..nz {
             for j in 0..ny {
                 for i in 0..nx {
                     if which(i, j, k) {
                         let c = i + nx * (j + ny * k);
+                        // New matter in the cell, so a fraction carried from what was there
+                        // before is a statement about something else — or, from void, about
+                        // nothing.
+                        rephase[c] = self.which[c] != id || self.void[c];
                         self.which[c] = id;
                         // **Filling a cell puts something in it**, which includes a cell that
                         // held nothing. `empty` was one-way until this line, and `pantometry-
@@ -705,7 +837,7 @@ impl Solid3D {
                 }
             }
         }
-        self.resolve();
+        self.resolve_rephasing(&rephase);
         self
     }
 
@@ -801,6 +933,13 @@ impl Solid3D {
     /// learned from `Puck::repack` — a mutator that leaves a cached solve stale reports a number
     /// that was true about the previous object, and it looks exactly like a number.
     fn resolve(&mut self) {
+        self.resolve_rephasing(&[]);
+    }
+
+    /// [`resolve`](Solid3D::resolve), deriving the phase of each cell `rephase` marks from its
+    /// temperature rather than carrying it. [`fill`](Solid3D::fill) marks the cells it put a
+    /// different substance in; nothing else marks any.
+    fn resolve_rephasing(&mut self, rephase: &[bool]) {
         self.count_faces();
         let (nx, ny, nz) = self.counts;
         let dx = self.dx.to_si();
@@ -846,9 +985,10 @@ impl Solid3D {
 
         // The phase state first, because everything below depends on it.
         //
-        // Rebuilt from temperature only when there is not one yet. Once the sweep is carrying a
-        // fraction, re-deriving it would throw away every partially melted cell — and this runs every
-        // step for a two-phase block, because a cell's conductivity moves with its fraction.
+        // Rebuilt from temperature only when there is not one yet, or for a cell `fill` has just
+        // put new matter in. Once the sweep is carrying a fraction, re-deriving it would throw away
+        // every partially melted cell — and this runs every step for a two-phase block, because a
+        // cell's conductivity moves with its fraction.
         let fresh = self.melted.len() != self.cells.len();
         let carried = std::mem::take(&mut self.melted);
         self.melt_point = Vec::with_capacity(self.cells.len());
@@ -874,14 +1014,15 @@ impl Solid3D {
             self.melt_point.push(point);
             self.latent.push(latent);
             self.melted.push(if fresh {
-                if self.cells[c] > point {
-                    1.0
-                } else {
-                    0.0
-                }
+                phase_named_by(self.cells[c], point)
             } else {
                 prior
             });
+        }
+        // After the loop and over only what is marked, rather than a test inside it: the loop runs
+        // every step for a two-phase block, and only `fill` marks anything.
+        for (c, _) in rephase.iter().enumerate().filter(|(_, marked)| **marked) {
+            self.melted[c] = phase_named_by(self.cells[c], self.melt_point[c]);
         }
 
         // **Any cell with latent heat at all**, which is not the same question as `two_phase`.
@@ -921,56 +1062,12 @@ impl Solid3D {
                 if self.void[c] {
                     return (0.0, 0.0);
                 }
-                let (solid, liquid) = props[self.which[c] as usize];
-                let phi = self.melted[c];
-                (
-                    solid.0 + phi * (liquid.0 - solid.0),
-                    solid.1 + phi * (liquid.1 - solid.1),
-                )
+                mix(props[self.which[c] as usize], self.melted[c])
             })
             .collect();
 
-        // The series mean of the two half cells. Written as `2ab/(a+b)` and guarded at zero, because
-        // a perfect insulator is a legitimate fill and `0/0` is not a boundary condition.
-        let series = |a: f64, b: f64| {
-            let sum = a + b;
-            if sum > 0.0 {
-                2.0 * a * b / sum
-            } else {
-                0.0
-            }
-        };
         let k_of = |cell: usize| mixed[cell].0;
 
-        // **A stated contact, in series with the two half cells.** `series` is the resistance
-        // `dx/(2k_L) + dx/(2k_R)` written as a conductivity; a contact adds `1/h` to it, so
-        //
-        //     1/k_face = 1/k_series + 1/(dx·h)
-        //
-        // `h = +∞` is the unstated face and returns `k` bit for bit, which is why an untouched
-        // block cannot be perturbed by this existing. `h = 0` is a clearance and carries nothing.
-        // A `NaN` conductance makes the face `NaN`, which reaches `worst_rate` and refuses the
-        // sweep — the same road a substance that does not say what it conducts already takes.
-        let contact = |k: f64, h: f64| {
-            if h == f64::INFINITY {
-                return k;
-            }
-            // A **negative** conductance is not a poor joint, it is a mistake: a face that would
-            // carry heat up its own gradient. `NaN` reaches `worst_rate` and refuses the sweep,
-            // which is the road a substance that does not say what it conducts already takes.
-            // Clamping it to an insulator instead would model something nobody asked for and
-            // never say so — and an insulator is a plausible enough answer to go unnoticed.
-            if h.is_nan() || h < 0.0 {
-                return f64::NAN;
-            }
-            // `h = 0` needs no case of its own: `1/(dx·0)` is `+∞` and `1/∞` is zero, which is
-            // the clearance. Guarded on `k` because a void's conductivity is zero and `0/0` is
-            // not a boundary condition.
-            if k <= 0.0 {
-                return 0.0;
-            }
-            1.0 / (1.0 / k + 1.0 / (dx * h))
-        };
         // Read only where one was placed, so a block with no joints does no work and needs no
         // array. `joined` is what fills these, and it fills all three or none.
         let joined = !self.hx.is_empty();
@@ -986,7 +1083,7 @@ impl Solid3D {
                         let f = i + (nx + 1) * (j + ny * k);
                         let k_f = series(k_of(c - 1), k_of(c));
                         self.kx[f] = if joined {
-                            contact(k_f, self.hx[f])
+                            contact(k_f, self.hx[f], dx)
                         } else {
                             k_f
                         };
@@ -995,7 +1092,7 @@ impl Solid3D {
                         let f = i + nx * (j + (ny + 1) * k);
                         let k_f = series(k_of(c - nx), k_of(c));
                         self.ky[f] = if joined {
-                            contact(k_f, self.hy[f])
+                            contact(k_f, self.hy[f], dx)
                         } else {
                             k_f
                         };
@@ -1004,7 +1101,7 @@ impl Solid3D {
                         let f = i + nx * (j + ny * k);
                         let k_f = series(k_of(c - nx * ny), k_of(c));
                         self.kz[f] = if joined {
-                            contact(k_f, self.hz[f])
+                            contact(k_f, self.hz[f], dx)
                         } else {
                             k_f
                         };
@@ -1060,8 +1157,148 @@ impl Solid3D {
         if nowhere {
             self.worst_rate = f64::NAN;
         }
+        self.worst_stale = false;
+        self.phase_props = props;
         self.find_gaps();
         self.find_facing_air();
+    }
+
+    /// One cell's conductivity and capacity, as `resolve` mixes them by its melted fraction —
+    /// see the comment there — and zero for void.
+    fn mixed_at(&self, c: usize) -> (f64, f64) {
+        if self.void[c] {
+            return (0.0, 0.0);
+        }
+        mix(self.phase_props[self.which[c] as usize], self.melted[c])
+    }
+
+    /// The conductivity of the face between two cells of conductivities `low` and `high`, low
+    /// index first, as `resolve` joins them: their series mean, with the contact stated on that
+    /// face, if any, in series with it. `contacts` is the axis's `hx`, `hy` or `hz`, empty for a
+    /// block nobody has joined, and `face` the face's index into it.
+    fn face_conductivity(&self, contacts: &[f64], face: usize, low: f64, high: f64) -> f64 {
+        let k_f = series(low, high);
+        if contacts.is_empty() {
+            k_f
+        } else {
+            contact(k_f, contacts[face], self.dx.to_si())
+        }
+    }
+
+    /// Give a cell the capacity `cap`, and the mobility `resolve` gives it: `dx / cap`, and zero
+    /// for void.
+    fn hold(&mut self, c: usize, cap: f64) {
+        self.capacity[c] = cap;
+        self.mobility[c] = if self.void[c] {
+            0.0
+        } else {
+            self.dx.to_si() / cap
+        };
+    }
+
+    /// A cell's conduction sum `Σ_f k_f`, over its six faces in the order `resolve` adds them.
+    fn face_sum_at(&self, i: usize, j: usize, k: usize) -> f64 {
+        let (nx, ny, _) = self.counts;
+        self.kx[i + (nx + 1) * (j + ny * k)]
+            + self.kx[i + 1 + (nx + 1) * (j + ny * k)]
+            + self.ky[i + nx * (j + (ny + 1) * k)]
+            + self.ky[i + nx * (j + 1 + (ny + 1) * k)]
+            + self.kz[i + nx * (j + ny * k)]
+            + self.kz[i + nx * (j + ny * (k + 1))]
+    }
+
+    /// One cell's conduction rate, `mobility · Σ_f k_f`, in reciprocal seconds.
+    fn rate_at(&self, c: usize) -> f64 {
+        self.mobility[c] * self.face_sum[c]
+    }
+
+    /// `max_i mobility_i · Σ_f k_f` over every cell, or `NaN` if any cell's is not a number —
+    /// what `resolve` finds, found again.
+    fn scan_worst(&self) -> f64 {
+        (0..self.cells.len()).fold(0.0, |worst, c| worse(worst, self.rate_at(c)))
+    }
+
+    /// The conduction part of the stability rate: what `resolve` found, or, after a mutator moved
+    /// a phase since, the maximum found again from the per-cell terms it left right.
+    fn conduction_rate(&self) -> f64 {
+        if self.worst_stale {
+            self.scan_worst()
+        } else {
+            self.worst_rate
+        }
+    }
+
+    /// After a mutator between steps moved cell `c`'s melted fraction from `before`: re-derive
+    /// what the fraction decides, which is something only when a substance here has a liquid
+    /// phase that differs from its solid.
+    fn rephased(&mut self, c: usize, before: f64) {
+        if self.two_phase && self.melted[c] != before {
+            self.rederive_cell(c);
+        }
+    }
+
+    /// Re-derive what one cell's phase decides: its conductivity and capacity, the faces it
+    /// shares, and the conduction sums of the cells across them — the only entries one cell's
+    /// phase reaches. The maximum over cells is left for
+    /// [`conduction_rate`](Solid3D::conduction_rate) to find again; see `worst_stale` for why.
+    ///
+    /// **What `resolve` would make of the same state, to the bit**, and held to that by
+    /// `a_phase_set_between_steps.rs`, which compares every face, capacity, mobility and limit
+    /// with a full `resolve` after each of eleven scenarios of mutators — one substance and two,
+    /// a void, contacts, a film, and one melt beside the middle of a cube for each direction of
+    /// the neighbours' sums. `series`, `contact` and `mix` are shared; the
+    /// rest is the same expressions written twice, because `resolve` runs every step of a
+    /// two-phase block, and calling these helpers from its loops made that step 4% to 11% slower
+    /// from 16³ to 64³, pinned to one core.
+    fn rederive_cell(&mut self, c: usize) {
+        let (nx, ny, nz) = self.counts;
+        let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+        let here = self.mixed_at(c);
+        if i > 0 {
+            let f = i + (nx + 1) * (j + ny * k);
+            self.kx[f] = self.face_conductivity(&self.hx, f, self.mixed_at(c - 1).0, here.0);
+        }
+        if i + 1 < nx {
+            let f = i + 1 + (nx + 1) * (j + ny * k);
+            self.kx[f] = self.face_conductivity(&self.hx, f, here.0, self.mixed_at(c + 1).0);
+        }
+        if j > 0 {
+            let f = i + nx * (j + (ny + 1) * k);
+            self.ky[f] = self.face_conductivity(&self.hy, f, self.mixed_at(c - nx).0, here.0);
+        }
+        if j + 1 < ny {
+            let f = i + nx * (j + 1 + (ny + 1) * k);
+            self.ky[f] = self.face_conductivity(&self.hy, f, here.0, self.mixed_at(c + nx).0);
+        }
+        if k > 0 {
+            let f = i + nx * (j + ny * k);
+            self.kz[f] = self.face_conductivity(&self.hz, f, self.mixed_at(c - nx * ny).0, here.0);
+        }
+        if k + 1 < nz {
+            let f = i + nx * (j + ny * (k + 1));
+            self.kz[f] = self.face_conductivity(&self.hz, f, here.0, self.mixed_at(c + nx * ny).0);
+        }
+        self.hold(c, here.1);
+        self.face_sum[c] = self.face_sum_at(i, j, k);
+        if i > 0 {
+            self.face_sum[c - 1] = self.face_sum_at(i - 1, j, k);
+        }
+        if i + 1 < nx {
+            self.face_sum[c + 1] = self.face_sum_at(i + 1, j, k);
+        }
+        if j > 0 {
+            self.face_sum[c - nx] = self.face_sum_at(i, j - 1, k);
+        }
+        if j + 1 < ny {
+            self.face_sum[c + nx] = self.face_sum_at(i, j + 1, k);
+        }
+        if k > 0 {
+            self.face_sum[c - nx * ny] = self.face_sum_at(i, j, k - 1);
+        }
+        if k + 1 < nz {
+            self.face_sum[c + nx * ny] = self.face_sum_at(i, j, k + 1);
+        }
+        self.worst_stale = true;
     }
 
     /// Which solid cells have a face on the void, when there is air in it to lose to.
@@ -1610,7 +1847,7 @@ impl Solid3D {
                 supplied,
             ));
         }
-        if self.worst_rate.is_nan() {
+        if self.conduction_rate().is_nan() {
             return Err(Violation::at(
                 &self.name,
                 "this block cannot be stepped, so it has no balance to solve",
@@ -2049,12 +2286,13 @@ impl Solid3D {
         // conducting face at all, so the radiative exchange is the *only* thing setting their
         // step. Returning early on `exposed` alone handed such a pair an infinite limit, and a
         // march at infinity is a NaN block reported as a substance with no diffusivity.
+        let conducting = self.conduction_rate();
         if (self.exposed.is_empty() && self.gaps.is_empty() && self.air.is_none())
-            || self.worst_rate.is_nan()
+            || conducting.is_nan()
         {
-            return self.worst_rate;
+            return conducting;
         }
-        let mut worst = self.worst_rate;
+        let mut worst = conducting;
         // A gap's radiative conductance, linearised at the **hotter** of the pair, which is the
         // conservative end: `dq/dT = 4σA T³/(1/ε₁+1/ε₂−1)` grows with temperature, so the hotter
         // cell's tangent bounds the pair's. Charged to both cells, because either could be the
@@ -2479,19 +2717,21 @@ impl Solid3D {
     ///
     /// Out of range is ignored rather than a panic: a caller writing a hot spot in a loop over a
     /// radius is the expected use, and clipping at the edge is what they mean.
+    ///
+    /// A temperature that names a different phase in a block with a liquid phase re-derives that
+    /// cell's conductivity, capacity and faces, as
+    /// [`set_melted_fraction`](Solid3D::set_melted_fraction) does and for the same reason, and at
+    /// the cost of one cell: a region set one cell at a time costs what its cells do, not what the
+    /// block does.
     pub fn set_temperature(&mut self, i: usize, j: usize, k: usize, t: Temperature) {
         if let Some(idx) = self.index(i, j, k) {
             self.cells[idx] = t.to_si();
-            // A temperature is not a state for a substance that melts — 0 °C is ice, water, or any
-            // mixture of the two. Naming a temperature therefore names a phase as well, and the
-            // choice is the unmelted one at the point itself: a caller clamping a face below
-            // freezing means ice, and a caller clamping it above means liquid.
+            // A temperature is not a state for a substance that melts, so naming one names a
+            // phase as well — see `phase_named_by`.
             if self.latent[idx] > 0.0 {
-                self.melted[idx] = if t.to_si() > self.melt_point[idx] {
-                    1.0
-                } else {
-                    0.0
-                };
+                let before = self.melted[idx];
+                self.melted[idx] = phase_named_by(t.to_si(), self.melt_point[idx]);
+                self.rephased(idx, before);
             }
         }
     }
@@ -2501,13 +2741,22 @@ impl Solid3D {
     /// Counts toward [`absorbed_energy`](Solid3D::absorbed_energy), so the books balance. Out of
     /// range is ignored, which would silently lose energy — so it does not: the joules are
     /// refused, and nothing is added to either total.
+    ///
+    /// Heat that melts or freezes some of a cell in a block with a liquid phase re-derives the
+    /// cell, as [`set_melted_fraction`](Solid3D::set_melted_fraction) does. It did not: in a
+    /// column of eight 1 mm cells of ice at −5 °C, a cell given enough to melt it to water at 5 °C
+    /// kept ice's 2.22 mW/K on each of its faces where ice against water is 0.94 mW/K, and a step
+    /// of the column's limit, 0.423 s, took the cell to 0.10 °C where the same step through the
+    /// right faces took it to 2.92 °C.
     pub fn deposit(&mut self, i: usize, j: usize, k: usize, joules: Energy) {
         let Some(idx) = self.index(i, j, k) else {
             return;
         };
+        let before = self.melted[idx];
         let rise = joules.to_si() / self.capacity[idx];
         self.add_kelvin(idx, rise);
         self.absorbed += joules.to_si();
+        self.rephased(idx, before);
     }
 
     /// Mean over every cell. Every cell has the same volume, so this is the volume average.

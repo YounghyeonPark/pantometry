@@ -455,9 +455,7 @@ fn claimants() -> Vec<Claimant> {
                 expansion: ThermalExpansion::ppm_per_k(207.0),
                 emissivity: 0.96,
             }));
-            // Ice at its melting point and fed, so every step melts some of every cell. Not set
-            // with `set_melted_fraction`, which leaves the operator the constructor derived until
-            // the first step: a checkpoint then would hold a limit that no restore should give.
+            // Ice at its melting point and fed, so every step melts some of every cell.
             Solid3D::new(
                 "slush",
                 two_phase,

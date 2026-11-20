@@ -615,6 +615,67 @@ protects nothing.
 
 ### Fixed
 
+- **A phase named between steps left the operator of the phase before it, and `fill` gave new
+  matter the old matter's fraction** (`pantometry-thermal`). For a substance with a liquid phase,
+  a cell's conductivity and capacity follow how much of it has melted. `Solid3D`'s
+  `set_melted_fraction`, `set_temperature` and `deposit` moved the fraction and left the face
+  conductances, the capacities and the limit derived from the old one until the end of the next
+  step.
+  - **The limit was the old phase's.** Water at 5 °C declared ice at its melting point reported
+    3.206 s for a column whose own limit was 0.423 s, and one step at the limit it reported took
+    the cell set to −20 °C up to 0 °C and its neighbour down to −20.4 °C — past each other and out
+    of the range the column started in, with the books exact. Only the second step was refused.
+  - **The first step conducted through the old phase.** In a column of ice at −5 °C, a cell given
+    enough to melt it to water at 5 °C kept ice's 2.22 mW/K on its faces where ice against water
+    is 0.94 mW/K, and a step of the column's limit took the cell to 0.10 °C where the same step
+    through the right faces took it to 2.92 °C.
+  - **Iterated, the sweeps disagreed.** A checkpoint taken after a declaration held fractions its
+    operator was not derived from, and a restore re-derives: water declared at 0 °C with a cell at
+    −20 °C came out of the step after the checkpoint at −15.000 °C and of the step after a restore
+    at −17.878 °C.
+  - **A mutator re-derives the one cell it moved now** — its conductivity and capacity, its faces
+    and its neighbours' conduction sums — and leaves the maximum over cells to be found again by
+    whatever next asks for the limit. A full re-derivation per call would have been 6.2 ms at 64³,
+    27 minutes to set every cell of a two-phase block one at a time, which is how
+    `pantometry-world` sets a region's `initial_c`.
+  - **`fill` gave a cell new matter and the old matter's fraction.** A wax melting at 28.15 °C
+    filled into aluminium at 40 °C was a solid at 40 °C, its books opened 0.199 J short — that
+    cell's latent heat — and with nothing flowing it came out of one step at 28.15 °C and 9.4%
+    melted. A cell that changes substance, or is filled from void, takes the phase its temperature
+    names, as in a block built of it; a cell that keeps its substance keeps its fraction.
+  - **`resolve` keeps its loops.** Calling the update's helpers from them made a two-phase step,
+    which runs one every step, 4% to 11% slower from 16³ to 64³ pinned to one core, and no one of
+    the changes measured recovered more than half of it. It shares `series`, `contact` and `mix`
+    with the update instead, and a step is 0.1% to 5.5% from what it was, which is the range two
+    builds of nearly the same code differ by on this machine.
+  - **`crates/pantometry-thermal/tests/a_phase_set_between_steps.rs`.** Eleven scenarios of
+    mutators — on a block with three axes, a void, a different contact on each axis and a film; on
+    aluminium and ice joined; every cell declared one at a time; and one melt beside the middle of
+    a 3×3×3 cube for each direction of the neighbours' sums — each required to move the operator,
+    after which every face, capacity, mobility, the limit and the stability ratio are a full
+    re-derivation's to the bit, reached by a `fill` of nothing and by a checkpoint and restore, and
+    so is the next step. A cell that cannot be stepped is still refused after a phase moves. A
+    column declared ice has ice's `dx²/(2α)` to an ulp and lands on −10 °C one step at it. A
+    restore after a declaration gives back the step after the checkpoint. A wax filled into warm
+    aluminium is liquid with its books at zero and moves nothing; into cold aluminium it is solid;
+    a half-melted cell keeps its fraction through a fill elsewhere and through a fill of its own
+    cell with what it holds; and ice put into a void at its melting point is solid.
+  - **Thirty-eight sabotages**, one at a time after a clean control, each failing its named tests
+    with the messages that name it: each mutator's re-derivation removed, and its before-value read
+    too late; the gate inverted; each of the six faces and each of the six neighbours' sums left
+    out; the contacts read off the wrong axis; the capacity, the cell's own sum, the stale mark and
+    the search again; every cell mixed as the first substance; a search that passes over a `NaN`;
+    a mutator that does nothing; a `fill` that returns early, so only the second reference sees
+    it; the restore's re-derivation; the form that shipped; and `fill` marking nothing, every cell,
+    every cell it named, only a change of substance or only void, its marks never read, and the
+    melting point named liquid.
+  - **Three reviews found what its first version could not see**, each reproduced before it was
+    fixed: a search that passed over a `NaN`, every cell mixed as the first substance, and a fill
+    that re-derived a cell it gave what it already held each passed every test it had, because
+    none combined a two-phase block with a `NaN`, a second substance or a fill of the same one.
+  - **Moved by it:** `two_phase_stefan.rs` declares its columns liquid, and its first step now
+    conducts through the liquid: the gap between the models at twenty cells is 2.198% where it was
+    2.155%, the worst against the two-phase form 3.77% where it was 3.78%.
 - **`Waves`' restore used up its checkpoint, and six more domains' restores gave back less than
   they had saved** (`pantometry-elastic`, `pantometry-acoustic`, `pantometry-thermal`,
   `pantometry-molecular`). `Schedule::Iterative` checkpoints every domain once an advance and

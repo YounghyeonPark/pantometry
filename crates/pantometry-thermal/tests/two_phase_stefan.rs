@@ -267,7 +267,7 @@ fn a_superheated_liquid_slows_the_front_by_what_the_closed_form_says() {
 ///
 /// In the *continuum* one-phase problem a liquid at the melting point cannot influence anything: every
 /// face in it has zero temperature difference, and zero times a conductance is zero. I asserted that of
-/// the solver and it is **false**, by 2.1% at twenty cells.
+/// the solver and it is **false**, by 2.2% at twenty cells.
 ///
 /// The reason is the discretisation and not the physics. A fixed grid puts a cell that is *wholly*
 /// liquid where the continuum has an interface partway through it, and that cell conducts at water's
