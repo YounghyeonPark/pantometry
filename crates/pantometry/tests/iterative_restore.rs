@@ -10,6 +10,7 @@
 //! So this file supplies the missing ingredient: a domain with a genuine residual, which forces
 //! real iterations, which forces real restores.
 
+use pantometry::core::integrator::substeps_for;
 use pantometry::prelude::*;
 
 /// A domain that converges over sweeps, so `iterate` has to iterate.
@@ -187,4 +188,126 @@ fn a_rewound_lumped_mass_does_not_invent_the_heat_it_shed() {
         shed > 100.0,
         "the plate should have shed real joules, got {shed:.3} J"
     );
+}
+
+/// A warming espresso bed: 8 x 6 x 8 cells of 1 mm at 20 C under a 93 C inlet, so a step moves its
+/// viscosity, its flow and its stability limit, which falls as it warms.
+fn warming_puck() -> Puck {
+    let dx = 1e-3;
+    let mut p = Puck::new(
+        "puck",
+        Basket {
+            counts: (8, 6, 8),
+            cell: Length::from_si(dx),
+            radius: Length::from_si(4.0 * dx),
+            porosity: 0.45,
+            grind: Grind::sieved(Length::from_si(800e-6)),
+            ..Basket::espresso()
+        },
+    );
+    p.set_temperature(Temperature::celsius(20.0));
+    p.set_inlet_temperature(Temperature::celsius(93.0));
+    p
+}
+
+/// What a bed reads out, as bits: each cell's temperature, extraction, concentration and pressure,
+/// the flow, the delivered totals and both books. Not its `Debug`, which the porous tests also
+/// compare: a bed in a coupling holds the checkpoint the coupling took, and a bed alone holds none.
+fn bed_bits(sim: &Simulation) -> Vec<u64> {
+    let p = sim.domain_as::<Puck>("puck").expect("the puck is there");
+    let (nx, ny, nz) = p.counts();
+    let mut bits = Vec::new();
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                bits.push(p.temperature_at(i, j, k).to_si().to_bits());
+                bits.push(p.extraction_at(i, j, k).to_bits());
+                bits.push(p.concentration_at(i, j, k).to_si().to_bits());
+                bits.push(p.pressure_at(i, j, k).to_si().to_bits());
+            }
+        }
+    }
+    let books = p.ledger();
+    for x in [
+        p.flow_rate().to_si(),
+        p.delivered().to_si(),
+        p.delivered_solute().to_si(),
+        p.delivered_enthalpy().to_si(),
+        books.get(quantity::MASS).expect("a mass book"),
+        books.get(quantity::ENERGY).expect("an energy book"),
+    ] {
+        bits.push(x.to_bits());
+    }
+    bits
+}
+
+/// **A puck rewound by an iterative coupling moves one window an advance, however many sweeps it
+/// takes.**
+///
+/// `Converging` makes `iterate` sweep three times and restore twice an advance. The puck is not
+/// coupled to it, so every sweep is the same window from the same bed, and the bed it ends on must
+/// be the one that window gives under `Schedule::Multirate`, which sweeps once and restores
+/// nothing — to the bit, and divided into the same substeps. The window is two and a half of the
+/// bed's first limit, and the limit falls as the bed warms, so each window is divided again inside
+/// itself, into more substeps than its first read plans, and how depends on the bed the sweep
+/// began from. Two advances, so the second iterates from a checkpoint taken over the first's: one
+/// that kept the first would rewind the second advance to where the first began.
+///
+/// The puck's restore took its checkpoint as it went, so the second restore did nothing and the
+/// third sweep began where the second ended: two windows in one. It did not claim
+/// `supports_restore` then, and `iterate` refused it.
+#[test]
+fn a_puck_rewound_by_an_iterative_coupling_moves_one_window() {
+    let t = Time::from_si(0.0);
+    let puck = warming_puck();
+    let window = Time::from_si(2.5 * puck.max_stable_dt(t).to_si());
+
+    let mut once = Simulation::new(Schedule::Multirate).with(puck.clone());
+    let mut sim = Simulation::new(Schedule::Iterative {
+        max_iter: 8,
+        tol: 0.2,
+    })
+    .with(Converging::new())
+    .with(puck);
+    let substeps = |r: &Report| {
+        r.substeps
+            .iter()
+            .find(|(name, _)| name == "puck")
+            .map(|(_, n)| *n)
+    };
+    for advance in 1..=2 {
+        let limit = once
+            .domain_as::<Puck>("puck")
+            .expect("the puck is there")
+            .max_stable_dt(t);
+        let planned = substeps_for(window, limit);
+        let alone = once.advance(window).expect("one window");
+        let coupled = sim
+            .advance(window)
+            .expect("a restorable puck in a coupling that converges");
+        println!(
+            "  advance {advance}: {planned} substeps planned, {:?} alone, {:?} in the coupling",
+            substeps(&alone),
+            substeps(&coupled)
+        );
+        assert_eq!(
+            coupled.iterations, 3,
+            "advance {advance}: three sweeps, so two restores"
+        );
+        assert!(
+            substeps(&alone) > Some(planned),
+            "advance {advance}, precondition: the window must be divided again inside itself"
+        );
+        assert_eq!(
+            substeps(&coupled),
+            substeps(&alone),
+            "advance {advance}: the third sweep divided the window differently from one sweep \
+             from the same bed"
+        );
+        assert!(
+            bed_bits(&sim) == bed_bits(&once),
+            "advance {advance}: the bed after three sweeps and two restores is not the bed one \
+             window gives"
+        );
+    }
 }

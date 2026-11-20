@@ -615,6 +615,36 @@ protects nothing.
 
 ### Fixed
 
+- **A puck's restore used up its checkpoint, and the puck could not be iterated**
+  (`pantometry-porous`). `Schedule::Iterative` checkpoints every domain once and restores it
+  before every sweep after the first. `Puck::restore` took the checkpoint as it went, so a second
+  restore found none and did nothing, and the third sweep would have begun where the second
+  ended. The puck did not claim `Domain::supports_restore`, so `Iterative` refused it and the
+  defect had no caller; claiming it as it was would have moved a bed two windows in a coupling
+  that took three sweeps. A restore copies from the checkpoint now and leaves it, as `Solid3D`'s
+  does, and the puck claims `supports_restore`.
+  - **What the checkpoint holds was already complete.** A step moves the heat, the solids, the
+    dissolved solute and the four delivered totals, and its closing solve replaces the field, its
+    faces and the solve's verdict; the checkpoint holds all of those. The drive and the inlet
+    temperature are a caller's, read at their new values after a restore, and the bed itself
+    changes only through a mutator.
+  - **Checked by what an iteration needs, to the bit.** One checkpoint restored three times,
+    each followed by the same step: every restore gives back the checkpointed bed, in what it
+    reads out and in its `Debug`, which prints every field, and every step from it the same
+    stepped bed. A field marked unconverged after the checkpoint is marked converged again by a
+    restore and stepped on, and one converged after an unconverged checkpoint is refused again.
+    And a warming bed beside a domain that makes `Iterative` sweep three times an advance ends
+    each of two advances on the bed the same windows under `Schedule::Multirate` give, divided
+    into the same substeps, more than the first read of each window plans, because a warming bed
+    divides a window again inside itself.
+  - **Seventeen sabotages, one at a time**, after a control in which every test they name passed
+    with nothing changed, each failing the named test with the message that names it: the
+    checkpoint taken again, in both tests — under the coupling the window took five substeps
+    where one window takes four; the claim withdrawn, which `Iterative` refuses; a second
+    checkpoint that keeps the first; the rescale left out; and each of the eleven restored fields
+    left out alone, one of them against the coupled bed as well. A review found that `converged`
+    left out passed every test, because every step here converges, and that the coupled bed's
+    own comparison had never been seen to fail; the verdict test and that second case see them.
 - **`Schedule::Multirate` sized a window's substeps from one read of each limit, and could hand a
   substep an ulp over it** (`pantometry-core`).
   - **One read a window.** `Domain::max_stable_dt` is the largest step from the state a domain is
@@ -650,8 +680,9 @@ protects nothing.
     scheduler refuses it.
   - **Under `Schedule::Iterative`**, which sweeps the same way, a limit that moves can divide a
     window differently from one iteration to the next, each following its own trajectory; the plan
-    used to be the restored state's in all of them. No test in the tree divides a window again
-    under it, counted.
+    used to be the restored state's in all of them. No test in the tree divided a window again
+    under it, counted then. A warming puck's does now, and its third sweep divides the window as
+    one sweep does, because each begins from the same bed — see the puck's entry above.
   - **The cost** is one more `max_stable_dt` per substep, and the block's limit was made cheaper
     first, for this. Pinned to a P-core, best of seven runs of each interleaved, as a share of the
     time before both changes: scene 24 0.88, 29 0.84, 30 0.99, 25 0.97, 18 and 27 1.00; and

@@ -4,6 +4,7 @@
 //! compares against another run of the same solver, and none compares against a number that was
 //! read off this implementation and pasted back in.
 
+use pantometry_core::conserved::quantity;
 use pantometry_core::integrator::substeps_for;
 use pantometry_core::{Domain, Exchange, Schedule, Simulation, Substance};
 use pantometry_porous::{Basket, Bed, Grind, Liquid, Observable, Puck};
@@ -1077,7 +1078,7 @@ fn the_outlet_temperature_is_what_the_outlet_flow_carries() {
 /// `restore` put the field at one pascal back and measured the flow across the face list again —
 /// and the step being rolled back had consumed that list, so a restored bed read **exactly zero**
 /// flow beside a pressure field that was not zero: a pump that had stopped, to anyone reading the
-/// bed after a restore. Nothing in the kernel restores a puck, which does not claim
+/// bed after a restore. Nothing in the kernel restored a puck then, which did not claim
 /// `supports_restore`, so only such a caller could see it. It measures again now, across the list
 /// the checkpoint saved; see `a_restore_puts_back_the_faces_with_the_field`.
 #[test]
@@ -1261,6 +1262,130 @@ fn a_flow_limited_bed_runs_multirate() {
             );
         }
     }
+}
+
+/// What a bed reads out, as bits: each cell's temperature, extraction, concentration and pressure,
+/// then the flow, the flow balance, the residual, the delivered totals and both books — the
+/// energy's carries the admitted enthalpy, which nothing else reads out. A readout can merge two
+/// values an ulp apart, and none reads whether the field converged, so a test holding a bed against
+/// itself later compares its `Debug` as well, which prints every field to the bit.
+fn fingerprint(p: &Puck) -> Vec<u64> {
+    let (nx, ny, nz) = p.counts();
+    let mut bits = Vec::new();
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                bits.push(p.temperature_at(i, j, k).to_si().to_bits());
+                bits.push(p.extraction_at(i, j, k).to_bits());
+                bits.push(p.concentration_at(i, j, k).to_si().to_bits());
+                bits.push(p.pressure_at(i, j, k).to_si().to_bits());
+            }
+        }
+    }
+    let books = p.ledger();
+    for x in [
+        p.flow_rate().to_si(),
+        p.flow_balance(),
+        p.residual(),
+        p.delivered().to_si(),
+        p.delivered_solute().to_si(),
+        p.delivered_enthalpy().to_si(),
+        books.get(quantity::MASS).expect("a puck keeps a mass book"),
+        books
+            .get(quantity::ENERGY)
+            .expect("a puck keeps an energy book"),
+    ] {
+        bits.push(x.to_bits());
+    }
+    bits
+}
+
+/// **A checkpoint survives its restore, so a bed restored again is the same bed.**
+///
+/// `Schedule::Iterative` checkpoints once and restores before every sweep after the first. The
+/// restore took the checkpoint as it went, so the second found none and did nothing, and the
+/// third sweep began where the second ended. Three restores of one checkpoint here, each followed
+/// by the same step: every restore must give back the checkpointed bed to the bit, and every step
+/// from it the same stepped bed. The warming bed, stepped once first, so a step moves its
+/// temperatures, its viscosity and the faces its field is solved on.
+#[test]
+fn a_bed_restored_again_is_the_checkpointed_bed_every_time() {
+    let t = Time::from_si(0.0);
+    let mut p = warming();
+    p.step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect("stable");
+    let dt = p.max_stable_dt(t);
+    p.checkpoint();
+    let (held, held_all) = (fingerprint(&p), format!("{p:?}"));
+    p.step(t, dt, &mut Exchange::new()).expect("stable");
+    let (stepped, stepped_all) = (fingerprint(&p), format!("{p:?}"));
+    assert_ne!(stepped, held, "precondition: the step must move the bed");
+    for time in 1..=3 {
+        p.restore();
+        assert!(
+            fingerprint(&p) == held && format!("{p:?}") == held_all,
+            "restore {time} did not give back the checkpointed bed"
+        );
+        p.step(t, dt, &mut Exchange::new()).expect("stable");
+        assert!(
+            fingerprint(&p) == stepped && format!("{p:?}") == stepped_all,
+            "the step after restore {time} was not the step the checkpoint took"
+        );
+    }
+}
+
+/// **A restore gives back the verdict with the field, both ways.**
+///
+/// A step trusts the field's verdict rather than solving first, so a restore that kept a later
+/// solve's would refuse a good field, or step on a bad one. Every step here converges, so before
+/// and after a step the verdict is the same, and nothing above can tell a restore that left it
+/// alone. A solve given no iterations against a residual of `1e-300` marks a field unconverged
+/// without moving it, and a solve to the bed's own tolerance marks it converged again.
+#[test]
+fn a_restore_gives_back_the_verdict_with_the_field() {
+    let t = Time::from_si(0.0);
+
+    // A solved field, then a later verdict that it is not.
+    let mut p = warming();
+    assert!(p.converged(), "precondition: the bed starts solved");
+    p.checkpoint();
+    let held = format!("{p:?}");
+    assert!(
+        !p.solve_within(1e-300, 0),
+        "no iterations cannot reach 1e-300"
+    );
+    p.restore();
+    assert!(
+        p.converged(),
+        "a restore after an unconverged solve kept that solve's verdict"
+    );
+    assert!(
+        format!("{p:?}") == held,
+        "a restore after an unconverged solve did not give back the checkpointed bed"
+    );
+    p.step(t, p.max_stable_dt(t), &mut Exchange::new())
+        .expect("the restored field converged, so a step on it is taken");
+
+    // An unsolved field, then a later solve that converges.
+    let mut q = warming();
+    assert!(
+        !q.solve_within(1e-300, 0),
+        "no iterations cannot reach 1e-300"
+    );
+    q.checkpoint();
+    assert!(q.solve(1e-10), "precondition: the field solves again");
+    q.restore();
+    assert!(
+        !q.converged(),
+        "a restore after a converged solve kept that solve's verdict"
+    );
+    let refused = q
+        .step(t, q.max_stable_dt(t), &mut Exchange::new())
+        .expect_err("the restored field did not converge, so a step on it is refused");
+    assert!(
+        refused.to_string().contains("pressure residual"),
+        "refused for another reason: {refused}"
+    );
 }
 
 /// **A restore puts back the faces with the field, and whether it converged.** The field at one

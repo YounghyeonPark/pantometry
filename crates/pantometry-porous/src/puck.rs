@@ -1511,29 +1511,52 @@ impl Domain for Puck {
         }));
     }
 
+    /// Back to the last [`checkpoint`](Domain::checkpoint), **which stays**, so a second restore
+    /// puts back the same bed as the first.
+    ///
+    /// [`Schedule::Iterative`](pantometry_core::Schedule::Iterative) checkpoints once and restores
+    /// before every sweep after the first. This took the checkpoint as it restored, so the second
+    /// restore found none and did nothing: the third sweep started where the second ended, and a
+    /// bed in a coupling that took three sweeps moved two steps in one. The puck did not claim
+    /// [`supports_restore`](Domain::supports_restore) then, so nothing in the kernel restored it.
     fn restore(&mut self) {
-        if let Some(s) = self.saved.take() {
-            // The field at one pascal **and the faces it was solved on**, rescaled to the drive —
-            // which a checkpoint does not hold and a restore does not touch. Measured again from
-            // the pair rather than saved, so that the flow is the one at the drive the pressure
-            // now has.
-            self.unit = s.unit;
-            self.face_cache = s.faces;
-            self.rescale();
-            // And whether that field converged. A step trusts it rather than solving again, so a
-            // restore that kept the rolled-back step's verdict would refuse a good field after a
-            // failed step, and pass a bad one after a good step.
-            self.residual = s.residual;
-            self.converged = s.converged;
-            self.temperature = s.temperature;
-            self.solids = s.solids;
-            self.dissolved = s.dissolved;
-            self.delivered_volume = s.delivered_volume;
-            self.delivered_solute = s.delivered_solute;
-            self.delivered_enthalpy = s.delivered_enthalpy;
-            self.admitted_enthalpy = s.admitted_enthalpy;
-            self.saved = None;
-        }
+        let Some(s) = self.saved.as_deref() else {
+            return;
+        };
+        // The field at one pascal **and the faces it was solved on**, rescaled to the drive below
+        // — which a checkpoint does not hold and a restore does not touch. Measured again from the
+        // pair rather than saved, so that the flow is the one at the drive the pressure now has.
+        self.unit.clone_from(&s.unit);
+        self.face_cache.clone_from(&s.faces);
+        // And whether that field converged. A step trusts it rather than solving again, so a
+        // restore that kept the rolled-back step's verdict would refuse a good field after a
+        // failed step, and pass a bad one after a good step.
+        self.residual = s.residual;
+        self.converged = s.converged;
+        self.temperature.clone_from(&s.temperature);
+        self.solids.clone_from(&s.solids);
+        self.dissolved.clone_from(&s.dissolved);
+        self.delivered_volume = s.delivered_volume;
+        self.delivered_solute = s.delivered_solute;
+        self.delivered_enthalpy = s.delivered_enthalpy;
+        self.admitted_enthalpy = s.admitted_enthalpy;
+        // Last, where the field and its faces are both back. It reads those two and the drive and
+        // nothing restored after them, so the bits are the ones it gave when it ran second.
+        self.rescale();
+    }
+
+    /// **Yes**, now that a restore leaves the checkpoint where it was.
+    ///
+    /// The checkpoint holds what a step moves — the heat, the solids, the dissolved solute, the
+    /// four delivered totals — and the field, its faces and the solve's verdict, which the step's
+    /// closing solve replaces. Everything else a step reads is either set by a caller, the drive
+    /// and the inlet temperature, or the bed itself, which only a mutator changes. It takes nothing
+    /// from the bus and publishes nothing, and has no residual of its own, so every sweep of an
+    /// iterated window repeats the same window from the same bed. A caller that changes the drive
+    /// between a checkpoint and a restore has the restored field read at the new drive, which
+    /// `a_restore_measures_the_flow_at_the_drive_it_finds` checks.
+    fn supports_restore(&self) -> bool {
+        true
     }
 }
 
