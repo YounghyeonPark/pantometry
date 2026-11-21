@@ -106,8 +106,9 @@ pub const STABLE_FOURIER_3D: f64 = 1.0 / 6.0;
 /// out sheds too much heat and — measured — turns a second-order boundary into a first-order
 /// one, which is the defect this workspace has twice found in an acoustic wall.
 ///
-/// An infinite conductivity (a substance that does not say) leaves the film alone, which is the
-/// right limit rather than a special case.
+/// A conductivity that is not finite leaves the film alone. An infinite one is the right limit
+/// rather than a special case. A `NaN` one is what a substance with no thermal properties reads
+/// as, and its capacity is `NaN` too, so its block's `step` is refused before this matters.
 fn series_with_half_cell(film: f64, conductivity: f64, area: f64, dx: f64) -> f64 {
     if film <= 0.0 {
         return 0.0;
@@ -347,6 +348,18 @@ pub struct Solid3D {
     /// `((k_s, C_s), (k_l, C_l))` — the pairs a cell's phase mixes between. Kept from `resolve` so
     /// one cell can be re-derived without rebuilding the rest.
     phase_props: Vec<((f64, f64), (f64, f64))>,
+    /// Each cell's conductivity and capacity **as the operator was last derived**, `(k, C)`:
+    /// what `resolve` mixed them to, and `rederive_cell` since, and zero for void.
+    ///
+    /// The film's half cell reads its conductivity here rather than mixing it again from
+    /// `melted`, because the two differ inside a step. The heat a step takes off the bus goes in
+    /// first, and can move a phase, after the limit is taken and before anything is swept; the
+    /// faces, the capacities and the limit are the phase's before it, so the film must be too.
+    /// Mixed again from `melted`, as the first version of this fix did, it was not: a liquid
+    /// conducting ten times its solid, melted by heat off the bus within a step at its limit,
+    /// carried 7.2 times the conductance the limit had charged, and took out 0.272 J in that step,
+    /// refreezing 83% of the cell.
+    derived: Vec<(f64, f64)>,
     /// Cells that are **not part of the block** — see [`Solid3D::empty`].
     void: Vec<bool>,
     /// How many solid cells lie on each face, in `Face` order. Filled by `resolve`; see
@@ -653,6 +666,7 @@ impl Solid3D {
             worst_rate: 0.0,
             worst_stale: false,
             phase_props: Vec::new(),
+            derived: Vec::new(),
             void: vec![false; counts.0 * counts.1 * counts.2],
             solid_on: [0; 6],
             facing_air: Vec::new(),
@@ -1159,6 +1173,10 @@ impl Solid3D {
         }
         self.worst_stale = false;
         self.phase_props = props;
+        // Kept rather than dropped, for the film. Moving it costs no time — measured, a step of a
+        // block that keeps it and reads nothing from it is the step of one that drops it — and it
+        // holds sixteen bytes a cell.
+        self.derived = mixed;
         self.find_gaps();
         self.find_facing_air();
     }
@@ -1254,6 +1272,7 @@ impl Solid3D {
         let (nx, ny, nz) = self.counts;
         let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
         let here = self.mixed_at(c);
+        self.derived[c] = here;
         if i > 0 {
             let f = i + (nx + 1) * (j + ny * k);
             self.kx[f] = self.face_conductivity(&self.hx, f, self.mixed_at(c - 1).0, here.0);
@@ -2365,11 +2384,6 @@ impl Solid3D {
         (0..nz).flat_map(move |k| (0..ny).flat_map(move |j| (0..nx).map(move |i| (i, j, k))))
     }
 
-    /// The film's flux out of a cell, in the sweep's own units — a conductivity times a
-    /// temperature difference, so that `mobility · this` is a rate in kelvin per second.
-    ///
-    /// The **secant** conductance of the bare surface, which is the exact one for this flux,
-    /// put in series with the half cell of solid behind it. Positive means heat leaving.
     /// A boundary film's conductance with the mounting in series, both in W/K.
     ///
     /// **Two callers and one function, deliberately.** The boundary loss is computed twice — once
@@ -2433,10 +2447,19 @@ impl Solid3D {
         h * dx * dx * faces as f64
     }
 
+    /// The film's flux out of a cell, in the sweep's own units — a conductivity times a
+    /// temperature difference, so that `mobility · this` is a rate in kelvin per second.
+    ///
+    /// The **secant** conductance of the bare surface, which is the exact one for this flux,
+    /// put in series with the half cell behind it. Positive means heat leaving.
+    ///
+    /// The half cell conducts as the cell's faces do, at the phase the operator was derived at —
+    /// see `loss_conductance_at` for what reading the solid's cost, and `derived` for why not the
+    /// phase of the moment.
     fn film_flux(&self, old: &[f64], cell: (usize, usize, usize), c: usize) -> f64 {
         let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
         let emissivity = thermal.map_or(0.0, |t| t.emissivity);
-        let conductivity = thermal.map_or(f64::INFINITY, |t| t.conductivity.to_si());
+        let conductivity = self.derived[c].0;
         let dx = self.dx.to_si();
         let here = Temperature::from_si(old[c]);
         let mut out = 0.0;
@@ -2616,10 +2639,24 @@ impl Solid3D {
     /// bounds `(T+T∞)(T²+T∞²)` for every `T ≤ T∞`, so the larger of the two points is safe on
     /// both sides.
     ///
-    /// The film is put **in series with the half cell of solid between the cell centre and the
-    /// surface**, `2k·A/dx`. A finite-volume cell knows only its centre and the film acts at the
-    /// surface, so the half cell between them is part of the path; charging the whole film
-    /// against the centre sheds too much, by the cell Biot number `h·dx/2k`.
+    /// The film is put **in series with the half cell between the cell centre and the surface**,
+    /// `2k·A/dx`. A finite-volume cell knows only its centre and the film acts at the surface, so
+    /// the half cell between them is part of the path; charging the whole film against the centre
+    /// sheds too much, by the cell Biot number `h·dx/2k`.
+    ///
+    /// **That `k` is the one the cell's faces are built from**, which for a substance with a
+    /// liquid phase is mixed by what has melted — read from `derived`, so that inside a step it is
+    /// the phase the faces and the limit have. This and `film_flux` used to read the solid's
+    /// whatever had melted. Measured on one cell of water under `h = 1e4`: a limit of 1.247 s
+    /// where its own is 3.590 s, and a step that shed 13.80 mJ where the film carries 4.79 mJ —
+    /// 2.88 times, the path through ice's half cell against the path through water's. Half
+    /// melted, 1.40 times. The books balanced, because the heat really did leave.
+    /// `tests/a_melted_surface_loses_through_its_liquid.rs` holds both to the closed form.
+    ///
+    /// The **emissivity** is still the solid's whatever has melted, and that is a shortcoming
+    /// rather than a choice: a melted surface radiates as its liquid does. For water against ice it
+    /// is 0.96 against 0.97, a hundredth of the radiative part; a pair whose phases radiate
+    /// differently is out by as much as they differ.
     ///
     /// **And it took two corrections to reach second order, not one.** The series form fixes
     /// the *space*: without it a review measured 2.08, 2.04, 2.02 per grid doubling against the
@@ -2636,6 +2673,8 @@ impl Solid3D {
     /// term reaching any other cell must widen that pass, or the limit leaves it out. Its debug
     /// assertion is what says so.
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
+        let (nx, ny, _) = self.counts;
+        let conductivity = self.derived[cell.0 + nx * (cell.1 + ny * cell.2)].0;
         self.air_conductance(cell)
             + self
                 .exposed
@@ -2653,7 +2692,7 @@ impl Solid3D {
                     // boundary is a defect with no symptom on either side alone.
                     series_with_half_cell(
                         self.outward(face, h * share, share),
-                        thermal.map_or(f64::INFINITY, |t| t.conductivity.to_si()),
+                        conductivity,
                         share,
                         self.dx.to_si(),
                     )

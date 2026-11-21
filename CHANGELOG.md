@@ -615,6 +615,30 @@ protects nothing.
 
 ### Fixed
 
+- **A melted surface lost its heat through the solid it had been** (`pantometry-thermal`). A film
+  on an outer face of a `Solid3D` is put in series with the half cell between the cell's centre and
+  the surface, `1/(1/(hA) + dx/(2kA))`, and for a substance with a liquid phase that `k` was the
+  solid's whatever had melted — in the heat the film took out and in the limit it set — while the
+  faces between cells followed the phase.
+  - **Measured on one cell of water under `h = 1e4`.** The block reported a limit of 1.247 s
+    where its own is 3.590 s, and a step of a quarter of that shed 13.80 mJ where the film carries
+    4.79 mJ, leaving the cell at 1.40 °C rather than 3.75 °C: 2.88 times the loss, the path through
+    ice's half cell against the path through water's. Half melted, 1.40 times. The books balanced,
+    because the heat really did leave.
+  - **Both read the conductivity the cell's faces are built from now**, kept from the last
+    derivation rather than mixed again. Mixed again, the film read a phase the heat off the bus had
+    already moved, after the limit was taken and before the faces were swept: a liquid conducting
+    ten times its solid, melted that way at its limit, carried 7.2 times the conductance the limit
+    had charged. A block with no liquid phase is unchanged to the bit, and no shipped scene has a
+    liquid phase and a film both.
+  - **The emissivity is still the solid's whatever has melted**, which is a shortcoming and is
+    recorded as one: 0.96 against 0.97 for water against ice.
+  - **`crates/pantometry-thermal/tests/a_melted_surface_loses_through_its_liquid.rs`.** One exposed
+    cell, one face and nothing radiating, so the film is that cell's only path out and has a closed
+    form: the limit is `C/(K + G)`, and a step loses `dt·G·(T − T∞)` and leaves the cell where that
+    puts it. For water; the same cell walled in by void at an index that is not zero; two cells
+    half melted, the film's `k` taken from the face between them; ice; and a half-melted cell
+    taking heat off the bus. Measured within 4.4e-16 of each closed form.
 - **A phase named between steps left the operator of the phase before it, and `fill` gave new
   matter the old matter's fraction** (`pantometry-thermal`). For a substance with a liquid phase,
   a cell's conductivity and capacity follow how much of it has melted. `Solid3D`'s
