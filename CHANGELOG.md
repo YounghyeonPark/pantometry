@@ -368,6 +368,23 @@ protects nothing.
 
 ### Changed
 
+- **A block with a film steps 32% to 58% faster, and every bit is as it was**
+  (`pantometry-thermal`). Every cell of a block with a film on any face asked the film what it
+  shed, which walks the map of exposed faces to find that an interior cell is on none of them, and
+  every boundary cell was asked twice a step: by the pass that totals the film for the books and
+  again by the sweep, the same number from the same state. The books' pass keeps what it finds now,
+  in a buffer the sweep reads for the cells that pass visits — the block's boundary, or every cell
+  when its void holds air — and the rest take their conduction alone.
+  - **Measured**, pinned to one P-core and interleaved against HEAD, best of three, a block of
+    aluminium with a film on every face: a convecting one 1.35 ms a step at 32³ against 0.66 ms;
+    radiating, 40.5%, 50.0% and 58.1% less at 16³, 32³ and 64³; and ice that melts, 31.7% and
+    36.4% less at 16³ and 32³.
+  - **Every bit is as it was**, and that is what the change rests on. The bench ends every case on
+    the same mean temperature and lost energy to the bit; the 34 shipped scenes write the same
+    frames to the byte, at the seven figures a frame keeps, the five with a film among them, and
+    run in 12.8 s against 14.8 s end to end; and the thermal tests pass unchanged. Four sabotages —
+    the top face left out of the cells that shed, the air left out, the buffer left unwritten, and
+    the books one step behind the sweep — each fail them.
 - **A block with air in its voids takes its stability limit from the solid cells facing them,
   and every bit is as it was** (`pantometry-thermal`). Air makes any cell beside the void lose
   heat, so after the entry below made the limit a pass over the exposed faces' cells, with air it
