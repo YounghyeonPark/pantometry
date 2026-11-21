@@ -615,6 +615,35 @@ protects nothing.
 
 ### Fixed
 
+- **A cell at the end of a clearance was given a step its row did not allow** (`pantometry-thermal`).
+  The explicit step is stable, and keeps every cell within the temperatures the block began at,
+  when for each cell `θ = dt·ΣG/C ≤ 1`, summed over everything that leaves it. `Solid3D`'s limit
+  summed a cell's faces, film and air, and charged each radiative clearance pair alone, so a cell
+  facing two clearances, or one and anything else, was given the largest of its terms where the
+  row is their sum.
+  - **Measured, and unstable rather than loose.** Three 1 mm cells at 900 K in a row across two
+    clearances reported 7.392 s where the middle row allows 3.696 s and forward Euler 4.928 s;
+    forty steps at the limit it reported took cells that began within 10 K of each other to
+    990.5 K and 708.9 K. Two pairs of 10 mm cells across one clearance, each face conducting what
+    the pair radiates, reported 73.92 s against 37.27 s and went 179 K outside where they began.
+    The books balanced throughout, because the exchange is antisymmetric.
+  - **Each clearance end's pairs are added into its row** with its faces, film and air, through a
+    list of the ends `find_gaps` keeps beside its pairs and groups again only when the pairs it
+    finds are not the ones it had. The two shipped scenes with clearances, 23 and 30, start at the
+    same limit to the bit: their tightest rows are cells that only conduct.
+  - **`crates/pantometry-thermal/tests/a_clearance_end_is_limited_by_its_whole_row.rs`.** Eight
+    blocks against the smallest row's closed form, `minᵢ Cᵢ/ΣGᵢ`: a cell between two clearances,
+    the same with air, a clearance between two materials, a clearance end that conducts, one with
+    a film, the centre of a cube facing six, a clearance that goes while another stays, and a
+    block whose clearances are filled in again. Then forty steps at the block's own limit, which a
+    row at `θ ≤ 1` keeps inside the range it began in — a theorem of the scheme, not a tolerance —
+    and which the old limit left by up to 1719 K. Within 2.2e-16 of each closed form; no cell left
+    its range. Ten sabotages, each caught by exactly the lines it claims.
+  - **The cost**, pinned and interleaved against HEAD on blocks with a clearance through the middle
+    and a film on every face: one phase, −4.0% to −0.8% at 16³ to 64³, and +1.3% to +1.9% with
+    loops aligned; two phases, +0.5% at 32³ and +5.2% at 16³, and +2.9% and +7.1% aligned. The
+    two-phase cost at 16³, about 18 µs a step, was not traced: the limit's loop is the same in both
+    and costs a one-phase block nothing measurable.
 - **A melted surface radiated as the solid it had been** (`pantometry-thermal`, `pantometry-core`).
   A substance states its liquid's emissivity beside the liquid's conductivity and capacity, and a
   `Solid3D` cell's conductivity and capacity follow its phase. The film on an outer face and the

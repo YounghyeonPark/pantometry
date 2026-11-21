@@ -382,6 +382,13 @@ pub struct Solid3D {
     /// `coefficient · (Tₐ⁴ − T_b⁴)` — see [`Solid3D::empty`] for what this models and what it
     /// does not.
     gaps: Vec<(usize, usize, f64)>,
+    /// Every cell that is an end of a clearance, in index order, with where its pairs are listed
+    /// in `gap_end_pairs`. Built by `find_gaps` beside `gaps`, so that the limit can add up
+    /// everything a cell radiates rather than charge each pair alone; `regap` changes coefficients
+    /// and never which pairs there are, so it leaves this as it is.
+    gap_ends: Vec<GapEnd>,
+    /// Indices into `gaps`, each end's in pair order — see `gap_ends`.
+    gap_end_pairs: Vec<usize>,
     /// Each cell's conduction sum, `Σ_f k_f`, kept so the stability limit can be rebuilt at
     /// the block's **current** temperature — see [`Solid3D::worst_rate_now`].
     face_sum: Vec<f64>,
@@ -579,6 +586,23 @@ fn worse(worst: f64, rate: f64) -> f64 {
 /// What one phase of a substance conducts, holds per cell and radiates with, `(k, C, ε)`.
 type Phase = (f64, f64, f64);
 
+/// One cell at the end of a clearance, as the limit reads it: where it is, and where its pairs
+/// are listed in `Solid3D::gap_end_pairs`.
+///
+/// Its coordinates are kept rather than divided out of its index each time, because the limit is
+/// asked for every step and three integer divisions an end were most of what reading the ends
+/// cost: measured against the limit's old loop, a step of a block with a clearance through its
+/// middle 3% to 4% slower, 16³ to 64³, pinned, and within the noise of it with them kept.
+#[derive(Clone, Debug)]
+struct GapEnd {
+    cell: usize,
+    at: (usize, usize, usize),
+    /// On the block's own boundary, the only place an exposed face can be.
+    outer: bool,
+    first: usize,
+    count: usize,
+}
+
 /// A cell's conductivity, capacity and emissivity, `phi` of the way from its substance's solid
 /// triple to its liquid triple — see [`Solid3D::mixed_at`].
 ///
@@ -714,6 +738,8 @@ impl Solid3D {
             supplied: 0.0,
             saved_supplied: 0.0,
             gaps: Vec::new(),
+            gap_ends: Vec::new(),
+            gap_end_pairs: Vec::new(),
             face_sum: Vec::new(),
             exposed: BTreeMap::new(),
             mounted: BTreeMap::new(),
@@ -1498,8 +1524,9 @@ impl Solid3D {
     /// `derived`, so a melted end is its liquid's. It read the substance's solid whatever had
     /// melted.
     fn find_gaps(&mut self) {
-        self.gaps.clear();
         if !self.void.iter().any(|v| *v) {
+            self.gaps.clear();
+            self.group_gap_ends();
             return;
         }
         let (nx, ny, nz) = self.counts;
@@ -1507,6 +1534,10 @@ impl Solid3D {
         let area = dx * dx;
         let emissivity = |c: usize| self.derived[c].2;
 
+        // Written over the pairs found last time, in place, noting whether any is not the pair it
+        // replaces — see the end, which is what this is for.
+        let mut written = 0usize;
+        let mut moved = false;
         // One pass per axis. `line` walks the indices of a single row, column or pillar.
         let mut walk = |line: Vec<usize>| {
             let mut last_solid: Option<usize> = None;
@@ -1518,7 +1549,17 @@ impl Solid3D {
                 }
                 if let (Some(a), true) = (last_solid, void_between) {
                     if let Some(coefficient) = exchange(emissivity(a), emissivity(c), area) {
-                        self.gaps.push((a, c, coefficient));
+                        match self.gaps.get_mut(written) {
+                            Some(old) => {
+                                moved |= (old.0, old.1) != (a, c);
+                                *old = (a, c, coefficient);
+                            }
+                            None => {
+                                moved = true;
+                                self.gaps.push((a, c, coefficient));
+                            }
+                        }
+                        written += 1;
                     }
                 }
                 last_solid = Some(c);
@@ -1540,6 +1581,54 @@ impl Solid3D {
             for i in 0..nx {
                 walk((0..nz).map(|k| i + nx * (j + ny * k)).collect());
             }
+        }
+        if written != self.gaps.len() {
+            moved = true;
+            self.gaps.truncate(written);
+        }
+        // **Grouped again only when these are not the pairs it was grouped from.** The grouping
+        // is a statement about which pairs there are and in what order, not about how strongly
+        // each radiates, and a two-phase block finds its clearances again after every step and
+        // nearly always finds the same ones.
+        if moved {
+            self.group_gap_ends();
+        }
+    }
+
+    /// Fill `gap_ends` and `gap_end_pairs` from `gaps`: each end cell, in index order, and the
+    /// pairs it is in, in the order `gaps` lists them — so a row's sum is added in one order, the
+    /// same on every run and every thread count.
+    fn group_gap_ends(&mut self) {
+        let mut ends: Vec<(usize, usize)> = self
+            .gaps
+            .iter()
+            .enumerate()
+            .flat_map(|(n, (a, b, _))| [(*a, n), (*b, n)])
+            .collect();
+        ends.sort_unstable();
+        self.gap_ends.clear();
+        self.gap_end_pairs.clear();
+        let (nx, ny, nz) = self.counts;
+        for (cell, n) in ends {
+            match self.gap_ends.last_mut() {
+                Some(end) if end.cell == cell => end.count += 1,
+                _ => {
+                    let (i, j, k) = (cell % nx, (cell / nx) % ny, cell / (nx * ny));
+                    self.gap_ends.push(GapEnd {
+                        cell,
+                        at: (i, j, k),
+                        outer: i == 0
+                            || i + 1 == nx
+                            || j == 0
+                            || j + 1 == ny
+                            || k == 0
+                            || k + 1 == nz,
+                        first: self.gap_end_pairs.len(),
+                        count: 1,
+                    });
+                }
+            }
+            self.gap_end_pairs.push(n);
         }
     }
 
@@ -2418,7 +2507,8 @@ impl Solid3D {
     }
 
     /// The stability rate at the block's **present** state: conduction, plus each exposed
-    /// cell's loss conductance at that cell's own temperature.
+    /// cell's loss conductance at that cell's own temperature, plus each clearance end's pairs at
+    /// the hotter of each pair — all of a cell's added into its one row.
     ///
     /// State-dependent on purpose, which is what [`Domain::max_stable_dt`] means by "the
     /// largest step this domain can take **from `now`**". A block cooling from 1000 °C is
@@ -2426,7 +2516,7 @@ impl Solid3D {
     /// only at the end.
     ///
     /// Costs a pass over the cells of the exposed faces and, when it has air in its voids, over the
-    /// solid cells facing them; for a block with neither, only its gaps' pairs, if it has any. With
+    /// solid cells facing them; and over the cells at the ends of its clearances, if it has any. With
     /// air it was a pass over every cell, 0.26 to 0.29 of a step. This said
     /// "the boundary cells" while the pass was over every cell, and the step asks for it before it
     /// moves anything, so on a small block that pass was 0.26 to 0.36 of what a step cost.
@@ -2446,13 +2536,38 @@ impl Solid3D {
         // conservative end: `dq/dT = 4σA T³/(1/ε₁+1/ε₂−1)` grows with temperature, so the hotter
         // cell's tangent bounds the pair's. Charged to both cells, because either could be the
         // one the step is too long for.
-        for (a, b, coefficient) in &self.gaps {
-            let hotter = self.cells[*a].max(self.cells[*b]);
-            let g = 4.0 * coefficient * hotter.powi(3);
-            for c in [*a, *b] {
-                if self.capacity[c] > 0.0 {
-                    worst = worst.max(g / self.capacity[c]);
-                }
+        //
+        // **Added into each end's row, with everything else that leaves the cell** — its faces,
+        // its film and its air — because the limit is a row's: `θᵢ = dt·ΣG/Cᵢ ≤ 1`. Each pair was
+        // charged alone, as the largest of the cell's terms rather than their sum, so a cell that
+        // also conducted, or faced two clearances, was given a step its row did not allow. Measured:
+        // three 1 mm cells in a row at 900 K across two clearances reported 7.392 s where the middle
+        // one's row allows 3.696 s, and forty steps at the limit it reported took cells that started
+        // within 10 K of each other to 990.5 K and 708.9 K. Two pairs of 10 mm cells across one, each
+        // face conducting what the pair radiates, went 179 K outside where they started in 40 steps.
+        // The books balanced throughout: the exchange is antisymmetric.
+        //
+        // A cell's film and air are asked for only where it can have either: on the block's own
+        // boundary, where an exposed face is, or with air in the void. Anywhere else the loss is a
+        // sum over nothing, exactly zero, and asking for it at every end of a clearance through
+        // the middle of a block cost a step 3.5% to 7.6%, 64³ to 16³, pinned.
+        let dx = self.dx.to_si();
+        for end in &self.gap_ends {
+            let c = end.cell;
+            if self.capacity[c] > 0.0 {
+                let radiated: f64 = self.gap_end_pairs[end.first..end.first + end.count]
+                    .iter()
+                    .map(|n| {
+                        let (a, b, coefficient) = self.gaps[*n];
+                        4.0 * coefficient * self.cells[a].max(self.cells[b]).powi(3)
+                    })
+                    .sum();
+                let loss = if end.outer || self.air.is_some() {
+                    self.loss_conductance_at(Temperature::from_si(self.cells[c]), end.at)
+                } else {
+                    0.0
+                };
+                worst = worst.max(self.mobility[c] * (self.face_sum[c] + (loss + radiated) / dx));
             }
         }
         // **Only the cells on an exposed face, and with air the solid cells facing the void**: any
@@ -2983,8 +3098,9 @@ impl Solid3D {
     /// `dt` as a fraction of the largest step this block is stable at — exactly one at the limit.
     ///
     /// The number `step` refuses on, and the honest one for a block that is thin or filled. It is
-    /// `dt · maxᵢ (Σ_f k_f / Cᵢ) · dx`: a maximum over **cells**, because stability is a statement
-    /// about a row of the update matrix and each cell has its own.
+    /// `dt · maxᵢ (ΣGᵢ / Cᵢ)`, with `ΣGᵢ` everything that leaves cell `i`: a maximum over
+    /// **cells**, because stability is a statement about a row of the update matrix and each cell
+    /// has its own.
     pub fn stability_ratio(&self, dt: Time) -> f64 {
         dt.to_si() * self.worst_rate_now()
     }
@@ -3265,14 +3381,19 @@ impl Domain for Solid3D {
         &self.name
     }
 
-    /// `minᵢ Cᵢ / (dx · Σ_f k_f)` — the tightest row of the update matrix, and `dx²/(6α)` when the
-    /// block is one material with at least two cells on every axis.
+    /// `minᵢ Cᵢ / ΣGᵢ`, `ΣGᵢ` everything that leaves cell `i` — the tightest row of the update
+    /// matrix, and `dx²/(6α)` when the block is one material with at least two cells on every axis
+    /// and nothing leaves it but through its faces.
     ///
     /// # Why a maximum over cells, and what summing the faces buys
     ///
     /// Stability is Gershgorin's condition on one row: the update is `I + dt·D⁻¹L`, row `i` has
     /// diagonal `−θᵢ` and off-diagonals summing to `+θᵢ` for `θᵢ = dt Σ_f G_f / Cᵢ`, so every
-    /// eigenvalue is in `[1 − 2θ_max, 1]` and `θ_max ≤ 1` is the limit.
+    /// eigenvalue is in `[1 − 2θ_max, 1]` and `θ_max ≤ 1` is the limit. The sum is over everything
+    /// that leaves the cell — its faces, its film, its air and each clearance it radiates across,
+    /// those linearised at the hotter end — and it was not: a clearance pair was charged alone, the
+    /// largest of a cell's terms where the row is their sum, and three cells in a row across two
+    /// clearances were given twice the step their middle row allows. See `worst_rate_now`.
     ///
     /// On a uniform grid that disc is **tight** rather than cautious — the sharpest representable
     /// mode saturates it — and this is where `1/2`, `1/4` and `1/6` come from. They are not three
