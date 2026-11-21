@@ -269,6 +269,46 @@ fn every_mutator_leaves_the_operator_a_full_resolve_would() {
         b.deposit(1, 0, 1, Energy::from_si(melt));
     }));
 
+    // A clearance's ends radiate as their phases do — water 0.96 and ice 0.97 — so a phase set at an
+    // end moves the pair's coefficient, which no face, capacity or limit here shows: a clearance sets
+    // nothing in a block that conducts. The step after is where a stale pair is seen. The centre of
+    // this cube faces a cell across void in each of the six directions, so melting it moves six
+    // pairs, each seen in a different cell; and one of those is partly melted from its own end.
+    //
+    // The capacity a melt moves satisfies "moved something" whether or not a pair did, so what makes
+    // this a clearance's scenario is that the two phases radiate differently, and that is required.
+    let (solid, liquid) = (
+        two_phase_ice().thermal.expect("ice has thermal properties"),
+        two_phase_ice()
+            .fusion
+            .and_then(|f| f.liquid)
+            .expect("a liquid is named"),
+    );
+    assert_ne!(
+        solid.emissivity, liquid.emissivity,
+        "phases that radiate alike move no pair, and the clearance scenario would test nothing"
+    );
+    let clearance = Solid3D::new(
+        "clearance",
+        two_phase_ice(),
+        (5, 5, 5),
+        Length::mm(1.0),
+        Temperature::celsius(-5.0),
+    )
+    .empty(|i, j, k| {
+        let off: Vec<usize> = [i, j, k].into_iter().filter(|x| *x != 2).collect();
+        off == [1] || off == [3]
+    });
+    scenarios.push(scenario(
+        "phases set across clearances",
+        clearance,
+        false,
+        |b| {
+            b.set_temperature(2, 2, 2, Temperature::celsius(5.0));
+            b.set_melted_fraction(0, 2, 2, 0.3);
+        },
+    ));
+
     // A cell's neighbours' conduction sums are seen only through the limit, and only where one of
     // them sets it. In a 3×3×3 block of ice the one cell with six neighbours does, and melting any
     // cell beside it lowers its sum without moving it off the maximum — so each of the six puts
@@ -311,20 +351,27 @@ fn every_mutator_leaves_the_operator_a_full_resolve_would() {
                 failures.push(format!("{}: {d}", s.name));
             }
         }
+        // One step on from **each** re-derivation, as this file's account says. It stepped the fill
+        // alone, so the second road, which is there for a `fill` that returns early, was not on the
+        // path of the one thing that sees a clearance: a stale pair moves no face, capacity or limit,
+        // and only the state a step leaves shows it.
         let dt = Time::from_si(0.9 * by_fill.1.max_stable_dt(Time::from_si(0.0)).to_si());
-        let (mut a, mut b) = (s.after, by_fill.1);
-        b.step(Time::from_si(0.0), dt, &mut Exchange::new())
-            .expect("the full re-derivation is stable at 0.9 of its own limit");
+        let mut a = s.after;
         // A refusal is a difference too, and the one a wrong operator tighter than the right one
         // gives: recorded with the rest rather than ending the test before they are said.
-        match a.step(Time::from_si(0.0), dt, &mut Exchange::new()) {
-            Err(v) => failures.push(format!(
+        let refused = a.step(Time::from_si(0.0), dt, &mut Exchange::new()).err();
+        if let Some(v) = &refused {
+            failures.push(format!(
                 "{}: refused a step its full re-derivation takes, {} {} against {}",
                 s.name, v.quantity, v.after, v.before
-            )),
-            Ok(()) => {
+            ));
+        }
+        for (against, mut b) in [by_fill, by_restore] {
+            b.step(Time::from_si(0.0), dt, &mut Exchange::new())
+                .expect("the full re-derivation is stable at 0.9 of its own limit");
+            if refused.is_none() {
                 for d in state_differences(&a, &b) {
-                    failures.push(format!("{}, one step on: {d}", s.name));
+                    failures.push(format!("{}, one step on from {against}: {d}", s.name));
                 }
             }
         }

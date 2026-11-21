@@ -344,22 +344,23 @@ pub struct Solid3D {
     /// worse: 6.2 ms on a two-phase block at 64³, so 27 minutes to declare every cell of one that
     /// way. So the pass is left to whoever next asks for the limit.
     worst_stale: bool,
-    /// Per substance, the solid phase's and the liquid phase's conductivity and capacity per cell,
-    /// `((k_s, C_s), (k_l, C_l))` — the pairs a cell's phase mixes between. Kept from `resolve` so
-    /// one cell can be re-derived without rebuilding the rest.
-    phase_props: Vec<((f64, f64), (f64, f64))>,
-    /// Each cell's conductivity and capacity **as the operator was last derived**, `(k, C)`:
-    /// what `resolve` mixed them to, and `rederive_cell` since, and zero for void.
+    /// Per substance, the solid phase's and the liquid phase's conductivity, capacity per cell and
+    /// emissivity, `((k_s, C_s, ε_s), (k_l, C_l, ε_l))` — the triples a cell's phase mixes between.
+    /// Kept from `resolve` so one cell can be re-derived without rebuilding the rest.
+    phase_props: Vec<(Phase, Phase)>,
+    /// Each cell's conductivity, capacity and emissivity **as the operator was last derived**,
+    /// `(k, C, ε)`: what `resolve` mixed them to, and `rederive_cell` since, and zero for void.
     ///
-    /// The film's half cell reads its conductivity here rather than mixing it again from
+    /// The film reads its half cell's conductivity and its surface's emissivity here, and
+    /// `find_gaps` the emissivities of a clearance's two ends, rather than mixing them again from
     /// `melted`, because the two differ inside a step. The heat a step takes off the bus goes in
     /// first, and can move a phase, after the limit is taken and before anything is swept; the
     /// faces, the capacities and the limit are the phase's before it, so the film must be too.
-    /// Mixed again from `melted`, as the first version of this fix did, it was not: a liquid
-    /// conducting ten times its solid, melted by heat off the bus within a step at its limit,
-    /// carried 7.2 times the conductance the limit had charged, and took out 0.272 J in that step,
-    /// refreezing 83% of the cell.
-    derived: Vec<(f64, f64)>,
+    /// Mixed again from `melted`, as the first version of the conductivity's fix did, it was not:
+    /// a liquid conducting ten times its solid, melted by heat off the bus within a step at its
+    /// limit, carried 7.2 times the conductance the limit had charged, and took out 0.272 J in
+    /// that step, refreezing 83% of the cell.
+    derived: Vec<Phase>,
     /// Cells that are **not part of the block** — see [`Solid3D::empty`].
     void: Vec<bool>,
     /// How many solid cells lie on each face, in `Face` order. Filled by `resolve`; see
@@ -372,9 +373,12 @@ pub struct Solid3D {
     /// `worst_rate_now`, which reads it.
     facing_air: Vec<(usize, usize, usize)>,
     /// Pairs of solid cells that face each other across a run of void, with the radiative
-    /// exchange coefficient between them. Rebuilt whenever the void or the materials change.
+    /// exchange coefficient between them. Rebuilt whenever the void or the materials change, and,
+    /// for a substance whose phases radiate differently, whenever a phase does — by `resolve`
+    /// after a step, and by `regap` after a mutator.
     ///
-    /// `(a, b, coefficient)` where the coefficient is `σA/(1/ε₁ + 1/ε₂ − 1)`, so the exchange is
+    /// `(a, b, coefficient)`, `a < b`, where the coefficient is `σA/(1/ε₁ + 1/ε₂ − 1)` with each
+    /// `ε` its cell's phase's, so the exchange is
     /// `coefficient · (Tₐ⁴ − T_b⁴)` — see [`Solid3D::empty`] for what this models and what it
     /// does not.
     gaps: Vec<(usize, usize, f64)>,
@@ -437,7 +441,8 @@ pub struct Solid3D {
     /// read 0.03 J absorbed straight after being restored to a checkpoint at which it had taken
     /// none, and an iterated window counted every sweep it threw away.
     saved_absorbed: f64,
-    /// Whether any material names a **liquid** phase whose properties differ from its solid.
+    /// Whether any material names a **liquid** phase whose properties differ from its solid: its
+    /// conductivity, its specific heat or its emissivity.
     ///
     /// The one thing that decides whether the sweep has to rebuild its operator each step. A block of
     /// ice does; a block of aluminium, or of ice under the one-phase model, does not.
@@ -571,13 +576,48 @@ fn worse(worst: f64, rate: f64) -> f64 {
     }
 }
 
-/// A cell's conductivity and capacity, `phi` of the way from its substance's solid pair to its
-/// liquid pair — see [`Solid3D::mixed_at`].
-fn mix((solid, liquid): ((f64, f64), (f64, f64)), phi: f64) -> (f64, f64) {
+/// What one phase of a substance conducts, holds per cell and radiates with, `(k, C, ε)`.
+type Phase = (f64, f64, f64);
+
+/// A cell's conductivity, capacity and emissivity, `phi` of the way from its substance's solid
+/// triple to its liquid triple — see [`Solid3D::mixed_at`].
+///
+/// **The emissivity is each phase's own where the cell is wholly that phase**, rather than the
+/// same line evaluated at an end. The line at an end reads the other phase as well: a liquid whose
+/// emissivity is not a number made `0.9 + 0·(NaN − 0.9)` of every solid cell, so a block of solid
+/// that had never melted lost a `NaN` through its film, and before the liquid's emissivity was
+/// read at all those cells were right. And it misses the end: `0.9 + (0.1 − 0.9)` is two ulps
+/// under `0.1`. The conductivity and the capacity are left on the line, so a block that radiates
+/// as it did is stepped to the bit as it was.
+fn mix((solid, liquid): (Phase, Phase), phi: f64) -> Phase {
     (
         solid.0 + phi * (liquid.0 - solid.0),
         solid.1 + phi * (liquid.1 - solid.1),
+        if phi <= 0.0 {
+            solid.2
+        } else if phi >= 1.0 {
+            liquid.2
+        } else {
+            solid.2 + phi * (liquid.2 - solid.2)
+        },
     )
+}
+
+/// The radiative exchange coefficient between two faces of area `area` facing each other, with
+/// emissivities `a` and `b`: `σA/(1/ε₁ + 1/ε₂ − 1)`, the parallel-plate series — or `None` where
+/// the pair carries nothing. A surface that does not radiate at all makes the pair carry nothing,
+/// which is the right limit and also keeps the reciprocal finite.
+///
+/// Shared by `find_gaps`, which pairs a block's clearances, and `regap`, which puts one cell's
+/// pairs right after its phase moved, so the two agree to the bit.
+fn exchange(a: f64, b: f64, area: f64) -> Option<f64> {
+    if a > 0.0 && b > 0.0 {
+        let resistance = 1.0 / a + 1.0 / b - 1.0;
+        if resistance > 0.0 {
+            return Some(STEFAN_BOLTZMANN.to_si() * area / resistance);
+        }
+    }
+    None
 }
 
 /// The series mean of the two half cells either side of a face. Written as `2ab/(a+b)` and guarded
@@ -959,25 +999,39 @@ impl Solid3D {
         let dx = self.dx.to_si();
         let volume = Volume::from_si(dx * dx * dx);
 
-        // Per material, the **solid** pair and the **liquid** pair. A material whose `FusionProps`
-        // names no liquid uses the solid pair for both, which is the one-phase model — exact whenever
-        // the liquid sits at the melting point, because a face with no temperature difference across
-        // it carries no heat whatever its conductivity.
+        // Per material, the **solid** triple and the **liquid** triple. A material whose
+        // `FusionProps` names no liquid uses the solid triple for both, which is the one-phase
+        // model. For its conductivity and capacity that is exact whenever the liquid sits at the
+        // melting point, because a face with no temperature difference across it carries no heat
+        // whatever its conductivity. For its emissivity it is not: a melted surface at the melting
+        // point sends `εσ(T⁴ − T∞⁴)` whatever is behind it, so the one-phase model is a statement
+        // that the finish survives melting, and a substance whose liquid radiates differently has
+        // to say so.
         //
-        // `NaN` for a substance that does not say, which `step` refuses on rather than stepping with
-        // a plausible default.
-        let props: Vec<((f64, f64), (f64, f64))> = self
+        // `NaN` conductivity and capacity for a substance that does not say, which `step` refuses
+        // on rather than stepping with a plausible default; an emissivity of zero, which is what
+        // every reader of a surface took one with no thermal properties to have.
+        //
+        // **The liquid's emissivity, not only its conductivity and capacity.** A finish is a
+        // surface, and a surface that has melted is the liquid's: a black coat on a solid does not
+        // survive it. This read the solid's whatever had melted, and so did the film and the
+        // clearances — measured, a cell of liquid radiating at 900 K to 300 K, its solid 0.9 and its
+        // liquid 0.1, lost 8.65 times what its own surface sends through its film, and two such
+        // cells across a void exchanged 15.5 times their own pair's heat.
+        let props: Vec<(Phase, Phase)> = self
             .materials
             .iter()
             .map(|s| {
                 let solid = (
                     s.thermal.map_or(f64::NAN, |t| t.conductivity.to_si()),
                     s.heat_capacity(volume).map_or(f64::NAN, |c| c.to_si()),
+                    s.thermal.map_or(0.0, |t| t.emissivity),
                 );
                 let liquid = match s.fusion.and_then(|f| f.liquid) {
                     Some(t) => (
                         t.conductivity.to_si(),
                         s.mass_of(volume).to_si() * t.specific_heat.to_si(),
+                        t.emissivity,
                     ),
                     None => solid,
                 };
@@ -987,12 +1041,16 @@ impl Solid3D {
 
         // A liquid phase that differs from the solid is what makes the operator move with the front.
         // A material whose `liquid` is absent, or identical to its solid, needs no per-step rebuild.
+        // An emissivity that differs is enough on its own: it moves the film's conductance and a
+        // clearance's, which are as much the operator as the faces are.
         self.two_phase =
             self.materials
                 .iter()
                 .any(|s| match (s.fusion.and_then(|f| f.liquid), s.thermal) {
                     (Some(l), Some(t)) => {
-                        l.conductivity != t.conductivity || l.specific_heat != t.specific_heat
+                        l.conductivity != t.conductivity
+                            || l.specific_heat != t.specific_heat
+                            || l.emissivity != t.emissivity
                     }
                     _ => false,
                 });
@@ -1067,14 +1125,30 @@ impl Solid3D {
         //
         // It applies only inside the mush, one or two cells wide, and that is where the scheme's
         // remaining first-order error lives.
-        let mixed: Vec<(f64, f64)> = (0..self.cells.len())
+        //
+        // The emissivity is mixed the same way and for the same reason: a surface half covered in
+        // liquid is two surfaces side by side, and what it radiates is the sum of what each part
+        // does, an area-weighted mean. Across a clearance that is exact rather than near: the two
+        // patches' radiosity branches, `1/(ε_i A_i)` each, are in parallel and make one surface of
+        // the mean, so the mean goes into the parallel-plate series rather than the two pairs'
+        // coefficients being averaged — which for 0.9 and 0.1 half and half, facing 0.9, is 3.2%
+        // low.
+        //
+        // **Where the front lies along the exposed face it is wrong, and by as much as the
+        // conductivity is.** A surface melted or frozen by what it radiates is wholly one phase at
+        // the face, and the mean says it is part of each: a liquid cell of 0.1 freezing under a
+        // solid of 0.9 by its own radiation takes `ln(9)/0.8 · 0.9` = 2.47 times as long as a face
+        // that turns solid at once. The time is one cell's, so the error falls with the cell, first
+        // order — the same as the mixed conductivity's in that geometry, where it should be in
+        // series.
+        let mixed: Vec<Phase> = (0..self.cells.len())
             .map(|c| {
                 // Nothing conducts nothing and holds nothing. Zeroing here rather than at every
                 // reader is what makes void fall out of the rest of the arithmetic: the face
                 // mean is already the harmonic one and guarded at zero, so a face touching void
                 // carries zero without knowing what void is.
                 if self.void[c] {
-                    return (0.0, 0.0);
+                    return (0.0, 0.0, 0.0);
                 }
                 mix(props[self.which[c] as usize], self.melted[c])
             })
@@ -1173,19 +1247,20 @@ impl Solid3D {
         }
         self.worst_stale = false;
         self.phase_props = props;
-        // Kept rather than dropped, for the film. Moving it costs no time — measured, a step of a
-        // block that keeps it and reads nothing from it is the step of one that drops it — and it
-        // holds sixteen bytes a cell.
+        // Kept rather than dropped, for the film and the clearances. Moving it costs no time —
+        // measured, a step of a block that keeps it and reads nothing from it is the step of one
+        // that drops it — and it holds twenty-four bytes a cell. Before `find_gaps`, which reads
+        // its emissivities.
         self.derived = mixed;
         self.find_gaps();
         self.find_facing_air();
     }
 
-    /// One cell's conductivity and capacity, as `resolve` mixes them by its melted fraction —
-    /// see the comment there — and zero for void.
-    fn mixed_at(&self, c: usize) -> (f64, f64) {
+    /// One cell's conductivity, capacity and emissivity, as `resolve` mixes them by its melted
+    /// fraction — see the comment there — and zero for void.
+    fn mixed_at(&self, c: usize) -> Phase {
         if self.void[c] {
-            return (0.0, 0.0);
+            return (0.0, 0.0, 0.0);
         }
         mix(self.phase_props[self.which[c] as usize], self.melted[c])
     }
@@ -1255,16 +1330,17 @@ impl Solid3D {
         }
     }
 
-    /// Re-derive what one cell's phase decides: its conductivity and capacity, the faces it
-    /// shares, and the conduction sums of the cells across them — the only entries one cell's
-    /// phase reaches. The maximum over cells is left for
+    /// Re-derive what one cell's phase decides: its conductivity, capacity and emissivity, the
+    /// faces it shares, the conduction sums of the cells across them, and the clearances it is an
+    /// end of — the only entries one cell's phase reaches. The maximum over cells is left for
     /// [`conduction_rate`](Solid3D::conduction_rate) to find again; see `worst_stale` for why.
     ///
     /// **What `resolve` would make of the same state, to the bit**, and held to that by
     /// `a_phase_set_between_steps.rs`, which compares every face, capacity, mobility and limit
-    /// with a full `resolve` after each of eleven scenarios of mutators — one substance and two,
-    /// a void, contacts, a film, and one melt beside the middle of a cube for each direction of
-    /// the neighbours' sums. `series`, `contact` and `mix` are shared; the
+    /// with a full `resolve` after each of twelve scenarios of mutators — one substance and two,
+    /// a void, contacts, a film, a clearance whose ends melt, and one melt beside the middle of a
+    /// cube for each direction of the neighbours' sums — and the state a step on each leaves.
+    /// `series`, `contact`, `mix` and `exchange` are shared; the
     /// rest is the same expressions written twice, because `resolve` runs every step of a
     /// two-phase block, and calling these helpers from its loops made that step 4% to 11% slower
     /// from 16³ to 64³, pinned to one core.
@@ -1272,7 +1348,10 @@ impl Solid3D {
         let (nx, ny, nz) = self.counts;
         let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
         let here = self.mixed_at(c);
-        self.derived[c] = here;
+        let was = std::mem::replace(&mut self.derived[c], here).2;
+        if here.2.to_bits() != was.to_bits() {
+            self.regap(c);
+        }
         if i > 0 {
             let f = i + (nx + 1) * (j + ny * k);
             self.kx[f] = self.face_conductivity(&self.hx, f, self.mixed_at(c - 1).0, here.0);
@@ -1320,6 +1399,63 @@ impl Solid3D {
         self.worst_stale = true;
     }
 
+    /// After cell `c`'s emissivity moved, put right the clearances it is one end of, as
+    /// `find_gaps` would make them — the same coefficients, to the bit, in the same order.
+    ///
+    /// Its partners are found by walking: along each of the six directions, the first solid cell
+    /// past one void cell or more, which is how `find_gaps` pairs a grid line. A cell with no void
+    /// beside it is the end of no pair and costs nothing, and one that is costs a pass over the
+    /// pairs for each partner — not over the block, so a region set one cell at a time still costs
+    /// what its cells do. Where a pair appears or vanishes, because an end stops or starts
+    /// radiating, its place in the list is what `find_gaps` decides, so that is called instead.
+    fn regap(&mut self, c: usize) {
+        let (nx, ny, nz) = self.counts;
+        let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+        let now = self.derived[c].2;
+        let area = self.dx.to_si() * self.dx.to_si();
+        // For each axis, `c`'s position along it, the cells on it and its stride.
+        let mut partners = Vec::new();
+        for (at, n, stride) in [(i, nx, 1), (j, ny, nx), (k, nz, nx * ny)] {
+            // Backwards, then forwards: the first non-void cell, and whether any void came first.
+            let mut p = c;
+            let mut m = at;
+            while m > 0 {
+                m -= 1;
+                p -= stride;
+                if !self.void[p] {
+                    if p + stride != c {
+                        partners.push((p, c));
+                    }
+                    break;
+                }
+            }
+            let (mut p, mut m) = (c, at);
+            while m + 1 < n {
+                m += 1;
+                p += stride;
+                if !self.void[p] {
+                    if p != c + stride {
+                        partners.push((c, p));
+                    }
+                    break;
+                }
+            }
+        }
+        for (a, b) in partners {
+            let other = self.derived[if a == c { b } else { a }].2;
+            let listed = self.gaps.iter().position(|g| (g.0, g.1) == (a, b));
+            match (listed, exchange(now, other, area)) {
+                (Some(n), Some(coefficient)) => self.gaps[n].2 = coefficient,
+                (None, None) => {}
+                // Listed and no longer radiating, or radiating and not listed.
+                _ => {
+                    self.find_gaps();
+                    return;
+                }
+            }
+        }
+    }
+
     /// Which solid cells have a face on the void, when there is air in it to lose to.
     ///
     /// A neighbour that is void, counted the way `air_conductance` counts it — six axis
@@ -1357,6 +1493,10 @@ impl Solid3D {
     /// Along each grid line, a run of void with solid at both ends is a gap, and the two cells
     /// at its ends see each other. Diagonals are not paired: a face is what radiates, and the
     /// grid's faces are axis-aligned.
+    ///
+    /// Each end radiates with the emissivity of its phase as the operator was derived, from
+    /// `derived`, so a melted end is its liquid's. It read the substance's solid whatever had
+    /// melted.
     fn find_gaps(&mut self) {
         self.gaps.clear();
         if !self.void.iter().any(|v| *v) {
@@ -1365,11 +1505,7 @@ impl Solid3D {
         let (nx, ny, nz) = self.counts;
         let dx = self.dx.to_si();
         let area = dx * dx;
-        let emissivity = |c: usize| {
-            self.materials[self.which[c] as usize]
-                .thermal
-                .map_or(0.0, |t| t.emissivity)
-        };
+        let emissivity = |c: usize| self.derived[c].2;
 
         // One pass per axis. `line` walks the indices of a single row, column or pillar.
         let mut walk = |line: Vec<usize>| {
@@ -1381,16 +1517,8 @@ impl Solid3D {
                     continue;
                 }
                 if let (Some(a), true) = (last_solid, void_between) {
-                    let (ea, eb) = (emissivity(a), emissivity(c));
-                    // The parallel-plate series: `1/ε₁ + 1/ε₂ − 1`. A surface that does not
-                    // radiate at all makes the pair carry nothing, which is the right limit and
-                    // also keeps the reciprocal finite.
-                    if ea > 0.0 && eb > 0.0 {
-                        let resistance = 1.0 / ea + 1.0 / eb - 1.0;
-                        if resistance > 0.0 {
-                            self.gaps
-                                .push((a, c, STEFAN_BOLTZMANN.to_si() * area / resistance));
-                        }
+                    if let Some(coefficient) = exchange(emissivity(a), emissivity(c), area) {
+                        self.gaps.push((a, c, coefficient));
                     }
                 }
                 last_solid = Some(c);
@@ -1526,7 +1654,9 @@ impl Solid3D {
     ///
     /// **Radiation does.** Two solid cells facing each other along a grid line across a run of
     /// void exchange `σA(T₁⁴ − T₂⁴)/(1/ε₁ + 1/ε₂ − 1)`, the parallel-plate series, with an
-    /// exchange factor of **one**.
+    /// exchange factor of **one**. Each `ε` is its cell's phase's: a cell that has melted radiates
+    /// as its substance's [liquid](pantometry_core::substance::FusionProps::liquid) does, and one
+    /// in the mush as the area-weighted mean of the two.
     ///
     /// That factor was written down here as a known approximation — a wide gap has a view factor
     /// well under one, so charging it as one was said to couple a wide gap too hard. Measuring it
@@ -1696,9 +1826,9 @@ impl Solid3D {
     /// chip package, a magnet busbar, a motor and a factory cell are all asking.
     ///
     /// The loss is [`Environment::loss_from`]'s, convective **and** radiative, applied per
-    /// boundary cell at that cell's own temperature and its own emissivity. Per cell rather
-    /// than to a mean, because that is what makes a gradient: the middle of a face runs hotter
-    /// than its edge, and a lumped loss says it does not.
+    /// boundary cell at that cell's own temperature and the emissivity of its own phase. Per cell
+    /// rather than to a mean, because that is what makes a gradient: the middle of a face runs
+    /// hotter than its edge, and a lumped loss says it does not.
     ///
     /// The environment's `area` is the **whole face's** area; each boundary cell is charged its
     /// share, `area / cells_on_the_face`. Stating the face's area rather than a cell's keeps
@@ -2453,13 +2583,11 @@ impl Solid3D {
     /// The **secant** conductance of the bare surface, which is the exact one for this flux,
     /// put in series with the half cell behind it. Positive means heat leaving.
     ///
-    /// The half cell conducts as the cell's faces do, at the phase the operator was derived at —
-    /// see `loss_conductance_at` for what reading the solid's cost, and `derived` for why not the
-    /// phase of the moment.
+    /// The half cell conducts as the cell's faces do, and the surface radiates as its phase does,
+    /// both at the phase the operator was derived at — see `loss_conductance_at` for what reading
+    /// the solid's cost, and `derived` for why not the phase of the moment.
     fn film_flux(&self, old: &[f64], cell: (usize, usize, usize), c: usize) -> f64 {
-        let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
-        let emissivity = thermal.map_or(0.0, |t| t.emissivity);
-        let conductivity = self.derived[c].0;
+        let (conductivity, _, emissivity) = self.derived[c];
         let dx = self.dx.to_si();
         let here = Temperature::from_si(old[c]);
         let mut out = 0.0;
@@ -2653,10 +2781,13 @@ impl Solid3D {
     /// melted, 1.40 times. The books balanced, because the heat really did leave.
     /// `tests/a_melted_surface_loses_through_its_liquid.rs` holds both to the closed form.
     ///
-    /// The **emissivity** is still the solid's whatever has melted, and that is a shortcoming
-    /// rather than a choice: a melted surface radiates as its liquid does. For water against ice it
-    /// is 0.96 against 0.97, a hundredth of the radiative part; a pair whose phases radiate
-    /// differently is out by as much as they differ.
+    /// **And the emissivity is the phase's**, mixed by what has melted and read from `derived` for
+    /// the same reason: a finish is a surface, and a surface that has melted is the liquid's. It was
+    /// the solid's whatever had melted, here and in `film_flux` alike, so the two agreed and the
+    /// block was stable and wrong. Measured on one cell of liquid at 900 K radiating to 300 K, its
+    /// solid 0.9 and its liquid 0.1: a limit of 30.21 s where its own is 245.2 s, and a step that
+    /// shed 8.65 times what its own surface sends. The other way about, 0.1 and 0.9, it shed 0.116
+    /// times. `tests/a_melted_surface_radiates_as_its_liquid.rs` holds both to the closed form.
     ///
     /// **And it took two corrections to reach second order, not one.** The series form fixes
     /// the *space*: without it a review measured 2.08, 2.04, 2.02 per grid doubling against the
@@ -2674,7 +2805,7 @@ impl Solid3D {
     /// assertion is what says so.
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
         let (nx, ny, _) = self.counts;
-        let conductivity = self.derived[cell.0 + nx * (cell.1 + ny * cell.2)].0;
+        let (conductivity, _, emissivity) = self.derived[cell.0 + nx * (cell.1 + ny * cell.2)];
         self.air_conductance(cell)
             + self
                 .exposed
@@ -2682,8 +2813,6 @@ impl Solid3D {
                 .filter(|(face, _)| self.exposed_at(**face, cell))
                 .map(|(face, env)| {
                     let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
-                    let thermal = self.substance_at(cell.0, cell.1, cell.2).thermal;
-                    let emissivity = thermal.map_or(0.0, |t| t.emissivity);
                     let hot = at.to_si().max(env.ambient.to_si());
                     let h = env.convection_w_per_m2_k
                         + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * hot.powi(3);

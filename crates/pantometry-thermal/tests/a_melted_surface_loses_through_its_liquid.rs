@@ -96,6 +96,13 @@ fn between(solid: f64, liquid: f64, phi: f64) -> f64 {
     solid + phi * (liquid - solid)
 }
 
+/// Whether a residual is out: at or past `tolerance`, or not a number. Written `>=` alone it let a
+/// `NaN` through, because no comparison with one is true, so a step that lost a `NaN` and left a
+/// mushy cell a `NaN` melted reported nothing.
+fn off(residual: f64, tolerance: f64) -> bool {
+    residual.is_nan() || residual >= tolerance
+}
+
 struct Case {
     name: &'static str,
     block: Solid3D,
@@ -229,7 +236,7 @@ fn a_melted_cell_loses_through_its_own_half_cell() {
         // alike, and 1e-14 is more than twenty times that, against a defect of a factor.
         let limit = block.max_stable_dt(Time::from_si(0.0)).to_si();
         let want = capacity / (faces + g);
-        if (limit / want - 1.0).abs() >= 1e-14 {
+        if off((limit / want - 1.0).abs(), 1e-14) {
             wrong.push(format!(
                 "{name}: the limit is C/(K + G) = {want:.6} s, and the block reports {limit:.6} s"
             ));
@@ -255,7 +262,7 @@ fn a_melted_cell_loses_through_its_own_half_cell() {
         }
         let lost = stepped.lost_energy().to_si();
         let shed = dt * g * (t0 - ta);
-        if (lost / shed - 1.0).abs() >= 1e-14 {
+        if off((lost / shed - 1.0).abs(), 1e-14) {
             wrong.push(format!(
                 "{name}: a step of {dt:.4} s loses dt·G·(T − T∞) = {shed:e} J through its film, \
                  and the block lost {lost:e} J"
@@ -265,7 +272,7 @@ fn a_melted_cell_loses_through_its_own_half_cell() {
             // The enthalpy round trip rounds at 273 K, whose ulp is 5.7e-14 K; measured, exactly.
             let t = stepped.temperature_at(i, j, k).to_si();
             let expected = t0 - dt * g * (t0 - ta) / capacity;
-            if (t - expected).abs() >= 1e-12 {
+            if off((t - expected).abs(), 1e-12) {
                 wrong.push(format!(
                     "{name}: one step on it should be at {:.6} °C, and is at {:.6} °C",
                     expected - 273.15,
@@ -277,7 +284,7 @@ fn a_melted_cell_loses_through_its_own_half_cell() {
             // fraction of order one through an enthalpy rounds near 1e-16; measured, 1.1e-16.
             let melted = stepped.melted_fraction_at(i, j, k);
             let expected = phi + bus / latent - shed / latent;
-            if (melted - expected).abs() >= 1e-12 {
+            if off((melted - expected).abs(), 1e-12) {
                 wrong.push(format!(
                     "{name}: one step on it should be {expected:.9} melted, and is {melted:.9}"
                 ));

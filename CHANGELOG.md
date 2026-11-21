@@ -615,6 +615,49 @@ protects nothing.
 
 ### Fixed
 
+- **A melted surface radiated as the solid it had been** (`pantometry-thermal`, `pantometry-core`).
+  A substance states its liquid's emissivity beside the liquid's conductivity and capacity, and a
+  `Solid3D` cell's conductivity and capacity follow its phase. The film on an outer face and the
+  radiation between two cells across a clearance both read the solid's emissivity whatever had
+  melted, in the heat they moved and in the limit they set.
+  - **Measured on a black coat of 0.9 on a solid that melts bright, 0.1.** One cell of liquid at
+    900 K radiating to 300 K reported a limit of 30.21 s where its own is 245.2 s, and a step shed
+    8.65 times what its surface sends. Two such cells across a void, at 900 K and 600 K, exchanged
+    15.5 times their own pair's heat. The other way about, 0.116 and 0.064 times. The limit and the
+    flux agreed, so the block was stable, and the books balanced, because the heat really did move.
+  - **Both read the emissivity of the phase the operator was derived at now**, kept beside the
+    conductivity for the same reason, and mixed by melted fraction as it is: a surface partly
+    melted radiates as the area-weighted mean of its two phases, which across a clearance is exact.
+    A whole phase radiates as its own, not as the line at an end, which would have let a liquid's
+    `NaN` emissivity reach every solid cell. A mutator that moves a phase puts right the clearances
+    its cell is an end of, walking to its partners rather than over the block. A liquid that
+    differs from its solid only in how it radiates makes a block two-phase. A block with no liquid
+    phase, or one whose liquid radiates as its solid, is stepped to the bit as before.
+  - **Where it is still wrong, and the docs say so:** a front along the exposed face makes the face
+    wholly one phase, and the mean says it is part of each. A liquid cell of 0.1 under a solid of
+    0.9 freezing by its own radiation takes 2.47 times as long as it should, first order, as the
+    mixed conductivity is in the same geometry.
+  - **`Substance::check` refuses a liquid's emissivity outside `0..=1`**, as it does the solid's. It
+    checked nothing of the liquid, which cost nothing while the emissivity was never read.
+    `with_emissivity` states a finish, the solid's surface, and leaves the liquid's alone, and
+    `FusionProps::liquid` no longer says its emissivity is unused.
+  - **`crates/pantometry-thermal/tests/a_melted_surface_radiates_as_its_liquid.rs`.** Radiation
+    alone, so every case has a closed form. Through a film, the limit is `C/(K + G)` with `G` the
+    derivative `4εσT³A` behind the half cell, and a step loses the secant's heat: seven cases. Across
+    a clearance, the coefficient is `σA/(1/ε₁ + 1/ε₂ − 1)` and the limit is taken at the hotter end:
+    nine, among them ends melted by a mutator from each end and along each axis, both ends melted by
+    a step, and an end refilled with other matter. And a pair that appears when both ends of a
+    mirror melt and goes when one freezes. Within 4.4e-16 of each closed form, temperatures within
+    one ulp at 900 K and fractions exactly. Twenty-one sabotages, each caught by exactly the lines
+    it claims.
+  - **Found by the reviews and changed with it.** `a_phase_set_between_steps.rs` said it stepped
+    both of its re-derivations and stepped one, and a stale clearance shows only in a step; it steps
+    both. The checks in this test and in `a_melted_surface_loses_through_its_liquid.rs` were
+    `error >= tol`, which a `NaN` passes; they count a `NaN` as out.
+  - **The step is faster, not slower.** Pinned and interleaved against HEAD, a block with a film on
+    every face steps 5.6% to 6.3% faster at 16³ to 64³ with one phase, and 2.5% to 3.3% with two;
+    with loops aligned, 3.8% to 6.7% and 2.3% to 3.0%. The film no longer looks a cell's substance up,
+    which may be why; that was not separated.
 - **A melted surface lost its heat through the solid it had been** (`pantometry-thermal`). A film
   on an outer face of a `Solid3D` is put in series with the half cell between the cell's centre and
   the surface, `1/(1/(hA) + dx/(2kA))`, and for a substance with a liquid phase that `k` was the
@@ -631,8 +674,8 @@ protects nothing.
     ten times its solid, melted that way at its limit, carried 7.2 times the conductance the limit
     had charged. A block with no liquid phase is unchanged to the bit, and no shipped scene has a
     liquid phase and a film both.
-  - **The emissivity is still the solid's whatever has melted**, which is a shortcoming and is
-    recorded as one: 0.96 against 0.97 for water against ice.
+  - **The emissivity was still the solid's whatever had melted**, recorded then as a
+    shortcoming, 0.96 against 0.97 for water against ice; the entry above is its fix.
   - **`crates/pantometry-thermal/tests/a_melted_surface_loses_through_its_liquid.rs`.** One exposed
     cell, one face and nothing radiating, so the film is that cell's only path out and has a closed
     form: the limit is `C/(K + G)`, and a step loses `dt·G·(T − T∞)` and leaves the cell where that

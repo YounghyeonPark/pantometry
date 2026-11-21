@@ -137,10 +137,12 @@ pub struct FusionProps {
     pub latent_heat: LatentHeat,
     /// What the **liquid** conducts and holds, if it differs from the solid.
     ///
-    /// `None` is the **one-phase** model: the liquid is taken to have the solid's conductivity and
-    /// specific heat. That is not a simplification to apologise for — it is exact whenever the liquid
-    /// sits at the melting point, because then no heat flows through it whatever its properties are,
-    /// and it is the case Stefan's original problem and Neumann's solution are about.
+    /// `None` is the **one-phase** model: the liquid is taken to have the solid's conductivity,
+    /// specific heat and emissivity. For the first two that is not a simplification to apologise
+    /// for — it is exact whenever the liquid sits at the melting point, because then no heat flows
+    /// through it whatever its properties are, and it is the case Stefan's original problem and
+    /// Neumann's solution are about. For the emissivity it is a statement that the finish survives
+    /// melting, because a melted surface radiates at the melting point whatever is behind it.
     ///
     /// It is wrong the moment the liquid is **superheated**, and wrong by a lot. Water conducts a
     /// quarter of what ice does and holds twice as much, and a liquid 20 K above freezing slows a
@@ -148,8 +150,13 @@ pub struct FusionProps {
     /// discretisation error, so the one-phase answer is not a slightly worse two-phase answer.
     ///
     /// The same type as the solid's, because a phase is a thing that conducts and holds heat and there
-    /// is no reason to describe it differently. `expansion` and `emissivity` are carried and unused by
-    /// conduction; give the liquid's if they are known.
+    /// is no reason to describe it differently. `expansion` is carried and unused by conduction.
+    ///
+    /// **`emissivity` is what a melted surface radiates with**, so give the liquid's. A finish is a
+    /// surface and does not survive melting: a black coat on a solid that melts bright radiates as
+    /// the bright liquid, and [`Substance::with_emissivity`], which states a finish, sets the solid's
+    /// and leaves this alone. A domain that radiates from a surface in the mush takes the
+    /// area-weighted mean of the two, as `pantometry-thermal`'s `Solid3D` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liquid: Option<ThermalProps>,
 }
@@ -173,7 +180,8 @@ impl FusionProps {
         }
     }
 
-    /// Name the liquid phase's conductivity and specific heat, making a block **two-phase**.
+    /// Name the liquid phase's conductivity, specific heat and emissivity, making a block
+    /// **two-phase**.
     ///
     /// Read [`liquid`](FusionProps::liquid) before reaching for this: it is the right model for a
     /// superheated liquid and it costs first-order accuracy at the interface, so it is not a strictly
@@ -390,6 +398,11 @@ impl Substance {
     ///
     /// Clamped to `0..=1`: a surface cannot radiate more than a blackbody, and a negative
     /// emissivity would make a body warm itself.
+    ///
+    /// **The solid's surface.** A finish does not survive melting, so a substance with a
+    /// [liquid](FusionProps::liquid) radiates as that liquid once it has melted, and this leaves the
+    /// liquid's alone. Without one — the one-phase model — the liquid is the solid in every respect,
+    /// this included.
     ///
     /// Does nothing to a substance whose thermal properties are unknown, because `None` means
     /// unknown rather than zero and inventing three of the four fields to set the fourth would
@@ -771,6 +784,18 @@ impl Substance {
         if let Some(f) = self.fusion {
             positive("latent_heat", f.latent_heat.to_si(), &mut wrong);
             positive("melting_point", f.melting_point.to_si(), &mut wrong);
+            // The liquid's emissivity is what a melted surface radiates with, so it is held to the
+            // range the solid's is. Nothing of the liquid was checked, and while its emissivity was
+            // carried and never read that cost nothing.
+            if let Some(l) = f.liquid {
+                if !(0.0..=1.0).contains(&l.emissivity) {
+                    wrong.push(format!(
+                        "the liquid's emissivity is a fraction of a blackbody's and must be in \
+                         0..=1, is {}",
+                        l.emissivity
+                    ));
+                }
+            }
         }
         // The cross-check, and only when there is something to cross.
         if let (Some(m), Some(a)) = (self.mechanical, self.acoustic) {
@@ -961,6 +986,21 @@ mod tests {
                 .emissivity,
             0.0
         );
+
+        // The solid's surface and only that: a finish does not survive melting, so a liquid that
+        // states its own emissivity keeps it, whichever order the two are given in.
+        let water = Substance::water().thermal.unwrap();
+        let fusion = Substance::ice().fusion.unwrap().with_liquid(water);
+        for painted in [
+            Substance::ice().with_fusion(fusion).with_emissivity(0.2),
+            Substance::ice().with_emissivity(0.2).with_fusion(fusion),
+        ] {
+            assert_eq!(painted.thermal.unwrap().emissivity, 0.2);
+            assert_eq!(
+                painted.fusion.unwrap().liquid.unwrap().emissivity,
+                water.emissivity
+            );
+        }
     }
 
     /// **The trap the docs now warn about, as a number.**

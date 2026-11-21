@@ -207,6 +207,35 @@ fn an_impossible_material_is_refused_by_the_field_that_is_wrong() {
             "latent_heat",
         ),
         (
+            // What a melted surface radiates with, so it is held to the solid's range. Nothing of
+            // the liquid was checked while its emissivity was carried and never read.
+            "the liquid's emissivity as a percentage",
+            base().with_fusion(
+                FusionProps::new(Temperature::celsius(44.0), LatentHeat::kj_per_kg(200.0))
+                    .with_liquid(ThermalProps {
+                        conductivity: ThermalConductivity::w_per_m_k(0.15),
+                        specific_heat: SpecificHeat::j_per_kg_k(2200.0),
+                        expansion: ThermalExpansion::ppm_per_k(900.0),
+                        emissivity: 90.0,
+                    }),
+            ),
+            "liquid's emissivity",
+        ),
+        (
+            // And below the range, so a check that only looks above it is not taken for one.
+            "a negative liquid emissivity",
+            base().with_fusion(
+                FusionProps::new(Temperature::celsius(44.0), LatentHeat::kj_per_kg(200.0))
+                    .with_liquid(ThermalProps {
+                        conductivity: ThermalConductivity::w_per_m_k(0.15),
+                        specific_heat: SpecificHeat::j_per_kg_k(2200.0),
+                        expansion: ThermalExpansion::ppm_per_k(900.0),
+                        emissivity: -0.1,
+                    }),
+            ),
+            "liquid's emissivity",
+        ),
+        (
             "a shear speed where the longitudinal one belongs",
             base()
                 .with_mechanical(MechanicalProps {
