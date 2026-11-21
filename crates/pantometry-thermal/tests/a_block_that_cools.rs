@@ -529,37 +529,24 @@ fn a_wall_between_two_films_is_its_resistances_in_series() {
         );
     }
 
-    // **What the two can differ by, and it is small.** The closed form takes each film at its
-    // surface. The domain has only cell centres and takes a film's radiative part at the centre,
-    // half a cell in, so the one structural difference is how much the radiative secant
-    // `s(T) = L(T)/(T − T∞) − hA` changes over that half cell, `q·dx/(2kA)`: `δs` in conductance,
-    // which moves the surface by `δs·(T_s − T∞)/(hA)`. That, for each film, plus the solver's own
-    // stopping rule — it stops when no sweep moves a cell by 1e-6 K — and twice the sum, because
-    // the first is a first-order estimate. Measured: 3.3e-6 to 6.1e-6 K against a bound of
-    // 2.7e-5 K.
+    // **What the two can differ by, and it is the solver's alone.** The closed form takes each
+    // film at its surface, and so does the domain, which solves for the surface's own temperature
+    // behind the half cell; the copper between carries a straight line, which the cells sample
+    // exactly. What is left is the solver's own stopping rule — it stops when no sweep moves a
+    // cell by 1e-6 K — and twice it. Measured: 1.4e-7 K against a bound of 2e-6 K.
     //
-    // **The first version bounded the whole radiative share times the whole drop**, 3.7e-4 K, and
-    // `numerics-reviewer` switched radiation off in the film and it passed: the effect it was
-    // meant to hold was a hundredth of what it allowed.
-    let half = q * dx / (2.0 * k * area);
-    let secant = |env: &Environment, h: f64, kelvin: f64| {
-        loss(env, kelvin) / (kelvin - env.ambient.to_si()) - h * area
-    };
-    let bottom = surface(&cold_film, q);
-    let moved = |env: &Environment, h: f64, at: f64, centre: f64| {
-        (secant(env, h, centre) - secant(env, h, at)).abs() * (at - env.ambient.to_si()).abs()
-            / (h * area)
-    };
-    let bound = 2.0
-        * (moved(&hot_film, h_hot, top, top - half)
-            + moved(&cold_film, h_cold, bottom, bottom + half)
-            + 1e-6);
+    // **It allowed the films' half cell as well, 2.7e-5 K**, because the domain used to take a
+    // film's radiative part at the centre, half a cell in, and the two differed by 3.3e-6 to
+    // 6.1e-6 K — which this bound now refuses. Before that it bounded the whole radiative share
+    // times the whole drop, 3.7e-4 K, and `numerics-reviewer` switched radiation off in the film
+    // and it passed: the effect it was meant to hold was a hundredth of what it allowed.
+    let bound = 2.0 * 1e-6;
     for (i, got) in field.iter().enumerate() {
         let want = top - q * (i as f64 + 0.5) * dx / (k * area);
         assert!(
             (got - want).abs() < bound,
             "cell {i} of the wall: {got:.7} K against the series {want:.7} K, off by {:.2e} K \
-             where the films' half cell and the solver allow {bound:.2e}",
+             where the solver allows {bound:.2e}",
             got - want
         );
     }

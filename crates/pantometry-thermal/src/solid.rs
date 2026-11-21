@@ -123,6 +123,89 @@ fn series_with_half_cell(film: f64, conductivity: f64, area: f64, dx: f64) -> f6
     1.0 / (1.0 / film + 1.0 / half)
 }
 
+/// How many Newton steps `radiating_film` may take to find its surface. A bound that is never
+/// the answer: the steps fall monotonically onto the root, so they stop on their own. Measured,
+/// counting the step that finds nothing left to move: three for aluminium or copper near room
+/// temperature, four or five for a cell of `k = 0.6` at 900 K to 1073 K, and nine and ten for a
+/// black face at 3000 K on an insulator of `k = 0.05`, a millimetre and ten millimetres a cell.
+const SURFACE_STEPS: usize = 64;
+
+/// The conductance, W/K, from a cell's centre to the room through a face that radiates.
+///
+/// `behind` is everything between the centre and the surface — the half cell and any mounting, in
+/// series, W/K. The surface sheds `A·(h + εσ(T + T∞)(T² + T∞²))·(T − T∞)` at **its own**
+/// temperature `T`, which is the one at which that equals what `behind` brings it:
+///
+/// ```text
+/// behind · (T_c − T)  =  A·(h + εσ(T + T∞)(T² + T∞²)) · (T − T∞)
+/// ```
+///
+/// and the answer is the series of `behind` and that secant, so that a flux computed from it is
+/// exactly what reached the surface.
+///
+/// **It charged the surface's loss at the centre's temperature**, which is the same thing only
+/// when the film is linear. A convective film's conductance does not depend on where it is read,
+/// and that is why the series form made the convective boundary second order. A radiating one's
+/// grows as `T³`, and the centre is hotter than the surface by what crosses the half cell, so
+/// the face shed too much by an amount proportional to `dx`: **first order**. Measured on a slab
+/// 16 mm deep generating `1.28 MW/m³` and radiating at 800 K from `ε = 0.9`, `k = 0.6`, the cells
+/// sat 10.06 K too cold at 1 mm, falling by 1.87, 1.94, 1.97, 1.98 a halving. Behind a mounting
+/// it did not converge at all: the mounting's drop does not shrink with the cell, so the surface
+/// was charged at a temperature above its own by `q(1/h_mount + dx/2k)` — 27.3 K at 1 mm, 14.5 K
+/// at 0.25 mm, and never less than the joint's 10.2 K however fine the grid — and the error went
+/// to −6.21 K rather than to zero — the limit of the old balance as the cell vanishes, solved for,
+/// with the grid at 0.25 mm still 8.77 K out. Now the error in each is `q'''dx²/8k`, which is what
+/// a convective face has — the half cell's straight line against the parabola — and it falls by
+/// 4.000 a halving.
+///
+/// **Newton from `max(T_c, T∞)`, which needs no safeguard.** `behind·(T − T_c)` plus the surface's
+/// loss is increasing and convex in `T` — the loss's second derivative is `12εσT²A` — and its
+/// root lies between `T_c` and `T∞`. Newton on such a function from a start at or beyond its root
+/// never crosses it, so each step lands between the root and the last, and the first that does
+/// not move down is where rounding has taken over. Only `+ − × ÷`, so the result is the same on
+/// every platform.
+///
+/// **It cannot loosen the limit.** The secant at `T ≤ max(T_c, T∞)` is at most the tangent
+/// `h + 4εσ·max(T_c, T∞)³` that `loss_conductance_at` charges, and putting the same `behind` in
+/// series with each keeps the order, so the limit bounds this as it bounded the centre's secant.
+/// Above the room that was the larger of the two; below it the surface's is, the surface being
+/// nearer the room — a cell at 300 K in a room at 1200 K carries 1.09 times what it did — and the
+/// bound holds on both sides because it is read at the hotter of the centre and the room.
+///
+/// An infinite `behind` puts the surface at the centre, which is the old form and the right one
+/// there; a zero one carries nothing.
+#[inline(never)]
+fn radiating_film(
+    behind: f64,
+    share: f64,
+    convection: f64,
+    radiative: f64,
+    centre: f64,
+    ambient: f64,
+) -> f64 {
+    let secant =
+        |t: f64| share * (convection + radiative * (t + ambient) * (t * t + ambient * ambient));
+    if behind <= 0.0 {
+        return 0.0;
+    }
+    if !behind.is_finite() {
+        return secant(centre);
+    }
+    let mut surface = centre.max(ambient);
+    for _ in 0..SURFACE_STEPS {
+        let excess = secant(surface) * (surface - ambient) - behind * (centre - surface);
+        let slope = share * (convection + 4.0 * radiative * surface * surface * surface) + behind;
+        let next = surface - excess / slope;
+        // `NaN` stops it too, which a bare `next < surface` written as its negation would say.
+        if next.is_nan() || next >= surface {
+            break;
+        }
+        surface = next;
+    }
+    let through = secant(surface);
+    through * behind / (through + behind)
+}
+
 /// How many Gauss-Seidel sweeps [`Solid3D::steady_state`] will take before reporting that it did
 /// not converge.
 ///
@@ -2392,6 +2475,13 @@ impl Solid3D {
     /// dx/(2kA)   +   1/(h_mount·A)   +   1/((h_conv + 4εσT³)·A)
     /// ```
     ///
+    /// with the radiation read at the **outer face's** own temperature in the heat that moves,
+    /// solved for so that what reaches that face is what it sheds, and as the tangent at the
+    /// hotter of the centre and the room in the limit, which bounds it. It was read at the
+    /// centre's in both, and the joint's drop does not shrink with the cell: a face radiating at
+    /// 800 K behind `2000 W·m⁻²·K⁻¹` was charged at least 10.2 K hot at every grid and never
+    /// converged.
+    ///
     /// # Where the radiative term sits, and why it is behind the joint
     ///
     /// `Environment` derives radiation from the surface's emissivity, and that term stays in
@@ -2701,7 +2791,10 @@ impl Solid3D {
     /// temperature difference, so that `mobility · this` is a rate in kelvin per second.
     ///
     /// The **secant** conductance of the bare surface, which is the exact one for this flux,
-    /// put in series with the half cell behind it. Positive means heat leaving.
+    /// put in series with the half cell behind it. Positive means heat leaving. A face that
+    /// radiates reads that secant at the surface's own temperature, which `radiating_film`
+    /// solves for; one that only convects has a secant that is the same at every temperature,
+    /// and keeps the arithmetic it always had.
     ///
     /// The half cell conducts as the cell's faces do, and the surface radiates as its phase does,
     /// both at the phase the operator was derived at — see `loss_conductance_at` for what reading
@@ -2720,19 +2813,40 @@ impl Solid3D {
             if gap == 0.0 {
                 continue;
             }
-            let bare = Environment {
-                ambient: env.ambient,
-                convection_w_per_m2_k: env.convection_w_per_m2_k,
-                area: Area::from_si(share),
-            }
-            .loss_from(here, emissivity)
-            .to_si();
-            let g = series_with_half_cell(
-                self.outward(face, bare / gap, share),
-                conductivity,
-                share,
-                dx,
-            );
+            let g = if emissivity == 0.0 {
+                // Linear, so the film's conductance is one number whatever the surface's
+                // temperature, and the series below is exact as it stands.
+                let bare = Environment {
+                    ambient: env.ambient,
+                    convection_w_per_m2_k: env.convection_w_per_m2_k,
+                    area: Area::from_si(share),
+                }
+                .loss_from(here, emissivity)
+                .to_si();
+                series_with_half_cell(
+                    self.outward(face, bare / gap, share),
+                    conductivity,
+                    share,
+                    dx,
+                )
+            } else {
+                let half = 2.0 * conductivity * share / dx;
+                let behind = if !half.is_finite() {
+                    self.outward(face, f64::INFINITY, share)
+                } else if half > 0.0 {
+                    self.outward(face, half, share)
+                } else {
+                    0.0
+                };
+                radiating_film(
+                    behind,
+                    share,
+                    env.convection_w_per_m2_k,
+                    emissivity * STEFAN_BOLTZMANN.to_si(),
+                    here.to_si(),
+                    env.ambient.to_si(),
+                )
+            };
             out += g * gap / dx;
         }
         // The air in the void, if this block has any. **Convection only**: a transparent gas does
@@ -2918,6 +3032,14 @@ impl Solid3D {
     /// film inside the same explicit update — see `film_flux`, called from the sweep — makes
     /// them one operator, and `tests/the_cooled_boundary_order.rs` measures four per doubling at
     /// `Bi = 1.7` and at `Bi = 17`.
+    ///
+    /// **That is a convective face, and a radiating one needed a third.** After both corrections
+    /// its film was still read at the centre's temperature, which a half cell's drop puts above
+    /// the surface's, so it shed too much by an amount proportional to `dx` — 1.87 to 1.98 a
+    /// halving. `film_flux` now reads it at the surface's, through `radiating_film`, and
+    /// `tests/a_radiating_face_sheds_from_its_surface.rs` measures 4.000. This limit is unchanged:
+    /// the tangent at the hotter of the centre and the room bounds the secant at the surface on
+    /// either side of the room.
     ///
     /// **Nothing here may be non-zero for a solid cell off an exposed face that does not face the
     /// air.** `worst_rate_now` visits only those faces' cells and, with air, `facing_air`, and a

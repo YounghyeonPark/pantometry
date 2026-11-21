@@ -162,11 +162,17 @@ fn a_radiating_block_is_solved_to_the_root_of_its_quartic() {
     .dissipating(watts, |_, _, _| true)
     .losing_from(Face::XMin, film(h, area));
 
-    // The root of `hA(T − T∞) + εσA(T⁴ − T∞⁴) = P`, **in series with the half cell of solid
-    // the film sits behind**, by bisection from the constants. That half cell is `2kA/dx`, four
-    // orders above the film here, so it moves the answer by 0.04% — which is nothing to the
-    // physics and everything to a check written at one part in a million. Leaving it out measured
-    // 588.520 against 588.255.
+    // The surface sheds all of `P`, so **it** is at the root of `hA(T − T∞) + εσA(T⁴ − T∞⁴) = P`,
+    // by bisection from the constants, and the cell's centre is above it by what `P` drops across
+    // the half cell of solid the film sits behind, `P/(2kA/dx)`. That half cell conducts 986
+    // times what the film does here, so it moves the answer by 0.05% — which is nothing to the
+    // physics and everything to a check written at one part in a million: the surface alone is
+    // 588.255 K and the centre 588.555 K.
+    //
+    // **And it is the surface that radiates, not the centre.** This used to charge the film's
+    // secant at the centre's temperature, in series with the half cell, and the block did the
+    // same, so the two agreed at 588.520 K — a radiating boundary of first order, the cells 10 K
+    // too cold on a slab a millimetre a cell, and a block and its check agreeing about it.
     let k = Substance::aluminium_6061()
         .thermal
         .expect("aluminium conducts")
@@ -176,20 +182,15 @@ fn a_radiating_block_is_solved_to_the_root_of_its_quartic() {
     let (mut lo, mut hi) = (ambient, ambient + 10_000.0);
     for _ in 0..200 {
         let mid = 0.5 * (lo + hi);
-        let gap = mid - ambient;
-        let bare = h * area * gap + emissivity * SIGMA * area * (mid.powi(4) - ambient.powi(4));
-        let shed = if gap > 0.0 {
-            gap / (gap / bare + 1.0 / half)
-        } else {
-            0.0
-        };
+        let shed = h * area * (mid - ambient)
+            + emissivity * SIGMA * area * (mid.powi(4) - ambient.powi(4));
         if shed < watts {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    let closed = 0.5 * (lo + hi);
+    let closed = 0.5 * (lo + hi) + watts / half;
 
     block.settle().expect("it has a steady state");
     let got = block.temperature_at(0, 0, 0).to_si();
@@ -198,8 +199,9 @@ fn a_radiating_block_is_solved_to_the_root_of_its_quartic() {
         (got - closed).abs() < 1e-6 * closed,
         "{got:.6} against {closed:.6}"
     );
-    // A solver that had linearised the radiation would land somewhere else entirely: at this
-    // temperature the radiative term is a third of the loss.
+    // A solver that had left the radiation out would land somewhere else entirely: at this
+    // temperature the radiative term is 11.5% of the loss, and without it the block sits 37.9 K
+    // higher. It said a third here, which it is not.
     let linear = ambient + watts / (h * area);
     println!("  a purely convective block would sit at {linear:.4} K");
     assert!(

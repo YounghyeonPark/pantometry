@@ -632,6 +632,52 @@ protects nothing.
 
 ### Fixed
 
+- **A radiating face shed at its cell centre's temperature, not its surface's**
+  (`pantometry-thermal`). A finite-volume cell knows its centre and a film acts half a cell away.
+  For convection that distance is a resistance in series and nothing else, which is what made the
+  cooled boundary second order; a radiating film's conductance grows as `T³`, and `Solid3D` read
+  it at the centre, which the half cell's drop puts above the surface. So the face shed too much
+  by an amount proportional to `dx`: **first order**, with the books balanced, because the heat
+  really did leave.
+  - **Measured** on a slab 16 mm deep generating heat throughout and radiating from one face at
+    800 K (`ε = 0.9`, `k = 0.6`): every cell 10.06 K too cold at 1 mm, falling by 1.87, 1.94,
+    1.97 and 1.98 a halving. **Behind a mounting it did not converge**: the joint's drop does not
+    shrink with the cell, so the surface was charged at least 10.2 K hot at every grid — 27.3 K
+    at 1 mm — and the error went to −6.21 K rather than to zero.
+  - **The surface's temperature is solved for**, by Newton from the hotter of the centre and the
+    room, where what the half cell and the mounting bring it is what it sends; the function is
+    increasing and convex, so every step lands between the root and the last and none needs a
+    safeguard, and only `+ − × ÷` are used. A face that only convects keeps the arithmetic it had,
+    to the bit. The limit is unchanged: its tangent, at the hotter of the centre and the room,
+    bounds the surface's secant on either side of the room.
+  - **`crates/pantometry-thermal/tests/a_radiating_face_sheds_from_its_surface.rs`.** A steady slab
+    held at every cell to the cell-centred scheme's own closed form, the parabola plus
+    `q'''dx²/8k`, radiating alone, with convection, behind a mounting, at 1500 K and in from a
+    hotter room, beside a convecting control: within 9.6e-6 K, and the error falls by four to
+    within 2.2e-5 a halving. And one step of one cell against the surface balance solved by
+    bisection — behind a mounting, convecting too, in a hotter room, a black face at 3000 K on an
+    insulator, a cell that conducts without limit, a mounting that does, and aluminium whose half
+    cell drops 6.6 mK — within 8.9e-16, each case required to tell its defect apart by a hundred
+    thousand times that, and each then marched at its own limit to the room without a step past it.
+  - **Two references rewritten and one bound tightened**, each of which had the centre's reading in
+    it: `a_melted_surface_radiates_as_its_liquid.rs`'s film, `the_balance_without_marching_to_it.rs`'s
+    quartic (588.555 K, where the centre's reading and its check agreed at 588.520 K), and
+    `a_block_that_cools.rs`'s wall between two films, whose bound allowed for the half cell's
+    difference and now allows only the solver's, 2e-6 K against 1.4e-7 K measured.
+  - **The shipped scenes**: the five with a film move, scene 24 by 4.9 mK at most and the rest
+    by 0.1 mK.
+  - **Six sabotages**, after a control in which every thermal test passed, on a tree the harness
+    refuses unless its five files are the ones committed, each failing with exactly the lines it
+    claims in the files this change wrote: the surface read at the centre, as shipped, 62 lines
+    and the wall's tightened bound beside them; the mounting left out of what is behind the
+    surface; Newton started at the centre, which only the cases with the room hotter than the cell
+    can see; one Newton step; convection left out of the surface; and a conductor without limit
+    sent through the Newton, where infinity times zero is not a number.
+  - **The cost**, pinned to one P-core and interleaved against the commit before, best of three, a
+    block with a radiating film on every face: 6.5%, 4.0% and 2.0% at 16³, 32³ and 64³, and 3.0%
+    to 3.5% for one that melts — the Newton solve, on the boundary alone. A convecting one is 1.4%
+    faster, every bit the same. Against the step before the film was evaluated once a step (under
+    Changed), a radiating block of 32³ is still 49% faster.
 - **A cell at the end of a clearance was given a step its row did not allow** (`pantometry-thermal`).
   The explicit step is stable, and keeps every cell within the temperatures the block began at,
   when for each cell `θ = dt·ΣG/C ≤ 1`, summed over everything that leaves it. `Solid3D`'s limit

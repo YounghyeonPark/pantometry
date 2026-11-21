@@ -19,9 +19,11 @@
 //!
 //! **Through a film.** The limit is the cell's capacity over everything leaving it, `C/(K + G)`,
 //! with `K` its faces to other cells and `G` the derivative `4εσT³A` in series with the half cell
-//! behind the surface; and a step of `dt` loses `dt·G'·(T − T∞)`, with `G'` the secant
-//! `εσA(T⁴ − T∞⁴)/(T − T∞)` in the same series, leaving the cell at `T − dt·G'·(T − T∞)/C`, or a
-//! cell in the mush its fraction less what it lost over its latent heat. For a cell of liquid; the
+//! behind the surface; and a step of `dt` loses `dt·G'·(T − T∞)`, with `G'` what the surface
+//! radiates, `εσA(T_s⁴ − T∞⁴)`, over `T − T∞` — at the surface's temperature `T_s`, a half cell's
+//! drop below the centre's, where the half cell brings it what it sends — leaving the cell at
+//! `T − dt·G'·(T − T∞)/C`, or a cell in the mush its fraction less what it lost over its latent
+//! heat. For a cell of liquid; the
 //! same walled in by void at `(1, 2, 1)` of a larger block, where an index that is not the cell's
 //! reads a void; two cells 30% melted between steps, radiating as the area-weighted mean of the
 //! two surfaces; a cell of solid, which this did not change, and one whose liquid's emissivity is
@@ -38,8 +40,9 @@
 //! an end refilled with other matter, each of which the block derives in full; and a pair whose
 //! ends radiate only once melted, which appears when both have and goes when one freezes again.
 //!
-//! `T⁴` is written `(T·T)·(T·T)` here and is `powi(4)` in the block. The two can round apart, which
-//! is part of what the tolerances allow for.
+//! `T⁴` is written `(T·T)·(T·T)` here; the block's clearance takes `powi(4)` and its film the
+//! factors `(T + T∞)(T² + T∞²)`, and finds the surface by Newton where this bisects. They can round
+//! apart, which is part of what the tolerances allow for.
 
 use pantometry_core::substance::{FusionProps, ThermalProps};
 use pantometry_core::units::{
@@ -144,16 +147,29 @@ fn behind(g: f64, k: f64) -> f64 {
     1.0 / (1.0 / g + DX / (2.0 * k * DX * DX))
 }
 
-/// The film's derivative at `t` and its secant from `t` to `ambient`, each behind the half cell.
+/// The film's derivative at `t` behind the half cell, and the conductance from a centre at `t` to
+/// `ambient` through it: what the surface radiates over `t − ambient`, at the surface's own
+/// temperature, where what the half cell brings it is what it sends. That temperature is found by
+/// bisection, and it is below `t` by the half cell's drop — the surface and not the centre is what
+/// radiates.
 fn film(k: f64, emissivity: f64, t: f64, ambient: f64) -> (f64, f64) {
     let a = DX * DX;
     let hot = t.max(ambient);
+    let half = 2.0 * k * a / DX;
+    let sends = |s: f64| emissivity * SIGMA * a * (fourth(s) - fourth(ambient));
+    let (mut lo, mut hi) = (t.min(ambient), t.max(ambient));
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        // What reaches the surface less what leaves it, which falls as the surface warms.
+        if half * (t - mid) - sends(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
     (
         behind(4.0 * emissivity * SIGMA * a * hot * hot * hot, k),
-        behind(
-            emissivity * SIGMA * a * (fourth(t) - fourth(ambient)) / (t - ambient),
-            k,
-        ),
+        sends(0.5 * (lo + hi)) / (t - ambient),
     )
 }
 
@@ -360,8 +376,9 @@ fn a_melted_surface_radiates_through_its_film_as_its_liquid() {
         }
 
         // Each side is a dozen `+ − × ÷`, each rounding by half an ulp, in different orders, and
-        // `T⁴` by a different route; measured, 2.2e-16 at most for the limit and the loss alike,
-        // and 1e-14 is forty times that, against a defect of a factor.
+        // `T⁴` by a different route, and the surface found by Newton against bisection; measured,
+        // 2.2e-16 at most for the limit and 6.7e-16 for the loss, and 1e-14 is fifteen times the
+        // larger, against a defect of a factor.
         let limit = block.max_stable_dt(Time::from_si(0.0)).to_si();
         let want = capacity / (faces + tangent);
         if off((limit / want - 1.0).abs(), 1e-14) {

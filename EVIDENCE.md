@@ -296,6 +296,26 @@ and the audit that was supposed to catch it was the thing keeping it in place. T
 now measured against the released state as its datum, with the difference reported by
 `Room::startup_adjustment` and bounded so a real first-step bug cannot hide in it.
 
+### And a third time, in a film that radiates
+
+`Solid3D`'s cooled face had been through this already. Charged against the cell centre with the
+half cell left out, it converged at 2.08, 2.04 and 2.02 a doubling, and the series form
+`1/(1/G_film + dx/2kA)` made it four — measured in `the_cooled_boundary_order.rs` at two Biot
+numbers, with `ε = 0`. That last condition was the gap. A convective film's conductance is the
+same wherever it is read; a radiating one's grows as `T³`, and the block still read it at the
+centre, which the half cell's drop puts above the surface. On a slab radiating at 800 K the cells
+sat 10.06 K too cold at 1 mm, falling by 1.87 to 1.98 a halving: first order again, behind a
+boundary that had been made second order, because the test that showed it second order turned
+radiation off to keep its closed form linear. Behind a mounting it did not converge at all — the
+joint's drop does not shrink with the cell, and the error tended to −6.21 K.
+
+The closed form that holds it now is the scheme's own. With the surface's temperature solved for,
+every cell of a uniformly heated slab sits exactly `q'''dx²/8k` above the continuous parabola,
+radiating or not, and the order is four to within 2.2e-5 —
+`crates/pantometry-thermal/tests/a_radiating_face_sheds_from_its_surface.rs`. The lesson is the
+one above with a narrower edge: a test that removes a non-linearity to keep its closed form exact
+has said nothing about the non-linear case, and the rate has to be measured there as well.
+
 ## The domain whose answers are distributions
 
 Every domain but one is checked against a value: a Fresnel coefficient, a mode frequency, a
