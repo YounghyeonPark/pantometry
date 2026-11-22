@@ -629,13 +629,17 @@ pub struct Solid3D {
     ///
     /// The film reads its half cell's conductivity and its surface's emissivity here, and
     /// `find_gaps` the emissivities of a clearance's two ends, rather than mixing them again from
-    /// `melted`, because the two differ inside a step. The heat a step takes off the bus goes in
-    /// first, and can move a phase, after the limit is taken and before anything is swept; the
-    /// faces, the capacities and the limit are the phase's before it, so the film must be too.
-    /// Mixed again from `melted`, as the first version of the conductivity's fix did, it was not:
-    /// a liquid conducting ten times its solid, melted by heat off the bus within a step at its
-    /// limit, carried 7.2 times the conductance the limit had charged, and took out 0.272 J in
-    /// that step, refreezing 83% of the cell.
+    /// `melted`: the faces, the capacities and the limit are built from these, and a reader that
+    /// mixes for itself agrees with them only while nothing moves a phase between the limit and
+    /// the sweep. Something did. The heat a step takes off the bus went in first, after the limit
+    /// and before the sweep, and mixed again from `melted`, as the first version of the
+    /// conductivity's fix did, a liquid conducting ten times its solid, melted by heat off the
+    /// bus within a step at its limit, carried 7.2 times the conductance the limit had charged,
+    /// and took out 0.272 J in that step, refreezing 83% of the cell. That heat goes in after the
+    /// sweep now — see `step` — so for the film and the limit the two agree again. Not for every
+    /// reader: the clearances' pass runs after the sweep, the source and the bus heat have all
+    /// moved phases, and reads its half cells here, which is what keeps them the phase the step
+    /// began in.
     derived: Vec<Phase>,
     /// Cells that are **not part of the block** — see [`Solid3D::empty`].
     void: Vec<bool>,
@@ -3910,33 +3914,6 @@ impl Domain for Solid3D {
             });
         }
 
-        // Heat off the plain channel, which carries an amount and no location.
-        //
-        // **Spread evenly**, and this is the one place where the 3D domain must not copy the 1D
-        // one. `Bar1D` puts placeless heat in its first cell, and that is defensible for a bar,
-        // which has an end that a surface absorbing light would plausibly be. A block has six
-        // faces and no distinguished cell, so choosing one would invent a location the bus never
-        // carried — and a hot spot that came from a tie-break is worse than no hot spot, because
-        // it looks like physics. Even spreading is the unique choice that adds no information.
-        // Heat that *does* have a place arrives through `deposit` or over an `Interface`.
-        // Spread to a uniform **rise**, which for a filled block means in proportion to each cell's
-        // capacity rather than in equal joules. Equal joules would warm the low-capacity material
-        // more and so would say where the heat landed, which the bus never carried.
-        let gained = bus.take_share(HEAT, dt);
-        if gained != 0.0 {
-            self.absorbed += gained;
-            let rise = gained / self.capacity.iter().sum::<f64>();
-            for c in 0..self.cells.len() {
-                // Void takes no share: it has no capacity to contribute to the sum above and no
-                // temperature to raise. Warming it would put joules where there is nothing to
-                // hold them, and the ledger would then disagree with the block.
-                if self.void[c] {
-                    continue;
-                }
-                self.add_kelvin(c, rise);
-            }
-        }
-
         // The seven-point stencil in conductance form: `Cᵢ ΔTᵢ = dt Σ_f G_f (T_f − Tᵢ)`.
         //
         // It is the **face flux** that is computed, and each face is read once from each side with
@@ -4073,6 +4050,54 @@ impl Domain for Solid3D {
                 let joules = self.source[c] * dts;
                 self.add_kelvin(c, joules / self.capacity[c]);
                 self.supplied += joules;
+            }
+        }
+
+        // **Heat off the plain channel**, which carries an amount and no location — added after
+        // the sweep, as the source above is and for its reason.
+        //
+        // It went in first, before `old` was taken, so the film met the heated state and shed a
+        // share of the heat in the step that brought it, `θ = dt·G/C` of it. Two things followed,
+        // and the books balanced through both, because the heat really did leave:
+        //
+        // - **The steady state depended on the step.** Measured on one cell convecting at
+        //   `h = 100` under constant bus power: it settled at 0.900, 0.500 and 0.100 of `P/G` above
+        //   the air at a tenth, a half and nine tenths of its limit, and at its limit it stayed at
+        //   the air.
+        // - **The step outran its limit.** The limit is taken from the state the step begins in, and
+        //   a radiating film met at a temperature the heat had raised is stiffer than that. A black
+        //   cell of 1 mm and `k = 200` at 1000 K, stepped at its own limit while the bus raised it
+        //   600 K, landed at −33.5 K, and raised 1000 K at −1982 K, every step accepted. This had
+        //   been caught once and refused, by a re-check in the film's own pass after the sweep; the
+        //   re-check went when the film moved into the sweep, and `a_cold_cell_and_a_bus_slug.rs`,
+        //   which allowed a refusal or a step that left no cell below the air, passed on its second
+        //   branch.
+        //
+        // After the sweep, the sweep reads the state the limit was taken from, and the heat is a
+        // constant source over the step, which `dT/dt = S` adds exactly.
+        //
+        // **Spread evenly**, and this is the one place where the 3D domain must not copy the 1D
+        // one. `Bar1D` puts placeless heat in its first cell, and that is defensible for a bar,
+        // which has an end that a surface absorbing light would plausibly be. A block has six
+        // faces and no distinguished cell, so choosing one would invent a location the bus never
+        // carried — and a hot spot that came from a tie-break is worse than no hot spot, because
+        // it looks like physics. Even spreading is the unique choice that adds no information.
+        // Heat that *does* have a place arrives through `deposit` or over an `Interface`.
+        // Spread to a uniform **rise**, which for a filled block means in proportion to each cell's
+        // capacity rather than in equal joules. Equal joules would warm the low-capacity material
+        // more and so would say where the heat landed, which the bus never carried.
+        let gained = bus.take_share(HEAT, dt);
+        if gained != 0.0 {
+            self.absorbed += gained;
+            let rise = gained / self.capacity.iter().sum::<f64>();
+            for c in 0..self.cells.len() {
+                // Void takes no share: it has no capacity to contribute to the sum above and no
+                // temperature to raise. Warming it would put joules where there is nothing to
+                // hold them, and the ledger would then disagree with the block.
+                if self.void[c] {
+                    continue;
+                }
+                self.add_kelvin(c, rise);
             }
         }
 

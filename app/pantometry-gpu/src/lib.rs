@@ -494,8 +494,12 @@ impl Domain for GpuSolid {
             });
         }
 
-        // Placeless heat spreads evenly, exactly as the CPU domain does it — a block has six faces
-        // and no distinguished cell, so choosing one would invent a location the bus never carried.
+        // Placeless heat spreads evenly, as the CPU domain spreads it — a block has six faces and no
+        // distinguished cell, so choosing one would invent a location the bus never carried. The
+        // CPU domain adds it after its sweep, so that its film does not shed it in the step that
+        // brings it; this block refuses films, air and clearances, and nothing in its step reads the
+        // heat but conduction, to which a uniform rise gives nothing — so before the dispatch is
+        // the same answer, to rounding, and saves a download.
         let gained = bus.take_share(HEAT, dt);
         if gained != 0.0 {
             self.absorbed += gained;

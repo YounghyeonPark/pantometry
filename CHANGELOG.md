@@ -632,6 +632,35 @@ protects nothing.
 
 ### Fixed
 
+- **Heat off the bus was shed by the step that brought it** (`pantometry-thermal`). `Solid3D` put
+  the heat it took off the bus into its cells before its sweep read them, so the film met the
+  heated state and shed a share `θ = dt·G/C` of that heat in the same step. The books balanced,
+  because the heat really did leave.
+  - **The steady state depended on the step.** One cell convecting under constant bus power settled
+    at 0.900, 0.500 and 0.100 of `P/G` above its air at a tenth, a half and nine tenths of its
+    stability limit — and at its limit, not at all.
+  - **The step outran its limit.** The limit is taken from the state a step begins in, and a
+    radiating film met at a temperature the heat had raised is stiffer than that: a black cell at
+    1000 K, stepped at its own limit while the bus raised it 600 K, landed at −33.5 K, and raised
+    1000 K at −1982 K, every step accepted. This had been caught and refused once, by a re-check in
+    the film's own pass after the sweep, which went when the film moved into the sweep; the test
+    that held it accepted a refusal or an outcome its cube no longer reached, and passed on the
+    second.
+  - **The heat goes in after the sweep now**, beside `dissipating`'s, where the sweep reads the
+    state the limit was taken from and the heat is a constant source over the step.
+  - **`crates/pantometry-thermal/tests/heat_off_the_bus_arrives_after_the_sweep.rs`.** Constant
+    bus power settles a convecting cell at `P/G`, a radiating cell where its surface sends it, and a
+    column at the parabola plus `q'''dx²/8k`, at a tenth to all of its limit, each to 1e-9 K; a
+    slug of up to 2000 K at the limit is the slug-free step with the rise added, to 1e-11 K, never
+    below the room, in a cell that melts as well; and a cell the heat melts is read by the next step
+    as the phase it left. `a_cold_cell_and_a_bus_slug.rs`'s slug test is held to the same, rather
+    than to either of two outcomes, and its books test takes a slug and moves by exactly that.
+  - **Four sabotages**, each failing exactly the lines it claims: the heat before the sweep, as
+    shipped; the heat dropped; the rise added twice; and the heat after the step re-derives the
+    block, which only the phase test sees.
+  - **The shipped scenes**: none moves at the seven figures they are written to, and none could
+    show this: the three that feed a heater into a block, 20, 21 and 22, have no film, air or
+    clearance on it, and conduction gets nothing from a uniform rise.
 - **A clearance radiated between its two cell centres, not its two surfaces**
   (`pantometry-thermal`). Two cells facing each other across void exchange
   `σA(T₁⁴ − T₂⁴)/(1/ε₁ + 1/ε₂ − 1)`, and what radiates is their facing surfaces, each half a cell

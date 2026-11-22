@@ -106,6 +106,17 @@ coupling: `tests/beam_heats_where_it_lands.rs` computes one by quadrature from t
 steady-state energy balance, checks *that* against the exact `ṫL²/12α` for a point
 source, and then watches the coupled answer converge on it as the window shrinks.
 
+And when a domain takes what arrives matters as much as how often it arrives. `Solid3D` put the
+bus's heat into its cells before its sweep read them, so its film shed a share `θ = dt·G/C` of the
+heat in the step that brought it: under constant power one cell settled at 0.900, 0.500 and 0.100
+of `P/G` above its air at a tenth, a half and nine tenths of its limit, and at its limit not at all
+— again with nothing lost, nothing created and every step inside its limit as taken. The other half
+of the same mistake, a slug that let a radiating step outrun the limit taken before it arrived, had
+been caught once and refused; the refusal lived in the film's own pass and went with it when the
+film moved into the sweep, and the test that held it accepted either a refusal or an outcome its
+cube no longer reached, and passed on the second. Taken after the sweep, as a source already was,
+the heat arrives without being shed: `tests/heat_off_the_bus_arrives_after_the_sweep.rs`.
+
 ## Closed form where there is one
 
 `Motion` is a function of `t`: ask for the world at 0.7 s and you get it, without

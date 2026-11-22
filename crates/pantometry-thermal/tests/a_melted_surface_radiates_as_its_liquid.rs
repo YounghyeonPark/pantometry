@@ -28,8 +28,9 @@
 //! reads a void; two cells 30% melted between steps, radiating as the area-weighted mean of the
 //! two surfaces; a cell of solid, which this did not change, and one whose liquid's emissivity is
 //! not a number, which a solid cell has no business reading; a half-melted cell taking heat off
-//! the bus, which moves its phase after the limit and before the sweep, so that the film is the
-//! phase the step began in; and a cell melted between steps whose liquid differs from its solid
+//! the bus, whose film is the phase the step began in — the heat goes in after the sweep, and once
+//! went in before it and moved the phase under the film; and a cell melted between steps whose
+//! liquid differs from its solid
 //! in nothing but how it radiates, which alone made the block one that rebuilds as it melts.
 //!
 //! **Across a clearance.** Two cells facing each other along a grid line across void exchange
@@ -349,10 +350,10 @@ fn a_melted_surface_radiates_through_its_film_as_its_liquid() {
             bus: 0.4 * latent(),
             from: MELTS.0,
             ambient: 300.0,
-            against: Some((
-                between(SOLID.2, LIQUID.2, 0.9),
-                "the phase after the bus heat",
-            )),
+            // Once the phase the bus heat left, which it reached before the film did; it goes in
+            // after the sweep now, and `heat_off_the_bus_arrives_after_the_sweep.rs` holds the
+            // phase it leaves to the next step.
+            against: None,
         },
         Film {
             name: "a cell melted between steps, its liquid differing only in how it radiates",

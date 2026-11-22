@@ -28,7 +28,7 @@
 //! and of ice with water named as its liquid, three ways, because the half cell is the phase's as
 //! the operator was derived: water, whose half cell is the liquid's and not the ice's; ice, whose
 //! half cell is the solid's and not the water's; and a cell half melted taking heat off the bus,
-//! whose half cell is the half-melted one the step began with and not the one the heat leaves it.
+//! whose half cell is the half-melted one the step began with — the heat goes in after the sweep.
 
 use pantometry_core::substance::ThermalProps;
 use pantometry_core::units::{
@@ -461,8 +461,8 @@ fn a_step_loses_what_the_air_takes_at_the_surface() {
             latent,
             instead: Some((WATER.0, "water's half cell")),
         },
-        // The bus heat melts it from a half to nine tenths before the air is asked, and the air is
-        // asked about the cell the step began with — as its faces and its limit are.
+        // The bus heat melts it from a half to nine tenths in the step, after the air is asked, and
+        // the air is asked about the cell the step began with — as its faces and its limit are.
         Cell {
             name: "a half-melted cell taking heat off the bus",
             block: fed,
@@ -476,10 +476,10 @@ fn a_step_loses_what_the_air_takes_at_the_surface() {
             air: kelvin(-10.0),
             bus: 0.4 * latent,
             latent,
-            instead: Some((
-                between(ICE.0, WATER.0, 0.9),
-                "the half cell of the phase the bus heat left it in",
-            )),
+            // Once the half cell of the phase the bus heat left, which it reached before the air
+            // did; it goes in after the sweep now, and `heat_off_the_bus_arrives_after_the_sweep.rs`
+            // holds the phase it leaves to the next step.
+            instead: None,
         },
     ];
 

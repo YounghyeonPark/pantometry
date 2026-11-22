@@ -48,28 +48,36 @@ fn a_cell_colder_than_its_surroundings_is_not_overdriven() {
     );
 }
 
-/// **Heat off the bus arrives after the limit was computed, and the step is re-checked against
-/// the state the film actually meets.**
+/// **Heat off the bus arrives after the sweep, so a slug is added to the step and none of it is
+/// shed by the step that brings it.**
 ///
-/// `stability_ratio` reads the temperatures the step *started* with. Bus heat is spread over
-/// every cell before the film is applied, so a slug can make a cell far stiffer than the limit
-/// was sized for. Measured before the fix, on a cube at ambient given its rise in one accepted
-/// step: 300 K took a corner to −137 °C and 900 K to −7007 °C, with the ledger balancing
+/// `stability_ratio` reads the temperatures the step *started* with. Bus heat was spread over
+/// every cell before the film was applied, so a slug could make a cell far stiffer than the limit
+/// was sized for. Measured on this cube when this was written, at ambient and given its rise in one
+/// accepted step: 300 K took a corner to −137 °C and 900 K to −7007 °C, with the ledger balancing
 /// perfectly throughout.
 ///
-/// The domain refuses now. Refusing rather than clamping, because a clamp would quietly return
-/// a different answer near the limit and this workspace would rather stop than be plausible.
+/// It was refused for that, by a re-check in the film's own pass after the sweep — and the
+/// re-check went when the film moved into the sweep. This test allowed a refusal *or* a step that
+/// left no cell below the air, and by then the cube no longer reached the air, so it passed on its
+/// second branch with no refusal anywhere — its coldest cell 506 K above the air — while one black
+/// cell of 1 mm and `k = 200` at 1000 K, stepped at its own limit under a slug of 1000 K, landed at
+/// −1982 K. The heat goes in after the sweep now — see
+/// `tests/heat_off_the_bus_arrives_after_the_sweep.rs` — and nothing is refused: every cell lands
+/// where the step without the slug puts it, plus the rise, to the rounding of adding 900 K.
 #[test]
-fn a_bus_slug_cannot_shed_a_cell_past_ambient() {
+fn a_bus_slug_is_added_to_every_cell_of_its_step() {
     let pla = Substance::from_name("pla").expect("the catalogue has it");
     let side = 4.0 * 5.0e-3;
+    // Hot, so the step without the slug does something: its films shed, its corners most. From
+    // the air's temperature it was the identity, and the check came down to the rise alone.
     let build = || {
         let mut block = Solid3D::new(
             "part",
             pla.clone(),
             (4, 4, 4),
             Length::mm(5.0),
-            Temperature::celsius(20.0),
+            Temperature::celsius(200.0),
         );
         for face in Face::ALL {
             block = block.losing_from(
@@ -85,38 +93,60 @@ fn a_bus_slug_cannot_shed_a_cell_past_ambient() {
     };
 
     // A slug big enough that the film, met at the post-slug temperature, would overshoot.
-    let mut block = build();
+    let block = build();
     let limit = block.max_stable_dt(Time::ZERO);
-    let capacity = block.heat_capacity().to_si();
-    let mut bus = Exchange::new();
-    bus.publish(HEAT, 900.0 * capacity);
+    // From the substance rather than from the block, so a block that spread the heat over the
+    // wrong total would not also be the one saying how much heat that is.
+    let capacity = pla.density.to_si()
+        * pla
+            .thermal
+            .expect("the catalogue gives it thermal properties")
+            .specific_heat
+            .to_si()
+        * side
+        * side
+        * side;
+    let rise = 900.0;
 
-    match block.step(Time::ZERO, limit, &mut bus) {
-        // Either the step is refused by name...
-        Err(v) => assert_eq!(v.quantity, "surface loss ratio", "{v}"),
-        // ...or it was taken, and then no cell may sit below the air it is losing to.
-        Ok(()) => {
-            let ambient = Temperature::celsius(20.0).to_si();
-            for k in 0..4 {
-                for j in 0..4 {
-                    for i in 0..4 {
-                        let t = block.temperature_at(i, j, k).to_si();
-                        assert!(
-                            t >= ambient - 1e-6,
-                            "cell ({i},{j},{k}) was shed to {t} K, below the {ambient} K air"
-                        );
-                    }
-                }
+    let mut bare = block.clone();
+    bare.step(Time::ZERO, limit, &mut Exchange::new())
+        .expect("its own limit is a step it can take");
+    let mut slugged = block.clone();
+    let mut bus = Exchange::new();
+    bus.publish(HEAT, rise * capacity);
+    slugged
+        .step(Time::ZERO, limit, &mut bus)
+        .expect("a slug is added to the step, and the step is the one the limit was taken for");
+
+    let ambient = Temperature::celsius(20.0).to_si();
+    for k in 0..4 {
+        for j in 0..4 {
+            for i in 0..4 {
+                let (without, with) = (
+                    bare.temperature_at(i, j, k).to_si(),
+                    slugged.temperature_at(i, j, k).to_si(),
+                );
+                // 900 K added to a cell near 473 K and read back: an ulp or two of 1400 K.
+                assert!(
+                    (with - (without + rise)).abs() < 1e-11,
+                    "cell ({i},{j},{k}) lands at {with} K, where the step without the slug puts \
+                     it at {without} K and the slug raises it {rise} K"
+                );
+                assert!(
+                    with >= ambient,
+                    "cell ({i},{j},{k}) was shed to {with} K, below the {ambient} K air"
+                );
             }
         }
     }
 }
 
-/// **The books still balance while all of that is refused or survived.** The audit could never
-/// see either defect — the heat genuinely left — so this is not the check that catches them; it
-/// is the check that the fixes did not break the thing that was right.
+/// **The books still balance through steps at the limit.** The audit could never see either defect
+/// above — the heat genuinely left — so this is not the check that catches them; it is the check
+/// that the fixes did not break the thing that was right. It was named for a refusal that the bus
+/// slug once met, and that nothing meets now.
 #[test]
-fn the_books_balance_through_a_refusal() {
+fn the_books_balance_through_steps_at_the_limit() {
     let glass = Substance::from_name("borosilicate").expect("the catalogue has it");
     let mut block = Solid3D::new(
         "part",
@@ -130,18 +160,29 @@ fn the_books_balance_through_a_refusal() {
         Environment::still_air(Temperature::celsius(20.0), Area::from_si(4.0e-4)),
     );
 
-    let opening = block.ledger().get(quantity::ENERGY).unwrap_or(0.0);
+    let books = |b: &Solid3D| {
+        b.ledger()
+            .get(quantity::ENERGY)
+            .expect("a block keeps its books in energy")
+    };
+    let opening = books(&block);
     let dt = block.max_stable_dt(Time::ZERO);
-    let mut bus = Exchange::new();
-    for _ in 0..200 {
+    // A slug off the bus in the first step, which goes in after its sweep: what crosses the bus is
+    // all the books may move by, whatever the film shed meanwhile.
+    let slug = 100.0;
+    for step in 0..200 {
+        let mut bus = Exchange::new();
+        if step == 0 {
+            bus.publish(HEAT, slug);
+        }
         block.step(Time::ZERO, dt, &mut bus).expect("a stable step");
     }
-    let closing = block.ledger().get(quantity::ENERGY).unwrap_or(0.0);
+    let closing = books(&block);
     let moved = block.lost_energy().to_si();
     assert!(moved > 0.0);
     assert!(
-        (closing - opening).abs() / moved < 1e-12,
-        "the ledger moved by {:e} J against {moved:e} J shed",
+        (closing - opening - slug).abs() / moved.max(slug) < 1e-12,
+        "the ledger moved by {:e} J, where {slug} J came over the bus and {moved:e} J was shed",
         closing - opening
     );
 }

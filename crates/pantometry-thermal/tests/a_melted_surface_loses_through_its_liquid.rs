@@ -27,9 +27,9 @@
 //!   than from the mixing rule, because the claim is that the film's half cell is the faces';
 //! - a cell of ice, which this did not change, and which says the change did not simply swap one
 //!   phase for the other;
-//! - a half-melted cell taking heat off the bus in the step, which moves its phase before the
-//!   sweep and after the limit: the film is the phase the step began in, as the faces and the
-//!   limit are.
+//! - a half-melted cell taking heat off the bus in the step: the film is the phase the step began
+//!   in, as the faces and the limit are. The heat used to go in before the sweep and move the
+//!   phase under the film; it goes in after now, and moves it for the next step.
 
 use pantometry_core::substance::ThermalProps;
 use pantometry_core::units::{
@@ -199,7 +199,12 @@ fn a_melted_cell_loses_through_its_own_half_cell() {
             bus: 0.4 * latent,
             from_c: 0.0,
             ambient_c: -10.0,
-            against: Some((between(ICE.0, WATER.0, 0.9), "the phase after the bus heat")),
+            // It was here to tell the phase the step began in from the one the bus heat left,
+            // which the bus heat reached before the film did. It goes in after the sweep now, so
+            // nothing the film reads has moved, and the case is what the heat does to the enthalpy;
+            // `heat_off_the_bus_arrives_after_the_sweep.rs` holds the phase it leaves to the next
+            // step.
+            against: None,
         },
     ];
 
