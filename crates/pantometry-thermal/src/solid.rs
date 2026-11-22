@@ -206,6 +206,199 @@ fn radiating_film(
     through * behind / (through + behind)
 }
 
+/// How many steps `crossing` may take to find what a clearance carries. A bound that is never the
+/// answer: over the eight thousand pairs the unit tests below draw — conductivities from 0.01 to
+/// 500 W/m·K, cells from 0.1 to 30 mm, 200 K to 3000 K, with and without air — eleven at most and
+/// 4.35 on average, and that test holds it to twelve.
+const CROSSING_STEPS: usize = 64;
+
+/// What one pair of a clearance carries, from its end `a` to its end `b`, in a step's arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Crossing {
+    /// Watts from `a`'s surface to `b`'s; negative the other way.
+    watts: f64,
+    /// The share of `watts` that `a`'s cell gives up, and the share `b`'s takes: each the share of
+    /// its surface's paths that runs through its half cell. One for both without air; with air,
+    /// the air takes `watts·(from_a − to_b)` between them.
+    from_a: f64,
+    to_b: f64,
+    /// The two surfaces, K, and the resistance from each one's source to it, K/W: what the slopes
+    /// are made of, kept rather than the slopes because only the steady solve asks for them.
+    surfaces: (f64, f64),
+    behind: (f64, f64),
+}
+
+impl Crossing {
+    /// How fast what `a`'s cell gives up through the pair moves with `a`'s own temperature, and
+    /// what `b`'s takes with `b`'s, W/K — the slopes the steady solve leans on. From
+    /// `dq·(1 + 4C(u³ r_a + v³ r_b)) = 4C(u³ dT*_a − v³ dT*_b)` and `dT* = f·dT_c`.
+    fn slopes(&self, coefficient: f64) -> (f64, f64) {
+        let ((u, v), (ra, rb)) = (self.surfaces, self.behind);
+        let (ua, vb) = (4.0 * coefficient * u * u * u, 4.0 * coefficient * v * v * v);
+        let stiff = 1.0 + ua * ra + vb * rb;
+        (
+            self.from_a * self.from_a * ua / stiff,
+            self.to_b * self.to_b * vb / stiff,
+        )
+    }
+}
+
+/// What a clearance's pair exchanges, given the coefficient `σA/(1/ε_a + 1/ε_b − 1)` of its two
+/// faces, each end's half cell, W/K, and its centre's temperature, and the air in the clearance
+/// on each face, W/K, and its temperature, if it has any.
+///
+/// **The two surfaces radiate, not the two centres.** Each surface is half a cell from the
+/// centre the block knows. Behind it is the half cell `G`, and beside it the air `H`; between
+/// them they hold it as a source `T* = T_c − w·(T_c − T_air)`, with `w = H/(G + H)`, behind a
+/// conductance `G + H`. So the surfaces are at `u = T*_a − q/(G_a + H)` and
+/// `v = T*_b + q/(G_b + H)`, and `q = C(u⁴ − v⁴)`: one equation in `q`, decreasing wherever both
+/// surfaces are above absolute zero, whose root lies between nothing and the `q` at which the two
+/// surfaces meet. Of what reaches `a`'s surface, the share `G_a/(G_a + H)` came through its half
+/// cell; the air's own share of the face is `air_conductance`'s, which carries the rest.
+///
+/// **Newton inside that bracket, halving it where a step would leave it.** The residual is not
+/// convex — its curvature is `12C(u²/G'_a² − v²/G'_b²)`, of either sign — so Newton alone is not
+/// monotone here as it is in `radiating_film`, and the bracket is what makes it safe. It starts
+/// at the secant between the two sources' answer. Written as `C·(u − v)(u + v)(u² + v²) − q` with
+/// `u − v` formed directly, and the sources' difference from whichever end cancels least, so that
+/// two surfaces close together are not the difference of two fourth powers. The unit tests below
+/// hold it to its root within what a halving on `a`'s surface can resolve, and its slopes to their
+/// derivatives. What is left against the exact root of the exact inputs is how those inputs round —
+/// the air's shares, chiefly, where it holds the two sources close together with the centres far
+/// apart. Only `+ − × ÷`.
+fn crossing(coefficient: f64, a: (f64, f64), b: (f64, f64), air: Option<(f64, f64)>) -> Crossing {
+    crossing_counted(coefficient, a, b, air).0
+}
+
+/// [`crossing`], and how many steps it took — which the unit tests below hold to its bound.
+fn crossing_counted(
+    coefficient: f64,
+    (half_a, centre_a): (f64, f64),
+    (half_b, centre_b): (f64, f64),
+    air: Option<(f64, f64)>,
+) -> (Crossing, usize) {
+    let (h, ambient) = air.unwrap_or((0.0, 0.0));
+    // A surface nothing reaches carries nothing and moves with nothing: no slope either.
+    let nothing = Crossing {
+        watts: 0.0,
+        from_a: 1.0,
+        to_b: 1.0,
+        surfaces: (0.0, 0.0),
+        behind: (0.0, 0.0),
+    };
+    // Each end: the resistance from its source to its surface, the source, the air's share of
+    // it and the half cell's — or `None` for a surface nothing reaches, which carries nothing.
+    let side = |half: f64, centre: f64| -> Option<(f64, f64, f64, f64)> {
+        if h == 0.0 {
+            if half <= 0.0 {
+                return None;
+            }
+            let r = if half.is_finite() { 1.0 / half } else { 0.0 };
+            return Some((r, centre, 0.0, 1.0));
+        }
+        // Air without limit holds the surface at its own temperature, whatever is behind it: the
+        // half cell carries none of what crosses. Written out because `∞/∞` is not a share.
+        if h == f64::INFINITY {
+            return Some((0.0, ambient, 1.0, 0.0));
+        }
+        if !half.is_finite() {
+            return Some((0.0, centre, 0.0, 1.0));
+        }
+        let through = half + h;
+        let (w, f) = (h / through, half / through);
+        Some((1.0 / through, centre - w * (centre - ambient), w, f))
+    };
+    let (Some((ra, sa, wa, fa)), Some((rb, sb, wb, fb))) =
+        (side(half_a, centre_a), side(half_b, centre_b))
+    else {
+        return (nothing, 0);
+    };
+    // The sources' difference, from whichever form subtracts the smaller terms, since what each
+    // rounds to is in proportion to them: the centres' difference less the air's shares of their
+    // excesses, or the half cells' shares of those excesses. The first where the air holds little,
+    // the second where it holds much — and where one end's air holds much and the other's little,
+    // whichever the numbers say.
+    let (ea, eb) = (centre_a - ambient, centre_b - ambient);
+    let by_centres = (centre_a - centre_b).abs() + (wa * ea).abs() + (wb * eb).abs();
+    let by_excess = (fa * ea).abs() + (fb * eb).abs();
+    let apart = if by_centres <= by_excess {
+        (centre_a - centre_b) - (wa * ea - wb * eb)
+    } else {
+        fa * ea - fb * eb
+    };
+    if apart == 0.0 {
+        let still = Crossing {
+            watts: 0.0,
+            from_a: fa,
+            to_b: fb,
+            surfaces: (sa, sb),
+            behind: (ra, rb),
+        };
+        return (still, 0);
+    }
+    // Solved from the hotter source, and the sign put back after.
+    let (hot_r, hot, cold_r, cold, d0) = if apart > 0.0 {
+        (ra, sa, rb, sb, apart)
+    } else {
+        (rb, sb, ra, sa, -apart)
+    };
+    let r = hot_r + cold_r;
+    let mut steps = 0;
+    let mut q = if r == 0.0 {
+        // Nothing between either centre and its surface: the centres' own reading, exactly.
+        coefficient * d0 * (hot + cold) * (hot * hot + cold * cold)
+    } else {
+        let (mut lo, mut hi) = (0.0, d0 / r);
+        // From the secant between the two sources, which is the answer where nothing is behind
+        // the surfaces and is off by the half cells' share of the path otherwise. It took fewer
+        // steps on random pairs than the tangent at the hotter source, and cost a slit through a
+        // block of 16³ 18.5% a step where the tangent cost 30%.
+        let secant = coefficient * (hot + cold) * (hot * hot + cold * cold);
+        let mut q = d0 / (r + 1.0 / secant);
+        for _ in 0..CROSSING_STEPS {
+            steps += 1;
+            let (u, v) = (hot - q * hot_r, cold + q * cold_r);
+            let gap = d0 - q * r;
+            let spread = (u + v) * (u * u + v * v);
+            let excess = coefficient * gap * spread - q;
+            if excess > 0.0 {
+                lo = q;
+            } else if excess < 0.0 {
+                hi = q;
+            } else {
+                break;
+            }
+            let bend =
+                (cold_r - hot_r) * (u * u + v * v) + 2.0 * (u + v) * (v * cold_r - u * hot_r);
+            let slope = coefficient * (gap * bend - r * spread) - 1.0;
+            let mut next = q - excess / slope;
+            if next == q {
+                break;
+            }
+            // Written out rather than negated, so that a `NaN` step is one that leaves.
+            if next.is_nan() || next <= lo || next >= hi {
+                next = 0.5 * (lo + hi);
+                if next <= lo || next >= hi {
+                    break;
+                }
+            }
+            q = next;
+        }
+        q
+    };
+    if apart < 0.0 {
+        q = -q;
+    }
+    let crossed = Crossing {
+        watts: q,
+        from_a: fa,
+        to_b: fb,
+        surfaces: (sa - q * ra, sb + q * rb),
+        behind: (ra, rb),
+    };
+    (crossed, steps)
+}
+
 /// How many Gauss-Seidel sweeps [`Solid3D::steady_state`] will take before reporting that it did
 /// not converge.
 ///
@@ -1833,8 +2026,11 @@ impl Solid3D {
     ///
     /// **Radiation does.** Two solid cells facing each other along a grid line across a run of
     /// void exchange `σA(T₁⁴ − T₂⁴)/(1/ε₁ + 1/ε₂ − 1)`, the parallel-plate series, with an
-    /// exchange factor of **one**. Each `ε` is its cell's phase's: a cell that has melted radiates
-    /// as its substance's [liquid](pantometry_core::substance::FusionProps::liquid) does, and one
+    /// exchange factor of **one**, at the temperatures of their two facing surfaces: each half a
+    /// cell from its centre, behind its half cell, and beside the clearance's air if
+    /// [`air_in`](Solid3D::air_in) put any there. Each `ε` is its cell's phase's: a cell that has
+    /// melted radiates as its substance's
+    /// [liquid](pantometry_core::substance::FusionProps::liquid) does, and one
     /// in the mush as the area-weighted mean of the two.
     ///
     /// That factor was written down here as a known approximation — a wide gap has a view factor
@@ -2201,17 +2397,19 @@ impl Solid3D {
         let count = body.iter().filter_map(|b| *b).max().map_or(0, |m| m + 1);
 
         // The net watts a clearance's pairs bring to each cell, and their slope. Held per sweep
-        // rather than per cell: a pair is symmetric, so walking the list once fills both ends.
+        // rather than per cell: walking the list once fills both ends. The march's own crossing,
+        // surfaces and all, so this is the balance it converges to.
         let mut gain = vec![0.0; t.len()];
         let mut slope = vec![0.0; t.len()];
 
         for round in 0..STEADY_SWEEPS {
             for (a, b, coefficient) in &self.gaps {
-                let watts = coefficient * (t[*a].powi(4) - t[*b].powi(4));
-                gain[*a] -= watts;
-                gain[*b] += watts;
-                slope[*a] += 4.0 * coefficient * t[*a].powi(3);
-                slope[*b] += 4.0 * coefficient * t[*b].powi(3);
+                let pair = self.crossing_at(&t, *a, *b, *coefficient);
+                let (at_a, at_b) = pair.slopes(*coefficient);
+                gain[*a] -= pair.watts * pair.from_a;
+                gain[*b] += pair.watts * pair.to_b;
+                slope[*a] += at_a;
+                slope[*b] += at_b;
             }
 
             let mut moved: f64 = 0.0;
@@ -2284,19 +2482,24 @@ impl Solid3D {
             //
             // A pair resists a shift only when its two ends are in *different* bodies: move one
             // object and the exchange changes, move both together and it does not. A pair inside
-            // one body cancels, exactly as a conducting face does.
+            // one body cancels, exactly as a conducting face does — without air. With it, what the
+            // air takes between the two surfaces is the body's loss and stays in its total. Its
+            // slope under a shift is left to `loss_conductance_at`'s air, which carries all of it
+            // where the two ends conduct alike and a few percent less where they do not: a slope
+            // sets how fast the solve gets there, not where it stops.
             for (a, b, coefficient) in &self.gaps {
                 let (Some(ba), Some(bb)) = (body[*a], body[*b]) else {
                     continue;
                 };
-                let watts = coefficient * (t[*a].powi(4) - t[*b].powi(4));
-                total[ba] -= watts;
-                total[bb] += watts;
+                let pair = self.crossing_at(&t, *a, *b, *coefficient);
+                total[ba] -= pair.watts * pair.from_a;
+                total[bb] += pair.watts * pair.to_b;
                 if ba == bb {
                     continue;
                 }
-                resist[ba] += 4.0 * coefficient * t[*a].powi(3);
-                resist[bb] += 4.0 * coefficient * t[*b].powi(3);
+                let (at_a, at_b) = pair.slopes(*coefficient);
+                resist[ba] += at_a;
+                resist[bb] += at_b;
             }
             for (b, r) in resist.iter().enumerate() {
                 if *r <= 0.0 {
@@ -2636,6 +2839,18 @@ impl Solid3D {
         // cell's tangent bounds the pair's. Charged to both cells, because either could be the
         // one the step is too long for.
         //
+        // **And of the two surfaces' sources, when air hotter than both centres is beside them.**
+        // The pair radiates between its two surfaces, and both lie between the two sources `T*`
+        // that hold them — each `T_c + w·(T_air − T_c)`, `w = H/(G + H)`, see `crossing` — so the
+        // tangent at the hotter source bounds the secant between them. Air hotter than both
+        // centres holds both sources above them, where the centres' tangent does not bound it;
+        // air no hotter cannot, and then this is the centres' tangent to the bit. The sources and
+        // not the air itself, which bounds them too and is far looser: air at 1500 K and
+        // 50 W/m²·K over ends at 600 K and 400 K, in cells of 1 mm and `k = 0.6`, would charge the
+        // pair 15.6 times the centres' tangent, where its hotter source charges it 1.19. The half
+        // cells only add resistance to the path, so this charges more than the pair carries, never
+        // less.
+        //
         // **Added into each end's row, with everything else that leaves the cell** — its faces,
         // its film and its air — because the limit is a row's: `θᵢ = dt·ΣG/Cᵢ ≤ 1`. Each pair was
         // charged alone, as the largest of the cell's terms rather than their sum, so a cell that
@@ -2651,6 +2866,11 @@ impl Solid3D {
         // sum over nothing, exactly zero, and asking for it at every end of a clearance through
         // the middle of a block cost a step 3.5% to 7.6%, 64³ to 16³, pinned.
         let dx = self.dx.to_si();
+        let area = dx * dx;
+        // The clearance's air as `crossing_at` reads it: W/K a face, and its temperature.
+        let air = self
+            .air
+            .and_then(|(ambient, h)| (h > 0.0).then_some((h * area, ambient)));
         for end in &self.gap_ends {
             let c = end.cell;
             if self.capacity[c] > 0.0 {
@@ -2658,7 +2878,21 @@ impl Solid3D {
                     .iter()
                     .map(|n| {
                         let (a, b, coefficient) = self.gaps[*n];
-                        4.0 * coefficient * self.cells[a].max(self.cells[b]).powi(3)
+                        let centres = self.cells[a].max(self.cells[b]);
+                        let mut hot = centres;
+                        if let Some((h, ambient)) = air.filter(|(_, ambient)| *ambient > centres) {
+                            for end in [a, b] {
+                                let half = 2.0 * self.derived[end].0 * area / dx;
+                                let w = if half.is_finite() {
+                                    h / (half + h)
+                                } else {
+                                    0.0
+                                };
+                                let t = self.cells[end];
+                                hot = hot.max(t + w * (ambient - t));
+                            }
+                        }
+                        4.0 * coefficient * hot * hot * hot
                     })
                     .sum();
                 let loss = if end.outer || self.air.is_some() {
@@ -2744,6 +2978,21 @@ impl Solid3D {
             // reciprocal that need not round-trip.
             _ => film,
         }
+    }
+
+    /// What the clearance pair `(a, b)` carries at the temperatures `t`: each end behind its own
+    /// half cell, `2k·dx` with the conductivity its faces are built from, and the clearance's air
+    /// on both faces if the block has any — see `crossing`. The half cell is formed as
+    /// `series_with_half_cell` forms it, so the air's share of the face here is the one
+    /// `air_conductance` charges.
+    fn crossing_at(&self, t: &[f64], a: usize, b: usize, coefficient: f64) -> Crossing {
+        let dx = self.dx.to_si();
+        let area = dx * dx;
+        let half = |c: usize| 2.0 * self.derived[c].0 * area / dx;
+        let air = self
+            .air
+            .and_then(|(ambient, h)| (h > 0.0).then_some((h * area, ambient)));
+        crossing(coefficient, (half(a), t[a]), (half(b), t[b]), air)
     }
 
     /// The conductance from one solid cell to the air in the void touching it, in W/K.
@@ -3799,16 +4048,6 @@ impl Domain for Solid3D {
             self.rise = next;
         }
 
-        // **What the gaps carry.** A pair of solid cells facing each other across void exchange
-        // radiation, and it is applied here — in the same explicit pass as the conduction sweep,
-        // read off the same `old` state — for the reason the surface film moved into the sweep:
-        // a separate pass is Lie splitting, whose error carries a coefficient growing as `1/dx`
-        // against a step falling as `dx²`, and the boundary comes out an order worse than the
-        // interior.
-        //
-        // **Antisymmetric**, so the pair conserves exactly: what leaves one arrives in the
-        // other, in the same statement, and `Σ Cᵢ Tᵢ` is unchanged to the last bit as it is for
-        // a conduction face.
         // **Heat that does have a place**, added after the sweep rather than before it.
         //
         // The distinction is not cosmetic and this learned it by measuring. A forward step is
@@ -3837,17 +4076,37 @@ impl Domain for Solid3D {
             }
         }
 
+        // **What the gaps carry.** A pair of solid cells facing each other across void exchange
+        // radiation, and it is applied here — in the same explicit update as the conduction
+        // sweep, read off the same `old` state — for the reason the surface film moved into the
+        // sweep: a separate pass is Lie splitting, whose error carries a coefficient growing as
+        // `1/dx` against a step falling as `dx²`, and the boundary comes out an order worse than
+        // the interior.
+        //
+        // **Between the two surfaces, each behind its half cell** — see `crossing`. It was
+        // `σA(T_a⁴ − T_b⁴)/(1/ε_a + 1/ε_b − 1)` read at the two centres, each a half cell's drop
+        // from the surface that radiates: first order, 1.99 a halving measured on two slabs across
+        // a vacuum and 2.01 with air between them.
+        //
+        // **Antisymmetric where nothing else is at the surfaces**, so the pair conserves exactly:
+        // what leaves one arrives in the other, in the same statement, and `Σ Cᵢ Tᵢ` is unchanged
+        // to the last bit as it is for a conduction face. With air in the clearance each surface
+        // also loses to it, and what one cell gives up is not what the other takes: the air has
+        // the difference, and the books hear it as they hear the film.
         if !self.gaps.is_empty() {
             let dts = dt.to_si();
             for (a, b, coefficient) in self.gaps.clone() {
-                let (ta, tb) = (old[a], old[b]);
-                let watts = coefficient * (ta.powi(4) - tb.powi(4));
-                if watts == 0.0 {
+                let pair = self.crossing_at(&old, a, b, coefficient);
+                if pair.watts == 0.0 {
                     continue;
                 }
-                let joules = watts * dts;
-                self.add_kelvin(a, -joules / self.capacity[a]);
-                self.add_kelvin(b, joules / self.capacity[b]);
+                let leaving = pair.watts * pair.from_a * dts;
+                let arriving = pair.watts * pair.to_b * dts;
+                self.add_kelvin(a, -leaving / self.capacity[a]);
+                self.add_kelvin(b, arriving / self.capacity[b]);
+                if leaving != arriving {
+                    self.lost += leaving - arriving;
+                }
             }
         }
 
@@ -4396,5 +4655,164 @@ mod tests {
             block.facing_air, conducting,
             "asked again, the list changed"
         );
+    }
+
+    /// One pair, drawn from the range `crossing` is documented for: conductivities from 0.01 to
+    /// 500 W/m·K and cells from 0.1 to 30 mm, a decade at a time; emissivities from 0.02 to one;
+    /// centres from 200 K to 3000 K, a fifth of them within two kelvin of each other; and, on half
+    /// of them, air at 200 K to 1500 K and 1 to 10⁴ W/m²·K. As `(C, (G_a, T_a), (G_b, T_b), air)`.
+    type Pair = (f64, (f64, f64), (f64, f64), Option<(f64, f64)>);
+
+    fn a_pair(index: u64) -> Pair {
+        let mut rng = pantometry_core::Rng::for_index(0x7a1c_4a11, index);
+        let mut decade = |lo: f64, hi: f64| 10f64.powf(rng.range(lo, hi));
+        let dx = decade(-4.0, -1.5);
+        let (ka, kb) = (decade(-2.0, 2.7), decade(-2.0, 2.7));
+        let h = decade(0.0, 4.0);
+        let area = dx * dx;
+        let (ea, eb) = (rng.range(0.02, 1.0), rng.range(0.02, 1.0));
+        let coefficient = super::STEFAN_BOLTZMANN.to_si() * area / (1.0 / ea + 1.0 / eb - 1.0);
+        let ta = rng.range(200.0, 3000.0);
+        let tb = if rng.unit() < 0.2 {
+            ta + rng.range(-2.0, 2.0)
+        } else {
+            rng.range(200.0, 3000.0)
+        };
+        let air = (rng.unit() < 0.5).then(|| (h * area, rng.range(200.0, 1500.0)));
+        (coefficient, (2.0 * ka * dx, ta), (2.0 * kb * dx, tb), air)
+    }
+
+    /// **`crossing` lands on the root of the balance it solves, and in a few steps.**
+    ///
+    /// The reference halves on `a`'s surface `u`, which `crossing` never solves for: what reaches
+    /// it through its half cell, less what its air takes, is what crosses; `b`'s surface is where
+    /// that, and what its own air brings, is what its half cell carries on; and the two surfaces
+    /// send `C(u⁴ − v⁴)` across, which rises with `u`. Halving finds that to an ulp or so of `u`,
+    /// which moves what crosses by `(G_a + H)` times an ulp, and the fourth powers round by an ulp
+    /// of `C·u⁴`: `crossing` is held to eight of each, or to 1e-13 of what crosses where that is
+    /// more. A Newton whose derivative is wrong still converges on most pairs, only slowly, so the
+    /// steps are held as well.
+    #[test]
+    fn a_crossing_lands_on_its_root_in_a_few_steps() {
+        let (mut most, mut taken, mut worst) = (0, 0, 0.0_f64);
+        let pairs = 8000;
+        for index in 0..pairs {
+            let (c, (ga, ta), (gb, tb), air) = a_pair(index);
+            let (h, room) = air.unwrap_or((0.0, 0.0));
+            let (crossed, steps) = super::crossing_counted(c, (ga, ta), (gb, tb), air);
+            most = most.max(steps);
+            taken += steps;
+
+            let across = |u: f64| ga * (ta - u) - h * (u - room);
+            let far = |q: f64| (gb * tb + h * room + q) / (gb + h);
+            let fourth = |t: f64| (t * t) * (t * t);
+            let residual = |u: f64| c * (fourth(u) - fourth(far(across(u)))) - across(u);
+            // Between where nothing crosses, `a`'s source, and where the two surfaces meet, their
+            // sources' mean weighted by what holds each: outside that, `v` can pass through zero
+            // and its fourth power turn the residual back.
+            let source = |g: f64, t: f64| (g * t + h * room) / (g + h);
+            let (sa, sb) = (source(ga, ta), source(gb, tb));
+            let meet = ((ga + h) * sa + (gb + h) * sb) / (ga + gb + 2.0 * h);
+            let (mut lo, mut hi) = (sa.min(meet), sa.max(meet));
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if residual(mid) > 0.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            let u = 0.5 * (lo + hi);
+            let reference = across(u);
+            let v = far(reference);
+            let resolution = 8.0 * f64::EPSILON * ((ga + h) * u + c * (fourth(u) + fourth(v)));
+            let allowed = resolution.max(1e-13 * reference.abs());
+            let miss = (crossed.watts - reference).abs();
+            worst = worst.max(miss / allowed);
+            assert!(
+                miss <= allowed,
+                "pair {index}: crossing gives {:e} W where its balance has its root at {reference:e} \
+                 W, {miss:e} apart against {allowed:e}, in {steps} steps",
+                crossed.watts
+            );
+        }
+        println!(
+            "  {pairs} pairs: {most} steps at most, {:.2} on average, the worst miss {worst:.2} of \
+             what it is allowed",
+            taken as f64 / pairs as f64
+        );
+        assert!(
+            most <= 12,
+            "{most} steps where the documentation says eleven at most"
+        );
+    }
+
+    /// **The slopes the steady solve leans on are the derivatives of what crosses**: what `a`'s
+    /// cell gives up against `a`'s centre, and what `b`'s takes against `b`'s, by central
+    /// differences of `crossing` itself a ten-thousandth of the temperature apart. The difference
+    /// is good to about `(δ/T)²` and to the rounding of what crosses over `δ`, so 1e-6 of the slope
+    /// is a thousand times what either leaves, against slopes left out of a crossing, or charged
+    /// by the share `f` rather than `f²`, or at the centres' tangent.
+    #[test]
+    fn a_crossings_slopes_are_its_derivatives() {
+        for index in 0..2000 {
+            let (c, (ga, ta), (gb, tb), air) = a_pair(index);
+            let (at_a, at_b) = super::crossing(c, (ga, ta), (gb, tb), air).slopes(c);
+            let gives = |t: f64| {
+                let p = super::crossing(c, (ga, t), (gb, tb), air);
+                p.watts * p.from_a
+            };
+            let takes = |t: f64| {
+                let p = super::crossing(c, (ga, ta), (gb, t), air);
+                p.watts * p.to_b
+            };
+            let (da, db) = (1e-4 * ta, 1e-4 * tb);
+            let by_a = (gives(ta + da) - gives(ta - da)) / (2.0 * da);
+            let by_b = -(takes(tb + db) - takes(tb - db)) / (2.0 * db);
+            // A floor where a slope is nothing: a pair whose air takes almost all of a surface.
+            let hot = ta.max(tb).max(air.map_or(0.0, |(_, t)| t));
+            let floor = 1e-12 * 4.0 * c * hot * hot * hot;
+            for (end, slope, by) in [("a", at_a, by_a), ("b", at_b, by_b)] {
+                let apart = (slope - by).abs();
+                assert!(
+                    apart <= 1e-6 * by.abs() + floor,
+                    "pair {index}: end {end}'s slope is {slope:e} W/K and what crosses moves by \
+                     {by:e} W/K, {apart:e} apart"
+                );
+            }
+        }
+    }
+
+    /// **Air without limit holds both surfaces at its own temperature**, so nothing crosses and
+    /// nothing moves with either centre. `∞/∞` is not a share, and taken as one it made both
+    /// surfaces not a number and the steady solve report that it diverged.
+    #[test]
+    fn air_without_limit_holds_both_surfaces_at_its_temperature() {
+        let c = 4.6e-14;
+        let pair = super::crossing(
+            c,
+            (1.2e-3, 900.0),
+            (0.1, 600.0),
+            Some((f64::INFINITY, 300.0)),
+        );
+        assert_eq!(pair.watts, 0.0, "{pair:?}");
+        assert_eq!((pair.from_a, pair.to_b), (0.0, 0.0), "{pair:?}");
+        assert_eq!(pair.slopes(c), (0.0, 0.0), "{pair:?}");
+    }
+
+    /// **Nothing behind either surface is the centres' reading**, exactly as it was: half cells
+    /// that conduct without limit put each surface at its centre.
+    #[test]
+    fn nothing_behind_the_surfaces_is_the_centres_reading() {
+        let c = 4.6e-14;
+        let pair = super::crossing(c, (f64::INFINITY, 900.0), (f64::INFINITY, 600.0), None);
+        let fourth = |t: f64| (t * t) * (t * t);
+        let centres = c * (fourth(900.0) - fourth(600.0));
+        assert!(
+            (pair.watts / centres - 1.0).abs() < 1e-15,
+            "{} W against the centres' {centres} W",
+            pair.watts
+        );
+        assert_eq!(pair.surfaces, (900.0, 600.0));
     }
 }

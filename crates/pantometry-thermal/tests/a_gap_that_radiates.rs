@@ -36,14 +36,17 @@ fn plates(gap: usize, emissivity: f64, hot_c: f64, cold_c: f64) -> Solid3D {
     block.empty(|_, _, k| k > 0 && k + 1 < n)
 }
 
-/// **One step's exchange is the parallel-plate closed form, to rounding.**
+/// **One step's exchange is the parallel-plate closed form at the two surfaces, to rounding.**
 ///
 /// The claim the whole feature rests on. A single step from a known pair of temperatures moves a
-/// known number of joules, and the number is `σA(T₁⁴ − T₂⁴)/(1/ε₁ + 1/ε₂ − 1)·dt` — computed here
-/// from the constants rather than from anything the domain did.
+/// known number of joules, and the number is `σA(T_s1⁴ − T_s2⁴)/(1/ε₁ + 1/ε₂ − 1)·dt` at the two
+/// facing **surfaces**, each half a cell from its centre: where what crosses is what each half
+/// cell, `2kA/dx`, carries between its centre and its surface. Found here by bisection, from the
+/// constants rather than from anything the domain did. Read at the two centres, which this did
+/// until the half cells were put in, it is 4.6e-4 more for these plates of copper.
 ///
-/// The tolerance is the enthalpy round trip, not a physical budget: the step is explicit and
-/// reads the temperatures it started with, so the joules that move are exactly that product.
+/// The tolerance is the step's own resolution, not a physical budget: what moved is read from a
+/// change of 77 µK on 293 K, whose ulp is 5.7e-14 K, so 7e-10 of it; measured, 3.0e-10.
 #[test]
 fn one_step_moves_what_the_parallel_plate_form_says() {
     let emissivity = 0.8;
@@ -61,10 +64,39 @@ fn one_step_moves_what_the_parallel_plate_form_says() {
         .expect("a stable step");
 
     let moved = (before_cold - block.temperature_at(0, 0, 2).to_si()).abs() * capacity;
-    let area = 5.0e-3 * 5.0e-3;
-    let expect =
-        SIGMA * area * (before_hot.powi(4) - before_cold.powi(4)) / (2.0 / emissivity - 1.0) * dt;
-
+    let dx = 5.0e-3;
+    let area = dx * dx;
+    let pair = SIGMA * area / (2.0 / emissivity - 1.0);
+    let half = 2.0
+        * Substance::copper()
+            .thermal
+            .expect("copper conducts")
+            .conductivity
+            .to_si()
+        * area
+        / dx;
+    let fourth = |t: f64| (t * t) * (t * t);
+    // What crosses, `q`: the surfaces are `q/half` inside each centre, and between them they send
+    // `pair·(u⁴ − v⁴)`. Halving between nothing and the `q` at which the two surfaces meet.
+    let (mut lo, mut hi) = (0.0, (before_hot - before_cold) * half / 2.0);
+    for _ in 0..200 {
+        let q = 0.5 * (lo + hi);
+        let sent = pair * (fourth(before_hot - q / half) - fourth(before_cold + q / half));
+        if sent > q {
+            lo = q;
+        } else {
+            hi = q;
+        }
+    }
+    let expect = 0.5 * (lo + hi) * dt;
+    let centres = pair * (fourth(before_hot) - fourth(before_cold)) * dt;
+    println!(
+        "  carried {moved:e} J, the surfaces send {expect:e} J, the centres would {centres:e} J"
+    );
+    assert!(
+        (centres / expect - 1.0).abs() > 1e-6,
+        "these plates cannot tell the surfaces from the centres"
+    );
     assert!(
         (moved - expect).abs() / expect < 1e-9,
         "the gap should carry {expect:e} J and carried {moved:e} J"

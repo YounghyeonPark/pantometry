@@ -328,6 +328,17 @@ step's error, which was larger. `crates/pantometry-thermal/tests/the_air_in_a_vo
 measures four now, with the void on each of the six sides of a column. A boundary corrected is one
 boundary: the next one written in the old form has to have its rate measured on its own.
 
+The clearance was the last of them. A pair of cells facing each other across void exchanged
+`σA(T₁⁴ − T₂⁴)/(1/ε₁ + 1/ε₂ − 1)` between their two centres, each a half cell's drop from the
+surface that radiates; on two slabs across a vacuum the heated one sat 24.8 K too cold at 4 mm a
+cell and 3.13 K at 0.5 mm, 1.99 a halving, and with air in the clearance the other slab was wrong
+too, because the air's share of each face moves with its surface. The two surfaces solved for
+together, each behind its own half cell and beside its air, both slabs meet the scheme's own closed
+form at every cell and the order is four —
+`crates/pantometry-thermal/tests/a_clearance_radiates_between_its_surfaces.rs`. With air the pair is
+no longer antisymmetric, and the air's share of the exchange is now in the books, which is what an
+exact conservation audit of a pair could never have said was missing.
+
 ## The domain whose answers are distributions
 
 Every domain but one is checked against a value: a Fresnel coefficient, a mode frequency, a

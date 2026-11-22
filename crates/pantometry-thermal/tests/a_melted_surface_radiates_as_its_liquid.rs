@@ -33,16 +33,18 @@
 //! in nothing but how it radiates, which alone made the block one that rebuilds as it melts.
 //!
 //! **Across a clearance.** Two cells facing each other along a grid line across void exchange
-//! `k·(T₁⁴ − T₂⁴)`, `k = σA/(1/ε₁ + 1/ε₂ − 1)`; the limit is the smaller capacity over the
-//! derivative at the hotter end, `4k·T³`; and a step moves `dt·k·(T₁⁴ − T₂⁴)` from one to the
-//! other. For two cells of liquid; a liquid facing a solid, derived in full; an end melted between
+//! `k·(u⁴ − v⁴)`, `k = σA/(1/ε₁ + 1/ε₂ − 1)`, between their two facing surfaces, each behind its
+//! own half cell of its own phase's conductivity — so a melted end's half cell is the liquid's —
+//! and found here by bisection; the limit is the smaller capacity over the derivative at the
+//! hotter end, `4k·T³`, which the half cells, in series with it, leave a bound; and a step moves
+//! `dt` times what crosses from one to the other. For two cells of liquid; a liquid facing a solid, derived in full; an end melted between
 //! steps, and one 30% melted, from each end and along each axis; both ends melted by a step, and
 //! an end refilled with other matter, each of which the block derives in full; and a pair whose
 //! ends radiate only once melted, which appears when both have and goes when one freezes again.
 //!
-//! `T⁴` is written `(T·T)·(T·T)` here; the block's clearance takes `powi(4)` and its film the
-//! factors `(T + T∞)(T² + T∞²)`, and finds the surface by Newton where this bisects. They can round
-//! apart, which is part of what the tolerances allow for.
+//! `T⁴` is written `(T·T)·(T·T)` here; the block's film takes the factors `(T + T∞)(T² + T∞²)`
+//! and its clearance `(u − v)(u + v)(u² + v²)`, and both find their surfaces by Newton where this
+//! bisects. They can round apart, which is part of what the tolerances allow for.
 
 use pantometry_core::substance::{FusionProps, ThermalProps};
 use pantometry_core::units::{
@@ -176,6 +178,27 @@ fn film(k: f64, emissivity: f64, t: f64, ambient: f64) -> (f64, f64) {
 /// The parallel-plate exchange coefficient for one cell's face, W/K⁴.
 fn pair(ea: f64, eb: f64) -> f64 {
     SIGMA * DX * DX / (1.0 / ea + 1.0 / eb - 1.0)
+}
+
+/// What crosses a clearance between two cells at `ta` and `tb`, W: the pair coefficient `k`
+/// between their two facing surfaces, each behind its own half cell, `2k·A/dx`, of conductivity
+/// `ka` and `kb`. What crosses is what each half cell carries between its centre and its surface,
+/// and the surfaces send `k·(u⁴ − v⁴)` to each other; found by bisection between nothing and the
+/// exchange at which the two surfaces meet, on which side of nothing the centres say.
+fn crossed(k: f64, (ka, ta): (f64, f64), (kb, tb): (f64, f64)) -> f64 {
+    let (ga, gb) = (2.0 * ka * DX, 2.0 * kb * DX);
+    let meet = (ta - tb) / (1.0 / ga + 1.0 / gb);
+    let (mut lo, mut hi) = if meet > 0.0 { (0.0, meet) } else { (meet, 0.0) };
+    for _ in 0..200 {
+        let q = 0.5 * (lo + hi);
+        // What the surfaces send at this exchange, less the exchange, which falls as it grows.
+        if k * (fourth(ta - q / ga) - fourth(tb + q / gb)) > q {
+            lo = q;
+        } else {
+            hi = q;
+        }
+    }
+    0.5 * (lo + hi)
 }
 
 /// `phi` of the way from the solid's value to the liquid's.
@@ -440,9 +463,11 @@ struct Gap {
     block: Solid3D,
     /// The two ends, low index first.
     ends: [(usize, usize, usize); 2],
-    /// What each end radiates with and holds, at the phase the step begins in.
+    /// What each end radiates with, holds and conducts through its half cell, at the phase the
+    /// step begins in.
     emissivity: [f64; 2],
     capacity: [f64; 2],
+    conductivity: [f64; 2],
     /// An emissivity pair this case exists to tell the right one from, and what it is.
     against: ([f64; 2], &'static str),
 }
@@ -462,6 +487,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
         ends: [(0, 0, 0), far],
         emissivity: [LIQUID.2; 2],
         capacity: [mass() * LIQUID.1; 2],
+        conductivity: [LIQUID.0; 2],
         against: ([SOLID.2; 2], "the solid's at both ends"),
     };
     // Its far end frozen by a mutator, and then the whole block derived again by a fill of nothing,
@@ -474,6 +500,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
         ends: [(0, 0, 0), far],
         emissivity: [LIQUID.2, SOLID.2],
         capacity: [mass() * LIQUID.1, mass() * SOLID.1],
+        conductivity: [LIQUID.0, SOLID.0],
         against: ([SOLID.2; 2], "the solid's at both ends"),
     };
     let solid_ends = [SOLID.2; 2];
@@ -506,10 +533,18 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
         let (mut b, far) = along(counts, [400.0, 400.0]);
         let at = if melt_far { far } else { (0, 0, 0) };
         b.set_temperature(at.0, at.1, at.2, Temperature::from_si(900.0));
-        let (e, c) = if melt_far {
-            ([SOLID.2, LIQUID.2], [SOLID.1, LIQUID.1])
+        let (e, c, conducts) = if melt_far {
+            (
+                [SOLID.2, LIQUID.2],
+                [SOLID.1, LIQUID.1],
+                [SOLID.0, LIQUID.0],
+            )
         } else {
-            ([LIQUID.2, SOLID.2], [LIQUID.1, SOLID.1])
+            (
+                [LIQUID.2, SOLID.2],
+                [LIQUID.1, SOLID.1],
+                [LIQUID.0, SOLID.0],
+            )
         };
         cases.push(Gap {
             name,
@@ -517,6 +552,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
             ends: [(0, 0, 0), far],
             emissivity: e,
             capacity: [mass() * c[0], mass() * c[1]],
+            conductivity: conducts,
             against: (solid_ends, "the pair as it was before the end melted"),
         });
     }
@@ -528,6 +564,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
         ends: [(0, 0, 0), far],
         emissivity: [SOLID.2, between(SOLID.2, LIQUID.2, 0.3)],
         capacity: [mass() * SOLID.1, mass() * between(SOLID.1, LIQUID.1, 0.3)],
+        conductivity: [SOLID.0, between(SOLID.0, LIQUID.0, 0.3)],
         against: (solid_ends, "the pair as it was before the end melted"),
     });
 
@@ -554,6 +591,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
         ends: [(0, 0, 0), (2, 0, 0)],
         emissivity: [MIRROR_LIQUID; 2],
         capacity: [mass() * LIQUID.1; 2],
+        conductivity: [LIQUID.0; 2],
         against: ([0.0; 2], "the mirror they were before the step"),
     });
 
@@ -568,6 +606,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
         ends: [(0, 0, 0), far],
         emissivity: [SOLID.2, PAINT],
         capacity: [mass() * SOLID.1; 2],
+        conductivity: [SOLID.0; 2],
         against: (solid_ends, "the matter the end had before"),
     });
 
@@ -579,6 +618,7 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
             ends: [a, b],
             emissivity: [ea, eb],
             capacity: [ca, cb],
+            conductivity: [ka, kb],
             against: ([oa, ob], what),
         } = case;
         let k = pair(ea, eb);
@@ -613,7 +653,20 @@ fn a_melted_surface_radiates_across_a_clearance_as_its_liquid() {
             wrong.push(format!("{name}: refused a quarter of its own limit: {v:?}"));
             continue;
         }
-        let moved = dt * k * (fourth(ta) - fourth(tb));
+        let moved = dt * crossed(k, (ka, ta), (kb, tb));
+        // Required of each case with an end that is not the solid, as the emissivities are above:
+        // its half cells read as the solid's must move an end by a thousand times what an end is
+        // held to, or the case cannot tell the phase's conductivity from the solid's.
+        if ka != SOLID.0 || kb != SOLID.0 {
+            let as_solid = dt * crossed(k, (SOLID.0, ta), (SOLID.0, tb));
+            let apart = (moved - as_solid).abs() / ca.min(cb);
+            if apart.is_nan() || apart <= 1e3 * 1e-12 {
+                wrong.push(format!(
+                    "{name}: the solid's half cells move an end by {apart:e} K from its own, too \
+                     little for this case to tell them apart"
+                ));
+            }
+        }
         for (end, (i, j, kk), t, phi, c, gain) in [
             ("near", a, ta, phi_a, ca, -moved),
             ("far", b, tb, phi_b, cb, moved),
@@ -714,7 +767,16 @@ fn a_pair_that_radiates_only_once_melted_comes_and_goes_with_the_phase() {
     match s.step(Time::from_si(0.0), Time::from_si(dt), &mut Exchange::new()) {
         Err(v) => wrong.push(format!("both ends melted: refused {dt} s: {v:?}")),
         Ok(()) => {
-            let moved = dt * k * (fourth(900.0) - fourth(600.0));
+            let moved = dt * crossed(k, (LIQUID.0, 900.0), (LIQUID.0, 600.0));
+            // As in the cases above, the liquid's half cells against the solid's.
+            let as_solid = dt * crossed(k, (SOLID.0, 900.0), (SOLID.0, 600.0));
+            if (moved - as_solid).abs() / c <= 1e3 * 1e-12 {
+                wrong.push(format!(
+                    "both ends melted: the solid's half cells move the hot end by {:e} K, too \
+                     little to tell them apart",
+                    (moved - as_solid).abs() / c
+                ));
+            }
             let got = s.temperature_at(0, 0, 0).to_si();
             if off((got - (900.0 - moved / c)).abs(), 1e-12) {
                 wrong.push(format!(

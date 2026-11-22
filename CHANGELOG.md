@@ -632,6 +632,46 @@ protects nothing.
 
 ### Fixed
 
+- **A clearance radiated between its two cell centres, not its two surfaces**
+  (`pantometry-thermal`). Two cells facing each other across void exchange
+  `σA(T₁⁴ − T₂⁴)/(1/ε₁ + 1/ε₂ − 1)`, and what radiates is their facing surfaces, each half a cell
+  from its centre; `Solid3D` read the centres. **First order**, with the books balanced, because
+  what left one cell arrived in the other. The last boundary read at the centre: the films and the
+  air were put behind their half cells in the two entries below.
+  - **Measured** on two slabs 16 mm deep across 4 mm, `k = 0.6`, `ε = 0.9`, 5 kW/m² from one to the
+    other: the heated slab 24.8 K too cold at 4 mm a cell and 3.13 K at 0.5 mm, 1.99 a halving;
+    with air in the clearance 2.01, and the other slab wrong too, 0.615 K at 0.5 mm.
+  - **The two surfaces are solved for together**, each held by its half cell and the clearance's
+    air: one equation in what crosses, solved by Newton inside its bracket from the secant between
+    the two sources, only `+ − × ÷`. Each cell gives up or takes its half cell's share; with air
+    and ends that conduct differently the air has the rest, and the books hear it. The steady
+    solve uses the same crossing and its slopes. The limit's tangent is the centres', or, with air
+    hotter than both, the hotter of the two surfaces' sources, which the air can hold above both
+    centres.
+  - **`crates/pantometry-thermal/tests/a_clearance_radiates_between_its_surfaces.rs`.** Two steady
+    slabs against the scheme's own closed form, across a vacuum and across air, alike and one ten
+    times the other's conductor: every cell within 2e-5 K, the error falling by 4.0000 a halving.
+    One step of a pair against the surface balance by bisection — a vacuum, air, an insulator facing
+    a conductor, air hotter than both from either side, a cell that conducts nothing, a black pair
+    at 3000 K — each end to an ulp, the air's share of the books and the limit to rounding; then
+    forty steps at its own limit inside the range, with `θ ≤ 1` checked row by row before each from
+    the surfaces themselves. A block in air without limit settles with nothing crossing. And unit
+    tests of the solve: on its root over eight thousand seeded pairs in eleven steps at most, its
+    slopes its derivatives.
+  - **Rewritten**: `a_gap_that_radiates.rs`'s one step, 4.6e-4 off for its copper plates, and the
+    clearance cases of `a_melted_surface_radiates_as_its_liquid.rs`, whose half cells are their
+    phase's and which must now tell those from the solid's.
+  - **Thirteen sabotages**, each failing exactly the lines it claims in the four files and no
+    others there: the centres' reading, as shipped; the surfaces without their air; the whole
+    exchange charged to the cells; the limit's tangent at the centres alone, and at the air
+    itself, and reading the near end's source alone; no Newton, and Newton without its residual's
+    bend; the solid's half cell; the first end taken for the hotter; the steady solve's slopes
+    left out, and tenfold; and air without limit through `∞/∞`.
+  - **The cost**, pinned to one P-core, best of five against the commit before: a block with a
+    one-cell slit through it steps 20.5% slower at 16³ and 9.2% at 32³, 8.1% and 3.3% with air in
+    the slit; a block with no clearance is unchanged, to the bit.
+  - **The shipped scenes**: 23 by 25.3 mK at most and 30 by 0.1 mK, the two with clearances; the
+    other thirty-two are the same to the byte.
 - **The air in a void cooled a cell at its centre, not at its surface** (`pantometry-thermal`).
   An outer face's film has been in series with the half cell behind it since the cooled boundary
   was made second order; `air_in`'s was not — `h·dx²` a face, charged against the cell centre, a
