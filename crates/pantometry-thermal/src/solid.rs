@@ -1573,8 +1573,10 @@ impl Solid3D {
     /// Which solid cells have a face on the void, when there is air in it to lose to.
     ///
     /// A neighbour that is void, counted the way `air_conductance` counts it — six axis
-    /// neighbours, none past the block's own outer faces — so the cells listed are exactly the
-    /// solid ones whose air conductance is not zero for a finite, non-zero coefficient.
+    /// neighbours, none past the block's own outer faces — so every solid cell whose air
+    /// conductance is not zero is listed. A listed one can still have none: a cell that conducts
+    /// nothing has no half cell for the air to reach it through, and `charge` passes over a loss
+    /// of zero.
     fn find_facing_air(&mut self) {
         self.facing_air.clear();
         if self.air.is_none() {
@@ -2081,7 +2083,9 @@ impl Solid3D {
     /// The area is `dx²` per touching face, counted from the grid. A caller states what an outer
     /// face exposes because a rasterised part covers less of it than the grid does; the faces
     /// touching an internal void are exactly the ones the grid has, so there is nothing to state
-    /// and nothing to state wrongly.
+    /// and nothing to state wrongly. Each face's film is in series with the half cell behind it,
+    /// as an outer face's is, so the air acts at the surface it touches rather than at the cell
+    /// centre.
     ///
     /// # What it models and what it does not
     ///
@@ -2681,12 +2685,11 @@ impl Solid3D {
             .keys()
             .fold(worst, |w, face| self.charge(w, face.cells(self.counts)));
         // **The void's own cells are left out, and the whole pass charged them.** A void cell
-        // beside more void has an air conductance, so its loss is not zero, but its mobility is:
-        // its term is a zero, which does not raise a maximum that started at zero, or a NaN, which
-        // `max` passes over. That holds for a coefficient that is finite and not negative, which
-        // is all a scene can state; `air_in` itself refuses neither. A negative one makes the term
-        // `-0.0`, which a maximum standing at exactly `+0.0` may return in its place, and an
-        // infinite one makes every buried cell's air term `inf * 0`, a NaN both paths pass over.
+        // conducts nothing, so there is no half cell for the air to reach it through and its air
+        // conductance is exactly zero, as its mobility is: the whole pass skips it as `loss == 0`,
+        // whatever the coefficient. A negative coefficient carries nothing on a solid cell
+        // either, as a negative film on an outer face already did, and an infinite one carries
+        // the half cell, `2k·dx` a face. `air_in` refuses neither.
         let near = self.charge(planes, self.facing_air.iter().copied());
         // **And checked, on every debug run of every test that builds a block.** The two paths
         // rest on `loss_conductance_at` having no term anywhere else, and the shipped scenes barely
@@ -2753,6 +2756,18 @@ impl Solid3D {
     /// exposes because a rasterised part covers less of it than the grid does; the faces touching
     /// an internal void are exactly the ones the grid has, so there is nothing to state and
     /// nothing to state wrongly.
+    ///
+    /// **Each face's film in series with the half cell behind it**, `2k·dx`, as an outer face's
+    /// is — with the conductivity the cell's faces are built from, from `derived`. It was
+    /// `h·dx²` a face, charged against the cell centre, half a cell from the surface the air
+    /// touches and a half cell's drop away from its temperature: first order. In a steady slab
+    /// every cell facing the air sat too cold by exactly that drop, `q''·dx/2k`, or too hot
+    /// where the heat came in.
+    /// Measured on a slab 16 mm deep, `k = 0.6`, heated to shed 100 kW/m² into air at `h = 200`,
+    /// 333.3 K too cold at 4 mm a cell and 41.67 K at 0.5 mm, halving with the cell, where the
+    /// same slab cooled through an outer face met the scheme's own closed form to 1e-13 K at the
+    /// face and to the steady solve's stop at every cell.
+    /// `tests/the_air_in_a_void_cools_at_the_surface.rs` holds it there now.
     fn air_conductance(&self, cell: (usize, usize, usize)) -> f64 {
         let Some((_, h)) = self.air else {
             return 0.0;
@@ -2760,6 +2775,7 @@ impl Solid3D {
         let (nx, ny, nz) = self.counts;
         let (i, j, k) = cell;
         let dx = self.dx.to_si();
+        let conductivity = self.derived[i + nx * (j + ny * k)].0;
         let mut faces = 0usize;
         let mut touching = |i: usize, j: usize, k: usize| {
             if self.void[i + nx * (j + ny * k)] {
@@ -2784,7 +2800,10 @@ impl Solid3D {
         if k + 1 < nz {
             touching(i, j, k + 1);
         }
-        h * dx * dx * faces as f64
+        if faces == 0 {
+            return 0.0;
+        }
+        series_with_half_cell(h * dx * dx, conductivity, dx * dx, dx) * faces as f64
     }
 
     /// The film's flux out of a cell, in the sweep's own units — a conductivity times a

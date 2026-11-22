@@ -632,6 +632,40 @@ protects nothing.
 
 ### Fixed
 
+- **The air in a void cooled a cell at its centre, not at its surface** (`pantometry-thermal`).
+  An outer face's film has been in series with the half cell behind it since the cooled boundary
+  was made second order; `air_in`'s was not — `h·dx²` a face, charged against the cell centre, a
+  half cell's drop from the surface the air touches. **First order**: in a steady slab every cell
+  facing the air sat too cold by exactly that drop, `q''·dx/2k`, with the books balanced.
+  - **Measured** on a slab 16 mm deep, `k = 0.6`, shedding 100 kW/m² into air at `h = 200`: every
+    cell 333.3 K too cold at 4 mm a cell and 41.67 K at 0.5 mm, halving with the cell, where the
+    same slab through an outer face meets its closed form to 1e-13 K at the face.
+  - **Each face's film is in series with its own half cell**, with the conductivity of the phase
+    the operator was derived at, as an outer face's is; the limit reads the same function. A face
+    of air carries no more than its half cell, `2k·dx`, however stiff the film. A negative
+    coefficient now carries nothing, as a negative outer film already did.
+  - **`crates/pantometry-thermal/tests/the_air_in_a_void_cools_at_the_surface.rs`.** A steady
+    slab facing the air on each of the six sides of a column, air hotter than the slab, and a
+    conductor, beside an outer-face control: every cell at the scheme's own closed form,
+    `q'''dx²/8k` above the parabola, within 1e-4 K, the error falling by 4.0000 a halving. And one
+    step of a cell beside the void — a poor conductor, air on two faces, aluminium, water melted
+    out of ice, ice, and a half-melted cell taking heat off the bus — its limit and loss at 1e-14
+    and its temperature or melted fraction to the closed form, each required to tell the centre's
+    reading, and the wrong phase's half cell, apart.
+  - **Rewritten** where the centre's reading was in them: `a_part_in_a_housing_full_of_air.rs`,
+    whose decay is now held to the scheme's own `(1 − dt·G/C)^N` to 1e-12 (1.6e-15 measured)
+    where the exponential's 0.22 K could not see a 0.165 K shift, whose parallel test is held to
+    1e-7 where 2e-3 was earned by nothing and missed the half cell in two of its three checks, and
+    whose corner and direction limits now carry the half cell — it caps the air, so a missing
+    corner is 1.050 times too long rather than 1.25; and the air row of
+    `a_clearance_end_is_limited_by_its_whole_row.rs`.
+  - **Six sabotages**, after a control in which every thermal test passed, each failing with
+    exactly the lines it claims in the three files and nowhere else: the air charged against the
+    centre, as shipped; every face's film behind one half cell; the solid's conductivity, the
+    liquid's always, and the phase of the moment rather than the one the step began with; and a
+    half cell a whole cell deep.
+  - **The shipped scenes**: 23, the one with air, by 10.8 mK at most; the other thirty-three are
+    the same to the byte.
 - **A radiating face shed at its cell centre's temperature, not its surface's**
   (`pantometry-thermal`). A finite-volume cell knows its centre and a film acts half a cell away.
   For convection that distance is a resistance in series and nothing else, which is what made the

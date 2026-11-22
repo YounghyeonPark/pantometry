@@ -148,13 +148,14 @@ fn a_clearance_end_is_given_the_step_its_whole_row_allows() {
 
     // The same with air in the clearances, at the coldest cell's temperature so the range is the
     // block's: every end of a clearance faces the air too, and the middle cell faces it on two
-    // sides, `2h·dx²`, beside its two pairs.
+    // sides, each `h·dx²` behind its half cell, beside its two pairs.
     let h_air = 100.0;
+    let air = 1.0 / (1.0 / (h_air * dx * dx) + dx / (2.0 * 1.0 * dx * dx));
     cases.push(Case {
         name: "a cell between two clearances full of air",
         block: three.air_in(Temperature::from_si(890.0), h_air),
         capacity: c,
-        row: 2.0 * h_air * dx * dx + 2.0 * pair(dx, 900.0),
+        row: 2.0 * air + 2.0 * pair(dx, 900.0),
         range: (890.0, 900.0),
     });
 

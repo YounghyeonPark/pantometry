@@ -12,11 +12,12 @@
 //!
 //! # What is checked
 //!
-//! The lumped balance, which is exact here for the same reason it is in `a_block_that_generates`:
-//! a copper bar 8 mm across has a Biot number of 8e-5 against a still-air film, so it is
-//! isothermal and the algebra is the answer rather than an approximation to it. What is new is
-//! that the conductance comes from the **grid** — `h · dx²` per face touching void — rather than
-//! from a stated area, so the closed form counts faces.
+//! The lumped balance, which is the scheme's own answer here rather than an approximation to it:
+//! the bar is one cell across and every cell of it has the same faces on the air, so the block
+//! holds it uniform whatever its Biot number — 2.5e-3 for copper 4 mm a cell under 500 W/m²K,
+//! which is the half cell's share of the path and is in the closed form. What is new is that the
+//! conductance comes from the **grid** — `h · dx²` per face touching void, in series with the half
+//! cell behind it — rather than from a stated area, so the closed form counts faces.
 
 use pantometry_core::{
     units::{Area, Length, Temperature, Time},
@@ -35,6 +36,26 @@ fn grey() -> Substance {
         t.emissivity = 0.0;
     }
     s
+}
+
+/// One face's air, W/K: `h·dx²` in series with the half cell behind it, `2k·dx`, which is where
+/// the air acts — at the surface, half a cell from the centre the block knows.
+fn per_face(h: f64, k: f64, dx: f64) -> f64 {
+    1.0 / (1.0 / (h * dx * dx) + 1.0 / (2.0 * k * dx))
+}
+
+/// Whether a residual is out: at or past `tolerance`, or not a number.
+fn off_by(residual: f64, tolerance: f64) -> bool {
+    residual.is_nan() || residual >= tolerance
+}
+
+/// Copper's conductivity, W/m·K.
+fn copper_k() -> f64 {
+    grey()
+        .thermal
+        .expect("copper conducts")
+        .conductivity
+        .to_si()
 }
 
 /// A bar of `n` cells along x, one cell square, walled in by void on both sides along y.
@@ -92,7 +113,7 @@ fn a_bar_walled_in_by_void_cannot_shed_and_says_nothing() {
     assert_eq!(bar.air(), None, "no air was asked for");
 }
 
-/// **Air in the void cools the surfaces facing it, at `h · dx²` a face.**
+/// **Air in the void cools the surfaces facing it, at `h · dx²` a face behind its half cell.**
 ///
 /// The closed form is the lumped balance with the conductance counted from the grid. The bar is
 /// `n` cells long, one square, walled in along y — so every cell has two faces on void, and the
@@ -116,9 +137,12 @@ fn air_in_the_void_cools_what_faces_it() {
     println!("  {faces} faces of the bar touch void");
     assert_eq!(faces, 2 * n, "the bar has two void faces a cell");
 
-    // The lumped balance. `Bi = h·(a/2)/k` is 8e-5 for 8 mm of copper against a 500 W/m²K film, so
-    // the bar is isothermal and `ρcV dT/dt = −hA(T − T∞)` is exact rather than approximate.
-    let g = h * (dx * dx) * faces as f64;
+    // The lumped balance, `C dT/dt = −G(T − T∞)`, which the block holds the bar to exactly: it is
+    // one cell across, so it stays uniform. Each face's air is behind the bar's half cell, `2k·dx`,
+    // which is 3.2 W/K against the film's 8 mW/K and moves the conductance by 0.25% — the Biot
+    // number, 2.5e-3 — small, and after a time constant 9.2e-4 of the drop, where the check on the
+    // scheme's own answer below is met to 1.6e-15 of it.
+    let g = per_face(h, copper_k(), dx) * faces as f64;
     let capacity = bar.heat_capacity().to_si();
     let tau = capacity / g;
     println!("  conductance {g:.6} W/K, capacity {capacity:.4} J/K, tau {tau:.3} s");
@@ -126,14 +150,46 @@ fn air_in_the_void_cools_what_faces_it() {
     let start = bar.mean_temperature().to_si();
     let air = Temperature::celsius(ambient).to_si();
     let mut elapsed = 0.0;
+    let mut steps = 0usize;
     let dt = Time::from_si(bar.max_stable_dt(Time::ZERO).to_si() * 0.5);
     while elapsed < tau {
         bar.step(Time::ZERO, dt, &mut Exchange::new())
             .expect("stable");
         elapsed += dt.to_si();
+        steps += 1;
     }
-    let want = air + (start - air) * (-elapsed / tau).exp();
+    // A time constant at half the limit is four hundred steps; none, and the check below would
+    // compare the start with itself.
+    assert!(
+        steps >= 100,
+        "only {steps} steps were taken over a time constant of {tau:.3} s"
+    );
     let got = bar.mean_temperature().to_si();
+
+    // **The scheme's own answer, exactly.** Every cell of the bar has the same two faces on the
+    // air and its neighbours at its own temperature, so the bar stays uniform and a step
+    // multiplies what it holds above the air by `1 − dt·G/C`: after `N` steps, that to the `N`th.
+    // What is left is the rounding of each step's update, which a step makes in a different order
+    // from this product's: four hundred steps at four ulps of 473 K each at most would be 5.1e-13
+    // of the drop, and 1.6e-15 is measured, so 1e-12 is earned and is a billionth of what the air
+    // charged against the centre would miss by.
+    let factor = 1.0 - dt.to_si() * g / capacity;
+    let mut excess = start - air;
+    for _ in 0..steps {
+        excess *= factor;
+    }
+    let discrete = air + excess;
+    let rounding = (got - discrete).abs() / (start - air);
+    println!(
+        "  after {steps} steps: {got:.9} K against the scheme's own {discrete:.9} K, {rounding:.2e} \
+         of the drop"
+    );
+    assert!(
+        !off_by(rounding, 1e-12),
+        "{got:.9} K after {steps} steps where each step's `1 − dt·G/C` leaves {discrete:.9} K"
+    );
+
+    let want = air + (start - air) * (-elapsed / tau).exp();
     println!("  after {elapsed:.3} s: {got:.4} K against the exponential's {want:.4} K");
     // The tolerance is the explicit scheme's own first order in time over one time constant, which
     // at `dt = τ/N` leaves about `dt/(2τ)` of the decay.
@@ -212,45 +268,47 @@ fn air_and_an_outer_film_are_two_conductances_in_parallel() {
 
     let both = settle(build(true, true));
     // The conductances, counted the way each is defined: the air from the grid, the film from the
-    // area the caller stated. The half cell of copper behind the film is 2kA/dx, which at 8 mm of
-    // copper is four orders above either, so it moves the answer by 0.02% and is left in.
-    let g_air = h_air * dx * dx * (2 * n) as f64;
+    // area the caller stated, each behind the half cell of copper between it and the cell centre.
+    // That is 2kA/dx, four hundred times the air on a face at 500 W/m²K and six hundred and
+    // sixty-eight times the film at 300, so it moves the air alone by 0.25%, both together by
+    // 0.19% and the film alone by 0.15%. It is in all three.
+    let g_air = per_face(h_air, copper_k(), dx) * (2 * n) as f64;
     let area = n as f64 * dx * dx;
-    let half = 2.0
-        * grey()
-            .thermal
-            .expect("copper conducts")
-            .conductivity
-            .to_si()
-        * area
-        / dx;
+    let half = 2.0 * copper_k() * area / dx;
     let g_film = 1.0 / (1.0 / (h_film * area) + 1.0 / half);
     let closed = watts / (g_air + g_film);
-    println!("  both paths: {both:.5} K against {closed:.5} K in parallel");
-    assert!(
-        (both / closed - 1.0).abs() < 2e-3,
-        "{both:.5} K against a parallel {closed:.5} K"
-    );
 
     // And each alone is the other's complement, which is what "in parallel" means and what a term
     // counted twice would break.
     let air_only = settle(build(true, false));
     let film_only = settle(build(false, true));
-    println!("  air alone {air_only:.5} K, film alone {film_only:.5} K");
-    assert!(
-        (air_only / (watts / g_air) - 1.0).abs() < 2e-3,
-        "air alone {air_only:.5} against {:.5}",
-        watts / g_air
-    );
-    assert!(
-        (film_only / (watts / g_film) - 1.0).abs() < 2e-3,
-        "film alone {film_only:.5} against {:.5}",
-        watts / g_film
-    );
-    assert!(
-        both < air_only && both < film_only,
-        "two paths must cool better than either: {both:.5} against {air_only:.5}/{film_only:.5}"
-    );
+
+    // **The tolerance is the settling, and the bar's uniformity makes it nothing else.** Every
+    // cell has the same faces, so the steady state is the closed form exactly; `settle` stops when
+    // the mean moves by under a nanokelvin a second, which leaves at most that times the time
+    // constant, 46 s at the longest, 4.6e-8 K — 1.3e-9 of the smallest rise; measured, 2.6e-10 to
+    // 2.9e-10. 1e-7 is eighty times the bound, and the half cell left out of any of the three moves
+    // it fifteen thousand times as far.
+    let mut wrong = Vec::new();
+    for (what, got, want) in [
+        ("both paths", both, closed),
+        ("air alone", air_only, watts / g_air),
+        ("film alone", film_only, watts / g_film),
+    ] {
+        let miss = (got / want - 1.0).abs();
+        println!("  {what}: {got:.7} K against {want:.7} K, {miss:.2e} apart");
+        if off_by(miss, 1e-7) {
+            wrong.push(format!(
+                "{what}: {got:.7} K against {want:.7} K in parallel"
+            ));
+        }
+    }
+    if !(both < air_only && both < film_only) {
+        wrong.push(format!(
+            "two paths must cool better than either: {both:.5} against {air_only:.5}/{film_only:.5}"
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// **Air tightens the stability limit, and the limit it reports is one the march survives.**
@@ -362,19 +420,22 @@ fn cavity(h: f64) -> Solid3D {
 /// **A core in a cavity takes the step its corners allow, and its corners are inside the block.**
 ///
 /// The limit is the stiffest cell's, `1/max(dx·(Σk_f + G_air/dx)/C)`, and for a cell with `f`
-/// faces on the void and the rest on copper that is `ρc dx²/((6 − f)k + f·h·dx)`. Above
-/// `h·dx = k` the corners, with three faces on the air, are the stiffest: `ρc dx²/(3(k + h·dx))`.
-/// At `h = 4e5`, in W/m/K, that denominator is 6003 against an edge's 4804, a face's 3605 and
-/// the centre's 2406.
+/// faces on the void and the rest on copper that is `ρc dx²/((6 − f)k + f·a)`, where `a` is one
+/// face's air behind its half cell, `1/(1/(h·dx) + 1/(2k))`, in W/m/K. Above `a = k`, which is
+/// `h·dx = 2k`, the corners, with three faces on the air, are the stiffest: `ρc dx²/(3(k + a))`.
+/// At `h = 4e5` that denominator is 2806 against an edge's 2672, a face's 2539 and the centre's
+/// 2406. The half cell is also why that is all air can do: however stiff the film, a face of it
+/// carries no more than the half cell, `2k`.
 ///
 /// The limit with air was a pass over every cell. It is a pass over the cells facing the void
 /// now, which are read from a list `resolve` fills, and a list that missed the corners would hand
-/// the core the edge's limit, 1.25 times too long; one that missed them all, the centre's, 2.5
+/// the core the edge's limit, 1.050 times too long; one that missed them all, the centre's, 1.166
 /// times. Every one of these cells is off the outer faces, so the faces' own pass cannot find them.
 ///
 /// The tolerance is rounding, not physics: the closed form is the limit's own arithmetic in
-/// another order: twelve roundings on the limit's side and seven on the closed form's, twenty
-/// at half an epsilon each at worst, against a bound of 32 epsilon. It measured one.
+/// another order: about twenty-three roundings on the limit's side, counting the capacity and the
+/// faces' series means, and fourteen on the closed form's, the half cell seven of each — 18.5
+/// epsilon at half an epsilon each at worst, against a bound of 32 epsilon. It measured none.
 #[test]
 fn a_core_in_a_cavity_takes_the_step_its_corners_allow() {
     let (h, dx) = (4e5, 4e-3);
@@ -385,8 +446,10 @@ fn a_core_in_a_cavity_takes_the_step_its_corners_allow() {
         copper.density.to_si(),
         thermal.specific_heat.to_si(),
     );
-    assert!(h * dx > k, "the corners set the limit only above h·dx = k");
-    let corners = rho * c * dx * dx / (3.0 * (k + h * dx));
+    let a = per_face(h, k, dx) / dx;
+    assert!(a > k, "the corners set the limit only above a = k");
+    let corners = rho * c * dx * dx / (3.0 * (k + a));
+    let edges = rho * c * dx * dx / (4.0 * k + 2.0 * a);
     let centre = rho * c * dx * dx / (6.0 * k);
 
     let limit = cavity(h).max_stable_dt(Time::ZERO).to_si();
@@ -398,7 +461,18 @@ fn a_core_in_a_cavity_takes_the_step_its_corners_allow() {
         (limit / corners - 1.0).abs() <= 32.0 * f64::EPSILON,
         "the core took {limit:.12e} s and its corners allow {corners:.12e}"
     );
-    assert!(corners < 0.5 * centre, "the air must be what sets it");
+    println!(
+        "  the edges' limit is {:.4} times the corners', the centre's {:.4}",
+        edges / corners,
+        centre / corners
+    );
+    // Measured 1.0499: a list that missed the corners would be 5% long, which the check above sees
+    // seven trillion times over. Asserted so that the case cannot drift to one in which it does not.
+    assert!(
+        edges > corners * 1.04,
+        "the corners must set the limit, and by 4% over the edges: {:.4}",
+        edges / corners
+    );
 }
 
 /// **The cells facing the air are the void's as it is now, whatever order made it.**
@@ -462,7 +536,8 @@ fn the_cells_facing_the_air_are_the_void_it_has_now() {
 /// a block that has both can be set by either. A copper slab three cells square, four deep, with
 /// its top layer void and a stiff film under it: the film's cells, which face no void, are the
 /// stiffest — five copper faces and the film's `2k·h·dx/(2k + h·dx)`, 2673 W/m/K against the
-/// centre's six faces, 2406, and the cells under the void's five and a still air's `h·dx`, 2005.
+/// centre's six faces, 2406, and the cells under the void's five and a still air's 0.032 behind
+/// its half cell, 2005.
 /// Air in the void moves none of that, so the limit is the same to the bit with it and without.
 /// A limit that read only the cells facing the air, once there was air, would hand the slab the
 /// centre's step, 1.11 times too long, and the one scene that ships with air takes its limit from
@@ -516,8 +591,9 @@ type Layer = fn(usize, usize, usize) -> bool;
 /// and between them all six, so a list that looked one way only would still find a corner and the
 /// limit would not move. Here the void is one outer layer of a 3x3x3 copper block, and the block's
 /// centre then has five copper faces and one on the air, on whichever axis and side the layer is:
-/// `ρc dx²/(5k + h·dx)`. Every other cell has a face fewer, so the centre sets the limit, and a list
-/// blind to that direction hands the block `ρc dx²/(5k)`, 1.8 times too long. The six are one
+/// `ρc dx²/(5k + a)`, with `a` the face's air behind its half cell as above. Every other cell has a
+/// face fewer, so the centre sets the limit, and a list blind to that direction hands the block
+/// `ρc dx²/(5k)`, 1.266 times too long. The six are one
 /// arithmetic over exact terms in a different order, so they agree to the bit; the closed form is
 /// held to the 32 epsilon above.
 #[test]
@@ -530,7 +606,7 @@ fn a_cell_facing_the_air_one_way_sets_the_limit_whichever_way() {
         copper.density.to_si(),
         thermal.specific_heat.to_si(),
     );
-    let closed = rho * c * dx * dx / (5.0 * k + h * dx);
+    let closed = rho * c * dx * dx / (5.0 * k + per_face(h, k, dx) / dx);
     let layers: [(&str, Layer); 6] = [
         ("x = 0", |i, _, _| i == 0),
         ("x = 2", |i, _, _| i == 2),

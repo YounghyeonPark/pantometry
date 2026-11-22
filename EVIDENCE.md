@@ -316,6 +316,18 @@ radiating or not, and the order is four to within 2.2e-5 —
 one above with a narrower edge: a test that removes a non-linearity to keep its closed form exact
 has said nothing about the non-linear case, and the rate has to be measured there as well.
 
+### And inside a void
+
+`air_in` came after the series form and was written as the film had been before it: `h·dx²` a
+face, charged against the cell centre. Every cell facing the air sat too cold by exactly the half
+cell's drop, `q''·dx/2k` — 333.3 K at 4 mm a cell on a slab of `k = 0.6` shedding 100 kW/m² into
+air at `h = 200`, and 41.67 K at 0.5 mm, halving with the cell — where the same slab cooled through
+an outer face met its closed form to 1e-13 K. Nothing had measured the air's order. Its tests were
+lumped balances of copper, whose half cell is a quarter of a percent of the path, held to the time
+step's error, which was larger. `crates/pantometry-thermal/tests/the_air_in_a_void_cools_at_the_surface.rs`
+measures four now, with the void on each of the six sides of a column. A boundary corrected is one
+boundary: the next one written in the old form has to have its rate measured on its own.
+
 ## The domain whose answers are distributions
 
 Every domain but one is checked against a value: a Fresnel coefficient, a mode frequency, a
