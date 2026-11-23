@@ -632,6 +632,117 @@ protects nothing.
 
 ### Fixed
 
+- **A part that loses nothing was answered wherever its solve drifted** (`pantometry-thermal`).
+  `Solid3D::steady_state` answered `Ok` with fields that are not where the block marches. Measured
+  before the change, on blocks of 1 mm cells:
+  - **A level with nothing to fix it.** A part that loses no heat balances at any level, since every
+    face term cancels under a uniform shift, and the solve answered wherever its relaxation had
+    drifted. Four insulated cells, one at 100 °C and three at 20 °C, came to 14.48 °C, colder than
+    the coldest of them, where they march to 40 °C; with the hot cell holding four times the
+    others' heat, 14.48 °C again rather than 65.71 °C. A body across a vacuum from a cooled one
+    came to −8.05 °C in a room at 0 °C rather than the 60 °C it holds, and two bodies radiating only
+    to each other to 2653.69 °C rather than 110 °C.
+  - **And `verify` measured arrival against it.** `settle` puts a block at its steady state, and
+    `19-a-coating-stops-the-heat` reported 18.693843 K still to come where its heat leaves
+    10.580868 K, `15-a-hot-spot-in-a-block` 7.953824 K where 7.964059 K is. Of the other five
+    shipped scenes with blocks, four arrive as they did to the microkelvin and `29`'s bracket moves
+    by 5e-6 K; their findings are unchanged. The table of all seven in `verify.rs` and
+    `FRICTION.md` had gone stale for three before this change: it read 0.046502 K, 0.757912 K and
+    178.069152 K for `29`, `25` and `23`, where HEAD measures 0.020176 K, 0.757915 K and
+    178.105051 K.
+  - **Heat with nowhere to go was asked of the block, not of where the heat is.** A block with a
+    film, air or a clearance anywhere passed. A block of `k = 0` with a film and a heated cell
+    returned the field it started from as its balance; a film, area, mounting or air of zero, a
+    heated cell behind an insulator and a heated body across a vacuum from the cooled one each swept
+    two thousand times and reported not converging.
+  - **Bodies a clearance joins each took their own step**, which closes an exchange from both ends
+    at once. Under a film too weak to hold them, two radiating bodies came to 2926.84 K in a room at
+    273.15 K and called it a balance, and under films of 1e-3 to 0.1 W/m²·K did not converge. A
+    milliwatt in at one and out at the other answered 2923 K; three bodies of one cell, 2.7e17 K;
+    ten of two cells, 3055 K where they hold 307.15 K; and a heated body joined to the cooled one
+    only through another body's clearance put a cell at −27 741 K.
+  - **Parts, now.** A block is divided into parts: bodies joined by faces that conduct, and by
+    clearances whose ends both conduct. A face of zero conductance, an insulating fill or a joint
+    of no contact, divides a body as a void does. Each part is asked whether anything can lose heat
+    from it: air, or a film that convects or radiates, behind a mounting and a half cell that carry.
+  - **Refused, where nothing carries the heat.** A part that loses nothing and is given heat is
+    refused before any sweep, naming a cell of it, carrying its watts and saying whether it warms or
+    cools without limit. Its net is asked to the rounding of spreading the watts over its cells,
+    `n·ε·Σ|P|`.
+  - **The level is the heat the part holds**, `Σ C·T` over its capacity, which its march conserves.
+  - **One step for the bodies of a part.** They take one Newton step together on their levels, with
+    each pair's couplings, the new `Crossing::couplings`, moving with both its ends, and in a part
+    that loses nothing its heat as one more equation. Each row is brought to its own units: two
+    bodies of 8e3 J/K at 10 K and 20 K were judged singular and answered where they began. A body
+    that is a part on its own takes the step it always took.
+  - **Relaxation.** Over-relaxation is set by each body's longest axis rather than the block's: a
+    body of two cells in a row of twenty-nine went past absolute zero in its first sweep. A cell
+    held mostly by its pairs takes a quarter of its level a sweep at most. A body's step is a
+    quarter of the larger of its own level and the block's: of its own alone, a sink of two
+    milliwatts fed across a clearance by a body a film warms found no balance above zero, where it
+    settles near 685 K.
+  - **Below absolute zero is refused**, by cause, a part with a sink or a solve that diverged, and
+    within 1e-4 K of zero, the solve's own error, a cell is answered as zero. More than 256 bodies
+    in one part are refused by count. A field that is not a number is refused before the exit
+    rather than after it.
+  - **What it did not change.** A block whose parts are each one body keeps every step and bound it
+    had: eight such steady states are bit for bit HEAD's, measured by hand in a worktree — a bar, a
+    radiating block with two films, air in a void, a mounted film, a joint, two materials, a film
+    without limit, a block cooling to its room. Two with clearances moved by 5e-9 and 1e-7 K. No
+    test holds this.
+  - **`crates/pantometry-thermal/tests/a_part_that_loses_nothing_keeps_the_heat_it_holds.rs`**,
+    nine tests, each against a closed form. A part's level is its heat over its capacity, to
+    sixteen roundings of 400 K, with unequal capacities: in three dimensions; along each axis behind
+    an insulator, a joint of no contact, a vacuum and a patch of film that stops short; for shapes
+    the search must walk back along an axis to find whole; and for bodies that only see each other —
+    one heavier, three in a row, three of one cell, ten of two, one at absolute zero, two of 8e3 J/K.
+    Fourier's law across every face between a source and a sink. Stefan–Boltzmann between the two
+    surfaces of every clearance that carries something, to 1e-6 of it: a milliwatt and three in and
+    out of two sealed bodies, heat out through the other body's film, a sink fed across a clearance
+    by a radiating film, a body joined through another body's clearance. The refusals, ten ways and
+    along each axis, and the second and the first of two sealed parts named rightly; as much in as
+    out to 3.6 roundings solved, three roundings' worth more refused. A sink's refusal names the
+    sink's cell and carries `T∞ − P·ΣR` to 1e-5 K; a bar held at a room at absolute zero is
+    answered there; 256 bodies are solved and 257 refused. A unit test holds the couplings to
+    central differences over eight thousand pairs, with air and without.
+  - **`app/pantometry-world/tests/verify_battery.rs`**: an insulated bar's arrival is measured
+    against the heat it holds, 60 K to come, measured 59.99999988 K.
+  - **`the_air_in_a_void_cools_at_the_surface.rs`**: "air hotter than the slab" moves 300 K up. Its
+    closed form put the insulated end at −133 K, which the solve now refuses; the problem is linear,
+    so it is the same flux and parabola. Its stopping error is 5.9e-6 K now, over-relaxed as long as
+    the slab rather than its block.
+  - **Forty-three sabotages**, each failing exactly the tests it claims with every claimed panic
+    line seen and none unclaimed, between a control before and one after: the level not set, set by
+    count, or set for losing parts too; the refusal dropped, or asked to an exact zero, one rounding
+    or a millionth; the block's watts, first cell or last part named; clearances joining no bodies,
+    or through a cell that conducts nothing, and a union that does not follow its roots; radiation,
+    a mounting, a half cell, the air, a film's area or its patch ignored, a film of zero taken to
+    act; bodies walked over the solid in every direction, along y and z only, at a cell's stride,
+    and never back along each axis; below zero answered, its first cell named, no sinks counted, a
+    sink worded as warming; the couplings dropped, swapped or from the wrong end, and no heat
+    equation; no scale, no pair clamp, a body's level alone, rows left in their units, no room below
+    zero and the room not answered as zero; the block's axis for the over-relaxation; no bound on
+    the bodies. Three versions no input could tell from the code were dropped: weights for the
+    bodies' heat in its row, which set the path and not the answer, and two that left the source
+    with them, a give-back of the heat a scaled step leaves out and the block's level for the
+    sweep's own clamp.
+  - **Reviews.** numerics-reviewer found the per-body step's failure on sources split across bodies
+    and on weak films, and in a second pass the common scale freezing a body at 0 K, the singular
+    pivot at great capacities and the 0 K room. unearned-pass-hunter found zero faces tested only
+    along x, a union whose `find` no input needed, the balance's factor `n` unpinned, the first cell
+    below zero named and patches unseen; silent-failure-hunter, the net sink worded as warming and
+    the stale arrival tables. Every finding was reproduced before it was acted on; two of
+    silent-failure-hunter's emulated cases, a weak film that would not converge and a room at
+    absolute zero solved below it, did not reproduce in the code.
+  - **Open.** A sink fed across a clearance by a body still warming can be drawn through zero before
+    its heat arrives, and the solve settles on a mirror of a balance that exists: a milliwatt from a
+    300 K start is refused this way, where a 1000 K start finds 878.6 K, and the refusal says what
+    was found. `verify` drops every refusal silently, so a block with no balance and a solve that
+    failed print the same nothing. A block fed over the bus is measured as if nothing more arrived.
+    `settle` moves a part that loses heat without putting it on the books. An infinite source passes
+    the balance. `ThermalNetwork::steady_state` refuses every part that loses nothing as singular,
+    where it could answer. `step` marches a sink below absolute zero.
+
 - **A number no body can have ran as one that looked plausible** (`pantometry-thermal`,
   `pantometry-core`). The four thermal domains took a conductivity, a capacity, a density, an
   emissivity, a phase change, a film, an area or an ambient that could not describe anything, and

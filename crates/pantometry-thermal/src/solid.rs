@@ -252,6 +252,19 @@ impl Crossing {
             self.to_b * self.to_b * vb / stiff,
         )
     }
+
+    /// The other half of the same derivative: how fast what `a`'s cell **takes in** through the
+    /// pair rises with `b`'s temperature, and what `b`'s takes in with `a`'s, W/K. From the same
+    /// `dq`: what `a` gives up is `q·f_a`, so its rise with `T_b` is `f_a·f_b·4Cv³/stiff`, and
+    /// `b`'s with `T_a` is `f_a·f_b·4Cu³/stiff`. Without air each is the other end's slope, so a
+    /// shift of both ends together moves nothing across, as it must.
+    fn couplings(&self, coefficient: f64) -> (f64, f64) {
+        let ((u, v), (ra, rb)) = (self.surfaces, self.behind);
+        let (ua, vb) = (4.0 * coefficient * u * u * u, 4.0 * coefficient * v * v * v);
+        let stiff = 1.0 + ua * ra + vb * rb;
+        let both = self.from_a * self.to_b;
+        (both * vb / stiff, both * ua / stiff)
+    }
 }
 
 /// What a clearance's pair exchanges, given the coefficient `σA/(1/ε_a + 1/ε_b − 1)` of its two
@@ -418,6 +431,49 @@ fn crossing_counted(
 /// that a longer wait will not fix. Bounded so a pathological input reports rather than spins,
 /// which is the same reason `ThermalNetwork::steady_state` bounds its Newton at eight.
 const STEADY_SWEEPS: usize = 2000;
+
+/// How many bodies one part of a block may hold for [`Solid3D::steady_state`] to solve it: the
+/// size of the dense system the bodies a clearance joins take their step in together. Its cost
+/// is the cube of this, `5.6e6` operations a round at the bound, against a scene's two bodies.
+const STEADY_BODIES: usize = 256;
+
+/// How far below absolute zero [`Solid3D::steady_state`] lets a cell stop and still call it zero,
+/// K: ten times the 1e-5 K the tests of the steady state hold a cell to, which is itself ten times
+/// the microkelvin a round has to move by less than. Below it, the field is refused.
+const BELOW_ZERO: f64 = 1e-4;
+
+/// One closed part of a block, as [`Solid3D::steady_state`] sees it — see `Solid3D::parts`.
+struct Part {
+    /// Whether any of its cells can lose heat.
+    loses: bool,
+    /// The watts generated in it, net.
+    heat: f64,
+    /// The watts generated in it with every source counted positive: the scale its net is
+    /// rounded on.
+    gross: f64,
+    /// Whether any of its cells is a sink, generating negative watts.
+    sinks: bool,
+    /// How many cells it has.
+    cells: usize,
+    /// How many bodies it has.
+    bodies: usize,
+    /// Its lowest cell's index.
+    first: usize,
+}
+
+impl Part {
+    /// Whether it generates no heat net, to the rounding of spreading the watts over its cells
+    /// and adding them back.
+    ///
+    /// `dissipating` stores `watts/n` in each cell, one rounding of at most `u·|each|`, and adding
+    /// `n` of them back rounds by at most `(n − 1)·u·Σ|each|`, with `u = ε/2`: together
+    /// `n·u·gross`, which `n·ε·gross` holds with a factor of two to spare. As much in as out,
+    /// stated as two sources in one insulated part, is a balance that exists, and its net is
+    /// rarely an exact zero once it is spread.
+    fn balanced(&self) -> bool {
+        self.heat.abs() <= self.cells as f64 * f64::EPSILON * self.gross
+    }
+}
 
 /// One outer face of a block.
 ///
@@ -920,6 +976,21 @@ fn mix((solid, liquid): (Phase, Phase), phi: f64) -> Phase {
             solid.2 + phi * (liquid.2 - solid.2)
         },
     )
+}
+
+/// The mean size of the solid cells' temperatures, K: what [`Solid3D::steady_state`] holds a body's
+/// step to a quarter of, for a body at absolute zero that a quarter of its own level would hold
+/// still. Added in index order, so for a block of one body whose cells are all above zero it is
+/// that body's mean to the bit.
+fn cell_level(t: &[f64], body: &[Option<usize>]) -> f64 {
+    let (mut sum, mut cells) = (0.0, 0.0_f64);
+    for (v, b) in t.iter().zip(body) {
+        if b.is_some() {
+            sum += v.abs();
+            cells += 1.0;
+        }
+    }
+    sum / cells.max(1.0)
 }
 
 /// The radiative exchange coefficient between two faces of area `area` facing each other, with
@@ -2362,16 +2433,70 @@ impl Solid3D {
     /// **Plain Gauss-Seidel is far too slow and it was measured being so.** Its spectral radius on
     /// an `n`-cell chain is `cos²(π/2n)`, so the sweeps needed grow as `n²`: a sixteen-cell bar
     /// took **over two thousand** and hit the bound. Over-relaxing by `ω = 2/(1 + sin(π/n))` — the
-    /// optimal factor for a Poisson operator on that grid, with `n` the longest axis — makes it
-    /// grow as `n` instead. The operator here is not pure Poisson, so that `ω` is an estimate
-    /// rather than the optimum; it is clamped below 1.95 because over-relaxing past the true
-    /// optimum diverges where under-relaxing only costs sweeps.
+    /// optimal factor for a Poisson operator on that grid, with `n` the longest axis of the body
+    /// being relaxed — makes it grow as `n` instead. The operator here is not pure Poisson, so
+    /// that `ω` is an estimate rather than the optimum; it is clamped below 1.95 because
+    /// over-relaxing past the true optimum diverges where under-relaxing only costs sweeps. It was
+    /// the block's longest axis, and a body of two cells in a block twenty-nine long was taken past
+    /// absolute zero by its first sweep.
+    ///
+    /// # Bodies, and the bodies a clearance joins
+    ///
+    /// **The slow mode is a body's level**, and each body that is a part on its own takes a step
+    /// on it every round: what it loses over the slope of what it loses. **The bodies a clearance
+    /// joins take that step together**, Newton on all their levels at once, with what each pair
+    /// carries moving with both its ends. Each body taking its own closes an exchange from both
+    /// sides and moves it twice: two radiating bodies under a film too weak to hold them came to
+    /// 2926.84 K in a room at 273.15 K and called it a balance, and under films a thousand to a
+    /// hundred thousand times stronger did not converge. A cell whose pairs are most of what holds
+    /// it takes a quarter of its own level a sweep at most, as a body does: three bodies of one
+    /// cell each, one at 300 °C, settled at 2.7e17 K, the cold ones' first sweep asking for some
+    /// 1250 K. A body's step is a quarter of the larger of its own level and the block's, so that a
+    /// body near absolute zero is not held near it: of its own alone, a sink fed across a clearance
+    /// found no balance above zero, and in a first form of the step taken together a sealed pair at
+    /// 400 K and 0 K answered 0 K for both.
+    ///
+    /// # A part that loses nothing
+    ///
+    /// **Balances at any level, and the answer is the one holding the heat it has now.** A block
+    /// insulated on every face, a body across a vacuum from the one with the film, an assembly
+    /// whose bodies see each other and nothing else: every face term cancels under a uniform shift,
+    /// so the equations fix the shape of the field and not where it sits. The march does fix it —
+    /// it conserves `Σ C·T` — so that is what this holds: the level is the heat each such part
+    /// holds now, over its capacity. **This answered wherever the relaxation drifted**, measured:
+    /// four insulated cells, one at 100 °C and three at 20 °C, at 14.48 °C, colder than the coldest
+    /// of them, where they march to 40 °C, and with a capacity four times the others' in the hot
+    /// one, at 14.48 °C again rather than 65.71 °C; a body across a vacuum from a cooled one, at
+    /// −8.05 °C in a room at 0 °C rather than its own 60 °C; two bodies radiating only to each
+    /// other at 2653.69 °C rather than 110 °C. `settle` put a block there, and `verify` reported
+    /// what was still to come against it.
+    ///
+    /// A part is the bodies joined by faces that conduct and by clearances that radiate, and it
+    /// loses nothing when no film, air or mounting that carries reaches it through a cell that
+    /// conducts — so a film of zero, a cell of zero conductivity and a joint of zero contact cut it
+    /// off as a void does, and a cell that conducts nothing at all keeps its own temperature.
     ///
     /// # What it refuses
     ///
-    /// **A block with heat coming in and nowhere for it to go.** There is no steady state; it
-    /// warms without limit, and returning the last iterate would be a plausible temperature for a
-    /// balance that was never struck.
+    /// **Heat generated where nothing carries it away.** There is no steady state; it warms without
+    /// limit, and returning the last iterate would be a plausible temperature for a balance that
+    /// was never struck. Asked of each part, naming a cell of it and carrying its watts. It was
+    /// asked of the block — whether it had a film, air or a clearance anywhere — and a block of
+    /// `k = 0` given a film returned the field it started from as its balance, while a film of
+    /// zero, a heated body across a vacuum from the cooled one and a heated cell behind an
+    /// insulator each swept two thousand times and reported not converging.
+    ///
+    /// **A balance below absolute zero.** A source of negative watts is a sink, and one that takes
+    /// more than can reach it has no steady state; the field that balances it is not one a body
+    /// can have. **Not always one that does not exist**: a sink whose heat comes across a
+    /// clearance from a body still warming can be drawn through zero before that heat arrives,
+    /// and the pairs read the fourth power of a negative temperature as a positive one, so the
+    /// solve settles on a mirror of a balance that is there. Measured: a milliwatt drawn from a
+    /// cell fed that way by a film radiating from a room at 1000 K is refused from a start at
+    /// 300 K and solved, at 878.6 K, from one at 1000 K. The refusal says what was found, not
+    /// that nothing could be; a block started nearer its answer finds it. Within a tenth of a
+    /// millikelvin below zero is the solve's own error around a room at absolute zero, and is
+    /// answered as zero.
     ///
     /// **A block that melts.** The state of a mushy cell is its enthalpy and not its temperature,
     /// so "the field at which every cell balances" is not a statement about temperature alone.
@@ -2396,15 +2521,6 @@ impl Solid3D {
             ));
         }
         let supplied: f64 = self.source.iter().sum();
-        if supplied != 0.0 && self.exposed.is_empty() && self.air.is_none() && self.gaps.is_empty()
-        {
-            return Err(Violation::at(
-                &self.name,
-                "heat is generated and no face, void or clearance carries it away, so there is no \
-                 steady state — it warms without limit",
-                supplied,
-            ));
-        }
         if self.conduction_rate().is_nan() {
             return Err(Violation::at(
                 &self.name,
@@ -2413,20 +2529,110 @@ impl Solid3D {
             ));
         }
 
-        // From where the block is. For a linear problem the start does not matter; for a radiative
-        // one it is a better guess than ambient whenever the caller has already stepped, and no
-        // worse when they have not — the same reasoning `ThermalNetwork::steady_state` gives.
-        let mut t = self.cells.clone();
-
-        // The over-relaxation factor, from the longest axis.
-        let longest = nx.max(ny).max(nz).max(2) as f64;
-        let omega = (2.0 / (1.0 + (std::f64::consts::PI / longest).sin())).clamp(1.0, 1.95);
-
-        // Which connected body each cell belongs to, six-connected over the solid. A block with a
-        // clearance in it holds two objects that conduct to nothing of each other's, and each has
-        // a uniform mode of its own — see the correction below.
+        // Which connected body each cell belongs to, six-connected across every face that
+        // conducts. A block with a clearance in it holds two objects that conduct to nothing of
+        // each other's, and so does one with an insulator through it, and each has a uniform mode
+        // of its own — see the correction below.
         let body = self.bodies();
         let count = body.iter().filter_map(|b| *b).max().map_or(0, |m| m + 1);
+
+        // **Which parts can lose heat**, and the heat generated in each — see `parts`. A part
+        // that loses nothing and is given heat warms without limit, and is refused here rather
+        // than swept two thousand times and reported as not converging; one given none keeps the
+        // heat it holds, which the correction at the end of each round sees to.
+        let (part, parts) = self.parts(&body, count);
+        if let Some(p) = parts.iter().find(|p| !p.loses && !p.balanced()) {
+            let (i, j, k) = (p.first % nx, (p.first / nx) % ny, p.first / (nx * ny));
+            // Said the way it happens: a part whose sinks outweigh its sources cools without limit,
+            // and was refused as warming.
+            let why = if p.heat > 0.0 {
+                format!(
+                    "heat is generated in the cells joined to ({i}, {j}, {k}) and no face, void or \
+                     clearance carries it away from them — nothing that loses heat is joined to \
+                     them by anything that conducts — so there is no steady state: it warms \
+                     without limit"
+                )
+            } else {
+                format!(
+                    "more heat is taken out of the cells joined to ({i}, {j}, {k}) than is \
+                     generated in them and no face, void or clearance brings any in — nothing \
+                     that loses heat is joined to them by anything that conducts — so there is no \
+                     steady state: it cools without limit"
+                )
+            };
+            return Err(Violation::at(&self.name, why, p.heat));
+        }
+        let closed = parts.iter().any(|p| !p.loses);
+
+        // The bodies of each part, where each sits among them, and what each holds, J/K — the
+        // unknowns of the step the bodies of a part take together, and its weights.
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); parts.len()];
+        let mut slot = vec![0; count];
+        for b in 0..count {
+            slot[b] = members[part[b]].len();
+            members[part[b]].push(b);
+        }
+        let mut body_capacity = vec![0.0; count];
+        let mut part_capacity = vec![0.0; parts.len()];
+        for (c, b) in body.iter().enumerate() {
+            if let Some(b) = b {
+                body_capacity[*b] += self.capacity[c];
+                part_capacity[part[*b]] += self.capacity[c];
+            }
+        }
+        // **A bound on that step, refused rather than dropped.** It is a dense solve, so its
+        // cost is the cube of the bodies a clearance joins into one part, and every shipped
+        // scene has two at most. Past it a part would be left without its levels, which is
+        // the drift this solve exists not to have.
+        if let Some(bodies) = members.iter().find(|b| b.len() > STEADY_BODIES) {
+            let first = body.iter().position(|b| *b == Some(bodies[0])).unwrap_or(0);
+            let (i, j, k) = (first % nx, (first / nx) % ny, first / (nx * ny));
+            return Err(Violation::at(
+                &self.name,
+                format!(
+                    "the cells joined to ({i}, {j}, {k}) are {} bodies that see each other \
+                     across clearances, and the steady solve couples {STEADY_BODIES} at most",
+                    bodies.len()
+                ),
+                bodies.len() as f64,
+            ));
+        }
+
+        // From where the block is. For the shape of the answer the start does not matter in a
+        // linear problem, and in a radiative one it is a better guess than ambient whenever the
+        // caller has already stepped, and no worse when they have not — the same reasoning
+        // `ThermalNetwork::steady_state` gives. **For the level of a part that loses nothing it is
+        // the answer**: such a part balances at any level, and the one its march reaches is the
+        // one holding the heat it has now.
+        let mut t = self.cells.clone();
+
+        // **The over-relaxation factor, from each body's longest axis** rather than the block's:
+        // what is relaxed is the body, and the factor is the one for a Poisson operator that long.
+        // A body of two cells in a row of twenty-nine was over-relaxed by 1.81, as if it were
+        // twenty-nine long, and its first sweep took a cell from 573 K to −114 K; past zero, its
+        // pairs read the fourth power of a negative temperature, which is a positive one, and
+        // ten such bodies came to a balance with the first at −383.9 K and the rest at +383.9 K;
+        // with fields below zero refused, they are refused as diverging. A body as long as its
+        // block keeps the factor it had.
+        let mut low = vec![(usize::MAX, usize::MAX, usize::MAX); count];
+        let mut high = vec![(0, 0, 0); count];
+        for (c, b) in body.iter().enumerate() {
+            if let Some(b) = b {
+                let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+                low[*b] = (low[*b].0.min(i), low[*b].1.min(j), low[*b].2.min(k));
+                high[*b] = (high[*b].0.max(i), high[*b].1.max(j), high[*b].2.max(k));
+            }
+        }
+        let omega: Vec<f64> = (0..count)
+            .map(|b| {
+                let (lo, hi) = (low[b], high[b]);
+                let longest = (hi.0 - lo.0 + 1)
+                    .max(hi.1 - lo.1 + 1)
+                    .max(hi.2 - lo.2 + 1)
+                    .max(2);
+                (2.0 / (1.0 + (std::f64::consts::PI / longest as f64).sin())).clamp(1.0, 1.95)
+            })
+            .collect();
 
         // The net watts a clearance's pairs bring to each cell, and their slope. Held per sweep
         // rather than per cell: walking the list once fills both ends. The march's own crossing,
@@ -2467,7 +2673,22 @@ impl Solid3D {
                         if d.is_nan() || d <= 0.0 {
                             continue;
                         }
-                        let step = omega * r / d;
+                        let mut step = body[c].map_or(1.0, |b| omega[b]) * r / d;
+                        // **A cell held mostly by its pairs takes a quarter of its level at most**,
+                        // as a body does below and for the same reason: a pair's slope is
+                        // `4C·T³`, a poor guide far from the answer, and over-relaxed it is a
+                        // worse one. Three bodies of one cell each across a radiating vacuum, one at
+                        // 300 °C: the cold cells' first sweep asks for some 1250 K, past zero.
+                        // Measured, they came to +12 772 K and −24 385 K and stopped moving, in a
+                        // first form of this solve, and in this one they do not converge.
+                        // A cell its faces or its film hold is not touched, so a block without
+                        // clearances sweeps as it did. Its own level, unlike a body's below: a cell
+                        // at absolute zero has no slope to its pairs, so it is not held here, and
+                        // the body it is in is moved by the step below.
+                        let cap = 0.25 * t[c].abs();
+                        if slope[c] > 0.5 * d && cap >= 0.0 {
+                            step = step.clamp(-cap, cap);
+                        }
                         t[c] += step;
                         moved = moved.max(step.abs());
                     }
@@ -2519,6 +2740,10 @@ impl Solid3D {
             // slope under a shift is left to `loss_conductance_at`'s air, which carries all of it
             // where the two ends conduct alike and a few percent less where they do not: a slope
             // sets how fast the solve gets there, not where it stops.
+            //
+            // Between two bodies of one part the pair's couplings are kept as well, for the step
+            // they take together below: `(a's body, b's body, a's rise with b, b's with a)`.
+            let mut coupled: Vec<(usize, usize, f64, f64)> = Vec::new();
             for (a, b, coefficient) in &self.gaps {
                 let (Some(ba), Some(bb)) = (body[*a], body[*b]) else {
                     continue;
@@ -2532,57 +2757,262 @@ impl Solid3D {
                 let (at_a, at_b) = pair.slopes(*coefficient);
                 resist[ba] += at_a;
                 resist[bb] += at_b;
+                if part[ba] == part[bb] && parts[part[ba]].bodies > 1 {
+                    let (by_b, by_a) = pair.couplings(*coefficient);
+                    coupled.push((ba, bb, by_b, by_a));
+                }
             }
-            for (b, r) in resist.iter().enumerate() {
-                if *r <= 0.0 {
-                    continue;
+
+            // **Damped, because the slope of a `T⁴` term is a bad guide far from the answer.**
+            // A body whose only path out is a clearance has a resistance of microwatts per
+            // kelvin near ambient, so the first Newton step from a cold start asks for tens of
+            // thousands of kelvin and the fourth power takes it to infinity. Measured: a bar
+            // radiating 0.4 W through a pair asked for 93 000 K and the solve reported
+            // diverging. Holding each step to a quarter of the body's own level makes the
+            // approach geometric — a factor of 1.25 a sweep, so any starting point is tens of
+            // sweeps away — and cannot pass through zero.
+            let mut level = vec![0.0; count];
+            let mut size = vec![0.0_f64; count];
+            for (c, v) in t.iter().enumerate() {
+                if let Some(b) = body[c] {
+                    level[b] += v;
+                    size[b] += 1.0;
                 }
-                // **Damped, because the slope of a `T⁴` term is a bad guide far from the answer.**
-                // A body whose only path out is a clearance has a resistance of microwatts per
-                // kelvin near ambient, so the first Newton step from a cold start asks for tens of
-                // thousands of kelvin and the fourth power takes it to infinity. Measured: a bar
-                // radiating 0.4 W through a pair asked for 93 000 K and the solve reported
-                // diverging. Holding each step to a quarter of the body's own level makes the
-                // approach geometric — a factor of 1.25 a sweep, so any starting point is tens of
-                // sweeps away — and cannot pass through zero.
-                let mut mean = 0.0;
-                let mut cells = 0.0_f64;
-                for (c, v) in t.iter().enumerate() {
-                    if body[c] == Some(b) {
-                        mean += v;
-                        cells += 1.0;
-                    }
-                }
-                let cap = 0.25 * (mean / cells.max(1.0)).abs();
-                // **`clamp` panics on a bound that is not a number**, and a field that has stopped
-                // being one has no level to hold a step to. It is the divergence the end of the
-                // round reports, reached before the round ends. A cell given a temperature of
-                // `NaN` reaches it with every input a block can have.
-                if cap.is_nan() {
-                    return Err(Violation::at(
+            }
+            // **`clamp` panics on a bound that is not a number**, and a field that has stopped
+            // being one has no level to hold a step to. It is the divergence the end of the
+            // round reports, reached before the round ends. A cell given a temperature of
+            // `NaN` reaches it with every input a block can have.
+            //
+            // **A quarter of the larger of its own level and the block's.** Of its own alone, a
+            // body near absolute zero is held near it. Measured: a sink of two milliwatts fed
+            // across a clearance by a body a film warms, from a start at 300 K, found no balance
+            // above zero, where with this it settles near 685 K; and in a first form of the step
+            // the bodies of a part take together, before its rows were brought to one, a sealed
+            // pair at 400 K and 0 K answered 0 K for both, the cold one held still while the warm
+            // one was swept down to it. A block of one body is its own reference, so its bound is
+            // the one it had.
+            let reference = cell_level(&t, &body);
+            let cap = |b: usize| {
+                let own = (level[b] / size[b].max(1.0)).abs();
+                if own.is_nan() {
+                    Err(Violation::at(
                         &self.name,
                         "the steady-state balance diverged",
                         f64::INFINITY,
-                    ));
+                    ))
+                } else {
+                    Ok(0.25 * own.max(reference))
                 }
-                let shift = (total[b] / r).clamp(-cap, cap);
-                for (c, v) in t.iter_mut().enumerate() {
-                    if body[c] == Some(b) {
-                        *v += shift;
+            };
+            // What each part that loses nothing has gained or lost since the start, as the
+            // kelvin it would take over its capacity: `Σ C·(T₀ − T)`, put back below.
+            let mut held = vec![0.0; parts.len()];
+            if closed {
+                for (c, v) in t.iter().enumerate() {
+                    if let Some(b) = body[c] {
+                        if !parts[part[b]].loses {
+                            held[part[b]] += self.capacity[c] * (self.cells[c] - v);
+                        }
                     }
                 }
-                moved = moved.max(shift.abs());
+            }
+            let mut shift = vec![0.0; count];
+            // A body that is a part on its own takes its own step: what it loses, over the slope
+            // of what it loses.
+            for b in 0..count {
+                if parts[part[b]].bodies > 1 || resist[b] <= 0.0 {
+                    continue;
+                }
+                let cap = cap(b)?;
+                shift[b] = (total[b] / resist[b]).clamp(-cap, cap);
+            }
+            // **The bodies of a part of several take one step together**: Newton on their levels,
+            // each body's balance against its own slope and the couplings of its pairs to the
+            // others', and in a part that loses nothing the heat it holds as one more equation.
+            // Each taking its own step, as a body alone does, closes an exchange from both ends
+            // at once and moves it twice. Measured: two bodies across a radiating vacuum, one at
+            // 100/20 °C and one at 300/20 °C, traded places every round and reported not
+            // converging; a milliwatt in at one and out at the other, settling near 390 K and
+            // 200 K, did not converge either; and under a film too weak to hold them, the same
+            // two came to 2926.84 K and called it a balance, where the room is 273.15 K. The
+            // step is held to a quarter of each body's level as one: every body's share of it
+            // scaled together, so that what it says about their differences is kept. That bound
+            // was written for the step a body took alone, and the 93 000 K it measured is not what
+            // the step taken together asks for; what still needs it is a sink fed across a
+            // clearance from a body a film warms. Measured, two milliwatts drawn from a cell of
+            // `k = 0.05` that a radiating film feeds through a clearance, from a start at 300 K:
+            // a balance near 685 K with the bound, and not converging without it.
+            for (p, bodies) in members.iter().enumerate() {
+                if bodies.len() < 2 {
+                    continue;
+                }
+                let closed_part = !parts[p].loses;
+                let m = bodies.len();
+                let n = m + usize::from(closed_part);
+                let mut a = vec![0.0; n * n];
+                let mut rhs = vec![0.0; n];
+                for (s, b) in bodies.iter().enumerate() {
+                    a[s * n + s] = resist[*b];
+                    rhs[s] = total[*b];
+                }
+                for (ba, bb, by_b, by_a) in &coupled {
+                    if part[*ba] == p {
+                        a[slot[*ba] * n + slot[*bb]] -= by_b;
+                        a[slot[*bb] * n + slot[*ba]] -= by_a;
+                    }
+                }
+                // The heat the part holds, with a slack in every balance for what rounding
+                // leaves of a net that is zero: the balances of a part that loses nothing add to
+                // its net source, so without it they are one equation too many.
+                //
+                // **Each row in its own units, brought to one.** The balances are watts against
+                // slopes in W/K, the heat row joules against capacities in J/K, and the solve
+                // calls a pivot singular below 1e-14 of the largest entry of all: measured, two
+                // sealed bodies of 8e3 J/K at 10 K and 20 K, whose slopes are 2e-11 W/K, were
+                // judged singular, took no step, and answered their starting levels where their
+                // heat sets 15 K. So each balance is divided by its body's slope, the slack by
+                // their mean, and the heat row by the part's capacity.
+                if closed_part {
+                    let mut mean = 0.0;
+                    for (s, b) in bodies.iter().enumerate() {
+                        let r = if resist[*b] > 0.0 && resist[*b].is_finite() {
+                            resist[*b]
+                        } else {
+                            1.0
+                        };
+                        for j in 0..m {
+                            a[s * n + j] /= r;
+                        }
+                        a[s * n + m] = 1.0 / r;
+                        rhs[s] /= r;
+                        mean += r / m as f64;
+                        a[m * n + s] = body_capacity[*b] / part_capacity[p];
+                    }
+                    for s in 0..m {
+                        a[s * n + m] *= mean;
+                    }
+                    rhs[m] = held[p] / part_capacity[p];
+                }
+                let Some(step) = crate::network::solve(&mut a, &mut rhs, n) else {
+                    // Judged singular all the same: a part that loses nothing still keeps its
+                    // heat, moving as a whole, and the sweeps do the rest.
+                    if closed_part {
+                        for b in bodies {
+                            shift[*b] = held[p] / part_capacity[p];
+                        }
+                    }
+                    continue;
+                };
+                let mut scale: f64 = 1.0;
+                for (s, b) in bodies.iter().enumerate() {
+                    let cap = cap(*b)?;
+                    if step[s].abs() > cap {
+                        scale = scale.min(cap / step[s].abs());
+                    }
+                }
+                for (s, b) in bodies.iter().enumerate() {
+                    shift[*b] = scale * step[s];
+                }
+                // The heat row is scaled with the rest, so a round held short keeps only that
+                // share of the heat it puts back; the next round asks for the rest, and at the
+                // answer the scale is one. A quarter of a body's own level alone could make it zero
+                // every round for a body at absolute zero — see `cap`, which is why that is a
+                // quarter of the block's level too.
+            }
+            for (c, v) in t.iter_mut().enumerate() {
+                if let Some(b) = body[c] {
+                    *v += shift[b];
+                }
+            }
+            moved = shift.iter().fold(moved, |m, s| m.max(s.abs()));
+
+            // **A part that loses nothing keeps the heat it holds.** It balances at any level —
+            // every face term cancels under a uniform shift, and nothing else acts on one — so the
+            // equations do not say where it sits, and the relaxation left it wherever its sweeps
+            // drifted. Measured before this: a block insulated on every face, one cell of four at
+            // 100 °C and the rest at 20 °C, solved to 14.48 °C, colder than its coldest cell,
+            // where its march goes to 40 °C; two radiating across a vacuum, at 2653.69 °C where
+            // the march goes to 110 °C. What fixes the level is what the march conserves: the heat
+            // in the part, `Σ C·T`, the cells' capacities and not their count. Each round puts
+            // it back. At the answer it is already there, and this moves nothing. A part of
+            // several bodies has put it back already, in the step they took together; this is
+            // the part of one, which moves as a whole.
+            if closed {
+                for (c, v) in t.iter_mut().enumerate() {
+                    if let Some(b) = body[c] {
+                        let p = &parts[part[b]];
+                        if !p.loses && p.bodies == 1 {
+                            let shift = held[part[b]] / part_capacity[part[b]];
+                            *v += shift;
+                            moved = moved.max(shift.abs());
+                        }
+                    }
+                }
             }
 
-            if round > 0 && moved < 1e-6 {
-                return Ok(t);
-            }
+            // Before the exit rather than after it: `moved.max(NaN)` is `moved`, so a field that
+            // had stopped being a number could stop moving and be returned.
             if t.iter().any(|v| !v.is_finite()) {
                 return Err(Violation::at(
                     &self.name,
                     "the steady-state balance diverged",
                     f64::INFINITY,
                 ));
+            }
+            if round > 0 && moved < 1e-6 {
+                // **A balance below absolute zero is not one.** A source of negative watts is a
+                // sink, and a sink can take more out of a part than can reach it: in a part that
+                // loses nothing, the level the heat it holds sets leaves the sink's cells below
+                // zero. Measured: two bodies across a radiating vacuum, one given 0.01 W and the
+                // other −0.01 W, balanced at −55.4 K — the field their march goes to, which
+                // `step` does not refuse either. A shifted level converges there; before it, the
+                // solve wandered and reported not converging.
+                //
+                // **And in a part with no sink it is the solve that went wrong**, which is said as
+                // that. Nothing there can be colder than its coldest ambient, at or above zero; a
+                // field below it is a root of the pairs' fourth powers that no body has. Asked of
+                // the coldest solid cell, which in a part with a sink is the one the sinks draw
+                // down, wherever the first cell happens to be.
+                //
+                // **What lies within the solve's own error of zero is zero.** A bar held at a room
+                // at absolute zero by a film without limit at both ends stopped with a cell at
+                // −8.8e-7 K and was refused as having diverged, where its answer is 0 K: the stop
+                // leaves microkelvin either side, and on this side it is below a bound nothing
+                // crosses. `BELOW_ZERO` is ten times what the tests here hold a cell to.
+                let coldest = (0..t.len())
+                    .filter(|c| body[*c].is_some())
+                    .min_by(|a, b| t[*a].total_cmp(&t[*b]));
+                if let Some(c) = coldest.filter(|c| t[*c] < -BELOW_ZERO) {
+                    let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+                    let sinks = body[c].is_some_and(|b| parts[part[b]].sinks);
+                    // Said as what was found rather than as what must be so: a sink drawing a
+                    // cell through zero before the heat that would feed it arrives leaves the
+                    // solve at a mirror of a balance that does exist, and both look like this.
+                    return Err(Violation::at(
+                        &self.name,
+                        if sinks {
+                            format!(
+                                "no balance above absolute zero was found: cell ({i}, {j}, {k}) \
+                                 came to below it, drawn down by the sinks in its part, which take \
+                                 more than can reach them or more than reaches them in time for \
+                                 this solve"
+                            )
+                        } else {
+                            format!(
+                                "the steady-state balance diverged, to cell ({i}, {j}, {k}) \
+                                 below absolute zero, where no part without a sink can be"
+                            )
+                        },
+                        t[c],
+                    ));
+                }
+                for (c, v) in t.iter_mut().enumerate() {
+                    if body[c].is_some() && *v < 0.0 {
+                        *v = 0.0;
+                    }
+                }
+                return Ok(t);
             }
         }
 
@@ -2595,10 +3025,17 @@ impl Solid3D {
 
     /// Which connected body each cell belongs to, or `None` for a void cell.
     ///
-    /// Six-connected over the solid. A block with a clearance in it holds two objects that conduct
-    /// to nothing of each other's, and [`steady_state`](Solid3D::steady_state) needs to know which
-    /// is which: a relaxation's slowest mode is moving a body as a whole, and there is one such
-    /// mode per body.
+    /// Six-connected **across every face that conducts**. A block with a clearance in it holds two
+    /// objects that conduct to nothing of each other's, and [`steady_state`](Solid3D::steady_state)
+    /// needs to know which is which: a relaxation's slowest mode is moving a body as a whole, and
+    /// there is one such mode per body.
+    ///
+    /// **A face of zero conductance divides a body as a void does.** An insulating fill and a joint
+    /// of zero contact carry nothing, exactly as a clearance without radiation does, and each side
+    /// has its own level. This walked the solid instead, so a block cut through by an insulator
+    /// was one body to the correction — and a part of it with nothing to lose to was shifted by
+    /// what the other part lost. Where no face is zero but at a void the bodies are the ones it
+    /// found, in the same order.
     fn bodies(&self) -> Vec<Option<usize>> {
         let (nx, ny, nz) = self.counts;
         let mut label: Vec<Option<usize>> = vec![None; self.cells.len()];
@@ -2616,34 +3053,40 @@ impl Solid3D {
                     // is not a stack.
                     let mut stack = vec![(i0, j0, k0)];
                     while let Some((i, j, k)) = stack.pop() {
+                        // `face` is the conductivity of the face crossed to reach the cell, which
+                        // is zero at a void, so a void needs no test of its own.
                         let push = |i: usize,
                                     j: usize,
                                     k: usize,
+                                    face: f64,
                                     s: &mut Vec<_>,
                                     l: &mut Vec<Option<usize>>| {
                             let c = at(i, j, k);
-                            if !self.void[c] && l[c].is_none() {
+                            if face > 0.0 && l[c].is_none() {
                                 l[c] = Some(next);
                                 s.push((i, j, k));
                             }
                         };
+                        let x = |i: usize| self.kx[i + (nx + 1) * (j + ny * k)];
+                        let y = |j: usize| self.ky[i + nx * (j + (ny + 1) * k)];
+                        let z = |k: usize| self.kz[i + nx * (j + ny * k)];
                         if i > 0 {
-                            push(i - 1, j, k, &mut stack, &mut label);
+                            push(i - 1, j, k, x(i), &mut stack, &mut label);
                         }
                         if i + 1 < nx {
-                            push(i + 1, j, k, &mut stack, &mut label);
+                            push(i + 1, j, k, x(i + 1), &mut stack, &mut label);
                         }
                         if j > 0 {
-                            push(i, j - 1, k, &mut stack, &mut label);
+                            push(i, j - 1, k, y(j), &mut stack, &mut label);
                         }
                         if j + 1 < ny {
-                            push(i, j + 1, k, &mut stack, &mut label);
+                            push(i, j + 1, k, y(j + 1), &mut stack, &mut label);
                         }
                         if k > 0 {
-                            push(i, j, k - 1, &mut stack, &mut label);
+                            push(i, j, k - 1, z(k), &mut stack, &mut label);
                         }
                         if k + 1 < nz {
-                            push(i, j, k + 1, &mut stack, &mut label);
+                            push(i, j, k + 1, z(k + 1), &mut stack, &mut label);
                         }
                     }
                     next += 1;
@@ -2653,11 +3096,115 @@ impl Solid3D {
         label
     }
 
+    /// The closed parts of this block, as [`steady_state`](Solid3D::steady_state) needs them:
+    /// which part each body is in, and for each part whether anything in it can lose heat, the
+    /// heat generated in it, and the capacity that holds it.
+    ///
+    /// **A part is the bodies a clearance joins**, through a pair whose two ends both conduct — a
+    /// pair behind a cell of zero conductivity carries nothing, as a face does. Radiation across a
+    /// vacuum moves heat between two bodies and takes none away, so two bodies that see each other
+    /// and nothing else are one closed system, and it is the system whose heat is conserved.
+    ///
+    /// **It loses heat** if any of its cells can — see `can_lose`. Which ones cannot is the
+    /// question the old test asked of the whole block: whether it had a film, air or a clearance
+    /// anywhere. A film that carries nothing passed it, and so did a heated body across a vacuum
+    /// from the one with the film. Measured before this: a block of `k = 0` with a film and a
+    /// heated cell returned the field it started from as its balance, and a film of zero, an
+    /// area of zero, a mounting or air of zero, a heated cell behind an insulator and a heated body
+    /// with no film beside one that had one each swept two thousand times and reported that the
+    /// balance had not converged.
+    fn parts(&self, body: &[Option<usize>], count: usize) -> (Vec<usize>, Vec<Part>) {
+        let (nx, ny, _) = self.counts;
+        // Union-find over the bodies, joined by the pairs that carry.
+        let mut root: Vec<usize> = (0..count).collect();
+        fn find(root: &mut [usize], mut b: usize) -> usize {
+            while root[b] != b {
+                root[b] = root[root[b]];
+                b = root[b];
+            }
+            b
+        }
+        for (a, b, _) in &self.gaps {
+            let (Some(ba), Some(bb)) = (body[*a], body[*b]) else {
+                continue;
+            };
+            if self.derived[*a].0 > 0.0 && self.derived[*b].0 > 0.0 {
+                let (ra, rb) = (find(&mut root, ba), find(&mut root, bb));
+                root[ra.max(rb)] = ra.min(rb);
+            }
+        }
+        // Numbered in the order their first cells come, so the first part refused is the one
+        // holding the lowest cell.
+        let mut number = vec![usize::MAX; count];
+        let mut part = vec![0; count];
+        let mut parts: Vec<Part> = Vec::new();
+        for (c, b) in body.iter().enumerate() {
+            let Some(b) = *b else { continue };
+            let r = find(&mut root, b);
+            if number[r] == usize::MAX {
+                number[r] = parts.len();
+                parts.push(Part {
+                    loses: false,
+                    heat: 0.0,
+                    gross: 0.0,
+                    sinks: false,
+                    cells: 0,
+                    bodies: 0,
+                    first: c,
+                });
+            }
+            part[b] = number[r];
+            let p = &mut parts[number[r]];
+            p.heat += self.source[c];
+            p.gross += self.source[c].abs();
+            p.sinks = p.sinks || self.source[c] < 0.0;
+            p.cells += 1;
+            p.loses = p.loses || self.can_lose((c % nx, (c / nx) % ny, c / (nx * ny)));
+        }
+        for b in 0..count {
+            parts[part[b]].bodies += 1;
+        }
+        (part, parts)
+    }
+
+    /// Whether anything can leave this solid cell other than through its faces: the air in a void
+    /// it faces, or a film on an outer face that convects or radiates, through whatever that face
+    /// is mounted on and the half cell behind it.
+    ///
+    /// **Whether, not how much.** What `loss_conductance_at` charges is zero at every temperature
+    /// exactly where this is false — a film, area, mounting or air of zero, a film with no
+    /// convection on a face that does not radiate, a cell that conducts nothing — and asked
+    /// separately because a radiating film's slope is zero at absolute zero, and a part that
+    /// loses heat once it is warm is not one that cannot.
+    fn can_lose(&self, cell: (usize, usize, usize)) -> bool {
+        let (nx, ny, _) = self.counts;
+        let (conductivity, _, emissivity) = self.derived[cell.0 + nx * (cell.1 + ny * cell.2)];
+        let dx = self.dx.to_si();
+        self.air_conductance(cell) > 0.0
+            || self
+                .exposed
+                .iter()
+                .filter(|(face, _)| self.exposed_at(**face, cell))
+                .any(|(face, env)| {
+                    let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
+                    let acts = env.convection_w_per_m2_k > 0.0 || emissivity > 0.0;
+                    // A film of one watt per square metre and kelvin in place of the one it has:
+                    // what is asked here is whether the path behind it carries.
+                    acts && series_with_half_cell(
+                        self.outward(face, share, share),
+                        conductivity,
+                        share,
+                        dx,
+                    ) > 0.0
+                })
+    }
+
     /// Put this block **at** its steady state, and say how far it had to move.
     ///
     /// The answer in kelvin, as the largest change any cell took. A caller who wants to know
     /// whether a run has arrived can march it and then read this: a run that settled moves by
-    /// nothing.
+    /// nothing. A part of the block that loses nothing moves to where its own heat evens out, so
+    /// its energy is the energy it had — see [`steady_state`](Solid3D::steady_state).
     pub fn settle(&mut self) -> Result<f64, Violation> {
         let field = self.steady_state()?;
         let mut moved: f64 = 0.0;
@@ -4913,6 +5460,49 @@ mod tests {
                     apart <= 1e-6 * by.abs() + floor,
                     "pair {index}: end {end}'s slope is {slope:e} W/K and what crosses moves by \
                      {by:e} W/K, {apart:e} apart"
+                );
+            }
+        }
+    }
+
+    /// **The couplings are the cross derivatives of what crosses**: what `a`'s cell takes in moving
+    /// with `b`'s temperature, and `b`'s with `a`'s — the off-diagonal the steady solve's step on
+    /// the levels of several bodies is built from — against central differences, over the same
+    /// eight thousand pairs and their air. And without air, each is the other end's slope.
+    #[test]
+    fn a_crossings_couplings_are_its_cross_derivatives() {
+        for index in 0..2000 {
+            let (c, (ga, ta), (gb, tb), air) = a_pair(index);
+            let pair = super::crossing(c, (ga, ta), (gb, tb), air);
+            let (by_b, by_a) = pair.couplings(c);
+            let a_takes = |t: f64| {
+                let p = super::crossing(c, (ga, ta), (gb, t), air);
+                -p.watts * p.from_a
+            };
+            let b_takes = |t: f64| {
+                let p = super::crossing(c, (ga, t), (gb, tb), air);
+                p.watts * p.to_b
+            };
+            let (da, db) = (1e-4 * ta, 1e-4 * tb);
+            let moved_by_b = (a_takes(tb + db) - a_takes(tb - db)) / (2.0 * db);
+            let moved_by_a = (b_takes(ta + da) - b_takes(ta - da)) / (2.0 * da);
+            let hot = ta.max(tb).max(air.map_or(0.0, |(_, t)| t));
+            let floor = 1e-12 * 4.0 * c * hot * hot * hot;
+            for (end, coupling, by) in [("a by b", by_b, moved_by_b), ("b by a", by_a, moved_by_a)]
+            {
+                let apart = (coupling - by).abs();
+                assert!(
+                    apart <= 1e-6 * by.abs() + floor,
+                    "pair {index}: {end}'s coupling is {coupling:e} W/K and what crosses moves by \
+                     {by:e} W/K, {apart:e} apart"
+                );
+            }
+            if air.is_none() {
+                let (at_a, at_b) = pair.slopes(c);
+                assert_eq!(
+                    (by_b.to_bits(), by_a.to_bits()),
+                    (at_b.to_bits(), at_a.to_bits()),
+                    "pair {index}: without air a coupling is the other end's slope"
                 );
             }
         }

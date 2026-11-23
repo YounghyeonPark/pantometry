@@ -722,7 +722,10 @@ fn emissivity_of(node: &NodeState) -> f64 {
 /// lines, and a linear-algebra dependency would have to clear `deny.toml` and the WebAssembly
 /// jobs to save them. Partial pivoting by magnitude, which is deterministic — the same matrix
 /// gives the same pivots on every platform, as everything in this workspace must.
-fn solve(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> {
+///
+/// `Solid3D::steady_state` solves with it too: the levels of the bodies a clearance joins, a
+/// handful of unknowns for the same reason a network is a handful of nodes.
+pub(crate) fn solve(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> {
     for col in 0..n {
         let (mut best, mut best_at) = (a[col * n + col].abs(), col);
         for row in col + 1..n {

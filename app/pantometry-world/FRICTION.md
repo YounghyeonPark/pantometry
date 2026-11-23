@@ -1135,12 +1135,16 @@ like a finding — it was written as one, at a percent, and then measured across
 ```text
    0.000%  24-a-power-module              0.000041 K
    0.020%  30-two-phases-crossing         0.004503 K
-   0.211%  29-a-designed-bracket          0.046502 K
-   0.540%  25-what-140-kelvin-does        0.757912 K
-  10.385%  19-a-coating-stops-the-heat   18.693843 K
-  13.256%  15-a-hot-spot-in-a-block       7.953824 K
-  63.596%  23-a-part-radiating-to-its-lid 178.069152 K
+   0.093%  29-a-designed-bracket          0.020171 K
+   0.540%  25-what-140-kelvin-does        0.757915 K
+   5.878%  19-a-coating-stops-the-heat   10.580868 K
+  13.273%  15-a-hot-spot-in-a-block       7.964059 K
+  63.609%  23-a-part-radiating-to-its-lid 178.105051 K
 ```
+
+Measured again when a part that loses nothing was made to keep its heat: `19` and `15` moved with
+that, from 18.693843 K and 7.953824 K, and `29`, `25` and `23` had moved since the table was first
+written, from 0.046502 K, 0.757912 K and 178.069152 K, by commits it did not follow.
 
 The last three are transient **on purpose** — `19`'s claim is the interface step before the front
 reaches the glass, and running it to steady state moves the steepest step off the interface and

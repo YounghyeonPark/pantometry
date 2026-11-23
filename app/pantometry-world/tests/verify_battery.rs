@@ -1009,6 +1009,45 @@ fn the_battery_says_how_far_a_run_stopped_from_its_balance() {
     assert!(report.contains("still to come"), "{report}");
 }
 
+/// **An insulated block is measured against the heat it holds**, which is where its march goes.
+///
+/// It balances at any level, and the solve answered wherever its relaxation drifted: four cells of
+/// a block like this, one at 100 °C, came to 14.48 °C rather than the 40 °C they hold, and a block
+/// made like `19-a-coating-stops-the-heat` reported 18.69 K still to come where 10.58 K was. Here a
+/// copper bar of eight cells, two at 100 °C and six at 20 °C, run for a nanosecond, which moves no
+/// cell by more than `dt·α/dx²·ΔT` = 9.4e-6 K: what is still to come is the hot cells' 60 K down to
+/// the 40 °C the bar holds.
+#[test]
+fn an_insulated_block_is_measured_against_the_heat_it_holds() {
+    let s = scene(
+        r#"{
+  "title": "a bar evening out",
+  "duration_s": 1e-9,
+  "frames": 2,
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    { "kind": "block", "name": "bar", "cells": [8, 1, 1], "cell_mm": 1.0,
+      "initial_c": 20.0, "material": "copper",
+      "regions": [{ "material": "copper", "from": [0, 0, 0], "to": [2, 1, 1],
+        "initial_c": 100.0 }] }
+  ]
+}"#,
+    );
+    let b = verify(&s, false).expect("it runs");
+    let (_, moved, _) = b
+        .base
+        .arrival
+        .first()
+        .unwrap_or_else(|| panic!("nothing was measured: {:?}", b.base.arrival));
+    println!("  {moved:.9} K still to come");
+    // The run's own movement, 9.4e-6 K, and the solve's, ten microkelvin — see
+    // `a_part_that_loses_nothing_keeps_the_heat_it_holds.rs`.
+    assert!(
+        (moved - 60.0).abs() < 2e-5,
+        "the bar holds 40 C, so its hot cells have 60 K to come, not {moved:.9}"
+    );
+}
+
 /// **A domain with no steady state to be short of is left out, not reported as arrived.**
 ///
 /// The difference between "it arrived" and "the question does not apply". A block generating heat

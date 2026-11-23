@@ -107,8 +107,9 @@ struct Slab {
 }
 
 /// How far a cell of the slab may be from the closed form, K. The steady solve stops when a
-/// sweep moves the field by less than a microkelvin, and what that leaves is measured at 7.2e-6 K
-/// at most here; against the air charged at the centre, which missed by 41 K and more on the
+/// sweep moves the field by less than a microkelvin, and what that leaves is measured at 5.9e-6 K
+/// at most here, over-relaxed as long as the slab rather than as its block, which with the void
+/// is twice as long: 7.2e-6 K that way; against the air charged at the centre, which missed by 41 K and more on the
 /// slabs of `k = 0.6`, 16.7 K on the one the air heats and 0.025 K on the conductor, at 32 cells.
 const CELL: f64 = 1e-4;
 
@@ -162,11 +163,15 @@ fn a_slab_facing_air_sits_where_one_facing_a_room_does() {
             ..poor
         },
         // A sink inside and air hotter than the slab: the heat comes in through the surface.
+        // **Above absolute zero everywhere.** At 600 K and 400 K the parabola put the insulated end
+        // at −133 K, which `steady_state` now refuses as no balance at all; the problem is linear,
+        // so 300 K higher is the same flux, the same parabola and the same `q'''dx²/8k`, with
+        // its insulated end at 166.7 K.
         Slab {
             name: "air hotter than the slab",
             facing: past(0, true),
-            air: 600.0,
-            settles_at: 400.0,
+            air: 900.0,
+            settles_at: 700.0,
             ..poor
         },
         // A conductor, whose half cell is one part in 250 of its film's resistance at 4 mm.

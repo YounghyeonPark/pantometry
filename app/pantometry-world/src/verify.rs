@@ -447,7 +447,8 @@ fn representation_scale(unit: &str, magnitude: f64) -> f64 {
 /// Solves each block where it stands and reports how far the solve had to move it. A block that
 /// arrived moves by nothing; one stopped halfway moves by what is left. Domains with no steady
 /// state — melting, or heat with nowhere to go — are left out rather than reported as zero, which
-/// is the difference between "it arrived" and "the question does not apply".
+/// is the difference between "it arrived" and "the question does not apply". An insulated block
+/// is measured against the level its own heat sets, which is where its march goes.
 ///
 /// Called after the run, on the world the run left behind, so the block is at the last frame.
 fn how_far_from_settled(
@@ -2057,12 +2058,15 @@ the other two refusals (worst step; not comparable to each other — the first i
         // ```text
         //    0.000%  24-a-power-module              0.000041 K
         //    0.020%  30-two-phases-crossing         0.004503 K
-        //    0.211%  29-a-designed-bracket          0.046502 K
-        //    0.540%  25-what-140-kelvin-does        0.757912 K
-        //   10.385%  19-a-coating-stops-the-heat   18.693843 K
-        //   13.256%  15-a-hot-spot-in-a-block       7.953824 K
-        //   63.596%  23-a-part-radiating-to-its-lid 178.069152 K
+        //    0.093%  29-a-designed-bracket          0.020171 K
+        //    0.540%  25-what-140-kelvin-does        0.757915 K
+        //    5.878%  19-a-coating-stops-the-heat   10.580868 K
+        //   13.273%  15-a-hot-spot-in-a-block       7.964059 K
+        //   63.609%  23-a-part-radiating-to-its-lid 178.105051 K
         // ```
+        //
+        // Measured again when a part that loses nothing was made to keep its heat, which moved
+        // `19` from 18.693843 K and `15` from 7.953824 K; `29`, `25` and `23` had moved before it.
         //
         // The last three are transient **on purpose**. `19`'s whole claim is the interface step
         // before the front reaches the glass, and running it to steady state moves the steepest
