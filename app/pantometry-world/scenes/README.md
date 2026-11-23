@@ -544,12 +544,12 @@ cells across is 3.08 m tall, and its (1,1) mode is 67.97 Hz rather than the 67.6
 nominal dimensions predict.
 
 **The bar's peak is not its mean.** In `04`, six joules raise 20 mm of aluminium by 1.240 K on
-average, but the peak reads 1.302 K after four seconds. Heat arriving on a plain channel has no
+average, but the peak reads 1.332 K after four seconds. Heat arriving on a plain channel has no
 place, so `Bar1D` puts it in the first cell and conduction has not finished levelling it.
 
 **A bar's panel is in kelvin and its readings are in celsius**, and both say which. The field
 returns what the cells hold; celsius is a conversion a view chooses, and no view here makes it.
-So `04` prints `|K| 294.4821` for a bar whose hottest cell is at 21.33 °C. It said `|C| 21.3321` while this
+So `04` prints `|K| 294.4823` for a bar whose hottest cell is at 21.33 °C. It said `|C| 21.3321` while this
 application sampled fields itself and applied the offset in the same expression as the label —
 which meant nothing could disagree with anything. `FRICTION.md` 22 is that gap, still open.
 

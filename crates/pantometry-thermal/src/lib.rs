@@ -594,27 +594,19 @@ impl Domain for Bar1D {
 
         let capacity = self.cell_capacity();
 
+        // Heat that knows where it landed, taken first because it is the take that can be
+        // refused, and a refused step should leave the bus and the bar as it found them. It
+        // came second, after the lumped share had gone into cell 0, so a step refused for a
+        // flux on the wrong grid kept the share it had already taken.
+        let arriving = match self.boundary.as_ref() {
+            Some(boundary) => Some(bus.take_on(boundary, HEAT)?),
+            None => None,
+        };
         // Lumped heat has no place, so it goes into the first cell — where a surface
         // absorbing light would put it, if the bar knew where the surface was. This step's
         // share of it: the bar subcycles hard under `Schedule::Multirate`, and taking the whole
         // interval at once would put every joule of it in the first substep.
         let gained = bus.take_share(HEAT, dt);
-        self.absorbed += gained;
-        self.cells[0] += gained / capacity;
-
-        // Heat that does know where it landed. Taken before the conduction sweep so it
-        // spreads on the same step it arrives, and taken out of the borrow of `boundary`
-        // before the cells are written to.
-        let arriving = match self.boundary.as_ref() {
-            Some(boundary) => Some(bus.take_on(boundary, HEAT)?),
-            None => None,
-        };
-        if let Some(flux) = arriving {
-            for (cell, joules) in self.cells.iter_mut().zip(flux.per_face()) {
-                *cell += joules / capacity;
-            }
-            self.absorbed += flux.total();
-        }
 
         // Insulated ends: the boundary cell exchanges with its one neighbour only,
         // which is what makes the total conserved to the last bit.
@@ -624,6 +616,28 @@ impl Domain for Bar1D {
             let left = previous[i.saturating_sub(1)];
             let right = previous[(i + 1).min(last)];
             self.cells[i] = previous[i] + f * (left - 2.0 * previous[i] + right);
+        }
+
+        // The heat goes in after the sweep, as a source the step adds: `T′ = T + F·∇²T + s`,
+        // the sweep reading the state the step began in. It went in before, "so it spreads on
+        // the same step it arrives", and that read the bar a sweep ahead of its heat: from a
+        // uniform start, the state after every step was this order's with one more sweep taken
+        // and nothing arriving, to the bit, so a settled bar read every cell one step's arrival
+        // short, less its mean. Nothing was lost, so no audit could see it. Under constant power
+        // into the first of 16 cells the first gap carried 0.893, 0.733 and 0.467 of its share
+        // at Fourier numbers of 0.1, 0.25 and 0.5 — `1 − F·n/(n − 1)` exactly — and the beam in
+        // `beam_heats_where_it_lands.rs` read its settled hot spot 1.04% low at a 0.5 ms window,
+        // where it reads 0.19% now. Added after, every gap carries its share at every step,
+        // because a forward step settles on the semi-discrete profile of a linear operator
+        // exactly. `ThermalNetwork` met the same thing on its first joint and says so beside its
+        // own source.
+        self.cells[0] += gained / capacity;
+        self.absorbed += gained;
+        if let Some(flux) = arriving {
+            for (cell, joules) in self.cells.iter_mut().zip(flux.per_face()) {
+                *cell += joules / capacity;
+            }
+            self.absorbed += flux.total();
         }
         Ok(())
     }
@@ -1326,6 +1340,11 @@ mod tests {
         resolved
             .step(Time::ZERO, Time::from_si(1e-4), &mut bus)
             .unwrap();
+        // And a step with nothing arriving, for the spot to spread: the heat goes in after the
+        // sweep, so the step that brings it leaves every other cell where it was.
+        resolved
+            .step(Time::ZERO, Time::from_si(1e-4), &mut bus)
+            .unwrap();
 
         // Same energy in, by the domain's own accounting.
         assert!(
@@ -1360,11 +1379,18 @@ mod tests {
             (resolved_end - 20.0).abs() < 1e-9,
             "and the end is untouched"
         );
-        // Symmetric about the spot, which a one-sided injection can never be.
+        // Spread to both sides of the spot, and symmetrically, which a one-sided injection can
+        // never be. Spread first: after the step that brought the heat its neighbours were at
+        // 20 °C still, and two cells at rest are symmetric about anything.
+        let left = resolved.temperature_at(9).in_celsius() - 20.0;
+        let right = resolved.temperature_at(11).in_celsius() - 20.0;
         assert!(
-            (resolved.temperature_at(9).in_celsius() - resolved.temperature_at(11).in_celsius())
-                .abs()
-                < 1e-12
+            left > 1e-2,
+            "the spot did not spread: its neighbour rose {left} K"
+        );
+        assert!(
+            (left - right).abs() < 1e-12,
+            "asymmetric about the spot: {left} K against {right} K"
         );
     }
 
@@ -1384,20 +1410,46 @@ mod tests {
         .exposing("bar face", Area::from_si(1e-4));
         let boundary = bar.boundary().unwrap().clone();
 
+        // A joule with no place first, which the bar puts in its first cell, so that it has a
+        // gradient: on a uniform bar a sweep moves nothing, and a refused step that had swept
+        // would look like one that had not.
+        let mut bus = Exchange::new();
+        bus.publish(HEAT, 1.0);
+        bar.step(Time::ZERO, Time::from_si(1e-4), &mut bus).unwrap();
+        let before: Vec<f64> = (0..21).map(|i| bar.temperature_at(i).to_si()).collect();
+        assert!(
+            before[0] > before[1] + 1.0,
+            "the first step left no gradient to move: {before:?}"
+        );
+
         // An illuminator on a 64-pixel grid, which is a perfectly reasonable thing to be.
         let camera = Interface::uniform("bar face", 64, Area::from_si(1e-4) * (21.0 / 64.0));
-        let mut bus = Exchange::new();
         bus.publish_on(&camera, HEAT, &Flux::spread_over(2.0, &camera))
             .unwrap();
+        // And another joule with no place.
+        bus.publish(HEAT, 1.0);
 
         let err = bar
             .step(Time::ZERO, Time::from_si(1e-4), &mut bus)
             .expect_err("a 64-face flux is not a 21-cell bar");
         assert!(err.quantity.contains("expected 21"), "{err}");
-        assert!(
-            (bar.temperature_at(10).in_celsius() - 20.0).abs() < 1e-9,
-            "and nothing was heated"
+        // Nothing moved and nothing was taken: every cell is where it was, to the bit, and the
+        // plain joule is still on the bus. It was not, while the step took the plain share
+        // first, put it in cell 0 and counted it absorbed, and only then met the flux it could
+        // not read.
+        for (i, was) in before.iter().enumerate() {
+            assert_eq!(
+                bar.temperature_at(i).to_si(),
+                *was,
+                "cell {i} moved in a step that was refused"
+            );
+        }
+        assert_eq!(
+            bar.absorbed_energy().to_si(),
+            1.0,
+            "the refused step counted heat absorbed"
         );
+        assert_eq!(bus.peek(HEAT), 1.0, "the refused step took the plain joule");
 
         // Resampling first is what works, and the bar then gets all of it.
         let crossed = bus
@@ -1407,7 +1459,7 @@ mod tests {
             .unwrap();
         bus.publish_on(&boundary, HEAT, &crossed).unwrap();
         bar.step(Time::ZERO, Time::from_si(1e-4), &mut bus).unwrap();
-        assert!((bar.absorbed_energy().to_si() - 2.0).abs() < 1e-12);
+        assert!((bar.absorbed_energy().to_si() - 4.0).abs() < 1e-12);
         assert!(bus.unclaimed().next().is_none());
     }
 

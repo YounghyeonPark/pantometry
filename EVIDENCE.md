@@ -117,6 +117,18 @@ film moved into the sweep, and the test that held it accepted either a refusal o
 cube no longer reached, and passed on the second. Taken after the sweep, as a source already was,
 the heat arrives without being shed: `tests/heat_off_the_bus_arrives_after_the_sweep.rs`.
 
+`Bar1D` did the same with no film to shed into, and it was still not harmless. With its heat in
+first, from a uniform start its state after every step was the right one with one more sweep
+taken and nothing arriving, to the bit: a settled bar read every cell one step's arrival short,
+less its mean. Under constant power into the first of 16 cells the first gap carried
+`1 − F·n/(n − 1)` of its share, 0.467 at the limit, and the beam above read its settled hot spot
+1.04% low at a 0.5 ms window, where the heat after the sweep reads 0.19% and a window the bar
+takes in one step stops mattering at all. Every total was right throughout. The grid test's
+first-order convergence, which a comment put down to sampling, was that and its coupling window
+together: at a window each grid takes in a step, the gap shrinks by 3.96 a doubling.
+`tests/a_bar_takes_its_heat_after_its_sweep.rs` holds each gap to Fourier's law at every step up
+to the limit, stepped by hand and under the scheduler.
+
 ## Closed form where there is one
 
 `Motion` is a function of `t`: ask for the world at 0.7 s and you get it, without

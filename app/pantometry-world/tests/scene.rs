@@ -1266,7 +1266,7 @@ fn every_scene_that_ships_runs_and_says_something_true() {
             // from the substance and not from the bar.
             //
             // Against the *mean*, and read from the domain rather than the panel. Two traps
-            // in one assertion, both met while writing it. The peak is 1.30 K, not 1.24,
+            // in one assertion, both met while writing it. The peak is 1.33 K, not 1.24,
             // because heat arriving on a plain channel has no place and `Bar1D` puts it in
             // cell 0 — four seconds of conduction have not finished levelling it, and that
             // gradient is the physics rather than an error. And a mean taken over the panel
@@ -1285,10 +1285,12 @@ fn every_scene_that_ships_runs_and_says_something_true() {
                     (mean / want - 1.0).abs() < 1e-6,
                     "{name}: the bar holds every joule: wanted {want:.4} K, got {mean:.4}"
                 );
+                // The panel is in kelvin. This subtracted 20 from it from the commit that made it
+                // kelvin on, and asked whether 274 K was above 1.24 K, which a flat bar passes.
                 assert!(
-                    peak - 20.0 > mean,
+                    peak - 293.15 > mean,
                     "{name}: the fed end should still be above the mean, peak {:.4} against mean {mean:.4}",
-                    peak - 20.0
+                    peak - 293.15
                 );
             }
             // The beam lands in the middle, so the middle must be hotter than the ends. A

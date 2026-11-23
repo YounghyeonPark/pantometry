@@ -632,6 +632,55 @@ protects nothing.
 
 ### Fixed
 
+- **A bar read itself a sweep ahead of the heat it was given** (`pantometry-thermal`). `Bar1D` put
+  the heat it took off the bus — its lumped share into the first cell, and a flux onto its faces —
+  into its cells before its sweep read them, "so it spreads on the same step it arrives". From a
+  uniform start that made its state after every step the right one with one more sweep taken and
+  nothing arriving, to the bit, so a settled bar read every cell one step's arrival short, less its
+  mean. Nothing was lost, the heat staying in the bar and only moving along it, so no audit could
+  see it; what moved was the shape the bar settles to, which then depended on its step.
+  - **Measured on an insulated bar of 16 cells under constant power into its first**, the first
+    gap carried 0.893, 0.733 and 0.467 of its share at Fourier numbers of 0.1, 0.25 and 0.5 —
+    `1 − F·n/(n − 1)` exactly — and every other gap all of its own.
+  - **In `beam_heats_where_it_lands.rs`** the settled hot spot read 1.04% low at a 0.5 ms window
+    and reads 0.19% low now, so that test's tolerance is 0.5% rather than 2%: just over the larger
+    of the two errors left, the grid's +0.26%, measured alone, and the window's −0.45%, the
+    difference. A window the bar takes in one step no longer matters at all — 0.4 ms settles where
+    0.2 ms does to 1.5e-10, where the old order put them 7.0e-3 apart — and the coupling test
+    asserts it. Its grid test said refining halves the gap, "the first-order convergence a
+    midpoint-sampled profile has"; that was its 1 ms windows with the old order, and at a window
+    each grid takes in one step the gap shrinks by 3.96 a doubling in either order.
+  - **The heat goes in after the sweep now**, where a forward step settles on the semi-discrete
+    profile exactly at any step, as `ThermalNetwork`'s source has since it met the same thing on its
+    first joint. **And the flux is taken first**, because it is the take that can be refused: a
+    step refused for a flux on the wrong grid had already put the lumped share into the first cell,
+    counted it absorbed and taken it off the bus.
+  - **`crates/pantometry-thermal/tests/a_bar_takes_its_heat_after_its_sweep.rs`.** Constant power
+    into the first cell, and onto the faces in a profile with no symmetry, settles every gap where
+    Fourier's law puts it — `kA·ΔT/dx` carrying what the cells beyond it take — at a tenth to all
+    of the limit, to 1e-10 K against 8.8e-12 K measured, and so does a heater's window handed to
+    the bar's four substeps a share at a time by `Schedule::Multirate`; a slug at the limit is the
+    step without it with the rise added in every cell, to 1e-13 K.
+  - **Two checks the change had made, or found, empty.** `heat_arrives_where_the_flux_says_it_did`
+    compared the spot's two neighbours after the step that brought the heat, which leaves both at
+    rest now, and takes a second step for them to differ from 20 °C before it asks whether they
+    agree. And `a_flux_on_the_wrong_grid_stops_the_step` refused a step on a uniform bar, where a
+    sweep moves nothing; it refuses one on a gradient now and holds every cell to the bit.
+  - **Nine sabotages**, each failing exactly the tests it claims: the heat before the sweep, as
+    shipped; the plain share alone before it, and the flux alone; the heat counted and never added;
+    the plain share taken before the flux; the rise added twice; the flux taken after the sweep,
+    which only the refused step sees; the faces mirrored, which only the profile with no symmetry
+    and the slug see; and the plain channel taken whole on a window's first substep, which only the
+    scheduler's test sees.
+  - **The shipped scenes**: the four that heat a bar, `04`, `05`, `10` and `14`, move at the seven
+    figures they are written to — the fed cell by 0.019, 0.004, 0.035 and 0.014 K at most — and
+    the other thirty are the same to the byte. Their checks read means, energies and orderings,
+    which cannot see it, and one of them could see nothing: `04` asked whether its bar's fed end
+    was above the mean by subtracting 20 from a panel in kelvin, from the commit that made it
+    kelvin on, so 274 against 1.24 and a flat bar passing. It subtracts 293.15 now. The scenes
+    README quoted `04`'s peak as 1.302 K, which was already stale: 1.3321 K before this change and
+    1.3323 K after. The tiles of `04`, `05` and `10` are redrawn, and `23`'s, which had been a
+    picture of its scene from before `2a0681e`.
 - **Heat off the bus was shed by the step that brought it** (`pantometry-thermal`). `Solid3D` put
   the heat it took off the bus into its cells before its sweep read them, so the film met the
   heated state and shed a share `θ = dt·G/C` of that heat in the same step. The books balanced,

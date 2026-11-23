@@ -283,9 +283,16 @@ fn the_answer_does_not_depend_on_the_grid() {
     }
 
     // The peak converges. It is a sampled value of a continuous field, so it is not
-    // identical across grids — a coarse cell averages over more of the profile and reads
-    // low. Refining must reduce the disagreement, and it does: doubling the grid roughly
-    // halves it, which is the first-order convergence a midpoint-sampled profile has.
+    // identical across grids, and refining must reduce the disagreement. It does, but most of
+    // what this measures is not the grid: the windows are 1 ms, which these bars take in 1, 3
+    // and 9 substeps with the window's flux whole in the first, so each grid reads a coupling
+    // error of its own as well. Over 41, 81, 161 and 321 cells the change from each grid to the
+    // next shrinks by 3.4 and then 2.9, and 41 cells read 1.9% over 161; at windows of 0.02 ms,
+    // which every one of them takes in one step, it shrinks by 3.96 both times — second order,
+    // the grid alone — and 41 cells read 0.51% over. This said a coarse cell reads low and that
+    // doubling the grid halves the gap, the first-order convergence a midpoint-sampled profile
+    // has. That was the window, with the bar conducting its heat in the step that brought it:
+    // in that order the change shrank by 2.2 and then 2.0, from below.
     let coarse_gap = (coarse_peak / fine_peak - 1.0).abs();
     let medium_gap = (medium_peak / fine_peak - 1.0).abs();
     assert!(
@@ -441,8 +448,14 @@ fn the_profile_settles_to_a_shape_that_matches_the_reference_solution() {
         )
     };
 
-    // A coupling window comfortably under the bar's own 0.44 ms step, so the transfer
-    // interval is not the limiting error — the test below is about what happens when it is.
+    // A coupling window of 0.5 ms, just over the bar's own 0.44 ms step, so the bar takes each
+    // in two substeps and the first takes the window's flux whole — `take_on` hands a flux over
+    // entire. The grid adds 0.26% to the excess, measured alone at windows of 0.2 ms and under,
+    // where the bar steps once a window and the error stops moving: +0.2613% at 0.2, 0.1 and
+    // 0.05 ms. Together they read 0.19% low here, so the window's own share is the difference,
+    // 0.45% low. The tolerance below is just over the larger of the two, so either alone passes
+    // it. It was 2%, while the bar conducted its heat in the step that brought it and this read
+    // 1.04% low. The test below is about what happens when the window is the larger error by far.
     let window = Time::ms(0.5);
     // Eight seconds, against a bar diffusion time L²/α of 5.8 s. The excess was measured
     // constant to twelve figures from six seconds on, so this is well past settled.
@@ -458,7 +471,7 @@ fn the_profile_settles_to_a_shape_that_matches_the_reference_solution() {
         (-2.0 * ((u - 0.5) * SPAN / waist).powi(2)).exp()
     });
     assert!(
-        (first_excess / reference - 1.0).abs() < 0.02,
+        (first_excess / reference - 1.0).abs() < 0.005,
         "the settled shape must match the reference: {first_excess} K against {reference} K"
     );
 
@@ -561,5 +574,19 @@ fn the_coupling_interval_is_an_error_source_and_it_converges() {
         error(fine) < 0.005,
         "a 0.2 ms window should be inside half a percent, got {:.4}",
         error(fine)
+    );
+
+    // And once the bar takes a window in a single step, the window stops being an error at
+    // all: the bar adds its heat after its sweep, a forward step settles on its semi-discrete
+    // profile whatever the step, and 0.4 ms — one step at 0.91 of its limit — settles where
+    // 0.2 ms does. Measured 1.5e-10 apart, the rounding of marches 20 000 and 40 000 windows
+    // long, which an ulp at 294 K over the slowest mode's decay a step bounds at about 1e-9 of
+    // the excess. They were 7.0e-3 apart while the bar conducted its heat in the step that
+    // brought it, an error first order in the step.
+    let (_, one_step) = settled(0.4);
+    assert!(
+        (one_step / fine - 1.0).abs() < 1e-8,
+        "a window the bar takes in one step must not matter: {one_step} K at 0.4 ms against \
+         {fine} K at 0.2 ms"
     );
 }
