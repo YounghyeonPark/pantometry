@@ -632,6 +632,87 @@ protects nothing.
 
 ### Fixed
 
+- **A number no body can have ran as one that looked plausible** (`pantometry-thermal`,
+  `pantometry-core`). The four thermal domains took a conductivity, a capacity, a density, an
+  emissivity, a phase change, a film, an area or an ambient that could not describe anything, and
+  stepped it. Measured on each before the change, by hand and through `Simulation`:
+  - **An insulator, in silence.** A `Solid3D` whose conductivity was `NaN`, infinite or negative,
+    its liquid's too, conducted nothing: the face mean is guarded at zero and each of those reads as
+    zero there, so the limit was infinite, nothing moved, and the audit agreed. A conductivity
+    without limit reads as `NaN` once mixed by phase, so between two cells it carried nothing; it
+    only ever worked in a block of one cell.
+  - **Heat up its gradient.** A negative specific heat or density diffused to 1e37 K in a block,
+    and gave a `Bar1D` a negative limit that it stepped under. A liquid whose specific heat was
+    negative took a block with no way to lose heat from 100 °C to −8.6 °C, through `Simulation` and
+    past `Substance::check`.
+  - **A phase that could not be named.** A melting point of `NaN` made every cell of a block `NaN`,
+    and a latent heat of zero or less held a cell in the phase it began in: ice at −1 °C given
+    eleven kelvin of its own heat sat solid at +10 °C, where it stops at 0 °C 6.1% melted.
+  - **Films that lost nothing, or `NaN`.** A negative film coefficient or area, a negative or `NaN`
+    coefficient for the air in a void, and a negative mounting lost nothing, and a `NaN` mounting
+    was read as none. A `NaN` emissivity, film, area or ambient made a block `NaN`, which
+    `Simulation` refused once a film had acted on it, as "energy at simulation", naming neither the
+    block nor the number, and made a `LumpedMass` or a `ThermalNetwork` `NaN` with no refusal at
+    all.
+    Emissivities of 1.5 and −0.5 radiated more than a black body and took in what they sent, in
+    every domain that radiates, and an ambient below absolute zero was taken as one.
+  - **A panic.** `Solid3D::steady_state` on a face or air whose ambient was `NaN` panicked in the
+    clamp that damps its uniform shift, rather than answering.
+  - **Refused now, by name and with the value, before anything moves or is taken off the bus**,
+    by every domain's `step` and by both `steady_state`s: a conductivity finite and zero or more, a
+    specific heat and a density finite and positive, an emissivity in `0..=1`, and in a block the
+    liquid's three, a melting point above absolute zero and a positive latent heat; a film, area
+    and ambient finite and zero or more. Every substance a block was given, every face, mounting
+    and node, not only the first. A film, mounting or air without limit is allowed on a block,
+    where it is a surface held at its ambient behind a half cell, and refused on a lumped body,
+    where its limit is zero. In `step` rather than a constructor's `Result`, so no signature
+    changed: it is where `Solid3D` already refused a bad joint.
+  - **`k = 0` stays a fill**, as `Solid3D` documents it, though `Substance::check` refuses it. A
+    substance with no thermal properties is refused as it was, by the cells that hold one.
+  - **A film without limit on a face that radiates did not work**, and this change had allowed it.
+    The surface was solved for as `∞/∞`, so a cell stepped to `NaN` within twenty steps at half its
+    limit while the limit, which reads the film through the half cell, said the step was fine, and
+    the steady solve reported that it diverged. The film carries the half cell now, which is what
+    the limit already charged.
+  - **The clamp cannot panic.** A field that has stopped being a number reports that the balance
+    diverged; a cell given a temperature of `NaN` still reaches it, with every input possible.
+  - **`Substance::check` refuses the liquid's conductivity and specific heat** as it does the
+    solid's, beside the liquid's emissivity, which it already refused. A scene's own substance
+    could carry a negative liquid capacity past it.
+  - **`crates/pantometry-thermal/tests/an_impossible_number_is_refused_by_name.rs`.** Every case
+    above, in every domain it reaches, refused naming the number and carrying it bit for bit —
+    in an insert of a good block, on a second face, mounting and node as well as the first — with
+    every temperature as it was, the heat waiting on the bus still there and nothing lost, on films
+    20 K below the cells so that each would have acted; the steady states refusing as the steps do;
+    through `Simulation` at the first advance; a substance no cell holds still refused. And the
+    limits a caller can mean still run, against their closed forms: a conductivity of zero moves
+    nothing, a bar's given heat staying in its first cell; a film, area, mounting or air of zero
+    loses nothing; a mounting without limit is the face bolted to its film, bit for bit, on a film
+    that loses; air at absolute zero takes heat; one step of a radiating face held at the room is
+    `T − G(T − T∞)·dt/C` behind its half cell, and of a black body to a room and to absolute zero
+    `σA(T⁴ − T∞⁴)·dt/C`, each to the bit; and a film and air without limit, marched and then
+    solved, hold the steady line `T∞ + P·x/(kA)` to 1e-5 K — ten times the solve's stopping rule
+    and 2.8 times the larger error measured, 3.6e-6 K, which an `f64` emulation of the solve
+    reproduces to four figures.
+  - **Two cases moved**, each of a test whose substance the step now refuses: the film's "a cell of
+    solid whose liquid's emissivity is not a number" in `a_melted_surface_radiates_as_its_liquid.rs`,
+    one of its seven, and the step's "a cell that conducts without limit" in
+    `a_radiating_face_sheds_from_its_surface.rs`. Each is a test of its own now that holds the limit
+    it was there for — a solid cell reading nothing of its liquid, a surface with nothing behind it
+    — and asks that the step refuse.
+  - **Thirty sabotages**, each failing exactly the tests it claims with every claimed line seen:
+    each bound dropped, or moved to refuse an insulator or a block's film without limit, or to take
+    a heat capacity of zero or a lumped film without limit; the phase change not read, and its
+    melting point and latent heat each unbounded; the film without limit solved for again; only the
+    first substance, face, mounting or node asked, and only the last substance; a mounting and the
+    air not asked; each `step` and each `steady_state` not asking, and the block's balance asking
+    after it refuses a block that melts; the bar taking its share before it asks; the clamp
+    unguarded; and the kernel's check skipping the liquid.
+  - **Found by the reviews and left for items of their own:** `LumpedMass::equilibrium_rise`,
+    `time_constant` and `biot_number` answering for inputs `step` refuses — 99.2 K for a `NaN`
+    emissivity where the answer is 49.9 K; geometry nobody checks, a bar of no cross-section
+    stepping to `NaN`; and a heated block whose films carry nothing answering its own starting
+    field as its steady state.
 - **A bar read itself a sweep ahead of the heat it was given** (`pantometry-thermal`). `Bar1D` put
   the heat it took off the bus — its lumped share into the first cell, and a flux onto its faces —
   into its cells before its sweep read them, "so it spreads on the same step it arrives". From a

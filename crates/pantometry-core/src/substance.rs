@@ -787,7 +787,22 @@ impl Substance {
             // The liquid's emissivity is what a melted surface radiates with, so it is held to the
             // range the solid's is. Nothing of the liquid was checked, and while its emissivity was
             // carried and never read that cost nothing.
+            //
+            // Its conductivity and specific heat are held to the solid's rule too, and were not
+            // when the emissivity was: a liquid that conducted `NaN` or a negative amount ran as an
+            // insulator once melted, and one whose specific heat was negative took a block with no
+            // way to lose heat from 100 °C to −8.6 °C, past this check and every one after it.
             if let Some(l) = f.liquid {
+                positive(
+                    "the liquid's conductivity",
+                    l.conductivity.to_si(),
+                    &mut wrong,
+                );
+                positive(
+                    "the liquid's specific_heat",
+                    l.specific_heat.to_si(),
+                    &mut wrong,
+                );
                 if !(0.0..=1.0).contains(&l.emissivity) {
                     wrong.push(format!(
                         "the liquid's emissivity is a fraction of a blackbody's and must be in \

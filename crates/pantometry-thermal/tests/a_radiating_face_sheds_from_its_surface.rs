@@ -258,6 +258,57 @@ struct Cell {
     from: f64,
 }
 
+/// **No half cell at all, in the limit, and a block that refuses to step it.**
+///
+/// This was a case of the table below: a cell that conducts without limit, whose surface is its
+/// centre, which is the reading the surface's replaced and the right one there. A block refuses
+/// that conductivity now, by name and before a step moves anything — it reads as `NaN` once mixed
+/// by phase, and between two cells a face of it carried nothing at all. What is left to hold is the
+/// limit, asked of the operator rather than stepped: the capacity over the film's tangent alone,
+/// with nothing in series. The tolerance is the table's.
+#[test]
+fn a_cell_that_conducts_without_limit_has_the_films_limit_and_is_refused() {
+    let (dx, from) = (1e-3, 900.0);
+    let surface = Surface {
+        h: 0.0,
+        emissivity: 0.9,
+        ambient: 300.0,
+        mount: None,
+    };
+    let a = dx * dx;
+    let block = surface.on(
+        Solid3D::new(
+            "cell",
+            stuff(f64::INFINITY, surface.emissivity),
+            (1, 1, 1),
+            Length::from_si(dx),
+            Temperature::from_si(from),
+        ),
+        Face::XMin,
+        dx,
+    );
+    let tangent = a * 4.0 * surface.emissivity * SIGMA * from * from * from;
+    let want = RHO * C * dx * dx * dx / tangent;
+    let limit = block.max_stable_dt(Time::ZERO).to_si();
+    assert!(
+        !off((limit / want - 1.0).abs(), 1e-14),
+        "the limit is C/G = {want:.6} s, and the block reports {limit:.6} s"
+    );
+    let mut stepped = block.clone();
+    let refusal = stepped
+        .step(Time::ZERO, Time::from_si(0.25 * want), &mut Exchange::new())
+        .expect_err("a conductivity without limit is refused");
+    assert!(
+        refusal.quantity.contains("stuff's conductivity") && refusal.before == f64::INFINITY,
+        "the refusal names the conductivity and carries it: {refusal}"
+    );
+    assert_eq!(
+        stepped.temperature_at(0, 0, 0).to_si(),
+        from,
+        "a refused step moved the cell"
+    );
+}
+
 /// **A step loses what the surface sends**, at the surface's own temperature, and the limit that
 /// charged the centre's tangent still bounds it.
 #[test]
@@ -313,20 +364,6 @@ fn a_step_loses_what_the_surface_sends() {
                 mount: None,
             },
             from: 3000.0,
-        },
-        // No half cell at all: the surface is the centre, which is the reading this replaced and
-        // the right one here.
-        Cell {
-            name: "a cell that conducts without limit",
-            k: f64::INFINITY,
-            dx: 1e-3,
-            surface: Surface {
-                h: 0.0,
-                emissivity: 0.9,
-                ambient: 300.0,
-                mount: None,
-            },
-            from: 900.0,
         },
         // A mounting that conducts without limit is no mounting.
         Cell {
@@ -420,13 +457,12 @@ fn a_step_loses_what_the_surface_sends() {
         // case simplified until it could not see its defect says so: the surface read at the
         // centre, which is what this replaced and what a search started on the wrong side of the
         // root ends at; a mounting left out of the path; and convection left out of the surface.
-        // Not where nothing is behind the surface: there the centre's reading is the right one.
+        // Every case has something behind its surface: the one that had nothing, where the
+        // centre's reading is the right one, is a test of its own, because a block refuses it.
         let mut others = Vec::new();
-        if behind.is_finite() {
-            let gap = from - surface.ambient;
-            let centre = 1.0 / (1.0 / behind + 1.0 / (a * surface.sends(from) / gap));
-            others.push(("the centre's reading", dt * centre * gap));
-        }
+        let gap = from - surface.ambient;
+        let centre = 1.0 / (1.0 / behind + 1.0 / (a * surface.sends(from) / gap));
+        others.push(("the centre's reading", dt * centre * gap));
         if surface.mount.is_some_and(f64::is_finite) {
             let bare = Surface {
                 mount: None,

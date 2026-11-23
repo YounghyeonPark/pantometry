@@ -236,6 +236,36 @@ fn an_impossible_material_is_refused_by_the_field_that_is_wrong() {
             "liquid's emissivity",
         ),
         (
+            // What a melted cell conducts with. A negative or `NaN` one ran as an insulator once
+            // the cell melted, past this check and every one after it.
+            "a negative liquid conductivity",
+            base().with_fusion(
+                FusionProps::new(Temperature::celsius(44.0), LatentHeat::kj_per_kg(200.0))
+                    .with_liquid(ThermalProps {
+                        conductivity: ThermalConductivity::w_per_m_k(-0.15),
+                        specific_heat: SpecificHeat::j_per_kg_k(2200.0),
+                        expansion: ThermalExpansion::ppm_per_k(900.0),
+                        emissivity: 0.9,
+                    }),
+            ),
+            "liquid's conductivity",
+        ),
+        (
+            // What a melted cell stores with. A negative one took a block with no way to lose
+            // heat from 100 °C to −8.6 °C.
+            "a negative liquid specific heat",
+            base().with_fusion(
+                FusionProps::new(Temperature::celsius(44.0), LatentHeat::kj_per_kg(200.0))
+                    .with_liquid(ThermalProps {
+                        conductivity: ThermalConductivity::w_per_m_k(0.15),
+                        specific_heat: SpecificHeat::j_per_kg_k(-2200.0),
+                        expansion: ThermalExpansion::ppm_per_k(900.0),
+                        emissivity: 0.9,
+                    }),
+            ),
+            "liquid's specific_heat",
+        ),
+        (
             "a shear speed where the longitudinal one belongs",
             base()
                 .with_mechanical(MechanicalProps {

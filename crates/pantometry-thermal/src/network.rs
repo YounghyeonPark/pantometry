@@ -507,6 +507,9 @@ impl ThermalNetwork {
         if !p.is_finite() {
             return Err(Violation::at(self.name.clone(), "power is not finite", p));
         }
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         let sink = match self.absorbing {
             Some(i) => i,
             None if p == 0.0 => 0, // unused: with no power the source vector is zero anyway
@@ -623,6 +626,28 @@ impl ThermalNetwork {
         Ok(SteadyState {
             network: self.id,
             temperatures: t,
+        })
+    }
+
+    /// The first node whose substance or film has a number no body can have, as the refusal
+    /// [`step`](Domain::step) and [`steady_state`](ThermalNetwork::steady_state) give — see
+    /// `substance_fault` and `environment_fault` for what each is and what it did before.
+    ///
+    /// A film of `NaN` and an emissivity of `NaN` stepped to `NaN` temperatures with no refusal,
+    /// and a negative film, area or emissivity stepped as if it were a smaller one. A film without
+    /// limit was refused already, as a Fourier number of infinity, and is named now.
+    fn input_fault(&self) -> Option<Violation> {
+        self.nodes.iter().find_map(|n| {
+            let fault = crate::substance_fault(&n.substance, false).or_else(|| {
+                n.environment
+                    .as_ref()
+                    .and_then(|e| crate::environment_fault(e, false))
+            })?;
+            Some(Violation::at(
+                format!("{}/{}", self.name, n.label),
+                fault.0,
+                fault.1,
+            ))
         })
     }
 
@@ -792,6 +817,9 @@ impl Domain for ThermalNetwork {
                 "a network with no nodes",
                 0.0,
             ));
+        }
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
         }
 
         // Refuse rather than diverge, and name the node. `F_i` is the fraction of a node's

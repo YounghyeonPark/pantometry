@@ -107,8 +107,9 @@ pub const STABLE_FOURIER_3D: f64 = 1.0 / 6.0;
 /// one, which is the defect this workspace has twice found in an acoustic wall.
 ///
 /// A conductivity that is not finite leaves the film alone. An infinite one is the right limit
-/// rather than a special case. A `NaN` one is what a substance with no thermal properties reads
-/// as, and its capacity is `NaN` too, so its block's `step` is refused before this matters.
+/// rather than a special case, and a `NaN` one is what a substance with no thermal properties
+/// reads as. A block steps neither — it refuses both by name, the first because between two
+/// cells it carried nothing — so what reads this with one is the limit.
 fn series_with_half_cell(film: f64, conductivity: f64, area: f64, dx: f64) -> f64 {
     if film <= 0.0 {
         return 0.0;
@@ -174,6 +175,13 @@ const SURFACE_STEPS: usize = 64;
 ///
 /// An infinite `behind` puts the surface at the centre, which is the old form and the right one
 /// there; a zero one carries nothing.
+///
+/// **A film without limit holds the surface at the room**, so what carries the heat is `behind`
+/// alone, whatever the surface radiates. Solved for, it was `∞/∞`: the first Newton step was not a
+/// number and so was the film, and a radiating face cooled without limit stepped its cell to `NaN`
+/// while the limit — which reads the film through `series_with_half_cell`, and gets the half cell —
+/// said the step was fine. Measured on four cells of `k = 50` radiating at `ε = 0.5`: `NaN` within
+/// twenty steps at half the limit, and the steady solve reporting that it diverged.
 #[inline(never)]
 fn radiating_film(
     behind: f64,
@@ -187,6 +195,9 @@ fn radiating_film(
         |t: f64| share * (convection + radiative * (t + ambient) * (t * t + ambient * ambient));
     if behind <= 0.0 {
         return 0.0;
+    }
+    if convection == f64::INFINITY {
+        return behind;
     }
     if !behind.is_finite() {
         return secant(centre);
@@ -2218,6 +2229,11 @@ impl Solid3D {
     /// Exposing a face **tightens the stability limit**, because a cell that can also lose to
     /// air has more conductance leaving it. [`Solid3D::max_stable_dt`] accounts for it; a
     /// caller stepping by hand past the returned limit is refused as ever.
+    ///
+    /// An environment no surface can have — a coefficient that is negative or not a number, an
+    /// area that is negative or not finite, an ambient below absolute zero — is taken here and
+    /// refused by [`step`](Domain::step), naming the face. A coefficient of `+∞` is a surface
+    /// held at the ambient behind its half cell, and is not refused.
     pub fn losing_from(mut self, face: Face, environment: Environment) -> Solid3D {
         self.exposed.insert(face, environment);
         self.resolve();
@@ -2300,6 +2316,11 @@ impl Solid3D {
     ///
     /// Filling the void tightens the stability limit for every cell touching it, exactly as
     /// exposing a face does.
+    ///
+    /// A coefficient that is negative or not a number, or an ambient below absolute zero, is
+    /// refused by [`step`](Domain::step). Both used to run: a negative or `NaN` coefficient lost
+    /// nothing, and `steady_state` **panicked** on a `NaN` ambient. `+∞` holds the surfaces at the
+    /// air's temperature and is not refused.
     pub fn air_in(mut self, ambient: Temperature, w_per_m2_k: f64) -> Solid3D {
         self.air = Some((ambient.to_si(), w_per_m2_k));
         self.resolve();
@@ -2356,9 +2377,16 @@ impl Solid3D {
     /// so "the field at which every cell balances" is not a statement about temperature alone.
     ///
     /// **Not converging**, which is a real answer and is not this one.
+    ///
+    /// **A number no block can have**, as [`step`](Domain::step) refuses it, by name. A face or
+    /// air whose ambient was not a number made this **panic** rather than answer, inside the
+    /// clamp that damps the uniform shift.
     pub fn steady_state(&self) -> Result<Vec<f64>, Violation> {
         let (nx, ny, nz) = self.counts;
         let dx = self.dx.to_si();
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         if self.latent_anywhere {
             return Err(Violation::at(
                 &self.name,
@@ -2526,6 +2554,17 @@ impl Solid3D {
                     }
                 }
                 let cap = 0.25 * (mean / cells.max(1.0)).abs();
+                // **`clamp` panics on a bound that is not a number**, and a field that has stopped
+                // being one has no level to hold a step to. It is the divergence the end of the
+                // round reports, reached before the round ends. A cell given a temperature of
+                // `NaN` reaches it with every input a block can have.
+                if cap.is_nan() {
+                    return Err(Violation::at(
+                        &self.name,
+                        "the steady-state balance diverged",
+                        f64::INFINITY,
+                    ));
+                }
                 let shift = (total[b] / r).clamp(-cap, cap);
                 for (c, v) in t.iter_mut().enumerate() {
                     if body[c] == Some(b) {
@@ -2708,6 +2747,10 @@ impl Solid3D {
     ///
     /// A face with no film is unaffected: there is nothing for the joint to be in series with,
     /// and a resistance to nowhere carries nothing either way.
+    ///
+    /// A negative or `NaN` conductance is refused by [`step`](Domain::step), naming the face. A
+    /// negative one ran as a joint that carries nothing and a `NaN` one as no joint at all, and
+    /// neither said so. `+∞` is the face bolted straight to its film.
     pub fn mounted_on(mut self, face: Face, w_per_m2_k: f64) -> Solid3D {
         self.mounted.insert(face, w_per_m2_k);
         self.resolve();
@@ -2717,6 +2760,67 @@ impl Solid3D {
     /// The contact conductance between one outer face and its film, if one was stated.
     pub fn mounting_of(&self, face: Face) -> Option<f64> {
         self.mounted.get(&face).copied()
+    }
+
+    /// The first number this block was given that no block can have, as the refusal
+    /// [`step`](Domain::step) and [`steady_state`](Solid3D::steady_state) give, or `None`.
+    ///
+    /// Asked of what was **stated**, every substance and every film, rather than of the operator
+    /// `resolve` derived from them, because the operator is where these went quiet: a series mean
+    /// guarded at zero reads a negative or `NaN` conductivity as an insulator, and `outward` reads
+    /// a negative mounting as a joint that carries nothing. Each is a plausible block, so nothing
+    /// downstream of it could tell. See `substance_fault` and `environment_fault` for the rest.
+    ///
+    /// **Every substance, whether or not a cell still holds it.** A block with a substance in it
+    /// that cannot be one was built from a number somebody mistyped, and the cells it is in are
+    /// not the place that mistake is. A substance with no thermal properties is the exception,
+    /// as it always was: it is refused by the cells that hold it, as having no diffusivity, and a
+    /// block filled over it entirely runs.
+    ///
+    /// A mounting or the air without limit is a face or a surface held at the film's ambient, and
+    /// both are allowed, as an outer film without limit is. `NaN` is refused in each: a mounting
+    /// of `NaN` was read as no mounting at all.
+    fn input_fault(&self) -> Option<Violation> {
+        let refuse = |what: String, value: f64| Some(Violation::at(&self.name, what, value));
+        for s in &self.materials {
+            if let Some((what, value)) = crate::substance_fault(s, true) {
+                return refuse(what, value);
+            }
+        }
+        for (face, environment) in &self.exposed {
+            if let Some((what, value)) = crate::environment_fault(environment, true) {
+                return refuse(format!("{face:?}: {what}"), value);
+            }
+        }
+        for (face, h) in &self.mounted {
+            if h.is_nan() || *h < 0.0 {
+                return refuse(
+                    format!(
+                        "{face:?}: the mounting must be zero or more W/m²/K, or +inf for a face \
+                         bolted straight to its film"
+                    ),
+                    *h,
+                );
+            }
+        }
+        if let Some((ambient, h)) = self.air {
+            if h.is_nan() || h < 0.0 {
+                return refuse(
+                    "the air in the void must be zero or more W/m²/K, or +inf to hold its \
+                     surfaces at its temperature"
+                        .to_string(),
+                    h,
+                );
+            }
+            if !(ambient.is_finite() && ambient >= 0.0) {
+                return refuse(
+                    "the air in the void must be finite and at or above absolute zero, in kelvin"
+                        .to_string(),
+                    ambient,
+                );
+            }
+        }
+        None
     }
 
     /// Generate `watts` **spread evenly over the cells `where_` selects**, replacing whatever
@@ -2926,8 +3030,9 @@ impl Solid3D {
         // conducts nothing, so there is no half cell for the air to reach it through and its air
         // conductance is exactly zero, as its mobility is: the whole pass skips it as `loss == 0`,
         // whatever the coefficient. A negative coefficient carries nothing on a solid cell
-        // either, as a negative film on an outer face already did, and an infinite one carries
-        // the half cell, `2k·dx` a face. `air_in` refuses neither.
+        // either, as a negative film on an outer face does, and an infinite one carries the half
+        // cell, `2k·dx` a face. `air_in` takes both; `step` refuses the negative one before this
+        // is asked, and the infinite one is a surface held at the air's temperature.
         let near = self.charge(planes, self.facing_air.iter().copied());
         // **And checked, on every debug run of every test that builds a block.** The two paths
         // rest on `loss_conductance_at` having no term anywhere else, and the shipped scenes barely
@@ -3885,6 +3990,11 @@ impl Domain for Solid3D {
     }
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
+        // Before the limit, because most of what this refuses leaves the limit looking fine: an
+        // insulator's is infinite, and a negative capacity's is too.
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         let ratio = self.stability_ratio(dt);
         if ratio.is_nan() {
             // A bad joint and a substance with no conductivity both leave the limit unsayable, and

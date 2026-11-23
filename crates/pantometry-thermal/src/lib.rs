@@ -324,6 +324,13 @@ impl Domain for LumpedMass {
     }
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
+        // First, so a body whose numbers are impossible is told which one rather than that it
+        // has no heat capacity — and a film of `NaN` or `+∞`, which has a capacity, is told at all.
+        if let Some((what, value)) = substance_fault(&self.substance, false)
+            .or_else(|| environment_fault(&self.environment, false))
+        {
+            return Err(Violation::at(&self.name, what, value));
+        }
         let capacity = self.heat_capacity();
         if !capacity.to_si().is_finite() || capacity.to_si() <= 0.0 {
             return Err(Violation::at(
@@ -574,6 +581,11 @@ impl Domain for Bar1D {
     }
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
+        // First: a negative conductivity or capacity gives a negative Fourier number, which is
+        // under one half and was stepped.
+        if let Some((what, value)) = substance_fault(&self.substance, false) {
+            return Err(Violation::at(&self.name, what, value));
+        }
         let f = self.fourier_number(dt);
         if !f.is_finite() {
             return Err(Violation::at(&self.name, "substance has no diffusivity", f));
@@ -855,6 +867,141 @@ pub(crate) fn linearised_loss_conductance(
     let t = at.to_si().max(0.0);
     environment.convection_w_per_m2_k * area
         + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * area * t * t * t
+}
+
+/// The first of `substance`'s thermal numbers that no substance can have, with its value, or `None`.
+///
+/// **Each of these ran, and none of them said anything.** Measured on a block, a bar, a lumped mass
+/// and a network before this existed, stepped by hand and through `Simulation`:
+///
+/// - a conductivity that is `NaN`, infinite or negative made a block an **insulator**: its limit
+///   infinite, nothing moving, and the audit content, because nothing moving conserves;
+/// - a negative specific heat or density moved heat **up** its gradient, to 1e37 K in a block,
+///   and gave a bar a negative limit that it stepped under;
+/// - an emissivity outside `0..=1` radiated more than a black body does, or took in what it sent;
+/// - a liquid's negative specific heat took a block with no way to lose heat from 100 °C to
+///   −8.6 °C, and a melting point that was not a number made every cell of a block `NaN`.
+///
+/// **The whole of the thermal block, not only what a domain reads of it.** A bar does not radiate,
+/// and an emissivity of 1.5 on one is still a substance that is wrong: the same substance put in a
+/// block would radiate with it, and a refusal that depended on which domain was given it would let
+/// a mistake through until it reached the one that noticed.
+///
+/// A substance with **no** thermal properties is not refused here. Every domain already refuses to
+/// step one, as having no heat capacity or no diffusivity, and says so.
+///
+/// `k = 0` is a perfect insulator and is allowed. [`Solid3D`] documents it as a fill and guards
+/// its face mean for it; [`Substance::check`] refuses it, because a catalogue entry that conducts
+/// nothing is a transcription mistake, and a domain told to model nothing has been told something.
+///
+/// The phase change — the liquid, the melting point and the latent heat — is read only when `melts`
+/// says so, because [`Solid3D`] is the one domain that melts a substance; the others step its solid
+/// and have no phase for a mistake there to reach.
+pub(crate) fn substance_fault(substance: &Substance, melts: bool) -> Option<(String, f64)> {
+    let thermal = substance.thermal?;
+    let name = &substance.name;
+    let density = substance.density.to_si();
+    if !(density.is_finite() && density > 0.0) {
+        return Some((
+            format!("{name}'s density must be finite and positive"),
+            density,
+        ));
+    }
+    let fusion = substance.fusion.filter(|_| melts);
+    let melted = fusion.and_then(|f| f.liquid).map(|l| ("liquid ", l));
+    for (phase, t) in std::iter::once(("", thermal)).chain(melted) {
+        let k = t.conductivity.to_si();
+        if !(k.is_finite() && k >= 0.0) {
+            return Some((
+                format!("{name}'s {phase}conductivity must be finite and zero or more"),
+                k,
+            ));
+        }
+        let c = t.specific_heat.to_si();
+        if !(c.is_finite() && c > 0.0) {
+            return Some((
+                format!("{name}'s {phase}specific heat must be finite and positive"),
+                c,
+            ));
+        }
+        if !(0.0..=1.0).contains(&t.emissivity) {
+            return Some((
+                format!("{name}'s {phase}emissivity must be in 0..=1"),
+                t.emissivity,
+            ));
+        }
+    }
+    // Where it melts and what that takes. A point that is not a number names no phase, and every
+    // enthalpy read against it is `NaN`; a latent heat of nothing or less is a block that never
+    // melts, holding each cell in the phase it began in whatever its temperature.
+    if let Some(f) = fusion {
+        let point = f.melting_point.to_si();
+        if !(point.is_finite() && point > 0.0) {
+            return Some((
+                format!("{name}'s melting point must be finite and above absolute zero, in kelvin"),
+                point,
+            ));
+        }
+        let latent = f.latent_heat.to_si();
+        if !(latent.is_finite() && latent > 0.0) {
+            return Some((
+                format!("{name}'s latent heat must be finite and positive"),
+                latent,
+            ));
+        }
+    }
+    None
+}
+
+/// The first number of `environment` a body cannot lose heat to, with its value, or `None`.
+///
+/// The film was the quieter half. Measured before this existed: a `NaN` film coefficient, area or
+/// ambient made every temperature `NaN` and the refusal, where there was one, named the books
+/// rather than the film; a negative coefficient or area **lost nothing**, which is an insulated
+/// body answering in silence; and an ambient below absolute zero was taken as one.
+///
+/// **A film without limit**, `h = +∞`, is a surface held at the ambient, and whether a domain can
+/// say that is the domain's: [`Solid3D`] puts its film in series with the half cell behind the
+/// face, so an infinite film is the half cell's finite conductance and the limit a block reports,
+/// and `film_without_limit` is what says it may. A lumped body has nothing in series with its
+/// film, so its limit is zero and its step `NaN`, and it is refused.
+///
+/// An area or a coefficient of **zero** is a surface that loses nothing, which is a body a caller
+/// can mean, and both are allowed. So is an ambient of exactly zero kelvin.
+pub(crate) fn environment_fault(
+    environment: &Environment,
+    film_without_limit: bool,
+) -> Option<(String, f64)> {
+    let h = environment.convection_w_per_m2_k;
+    let unlimited = film_without_limit && h == f64::INFINITY;
+    if !(unlimited || (h.is_finite() && h >= 0.0)) {
+        return Some((
+            if film_without_limit {
+                "the film's convection_w_per_m2_k must be zero or more, or +inf to hold the surface \
+                 at the ambient"
+                    .to_string()
+            } else {
+                "the film's convection_w_per_m2_k must be finite and zero or more".to_string()
+            },
+            h,
+        ));
+    }
+    let area = environment.area.to_si();
+    if !(area.is_finite() && area >= 0.0) {
+        return Some((
+            "the film's area must be finite and zero or more".to_string(),
+            area,
+        ));
+    }
+    let ambient = environment.ambient.to_si();
+    if !(ambient.is_finite() && ambient >= 0.0) {
+        return Some((
+            "the film's ambient must be finite and at or above absolute zero, in kelvin"
+                .to_string(),
+            ambient,
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

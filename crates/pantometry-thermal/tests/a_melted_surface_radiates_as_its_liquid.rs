@@ -27,8 +27,9 @@
 //! same walled in by void at `(1, 2, 1)` of a larger block, where an index that is not the cell's
 //! reads a void; two cells 30% melted between steps, radiating as the area-weighted mean of the
 //! two surfaces; a cell of solid, which this did not change, and one whose liquid's emissivity is
-//! not a number, which a solid cell has no business reading; a half-melted cell taking heat off
-//! the bus, whose film is the phase the step began in — the heat goes in after the sweep, and once
+//! not a number, which a solid cell has no business reading — a block refuses that liquid before it
+//! steps now, so what is left of that case is its limit, in a test of its own; a half-melted cell
+//! taking heat off the bus, whose film is the phase the step began in — the heat goes in after the sweep, and once
 //! went in before it and moved the phase under the film; and a cell melted between steps whose
 //! liquid differs from its solid
 //! in nothing but how it radiates, which alone made the block one that rebuilds as it melts.
@@ -316,29 +317,6 @@ fn a_melted_surface_radiates_through_its_film_as_its_liquid() {
             ambient: 300.0,
             against: None,
         },
-        // A solid cell radiates as its solid whatever its liquid says, even a liquid whose emissivity
-        // is not a number: it reads the liquid's nothing.
-        Film {
-            name: "a cell of solid whose liquid's emissivity is not a number",
-            block: exposed(
-                block_of(
-                    substance(SOLID, (LIQUID.0, LIQUID.1, f64::NAN)),
-                    (1, 1, 1),
-                    450.0,
-                ),
-                Face::XMin,
-                300.0,
-            ),
-            at: (0, 0, 0),
-            k: SOLID.0,
-            emissivity: SOLID.2,
-            capacity: mass() * SOLID.1,
-            faces: 0.0,
-            bus: 0.0,
-            from: 450.0,
-            ambient: 300.0,
-            against: None,
-        },
         Film {
             name: "a half-melted cell taking heat off the bus",
             block: fed,
@@ -457,6 +435,51 @@ fn a_melted_surface_radiates_through_its_film_as_its_liquid() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// **A solid cell reads nothing of its liquid, and its block refuses a liquid that is not one.**
+///
+/// This was a case of the film's: a liquid whose emissivity is not a number, on a cell of solid,
+/// which radiated as its solid because a solid cell reads the liquid's nothing. A block refuses
+/// that substance now, by name and before a step moves anything — no surface can radiate with
+/// `NaN`, and any cell of the block could melt into it. What is left to hold is the limit, which is
+/// asked of the operator rather than stepped, and is the solid's: a solid cell that read its
+/// liquid would read `NaN` there and report no limit at all. The tolerance is the film table's.
+#[test]
+fn a_solid_cell_reads_nothing_of_a_liquid_its_block_refuses() {
+    let block = exposed(
+        block_of(
+            substance(SOLID, (LIQUID.0, LIQUID.1, f64::NAN)),
+            (1, 1, 1),
+            450.0,
+        ),
+        Face::XMin,
+        300.0,
+    );
+    let (tangent, _) = film(SOLID.0, SOLID.2, 450.0, 300.0);
+    let want = mass() * SOLID.1 / tangent;
+    let limit = block.max_stable_dt(Time::from_si(0.0)).to_si();
+    assert!(
+        !off((limit / want - 1.0).abs(), 1e-14),
+        "the limit is the solid's C/G = {want:.6} s, and the block reports {limit:.6} s"
+    );
+    let mut stepped = block.clone();
+    let refusal = stepped
+        .step(
+            Time::from_si(0.0),
+            Time::from_si(0.25 * want),
+            &mut Exchange::new(),
+        )
+        .expect_err("a liquid that radiates with NaN is refused");
+    assert!(
+        refusal.quantity.contains("coated's liquid emissivity") && refusal.before.is_nan(),
+        "the refusal names the liquid's emissivity and carries it: {refusal}"
+    );
+    assert_eq!(
+        stepped.temperature_at(0, 0, 0).to_si(),
+        450.0,
+        "a refused step moved the cell"
+    );
 }
 
 struct Gap {
