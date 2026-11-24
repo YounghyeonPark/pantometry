@@ -238,7 +238,8 @@ impl LumpedMass {
                 capacity,
             ));
         }
-        None
+        state_fault("the body's temperature", self.temperature.to_si())
+            .map(|(what, value)| Violation::at(&self.name, what, value))
     }
 
     /// Time constant `C/(hA)` — how long it takes to get most of the way to
@@ -489,18 +490,42 @@ impl Domain for LumpedMass {
         // This step's share of the channel, not all of it. A lumped mass is subcycled under
         // `Schedule::Multirate`, and taking the whole outer step's joules on the first substep
         // deposits them all at its beginning — which stops the substep count from improving
-        // anything. See `Exchange::take_share`.
-        let gained = bus.take_share(HEAT, dt);
-        self.absorbed += gained;
-
+        // anything. See `Exchange::take_share`. Looked at first, and taken once the step stands.
+        let gained = bus.peek_share(HEAT, dt);
         let lost = self
             .environment
             .loss_from(self.temperature, self.emissivity());
         let lost_joules = lost.to_si() * dt.to_si();
-        self.lost += lost_joules;
-
         let net = gained - lost_joules;
-        self.temperature += Temperature::from_si(net / capacity.to_si());
+        let next = self.temperature + Temperature::from_si(net / capacity.to_si());
+
+        // Heat taken out that takes the body below absolute zero is refused, with nothing taken.
+        // A megajoule off 100 cm³ of water at 20 °C put it at −2206.85 K and answered `Ok`. Asked
+        // only where heat was taken out: a film no colder than absolute zero, stepped within its
+        // limit, cannot do it, and one stepped past it is a different mistake.
+        if gained < 0.0 && next.to_si() < 0.0 {
+            return Err(Violation::at(
+                &self.name,
+                "the heat taken out in this step would take the body below absolute zero, to this \
+                 many kelvin",
+                next.to_si(),
+            ));
+        }
+        // **And a step longer than the body's time constant.** Nothing refuses one — explicit
+        // Euler is stable to twice it — and past it the film overshoots its room: a body at 1000 K
+        // stepped 1.5 time constants into a room at 0 °C came to −90.3 K and answered `Ok`, and its
+        // next step refused the state as if a caller had set it.
+        if next.to_si() < -ZERO_SLACK {
+            return Err(Violation::at(
+                &self.name,
+                "this step would take the body below absolute zero, to this many kelvin: it is \
+                 longer than the body's time constant, past which its film overshoots its room",
+                next.to_si(),
+            ));
+        }
+        self.absorbed += bus.take_share(HEAT, dt);
+        self.lost += lost_joules;
+        self.temperature = next;
         Ok(())
     }
 
@@ -666,6 +691,12 @@ impl Bar1D {
                 self.face_area
                     .and_then(|a| size_fault("the exposed face's area", a, "square metres"))
             })
+            .or_else(|| {
+                self.cells
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, t)| state_fault(&format!("cell {i}'s temperature"), *t))
+            })
             .map(|(what, value)| Violation::at(&self.name, what, value))
     }
 
@@ -805,19 +836,22 @@ impl Domain for Bar1D {
 
         let capacity = self.cell_capacity();
 
-        // Heat that knows where it landed, taken first because it is the take that can be
-        // refused, and a refused step should leave the bus and the bar as it found them. It
-        // came second, after the lumped share had gone into cell 0, so a step refused for a
-        // flux on the wrong grid kept the share it had already taken.
-        let arriving = match self.boundary.as_ref() {
-            Some(boundary) => Some(bus.take_on(boundary, HEAT)?),
-            None => None,
-        };
+        // Heat that knows where it landed, on another grid: refused by the take that would read
+        // it, which leaves it where it was offered, before anything else is taken. It came second
+        // once, after the lumped share had gone into cell 0, so a step refused for a flux on the
+        // wrong grid kept the share it had already taken.
+        if let Some(boundary) = self.boundary.as_ref() {
+            let offered = bus.peek_on(boundary, HEAT);
+            if offered.is_some_and(|flux| flux.faces() != boundary.faces()) {
+                return bus.take_on(boundary, HEAT).map(|_| ());
+            }
+        }
         // Lumped heat has no place, so it goes into the first cell — where a surface
         // absorbing light would put it, if the bar knew where the surface was. This step's
         // share of it: the bar subcycles hard under `Schedule::Multirate`, and taking the whole
-        // interval at once would put every joule of it in the first substep.
-        let gained = bus.take_share(HEAT, dt);
+        // interval at once would put every joule of it in the first substep. Both looked at, and
+        // taken once the step stands.
+        let gained = bus.peek_share(HEAT, dt);
 
         // Insulated ends: the boundary cell exchanges with its one neighbour only,
         // which is what makes the total conserved to the last bit.
@@ -843,11 +877,40 @@ impl Domain for Bar1D {
         // exactly. `ThermalNetwork` met the same thing on its first joint and says so beside its
         // own source.
         self.cells[0] += gained / capacity;
-        self.absorbed += gained;
+        let arriving = self.boundary.as_ref().and_then(|b| bus.peek_on(b, HEAT));
         if let Some(flux) = arriving {
             for (cell, joules) in self.cells.iter_mut().zip(flux.per_face()) {
                 *cell += joules / capacity;
             }
+        }
+
+        // Heat taken out that takes a cell below absolute zero is refused, and the bar and the bus
+        // are as they were: a kilojoule off the first cell of a bar at 20 °C put it at −3840.45 K
+        // and answered `Ok`. Asked of the cells heat was taken out of, the first for the lumped
+        // share and each face its own: the sweep alone, within its limit, is an average of
+        // temperatures that are not below zero.
+        let taken_out =
+            |i: usize| (i == 0 && gained < 0.0) || arriving.is_some_and(|flux| flux.at(i) < 0.0);
+        if let Some(i) = (0..self.cells.len()).find(|&i| taken_out(i) && self.cells[i] < 0.0) {
+            let would = self.cells[i];
+            self.cells = previous;
+            return Err(Violation::at(
+                &self.name,
+                format!(
+                    "the heat taken out in this step would take cell {i} below absolute zero, to \
+                     this many kelvin"
+                ),
+                would,
+            ));
+        }
+        // Taken in the order they were taken before the step could refuse, the faces' first, so
+        // the bus counts what it gave in the order it always did.
+        let landed = match self.boundary.as_ref() {
+            Some(boundary) => Some(bus.take_on(boundary, HEAT)?),
+            None => None,
+        };
+        self.absorbed += bus.take_share(HEAT, dt);
+        if let Some(flux) = landed {
             self.absorbed += flux.total();
         }
         Ok(())
@@ -1223,6 +1286,39 @@ pub(crate) fn size_fault(what: &str, value: f64, unit: &str) -> Option<(String, 
         (
             format!("{what} must be finite and positive, in {unit}"),
             value,
+        )
+    })
+}
+
+/// How far below absolute zero a temperature a step left, with nothing taken out, can be: a
+/// microkelvin. A block's limit is checked to `1 + 6e-12` of itself and a bar's and a network's to
+/// `1e-12`, so a step a hair past its limit beside a room at absolute zero can overshoot it: one
+/// cell of aluminium under a film, stepped 5.9e-12 past its limit into a room at 0 K, came to
+/// −4.3e-12 of the temperature it started from, measured from 1 K to 1e5 K and films from 0.1 to
+/// 1e4 W·m⁻²·K⁻¹ — −4.3e-7 K from 1e5 K, and a microkelvin from 2.3e5 K. Exactly at the limit it
+/// came to nothing below zero.
+///
+/// Asked of a state and of a step that took nothing out. A step that takes heat out is asked to
+/// zero, because what takes a cell below it there is the heat, not the rounding.
+pub(crate) const ZERO_SLACK: f64 = 1e-6;
+
+/// `what`, a temperature nothing can be at, with its value, or `None`: finite, and at or above
+/// absolute zero, in kelvin.
+///
+/// Asked of the state a step starts from, which the caller set. Measured before this existed: a
+/// lumped body, a bar, a block and a network started at −10 K each stepped and answered `Ok`, the
+/// lumped body to 5.43 K and the bar holding −10 K, and started at `NaN` each stepped to `NaN`; a
+/// block given −50 K by `set_temperature` stepped on from it, and one given a kilojoule taken out
+/// by `deposit` stepped with a cell at −206 386 K.
+///
+/// **Within [`ZERO_SLACK`] below zero is zero**, because a step can leave that much with nothing
+/// taken out: the limits allow a step a few parts in 10¹² past them, and beside a room at absolute
+/// zero that is as far below it.
+pub(crate) fn state_fault(what: &str, kelvin: f64) -> Option<(String, f64)> {
+    (!(kelvin.is_finite() && kelvin >= -ZERO_SLACK)).then(|| {
+        (
+            format!("{what} must be finite and at or above absolute zero, in kelvin"),
+            kelvin,
         )
     })
 }

@@ -421,6 +421,17 @@ pub struct Exchange {
     published_since_mark: BTreeMap<&'static str, f64>,
 }
 
+/// What a substep is owed of a channel. See `Exchange::share_of`.
+enum Share {
+    /// All of what is on it: the interval is unknown, or this substep is the last of it.
+    Whole {
+        /// Whether this substep is the interval's last, which leaves no time unclaimed.
+        last: bool,
+    },
+    /// `share` joules of it, leaving `left` seconds of the interval unclaimed after.
+    Part { share: f64, left: f64 },
+}
+
 impl Exchange {
     /// An empty bus.
     pub fn new() -> Exchange {
@@ -471,26 +482,62 @@ impl Exchange {
     /// against this works unchanged under a bare `Exchange` and under
     /// [`Schedule::Staggered`], where it steps once and the share is the whole.
     pub fn take_share(&mut self, channel: &'static str, dt: Time) -> f64 {
+        match self.share_of(channel, dt) {
+            Share::Whole { last } => {
+                if last {
+                    self.unclaimed_time.insert(channel, 0.0);
+                }
+                self.take(channel)
+            }
+            Share::Part { share, left } => {
+                self.unclaimed_time.insert(channel, left);
+                *self.published.entry(channel).or_insert(0.0) -= share;
+                *self.consumed.entry(channel).or_insert(0.0) += share;
+                *self.taken_since_mark.entry(channel).or_insert(0.0) += share;
+                share
+            }
+        }
+    }
+
+    /// Look at the share [`Exchange::take_share`] would give a substep of length `dt`, without
+    /// taking it: the same joules, to the bit, and the bus as it was.
+    ///
+    /// For a domain that can refuse its step after working it out. A step that took its share and
+    /// then refused left the share taken — off the bus, and counted against a domain that never
+    /// used it — so a domain that would rather say no than leave that behind reads its share
+    /// here, works out the step, and takes it only once the step stands.
+    pub fn peek_share(&self, channel: &'static str, dt: Time) -> f64 {
+        match self.share_of(channel, dt) {
+            Share::Whole { .. } => self.peek(channel),
+            Share::Part { share, .. } => share,
+        }
+    }
+
+    /// What a substep of length `dt` is owed of a channel: all of it, or a part, with the time
+    /// left after it. One reading for [`Exchange::take_share`] and [`Exchange::peek_share`], so
+    /// what a domain looked at is what it is given.
+    fn share_of(&self, channel: &'static str, dt: Time) -> Share {
         let h = dt.to_si();
         if self.interval <= 0.0 || !h.is_finite() || h <= 0.0 {
-            return self.take(channel);
+            return Share::Whole { last: false };
         }
-        let left = *self.unclaimed_time.entry(channel).or_insert(self.interval);
+        let left = self
+            .unclaimed_time
+            .get(channel)
+            .copied()
+            .unwrap_or(self.interval);
         // The last substep asks for everything that is left, and gets it. Compared with a
         // slack of `1e-12` of the interval rather than exactly, because `n` substeps of `dt/n`
         // do not sum to `dt` in binary: three of a third leave a residue one ulp wide, and an
         // exact comparison misses the final share and strands it on the channel.
         if h >= left || left - h <= self.interval * 1e-12 {
-            self.unclaimed_time.insert(channel, 0.0);
-            return self.take(channel);
+            return Share::Whole { last: true };
         }
         let amount = self.published.get(channel).copied().unwrap_or(0.0);
-        let share = amount * h / left;
-        self.unclaimed_time.insert(channel, left - h);
-        *self.published.entry(channel).or_insert(0.0) -= share;
-        *self.consumed.entry(channel).or_insert(0.0) += share;
-        *self.taken_since_mark.entry(channel).or_insert(0.0) += share;
-        share
+        Share::Part {
+            share: amount * h / left,
+            left: left - h,
+        }
     }
 
     /// Tell the bus what interval the current sweep covers, so [`Exchange::take_share`] can
@@ -2214,5 +2261,43 @@ mod tests {
             .unwrap();
         assert_eq!(crossed.faces(), 16);
         assert!((crossed.total() - 4.0).abs() < 1e-12);
+    }
+
+    /// **A share looked at is the share taken**, to the bit, and looking takes nothing: over an
+    /// interval of three substeps of a third — whose sum is a residue short of it, so the last is
+    /// the interval's last by the slack — over substeps of no length and of `NaN`, which take the
+    /// whole, and on a bare bus that was never told an interval.
+    #[test]
+    fn a_share_looked_at_is_the_share_taken() {
+        for told in [true, false] {
+            let mut bus = Exchange::new();
+            if told {
+                bus.covering(Time::s(1.0));
+            }
+            bus.publish("heat", 1.0);
+            for dt in [1.0 / 3.0, 0.0, 1.0 / 3.0, f64::NAN, 1.0 / 3.0] {
+                bus.publish("heat", 0.25);
+                let dt = Time::s(dt);
+                let (before, consumed) = (bus.peek("heat"), bus.total_consumed("heat"));
+                let looked = bus.peek_share("heat", dt);
+                assert_eq!(
+                    bus.peek("heat").to_bits(),
+                    before.to_bits(),
+                    "looking took heat"
+                );
+                assert_eq!(
+                    bus.total_consumed("heat"),
+                    consumed,
+                    "looking counted a take"
+                );
+                assert_eq!(bus.peek_share("heat", dt).to_bits(), looked.to_bits());
+                let taken = bus.take_share("heat", dt);
+                assert_eq!(
+                    taken.to_bits(),
+                    looked.to_bits(),
+                    "told {told}, dt {dt:?}: looked at {looked}, given {taken}"
+                );
+            }
+        }
     }
 }

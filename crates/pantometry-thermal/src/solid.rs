@@ -779,6 +779,16 @@ pub struct Solid3D {
     /// by [`Solid3D::dissipating`], the one place a source is written, so a step pays nothing to
     /// refuse it. See `input_fault`.
     bad_source: Option<(usize, f64)>,
+    /// The cells whose source takes heat out, in order: with the bus, the only way a step within
+    /// its limit can take a cell below absolute zero. Found by [`Solid3D::dissipating`].
+    sinks: Vec<usize>,
+    /// Whether a cell's temperature was set since a step last read every one — by the
+    /// constructor, `set_temperature`, `deposit`, `set_melted_fraction`, `release_mode` or a
+    /// restore. A step reads the cells only when one was, so a block nobody touched between steps
+    /// pays nothing to be asked.
+    unchecked: bool,
+    /// The fractions a step that takes heat out began with, to put back if it is refused.
+    undo_melted: Vec<f64>,
     /// Joules generated over the run, and the reason the books still balance: the ledger is
     /// `stored + lost − supplied`, so a source that adds a joule to a cell adds one here too and
     /// the total moves only by what crossed the bus.
@@ -1106,6 +1116,9 @@ impl Solid3D {
             facing_air: Vec::new(),
             source: vec![0.0; counts.0 * counts.1 * counts.2],
             bad_source: None,
+            sinks: Vec::new(),
+            unchecked: true,
+            undo_melted: Vec::new(),
             supplied: 0.0,
             saved_supplied: 0.0,
             gaps: Vec::new(),
@@ -1176,6 +1189,7 @@ impl Solid3D {
         if self.latent[idx] <= 0.0 {
             return;
         }
+        self.unchecked = true;
         let before = self.melted[idx];
         let phi = fraction.clamp(0.0, 1.0);
         self.melted[idx] = phi;
@@ -1289,6 +1303,9 @@ impl Solid3D {
                 }
             }
         }
+        // A void cell filled is solid again, holding what it held as void, which nothing asked: a
+        // cell set to −50 K while void, filled after a step, stepped on from −50 K.
+        self.unchecked = true;
         self.resolve_rephasing(&rephase);
         self
     }
@@ -2517,6 +2534,11 @@ impl Solid3D {
         if let Some(fault) = self.input_fault() {
             return Err(fault);
         }
+        // The cells as the caller left them, as the step asks them: a part that loses nothing
+        // comes to the heat it holds, and a cell below absolute zero holds heat no body can.
+        if let Some(fault) = self.cell_fault() {
+            return Err(fault);
+        }
         if self.latent_anywhere {
             return Err(Violation::at(
                 &self.name,
@@ -2642,6 +2664,18 @@ impl Solid3D {
         // surfaces and all, so this is the balance it converges to.
         let mut gain = vec![0.0; t.len()];
         let mut slope = vec![0.0; t.len()];
+
+        // What a part's sinks did to `c`, said as what was found rather than as what must be so: a
+        // sink drawing a cell through zero before the heat that would feed it arrives leaves the
+        // solve at a mirror of a balance that does exist, and both look like this.
+        let drawn_below = |c: usize| {
+            let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+            format!(
+                "no balance above absolute zero was found: cell ({i}, {j}, {k}) came to below \
+                 it, drawn down by the sinks in its part, which take more than can reach them or \
+                 more than reaches them in time for this solve"
+            )
+        };
 
         for round in 0..STEADY_SWEEPS {
             for (a, b, coefficient) in &self.gaps {
@@ -2989,18 +3023,10 @@ impl Solid3D {
                 if let Some(c) = coldest.filter(|c| t[*c] < -BELOW_ZERO) {
                     let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
                     let sinks = body[c].is_some_and(|b| parts[part[b]].sinks);
-                    // Said as what was found rather than as what must be so: a sink drawing a
-                    // cell through zero before the heat that would feed it arrives leaves the
-                    // solve at a mirror of a balance that does exist, and both look like this.
                     return Err(Violation::at(
                         &self.name,
                         if sinks {
-                            format!(
-                                "no balance above absolute zero was found: cell ({i}, {j}, {k}) \
-                                 came to below it, drawn down by the sinks in its part, which take \
-                                 more than can reach them or more than reaches them in time for \
-                                 this solve"
-                            )
+                            drawn_below(c)
                         } else {
                             format!(
                                 "the steady-state balance diverged, to cell ({i}, {j}, {k}) \
@@ -3019,6 +3045,25 @@ impl Solid3D {
             }
         }
 
+        // **Sinks that take more than can reach them draw their cells down without end**, and the
+        // sweeps run out before anything settles: −50 mW out of a block whose film can bring it
+        // 2 mW was refused as not converging. Said as what it is, as the converged case says it,
+        // where the coldest cell of a part with a sink has gone below absolute zero.
+        let coldest = (0..t.len())
+            .filter(|c| body[*c].is_some())
+            .min_by(|a, b| t[*a].total_cmp(&t[*b]));
+        if let Some(c) = coldest
+            .filter(|c| t[*c] < -BELOW_ZERO && body[*c].is_some_and(|b| parts[part[b]].sinks))
+        {
+            return Err(Violation::at(
+                &self.name,
+                format!(
+                    "{}, where {STEADY_SWEEPS} sweeps had not settled",
+                    drawn_below(c)
+                ),
+                t[c],
+            ));
+        }
         Err(Violation::at(
             &self.name,
             "the steady-state balance did not converge in the sweeps allowed",
@@ -3412,6 +3457,43 @@ impl Solid3D {
         }
     }
 
+    /// The first solid cell whose temperature nothing can be at — not a number, or below absolute
+    /// zero — as the refusal [`step`](Domain::step) and [`steady_state`](Solid3D::steady_state)
+    /// give, or `None`. See `state_fault`.
+    ///
+    /// **A void cell holds a placeholder, not a temperature, and has only to be a number.** One of
+    /// `NaN` or `±∞` reached the solid beside it through a face that carries nothing, `0·(NaN − T)`
+    /// being `NaN`, and the film's books by the same road: a void cell given `NaN`, or `deposit`ed
+    /// into, whose capacity of nothing makes any heat infinite, stepped its neighbour to `NaN` and
+    /// answered `Ok`, which the block's warmest and coldest readings step over.
+    fn cell_fault(&self) -> Option<Violation> {
+        let c = (0..self.cells.len()).find(|&c| {
+            let t = self.cells[c];
+            if self.void[c] {
+                !t.is_finite()
+            } else {
+                crate::state_fault("", t).is_some()
+            }
+        })?;
+        let (nx, ny) = (self.counts.0, self.counts.1);
+        let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+        if self.void[c] {
+            return Some(Violation::at(
+                &self.name,
+                format!(
+                    "cell ({i}, {j}, {k}) is void, and what it holds must be a number: a face that \
+                     carries nothing still multiplies it"
+                ),
+                self.cells[c],
+            ));
+        }
+        crate::state_fault(
+            &format!("cell ({i}, {j}, {k})'s temperature"),
+            self.cells[c],
+        )
+        .map(|(what, value)| Violation::at(&self.name, what, value))
+    }
+
     /// Generate `watts` **spread evenly over the cells `where_` selects**, replacing whatever
     /// those cells generated before.
     ///
@@ -3458,6 +3540,9 @@ impl Solid3D {
             .iter()
             .position(|w| !w.is_finite())
             .map(|c| (c, self.source[c]));
+        self.sinks = (0..self.source.len())
+            .filter(|&c| self.source[c] < 0.0)
+            .collect();
         self.resolve();
         self
     }
@@ -4109,6 +4194,7 @@ impl Solid3D {
     pub fn set_temperature(&mut self, i: usize, j: usize, k: usize, t: Temperature) {
         if let Some(idx) = self.index(i, j, k) {
             self.cells[idx] = t.to_si();
+            self.unchecked = true;
             // A temperature is not a state for a substance that melts, so naming one names a
             // phase as well — see `phase_named_by`.
             if self.latent[idx] > 0.0 {
@@ -4139,6 +4225,7 @@ impl Solid3D {
         let rise = joules.to_si() / self.capacity[idx];
         self.add_kelvin(idx, rise);
         self.absorbed += joules.to_si();
+        self.unchecked = true;
         self.rephased(idx, before);
     }
 
@@ -4275,6 +4362,7 @@ impl Solid3D {
             }
         }
         self.saved.clone_from(&self.cells);
+        self.unchecked = true;
     }
 
     /// The amplitude of one mode currently present, by projection.
@@ -4596,6 +4684,14 @@ impl Domain for Solid3D {
         if let Some((what, value)) = crate::step_fault(dt).or_else(|| crate::heat_fault(bus)) {
             return Err(Violation::at(&self.name, what, value));
         }
+        // The cells a caller set since a step last read them, before the limit reads them too: a
+        // block started at −10 K, or given −50 K by `set_temperature`, stepped on from there.
+        if self.unchecked {
+            if let Some(fault) = self.cell_fault() {
+                return Err(fault);
+            }
+            self.unchecked = false;
+        }
         let ratio = self.stability_ratio(dt);
         if ratio.is_nan() {
             return Err(self.unsteppable());
@@ -4623,6 +4719,17 @@ impl Domain for Solid3D {
         let (nx, ny, nz) = self.counts;
         let cells = nx * ny * nz;
         let dts = dt.to_si();
+
+        // This step's share of the bus, looked at, and taken once the step stands; and whether
+        // anything can take a cell below absolute zero — heat taken out, or a liquid freezing — for
+        // which the books and the phases the step began with are kept, to put back if it does not
+        // stand. A one-phase block that takes nothing out pays a compare.
+        let share = bus.peek_share(HEAT, dt);
+        let taking_out = share < 0.0 || !self.sinks.is_empty() || self.two_phase;
+        let books = (self.lost, self.supplied, self.absorbed);
+        if taking_out && self.latent_anywhere {
+            self.undo_melted.clone_from(&self.melted);
+        }
 
         // The state the sweep reads, into a buffer that outlives the step.
         let mut old = std::mem::take(&mut self.old);
@@ -4786,7 +4893,7 @@ impl Domain for Solid3D {
         // Spread to a uniform **rise**, which for a filled block means in proportion to each cell's
         // capacity rather than in equal joules. Equal joules would warm the low-capacity material
         // more and so would say where the heat landed, which the bus never carried.
-        let gained = bus.take_share(HEAT, dt);
+        let gained = share;
         if gained != 0.0 {
             self.absorbed += gained;
             let rise = gained / self.capacity.iter().sum::<f64>();
@@ -4834,6 +4941,76 @@ impl Domain for Solid3D {
                 }
             }
         }
+
+        // **Heat taken out that takes a cell below absolute zero is refused**, and the block, its
+        // phases, its books and the bus are as the step found them. A block whose sink outran what
+        // its film could bring in stepped twenty thousand times to −354.67 K and answered `Ok`
+        // each time. Asked only of the cells heat was taken out of — the sinks, and every cell
+        // when the bus takes heat out — because within its limit everything else in a step is an
+        // average of temperatures that are not below zero: conduction, a film whose room is not,
+        // and a clearance, whose rows the limit sums.
+        //
+        // **Except a liquid that freezes**, whose heat a step moves in enthalpy at its liquid's
+        // capacity and gives back as temperature at its solid's: where the liquid holds more, as
+        // water does ice, a cell that crosses to solid in one step drops by the ratio, and the
+        // limit, read at the phase the cell began in, does not bound it. Water at 1 °C between two
+        // cells of ice at 1 K, stepped at the limit, came to −108.4 K; one cell of it under films
+        // to a room at 0 K, −120.1 K; to a room at 77 K, 36.6 K, below the room. A two-phase block
+        // is asked of every cell, and refused where one goes below absolute zero; where it
+        // undershoots its room and stays above zero, it is not yet asked.
+        if taking_out {
+            // To zero where heat was taken out of the cell — every cell, when the bus took it out —
+            // and to the rounding of a limit where only a phase change can have done it. The
+            // sinks first, so a cell found in the second pass is one heat was not taken out of.
+            let below = |c: usize, floor: f64| !self.void[c] && self.cells[c] < floor;
+            let found = if share < 0.0 {
+                (0..self.cells.len())
+                    .find(|&c| below(c, 0.0))
+                    .map(|c| (c, true))
+            } else {
+                let by_sink = self.sinks.iter().copied().find(|&c| below(c, 0.0));
+                by_sink.map(|c| (c, true)).or_else(|| {
+                    self.two_phase
+                        .then(|| (0..self.cells.len()).find(|&c| below(c, -crate::ZERO_SLACK)))
+                        .flatten()
+                        .map(|c| (c, false))
+                })
+            };
+            if let Some((c, heat)) = found {
+                let would = self.cells[c];
+                self.cells.copy_from_slice(&old);
+                if self.latent_anywhere {
+                    self.melted.copy_from_slice(&self.undo_melted);
+                }
+                (self.lost, self.supplied, self.absorbed) = books;
+                self.old = old;
+                self.film = film;
+                let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+                return Err(Violation::at(
+                    &self.name,
+                    if heat {
+                        format!(
+                            "the heat taken out in this step would take cell ({i}, {j}, {k}) \
+                             below absolute zero, to this many kelvin"
+                        )
+                    } else {
+                        format!(
+                            "this step would take cell ({i}, {j}, {k}) below absolute zero, to \
+                             this many kelvin: freezing in it, the cell gives up what its liquid \
+                             held into a solid that holds less, further than the block's limit \
+                             bounds"
+                        )
+                    },
+                    would,
+                ));
+            }
+        }
+        let taken = bus.take_share(HEAT, dt);
+        debug_assert_eq!(
+            taken.to_bits(),
+            share.to_bits(),
+            "the share looked at was not taken"
+        );
 
         // **A two-phase block re-derives its conductivities, because they moved.**
         //
@@ -4908,6 +5085,9 @@ impl Domain for Solid3D {
     fn restore(&mut self) {
         self.cells.clone_from(&self.saved);
         self.melted.clone_from(&self.saved_melted);
+        // What was saved need not be what the last step read: a cell set below absolute zero,
+        // saved, put right and stepped comes back from the checkpoint below it.
+        self.unchecked = true;
         self.lost = self.saved_lost;
         self.supplied = self.saved_supplied;
         self.absorbed = self.saved_absorbed;

@@ -23,6 +23,12 @@ protects nothing.
 
 ### Added
 
+- **`Exchange::peek_share`** (`pantometry-core`): the share `take_share` would give a substep, to
+  the bit, without taking it. For a domain that works its step out before it knows whether the step
+  stands, so a step it refuses leaves the bus as it found it. `take_share` and it read one private
+  `share_of`, so what was looked at is what is given; a unit test holds the two equal over an
+  interval of three thirds, steps of no length and of `NaN`, and a bus told no interval.
+
 - **A number can be swept: several runs, one value apart, and the readings against it.** **Run →
   Sweep a value…** opens a window. Choose any number the scene states, give it a range or the
   values written out, and run.
@@ -652,6 +658,99 @@ protects nothing.
 
 ### Fixed
 
+- **A temperature below absolute zero was answered** (`pantometry-thermal`, `pantometry-core`). Set
+  by a caller, made by a step or solved for by a balance, each ran. Measured before the change:
+  - **Set.** A lumped body, a bar, a block and a network started at −10 K each stepped, the lumped
+    body to 5.43 K and the bar holding −10 K; started at `NaN`, each to `NaN`. A block given −50 K
+    by `set_temperature` stepped on from it; one given a kilojoule out by `deposit`, with a cell at
+    −206 386 K. A void cell given `NaN`, or `deposit`ed into, whose capacity of nothing makes any
+    heat infinite, reached the solid beside it through a face that carries nothing, `0·(NaN − T)`
+    being `NaN`, and stepped it to `NaN`.
+  - **Made.** A megajoule off 100 cm³ of water at 20 °C put a lumped body and a network node at
+    −2206.85 K; a kilojoule off a bar's first cell put it at −3840.45 K; a block whose 50 mW sink
+    outran the 2 mW its film could bring in stepped twenty thousand times to −354.67 K. A lumped
+    body stepped one and a half time constants from 1000 K overshot its room to −90.3 K. And a
+    liquid that freezes in one step: a step moves a cell's heat in enthalpy at its liquid's capacity
+    and gives it back as temperature at its solid's, and water holds twice what ice does, so water
+    at 1 °C between two cells of ice at 1 K, stepped at its block's limit, froze to −108.4 K, and
+    one cell of it under films to a room at 0 K to −120.1 K, with nothing taken out.
+  - **Solved for.** 100 W out of a node a still-air room can bring 20.5 W to was answered at
+    −1135.42 K, and its path conductance there as 0.0700 W/K. A surface that radiates read a
+    fourth power below zero, the solve went off, and was refused as not finite; one that only
+    radiates, as singular, "no path to an environment". A block's balance under that sink was
+    refused as not converging.
+
+  What changed:
+  - **A state is asked before a step reads it**: finite and at or above absolute zero, by the cell
+    or node, in every `step` and `steady_state` and every question the step's refusal stands for;
+    a void cell's placeholder only finite. A block asks only when a cell was set since a step last
+    read them — by the constructor, `set_temperature`, `deposit`, `set_melted_fraction`,
+    `release_mode`, `fill` or a restore — so a block nobody touched pays nothing. A microkelvin
+    below zero is taken as zero: a block's limit is checked to `1 + 6e-12` of itself, and a step
+    that far past it beside a room at 0 K came to −4.3e-12 of where it started, measured from 1 K
+    to 1e5 K, where exactly at its limit it came to nothing below.
+  - **A step that would take a cell below absolute zero is refused**, and leaves the body, its
+    phases, its books and the bus as it found them, so it can be asked again with less taken out.
+    To leave the bus, `Exchange::peek_share` (Added): each domain looks at its share, works the
+    step out, and takes it once the step stands; a bar takes its faces before its channel, as it
+    always did, so the bus counts in the order it did. Asked of the cells heat was taken out of —
+    the sinks, the faces, and every cell when the bus took heat out — to zero; of every cell of a
+    two-phase block, to the microkelvin, said as a freeze; and of a lumped body stepped past its
+    time constant, said as that.
+  - **A balance below absolute zero is refused**, naming the coldest node and where it would come
+    to. A network's radiation is held below zero at what it is there, so its balance is unchanged
+    wherever a temperature means anything and has one root, and a root below zero says there is
+    none above it; within the solve's own error of zero, `10·1e-12·max(|P|, 1)` W over what carries
+    heat from the node and never more than 1e-4 K, is zero. A solve that fails with a node drawn
+    below zero says it found no balance above it. A block's balance that runs out of sweeps with a
+    sink's cell below zero says that, and that it had not settled.
+
+  Tests: `crates/pantometry-thermal/tests/a_state_below_absolute_zero_is_refused.rs`, seven, each
+  refusal by its words, site and value bit for bit and each refused step asked twice. A state set
+  each way a caller can, every one after a step that read the cells, in each domain, on the second
+  node and in a cell other than the first, every question refusing with the step; a hair below
+  zero runs. Heat taken out against `T + (Q − L)/C`, a part in a billion past and short, from
+  books and losses that are not zero, the bus's take and what it counted as taken unchanged, on a
+  bar with a gradient, on a face other than the first, on a cell other than the first, and a
+  void's placeholder below zero not asked. Ice put back, phases and all; water frozen past zero
+  refused, and above it at half the limit and with a liquid that holds what its solid does. The
+  sink that outran its film refused where it crosses, every step before it standing. The reason
+  only those cells are asked: a one-phase block with no sink in a room at 0 K, near zero and from
+  1000 K where only radiation carries it, every cell a number at or above zero after every step.
+  A network's balance against its closed form to the solve's own error, a part in a billion past
+  and short, at the bound to the bit answered as zero, in a room at 77 K, a node that only
+  radiates, and the coldest node of a chain named.
+  `Exchange`'s unit test holds `peek_share` to `take_share`.
+
+  Forty-four sabotages, each failing exactly the tests it claims with every claimed panic line seen
+  and none unclaimed, between clean controls, in one run on the source committed. A first run
+  found the network's hold at absolute zero needed by no test, and the node at the bound to the bit
+  that needs it was added; its other misses were five predictions short of what failed and one
+  sabotage that did not compile. The 34 shipped scenes are byte for byte what 9fb89cb writes.
+  A one-phase block steps within 1% of 9fb89cb, aligned builds pinned to a P-core (a default
+  build 1.3% to 2.5% behind, which aligning shows to be layout), and a two-phase one 1.1% to
+  3.3% behind, for one copy of its fractions and one pass over its cells a step; every bit is as
+  it was.
+
+  Reviews: invariant-guard passed every invariant and found the bar's two takes reversed, which
+  moved the bus's count in its last bit, and a `max` that could choose a zero's sign.
+  numerics-reviewer found the freeze, the lumped body past its time constant, the rounding a step
+  can leave below zero being refused next step as a state, the network's band unexercised and a
+  node that only radiates refused as singular. unearned-pass-hunter found books put back only from
+  zero, losses never read, flags no input reached, a theorem test whose radiation and clearance
+  carried nothing and whose readings could not see a `NaN`, and a bus compared by what it held and
+  not by what it had counted. silent-failure-hunter found the void cell's `NaN`, `fill` setting no
+  flag, and a band of 1e-4 K for every node that answered a balance a part in a million short in a
+  room at 77 K. Each was reproduced in Rust first; the freeze to −108.4 K and −120.1 K exactly.
+
+  Open: a two-phase block's limit does not bound a freeze, so where the room is above absolute zero
+  it undershoots it unrefused — water under films to a room at 77 K came to 36.6 K in one step at
+  the limit — and the limit wants the solid's capacity for a cell that can freeze in a step.
+  `path_conductance` near the bound takes its slope across a clamp. Read and not run: a refused
+  step part-way through `Simulation::advance` leaves the domains before it stepped, and `Iterative`
+  returns without restoring its checkpoint; `set_melted_fraction(NaN)` holds a cell at its melting
+  point.
+
 - **A size, a source, a heat or a step no body can have ran** (`pantometry-thermal`). f98dd0e refused
   a substance or a film no body can have; the numbers around them were never asked, and the
   questions a body answers besides its step were not asked anything. Measured before the change,
@@ -707,10 +806,10 @@ protects nothing.
     answer at absolute zero where `−hA·Tₐ/hA` rounds a hair under it, −5.7e-14 K at 20 °C. The
     solve's own root, descending from above, came out below absolute zero in none of 135 520
     answers at the bound, a unit short of it, and a part in a trillion and a billion short, with a
-    hold taken out to look, so it is given none. Over 26 352 bodies — four rooms from 1 K to 1500 K, films from
-    1e-12 to 1e3 W·m⁻²·K⁻¹, four emissivities, three areas, nine powers — every answer is the root
-    of its balance to 3.25 units in the last place of its terms, and none was refused: the
-    convergence refusal is a guard no measured input reaches.
+    hold taken out to look, so it is given none. Over 26 352 bodies — four rooms from 1 K to
+    1500 K, films from 1e-12 to 1e3 W·m⁻²·K⁻¹, four emissivities, three areas, nine powers —
+    every answer is the root of its balance to 3.25 units in the last place of its terms, and
+    none was refused: the convergence refusal is a guard no measured input reaches.
   - A lumped body's limit is `+∞` when its step refuses it, where it was zero, `NaN` or −329 s.
   - A Biot number where nothing convects is zero, where it was `0/0` for a perfect insulator, and a
     network's for an insulator under a film is `+∞`, as a lumped body's is.
@@ -741,8 +840,8 @@ protects nothing.
   and none unclaimed, between a clean control before and after, on the source committed: fifty-seven
   in one run, and the two whose claimed lines were corrected in a second on the same source. A
   sixtieth, a hold at absolute zero on the solve's own root, failed nothing; 135 520 answers never
-  needed it, and it was taken out. The 34 shipped scenes are byte for byte what d50c924 writes, each scene run from a
-  binary built at that commit and one built from this one.
+  needed it, and it was taken out. The 34 shipped scenes are byte for byte what d50c924 writes,
+  each scene run from a binary built at that commit and one built from this one.
 
   Reviews: numerics-reviewer found the Newton's start, the bound's rounding and tolerances of
   `1e-12` and `1e-9` that were 10⁴ and up to 10⁶ times what was measured; unearned-pass-hunter, a
@@ -754,10 +853,11 @@ protects nothing.
   this change's own. Each was reproduced in Rust first.
 
   Open: `GpuSolid::mirroring` asks a block nothing and its step asks no step, heat or size, so every
-  refusal here is missing on the device; a network's balance below absolute zero is answered, at
-  −1135.42 K for 100 W taken out of a node its room can bring 20.5 W, and its path conductance there
-  is 0.0700 W/K, which is the next change's with a step marched there; `Solid3D::{heat_capacity, cell_capacities, volume, fourier_number,
-  mode_amplification}`, `Bar1D::fourier_number`, `LumpedMass::heat_capacity` and `Interface::uniform`
+  refusal here is missing on the device; a network's balance below absolute zero was answered,
+  at −1135.42 K for 100 W taken out of a node its room can bring 20.5 W, and is refused since,
+  by *A temperature below absolute zero was answered*; `Solid3D::{heat_capacity,
+  cell_capacities, volume, fourier_number, mode_amplification}`, `Bar1D::fourier_number`,
+  `LumpedMass::heat_capacity` and `Interface::uniform`
   still answer for a size no body has; `generated_power` counts a source in a cell emptied after
   it, 5 W where 3.75 W are made; a cell size small enough that its square underflows is refused as
   a substance with no diffusivity; and a network stepped no length leaves heat that is not a number
@@ -870,9 +970,10 @@ protects nothing.
     300 K start is refused this way, where a 1000 K start finds 878.6 K, and the refusal says what
     was found. `verify` drops every refusal silently, so a block with no balance and a solve that
     failed print the same nothing. A block fed over the bus is measured as if nothing more arrived.
-    `settle` moves a part that loses heat without putting it on the books. An infinite source passes
-    the balance. `ThermalNetwork::steady_state` refuses every part that loses nothing as singular,
-    where it could answer. `step` marches a sink below absolute zero.
+    `settle` moves a part that loses heat without putting it on the books. An infinite source passed
+    the balance, and is refused by name since. `ThermalNetwork::steady_state` refuses every part
+    that loses nothing as singular, where it could answer. `step` marched a sink below absolute
+    zero, and refuses to since.
 
 - **A number no body can have ran as one that looked plausible** (`pantometry-thermal`,
   `pantometry-core`). The four thermal domains took a conductivity, a capacity, a density, an
@@ -917,7 +1018,8 @@ protects nothing.
     the steady solve reported that it diverged. The film carries the half cell now, which is what
     the limit already charged.
   - **The clamp cannot panic.** A field that has stopped being a number reports that the balance
-    diverged; a cell given a temperature of `NaN` still reaches it, with every input possible.
+    diverged; a cell given a temperature of `NaN` reached it, with every input possible, and
+    is refused by the cell since.
   - **`Substance::check` refuses the liquid's conductivity and specific heat** as it does the
     solid's, beside the liquid's emissivity, which it already refused. A scene's own substance
     could carry a negative liquid capacity past it.

@@ -877,16 +877,33 @@ fn a_network_refuses_every_number_no_node_can_have() {
 }
 
 /// **`steady_state` answers rather than panicking, whatever the field.** A cell given a temperature
-/// of `NaN` reaches the clamp that damps the uniform shift with every number the block was built
-/// from possible, and `clamp` panics on a bound that is not a number. It is a solve that diverged.
+/// of `NaN` reached the clamp that damps the uniform shift with every number the block was built
+/// from possible, and `clamp` panics on a bound that is not a number; then it was refused as a
+/// solve that diverged. It is refused as the step refuses it now, by the cell, before any sweep.
+///
+/// **And a field the solve itself takes past a number still diverges**, rather than panicking: a
+/// source of 1e300 W, finite and a number, overflows the field it drives.
 #[test]
-fn a_field_that_is_not_a_number_diverges_rather_than_panicking() {
+fn a_field_that_is_not_a_number_is_refused_rather_than_panicking() {
     let mut b = block(fine()).losing_from(Face::XMax, still());
     b.set_temperature(1, 0, 0, Temperature::from_si(NAN));
     let refusal = b
         .steady_state()
         .expect_err("a field with a NaN in it has no balance");
-    println!("  a NaN cell -> {refusal}");
+    names(
+        "a NaN cell",
+        &refusal,
+        "block",
+        "cell (1, 0, 0)'s temperature must be finite",
+        NAN,
+    );
+    let b = block(fine())
+        .losing_from(Face::XMax, still())
+        .dissipating(1e300, |i, _, _| i == 0);
+    let refusal = b
+        .steady_state()
+        .expect_err("a field driven past a number has no balance");
+    println!("  a source of 1e300 W -> {refusal}");
     assert!(
         refusal.quantity.contains("diverged"),
         "it is a divergence, says {refusal}"

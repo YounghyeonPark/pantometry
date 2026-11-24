@@ -499,7 +499,16 @@ impl ThermalNetwork {
     /// **A network with no environment anywhere**, when power is arriving. Heat has nowhere to
     /// go, so no steady state exists and the balance has no solution — the matrix is singular.
     /// Marching such a network is perfectly well defined; it simply heats up forever. Returning
-    /// a plausible number here would be the worst outcome, so it is named instead.
+    /// a plausible number here would be the worst outcome, so it is named instead. Heat taken out
+    /// of one is said to cool it without limit.
+    ///
+    /// **A balance below absolute zero**, where more heat is taken out than the rooms can bring
+    /// in, named by the node that would be coldest and the temperature it would come to. Below
+    /// zero a surface's radiation is held at what it is at zero, so the balance has one root and a
+    /// root below zero says there is none above it; one within 1e-4 K of zero is the solve's own
+    /// error, and is answered as zero.
+    ///
+    /// **A network its step refuses**, with the step's refusal, before the power is asked.
     ///
     /// ```
     /// # use pantometry_thermal::{Environment, ThermalNetwork};
@@ -570,6 +579,26 @@ impl ThermalNetwork {
         // stepped, and no worse when they have not.
         let mut t: Vec<f64> = self.nodes.iter().map(|node| node.temperature).collect();
 
+        // A solve that fails with heat taken out and a node drawn below absolute zero failed
+        // because there is no balance above it: below zero, held at what it is at zero, a surface
+        // that only radiates brings in no more as the node cools, so its balance is flat there and
+        // has nothing to find. 100 W out of a node whose room brings it 2.1 W by radiation alone
+        // was refused as singular, "no path to an environment", which it has.
+        let drawn_below = |t: &[f64]| -> Option<Violation> {
+            if p >= 0.0 {
+                return None;
+            }
+            let i = (0..n)
+                .filter(|i| t[*i] < 0.0)
+                .min_by(|a, b| t[*a].total_cmp(&t[*b]))?;
+            Some(Violation::at(
+                format!("{}/{}", self.name, self.nodes[i].label),
+                "no balance above absolute zero was found: heat taken out drew this node below it \
+                 in the solve, to this many kelvin, where what its rooms bring in grows no more",
+                t[i],
+            ))
+        };
+
         // Newton. Eight is generous: the linear case converges on the first, and a radiative
         // one from a cold start has taken four in every case measured. The count is bounded so
         // a pathological input reports rather than spins.
@@ -585,9 +614,7 @@ impl ThermalNetwork {
             }
             for (i, node) in self.nodes.iter().enumerate() {
                 if let Some(e) = &node.environment {
-                    r[i] -= e
-                        .loss_from(Temperature::from_si(t[i]), emissivity_of(node))
-                        .to_si();
+                    r[i] -= loss_above_zero(e, t[i], emissivity_of(node));
                 }
             }
             if r.iter().all(|v| v.abs() < 1e-12 * p.abs().max(1.0)) {
@@ -618,14 +645,16 @@ impl ThermalNetwork {
             for v in r.iter_mut() {
                 *v = -*v;
             }
-            let step = solve(&mut j, &mut r, n).ok_or_else(|| {
-                Violation::at(
-                    self.name.clone(),
-                    "the steady-state balance is singular; some part of this network has no \
-                     path to an environment",
-                    p,
-                )
-            })?;
+            let Some(step) = solve(&mut j, &mut r, n) else {
+                return Err(drawn_below(&t).unwrap_or_else(|| {
+                    Violation::at(
+                        self.name.clone(),
+                        "the steady-state balance is singular; some part of this network has no \
+                         path to an environment",
+                        p,
+                    )
+                }));
+            };
             let mut moved: f64 = 0.0;
             for (ti, d) in t.iter_mut().zip(&step) {
                 *ti += d;
@@ -642,20 +671,75 @@ impl ThermalNetwork {
         // struck — found by instrumenting the iteration count, which showed the loop had no way
         // to report exhausting itself.
         if !converged {
-            return Err(Violation::at(
-                self.name.clone(),
-                "the steady-state balance did not converge in the iterations allowed",
-                p,
-            ));
+            return Err(drawn_below(&t).unwrap_or_else(|| {
+                Violation::at(
+                    self.name.clone(),
+                    "the steady-state balance did not converge in the iterations allowed",
+                    p,
+                )
+            }));
         }
 
         for (i, v) in t.iter().enumerate() {
             if !v.is_finite() {
+                if let Some(below) = drawn_below(&t) {
+                    return Err(below);
+                }
                 return Err(Violation::at(
                     format!("{}/{}", self.name, self.nodes[i].label),
                     "steady-state temperature is not finite",
                     *v,
                 ));
+            }
+        }
+
+        // **A balance below absolute zero is not one.** Heat taken out of a network can be more
+        // than its rooms bring in: 100 W out of a node a still-air room can bring 20.5 W to was
+        // answered at −1135.42 K, and its path conductance there as 0.0700 W/K; with a surface that
+        // radiates, the solve read a fourth power below zero, went off, and was refused as not
+        // finite. Below zero the radiation is held at what it is at zero, so the balance is the
+        // same where it means anything and, wherever a film convects, keeps rising below it, and
+        // has one root: one below zero means none above it. A surface that only radiates is flat
+        // there, and the solve that reaches it is refused as having found none, by `drawn_below`.
+        //
+        // **Within the solve's own error of zero is zero**, and the error is the node's: what the
+        // stop leaves of its balance, `1e-12·max(|P|, 1)` W, over what carries heat from it, ten
+        // times over, and never more than `NETWORK_BELOW_ZERO`. A bound of 1e-4 K for every node
+        // answered balances that are not there: a node in a room at 77 K given a part in a million
+        // more than its room can bring has its root 7.7e-5 K below zero, and was answered at it.
+        let band = |i: usize| {
+            let node = &self.nodes[i];
+            let film = node.environment.as_ref().map_or(0.0, |e| {
+                crate::linearised_loss_conductance(
+                    e,
+                    Temperature::from_si(t[i]),
+                    emissivity_of(node),
+                )
+            });
+            let joints: f64 = self
+                .links
+                .iter()
+                .filter(|l| l.a == i || l.b == i)
+                .map(|l| l.ua)
+                .sum();
+            (10.0 * 1e-12 * p.abs().max(1.0) / (film + joints)).min(NETWORK_BELOW_ZERO)
+        };
+        let coldest = (0..n)
+            .filter(|i| t[*i] < -band(*i))
+            .min_by(|a, b| t[*a].total_cmp(&t[*b]));
+        if let Some(i) = coldest {
+            return Err(Violation::at(
+                format!("{}/{}", self.name, self.nodes[i].label),
+                "no balance above absolute zero: more heat is taken out than the rooms can bring \
+                 in, and this node would come to this many kelvin",
+                t[i],
+            ));
+        }
+        // Compared rather than `max`ed: `max` may return either zero, and a node that came to
+        // `-0.0` would come out with whichever sign the platform chose.
+        for v in t.iter_mut() {
+            if *v < 0.0 {
+                *v = 0.0;
             }
         }
         Ok(SteadyState {
@@ -693,8 +777,15 @@ impl ThermalNetwork {
             if let Some((what, value)) = fault {
                 return Some(Violation::at(site(), what, value));
             }
-            (!(n.capacity.is_finite() && n.capacity > 0.0))
-                .then(|| Violation::at(site(), "substance has no heat capacity", n.capacity))
+            if !(n.capacity.is_finite() && n.capacity > 0.0) {
+                return Some(Violation::at(
+                    site(),
+                    "substance has no heat capacity",
+                    n.capacity,
+                ));
+            }
+            crate::state_fault("the node's temperature", n.temperature)
+                .map(|(what, value)| Violation::at(site(), what, value))
         })
     }
 
@@ -726,6 +817,33 @@ impl ThermalNetwork {
 /// caller will read them. Each iteration is one dense solve of an n×n system with n the node
 /// count, so for the handful of nodes a lumped network has, even sixty-six is microseconds.
 const NEWTON_STEPS: usize = 100;
+
+/// The most a converged balance can come out below absolute zero by the solve's own error, and
+/// still be absolute zero: what bounds each node's own band, `10·1e-12·max(|P|, 1)/G`, where the
+/// conductance carrying heat from it is small. Ten times the most measured: over 14 112 networks
+/// at the bound to the bit, a unit short of it and a part in a billion short — rooms from 1 K to
+/// 1500 K, films from 1e-9 to 1e3 W·m⁻²·K⁻¹, emissivities from 0 to 1, areas from 1e-6 to 1 m², a
+/// node alone and behind a joint — a node alone came to 9.79e-6 K below zero at most. Not rounding
+/// alone: the solve stops once what is left of a node's balance is under 1e-12 W, which under a
+/// film of a femtowatt per kelvin is a long way from its root. The same bound, for the same reason,
+/// as `Solid3D`'s.
+const NETWORK_BELOW_ZERO: f64 = 1e-4;
+
+/// What an environment takes from a node at `t` kelvin, with the radiation held below absolute
+/// zero at what it is there: [`Environment::loss_from`] wherever a temperature means anything, to
+/// the bit, and still rising below zero by its convection, so a balance asked there has one root.
+fn loss_above_zero(environment: &Environment, t: f64, emissivity: f64) -> f64 {
+    if t >= 0.0 {
+        environment
+            .loss_from(Temperature::from_si(t), emissivity)
+            .to_si()
+    } else {
+        environment
+            .loss_from(Temperature::from_si(0.0), emissivity)
+            .to_si()
+            + environment.convection_w_per_m2_k * environment.area.to_si() * t
+    }
+}
 
 /// What [`ThermalNetwork::steady_state`] found: a temperature per node.
 ///
@@ -916,9 +1034,8 @@ impl Domain for ThermalNetwork {
         }
 
         // This substep's share of the channel, not the whole outer step's. See
-        // `Exchange::take_share`.
-        let gained = bus.take_share(HEAT, dt);
-        self.absorbed += gained;
+        // `Exchange::take_share`. Looked at first, and taken once the step stands.
+        let gained = bus.peek_share(HEAT, dt);
 
         // Jacobi: every flux from the same snapshot, so the answer does not depend on the order
         // links were declared in. Gauss-Seidel would be a different scheme, not a rounding
@@ -951,6 +1068,8 @@ impl Domain for ThermalNetwork {
             delta[l.b] += q;
         }
 
+        // Each environment's loss, kept to be counted, in this order, once the step stands.
+        let mut shed = Vec::new();
         for (i, n) in self.nodes.iter().enumerate() {
             if let Some(e) = &n.environment {
                 let lost = e
@@ -961,10 +1080,30 @@ impl Domain for ThermalNetwork {
                     .to_si()
                     * h;
                 delta[i] -= lost;
-                self.lost += lost;
+                shed.push(lost);
             }
         }
 
+        // Heat taken out that takes the absorbing node below absolute zero is refused, and the
+        // network and the bus are as they were: a megajoule off a node of 100 cm³ of water at 20 °C
+        // put it at −2206.85 K and answered `Ok`. Asked of the absorbing node, the one the
+        // heat was taken out of: every other node's step, within its limit, is an average of
+        // temperatures that are not below zero.
+        if let Some(i) = self.absorbing.filter(|_| gained < 0.0) {
+            let would = self.nodes[i].temperature + delta[i] / self.nodes[i].capacity;
+            if would < 0.0 {
+                return Err(Violation::at(
+                    format!("{}/{}", self.name, self.nodes[i].label),
+                    "the heat taken out in this step would take the node below absolute zero, to \
+                     this many kelvin",
+                    would,
+                ));
+            }
+        }
+        self.absorbed += bus.take_share(HEAT, dt);
+        for lost in shed {
+            self.lost += lost;
+        }
         for (i, n) in self.nodes.iter_mut().enumerate() {
             n.temperature += delta[i] / n.capacity;
         }
