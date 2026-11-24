@@ -775,6 +775,10 @@ pub struct Solid3D {
     /// dissipates does it *somewhere*. Symmetric with [`Solid3D::losing_from`], which takes energy
     /// out at a face; this puts it in at a region.
     source: Vec<f64>,
+    /// The first cell whose source is not a number of watts, and that number, if any is — found
+    /// by [`Solid3D::dissipating`], the one place a source is written, so a step pays nothing to
+    /// refuse it. See `input_fault`.
+    bad_source: Option<(usize, f64)>,
     /// Joules generated over the run, and the reason the books still balance: the ledger is
     /// `stored + lost − supplied`, so a source that adds a joule to a cell adds one here too and
     /// the total moves only by what crossed the bus.
@@ -1101,6 +1105,7 @@ impl Solid3D {
             solid_on: [0; 6],
             facing_air: Vec::new(),
             source: vec![0.0; counts.0 * counts.1 * counts.2],
+            bad_source: None,
             supplied: 0.0,
             saved_supplied: 0.0,
             gaps: Vec::new(),
@@ -2521,12 +2526,10 @@ impl Solid3D {
             ));
         }
         let supplied: f64 = self.source.iter().sum();
+        // As the step refuses it, by what makes it unsteppable: this said "this block cannot be
+        // stepped", for a substance with no thermal properties and for a bad joint alike.
         if self.conduction_rate().is_nan() {
-            return Err(Violation::at(
-                &self.name,
-                "this block cannot be stepped, so it has no balance to solve",
-                f64::INFINITY,
-            ));
+            return Err(self.unsteppable());
         }
 
         // Which connected body each cell belongs to, six-connected across every face that
@@ -3334,6 +3337,26 @@ impl Solid3D {
                 return refuse(what, value);
             }
         }
+        // The cell size: zero, `NaN` and `+∞` were refused as a substance with no diffusivity, and
+        // a cell a millimetre less than nothing ran — see `size_fault`.
+        if let Some((what, value)) =
+            crate::size_fault("the block's cell size", self.dx.to_si(), "metres")
+        {
+            return refuse(what, value);
+        }
+        // A source that is not a number of watts, by the cell it is in. `+∞` or `−∞` stepped its
+        // cell there and answered `Ok`; `NaN` made the cell `NaN`, which the block's warmest and
+        // coldest readings step over, so it read as a block at 292.92 K; and `steady_state` refused
+        // each as a balance that diverged, or a `NaN` with nothing to lose it to as one that cools
+        // without limit.
+        if let Some((c, watts)) = self.bad_source {
+            let (nx, ny) = (self.counts.0, self.counts.1);
+            let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+            return refuse(
+                format!("the source in cell ({i}, {j}, {k}) must be finite, in watts"),
+                watts,
+            );
+        }
         for (face, environment) in &self.exposed {
             if let Some((what, value)) = crate::environment_fault(environment, true) {
                 return refuse(format!("{face:?}: {what}"), value);
@@ -3368,6 +3391,25 @@ impl Solid3D {
             }
         }
         None
+    }
+
+    /// Why a block whose conduction rate is not a number cannot be stepped, as
+    /// [`step`](Domain::step) and [`steady_state`](Solid3D::steady_state) both refuse it.
+    ///
+    /// A bad joint and a substance with no conductivity both leave the limit unsayable, and they
+    /// are not the same fault. Naming the first sends a caller to their materials, which is where a
+    /// bad joint is not. The joint's refusal carries the joint, which it did not: it carried `+∞`,
+    /// a value nobody stated.
+    fn unsteppable(&self) -> Violation {
+        match self.bad_contact {
+            Some(h) if h.is_nan() => Violation::at(
+                &self.name,
+                "a joint's contact conductance is not a number",
+                h,
+            ),
+            Some(h) => Violation::at(&self.name, "a joint's contact conductance is negative", h),
+            None => Violation::at(&self.name, "substance has no diffusivity", f64::INFINITY),
+        }
     }
 
     /// Generate `watts` **spread evenly over the cells `where_` selects**, replacing whatever
@@ -3409,6 +3451,13 @@ impl Solid3D {
         for c in chosen {
             self.source[c] = each;
         }
+        // Over every cell and not only these, because a later call that replaces a bad source
+        // with a good one leaves no fault behind, and one that does not leaves the first.
+        self.bad_source = self
+            .source
+            .iter()
+            .position(|w| !w.is_finite())
+            .map(|c| (c, self.source[c]));
         self.resolve();
         self
     }
@@ -4542,20 +4591,14 @@ impl Domain for Solid3D {
         if let Some(fault) = self.input_fault() {
             return Err(fault);
         }
+        // The step and the heat waiting for it, before anything moves: the heat goes in after the
+        // sweep, and a refusal there would leave a block swept with its heat still on the bus.
+        if let Some((what, value)) = crate::step_fault(dt).or_else(|| crate::heat_fault(bus)) {
+            return Err(Violation::at(&self.name, what, value));
+        }
         let ratio = self.stability_ratio(dt);
         if ratio.is_nan() {
-            // A bad joint and a substance with no conductivity both leave the limit unsayable, and
-            // they are not the same fault. Naming the first sends a caller to their materials,
-            // which is where a bad joint is not.
-            return Err(Violation::at(
-                &self.name,
-                match self.bad_contact {
-                    Some(h) if h.is_nan() => "a joint's contact conductance is not a number",
-                    Some(_) => "a joint's contact conductance is negative",
-                    None => "substance has no diffusivity",
-                },
-                f64::INFINITY,
-            ));
+            return Err(self.unsteppable());
         }
         // Reported in Fourier-number units, which is `dt/(6·max_stable_dt)` — the classic
         // `α·dt/dx²` for a block of one material with two cells on every axis, and the number the

@@ -169,14 +169,17 @@ fn main() {
         .expect("the joint has a path to ambient")
         .to_si();
     println!("  {:<34} {:>10.4} W/K  at 0.5 W", "joint to ambient", g);
+    let biot = net
+        .biot_number(hot)
+        .expect("every number of the path is one a body can have");
     println!(
         "  {:<34} {:>10.4}      well under 0.1, so a lumped node is honest",
         "Biot number",
-        net.biot_number(hot).unwrap_or(f64::NAN)
+        biot.unwrap_or(f64::NAN)
     );
     check_between(
         "the lumped model is valid here",
-        net.biot_number(hot).unwrap_or(1.0),
+        biot.unwrap_or(1.0),
         0.0,
         0.1,
         "Bi",

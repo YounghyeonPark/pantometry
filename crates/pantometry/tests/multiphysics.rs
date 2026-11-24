@@ -174,7 +174,7 @@ fn absorbed_light_warms_the_glass_and_the_books_balance() {
     assert!(rise > 1.0, "and it is a real warming, not a rounding");
     // Below the radiation-free closed form, which is the direction radiation pushes it.
     assert!(
-        rise < lens.equilibrium_rise(absorbed).to_si(),
+        rise < lens.equilibrium_rise(absorbed).unwrap().to_si(),
         "radiation must make the glass settle lower than convection alone predicts"
     );
 
@@ -211,7 +211,7 @@ fn a_warm_lens_drifts_out_of_focus() {
     let absorbed = surface.absorbed_power();
 
     let lens = warm_lens();
-    let settled = lens.equilibrium_rise(absorbed);
+    let settled = lens.equilibrium_rise(absorbed).unwrap();
     assert!(
         settled.to_si() > 1.0,
         "the rise should be more than a kelvin, got {} K",

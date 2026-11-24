@@ -72,6 +72,9 @@ struct NodeState {
     /// J/K. Held rather than recomputed, so a node is a capacity and not a substance — which is
     /// what lets a network mix copper, steel and air without the caller assembling a fiction.
     capacity: f64,
+    /// The volume the capacity was made from, as given, so a volume no body can have is refused
+    /// by name rather than as a capacity that came out wrong.
+    volume: f64,
     /// For the Biot number, which is the only thing that still needs a length.
     thickness: f64,
     substance: Substance,
@@ -193,6 +196,7 @@ impl ThermalNetwork {
         self.nodes.push(NodeState {
             label: label.into(),
             capacity,
+            volume: volume.to_si(),
             thickness: thickness.to_si(),
             substance,
             temperature: initial.to_si(),
@@ -398,25 +402,47 @@ impl ThermalNetwork {
     /// Whether a node's lumped approximation applies, from its own conductivity and its own
     /// environment. `None` for an interior node, which has no film coefficient to compare
     /// against — and that is worth knowing rather than papering over.
-    pub fn biot_number(&self, node: Node) -> Option<f64> {
-        let n = &self.nodes[node.index as usize];
-        let e = n.environment.as_ref()?;
-        let k = n.substance.thermal.map(|t| t.conductivity.to_si())?;
-        if k <= 0.0 {
-            return None;
+    ///
+    /// **Refused for a network [`step`](Domain::step) refuses, with the same refusal**, as
+    /// [`steady_state`](ThermalNetwork::steady_state) is. It answered one: a thickness of `NaN`
+    /// gave a Biot number of `NaN`, and a film of −7 W·m⁻²·K⁻¹ a negative one, which passes the
+    /// `< 0.1` a caller asks of it. A perfect insulator under a film was `None`, the answer for a
+    /// node with no film, and is `+∞`.
+    pub fn biot_number(&self, node: Node) -> Result<Option<f64>, Violation> {
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
         }
-        Some(e.convection_w_per_m2_k * n.thickness / k)
+        let n = &self.nodes[node.index as usize];
+        let Some(e) = n.environment.as_ref() else {
+            return Ok(None);
+        };
+        // A perfect insulator under a film is `+∞`, a body no lumped node describes, and zero
+        // where nothing convects, as [`LumpedMass::biot_number`](crate::LumpedMass::biot_number)
+        // says of the same body. It was `None`, which says "an interior node" of one that is not.
+        let k = n
+            .substance
+            .thermal
+            .map_or(f64::NAN, |t| t.conductivity.to_si());
+        let hl = e.convection_w_per_m2_k * n.thickness;
+        Ok(Some(if hl == 0.0 { 0.0 } else { hl / k }))
     }
 
     /// A node's local time constant: its capacity over everything that carries heat away from
     /// it, links included.
-    pub fn time_constant(&self, node: Node) -> Time {
+    ///
+    /// **Refused for a network [`step`](Domain::step) refuses, with the same refusal.** It
+    /// answered one: a node's volume of zero, `NaN` or less gave 0 s, `+∞` and −800 s, and a node
+    /// with no thermal properties `+∞`.
+    pub fn time_constant(&self, node: Node) -> Result<Time, Violation> {
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         let i = node.index as usize;
         let g = self.node_conductance(i);
-        if g <= 0.0 || !self.nodes[i].capacity.is_finite() {
-            return Time::from_si(f64::INFINITY);
+        if g <= 0.0 {
+            return Ok(Time::from_si(f64::INFINITY));
         }
-        Time::from_si(self.nodes[i].capacity / g)
+        Ok(Time::from_si(self.nodes[i].capacity / g))
     }
 
     /// Everything conducting heat out of node `i`: its environment linearised at its current
@@ -503,12 +529,14 @@ impl ThermalNetwork {
                 0.0,
             ));
         }
+        // The network before the power, so a network its step refuses is refused as its step
+        // refuses it whatever it is asked.
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         let p = power.to_si();
         if !p.is_finite() {
             return Err(Violation::at(self.name.clone(), "power is not finite", p));
-        }
-        if let Some(fault) = self.input_fault() {
-            return Err(fault);
         }
         let sink = match self.absorbing {
             Some(i) => i,
@@ -521,11 +549,18 @@ impl ThermalNetwork {
                 ))
             }
         };
+        // Said the way it happens: heat taken out of a network nothing brings any into cools it
+        // without limit, and was refused as warming.
         if p != 0.0 && !self.nodes.iter().any(|node| node.environment.is_some()) {
             return Err(Violation::at(
                 self.name.clone(),
-                "no node loses heat to an environment, so heat has nowhere to go and there is \
-                 no steady state — it warms without limit",
+                if p > 0.0 {
+                    "no node loses heat to an environment, so heat has nowhere to go and there is \
+                     no steady state — it warms without limit"
+                } else {
+                    "no node gains heat from an environment, so nothing replaces the heat taken \
+                     out and there is no steady state — it cools without limit"
+                },
                 p,
             ));
         }
@@ -629,25 +664,37 @@ impl ThermalNetwork {
         })
     }
 
-    /// The first node whose substance or film has a number no body can have, as the refusal
-    /// [`step`](Domain::step) and [`steady_state`](ThermalNetwork::steady_state) give — see
-    /// `substance_fault` and `environment_fault` for what each is and what it did before.
+    /// The first node whose substance, film, volume or thickness has a number no body can have, or
+    /// whose substance says nothing of its heat, as the refusal [`step`](Domain::step) gives — and
+    /// [`steady_state`](ThermalNetwork::steady_state), [`time_constant`](ThermalNetwork::time_constant)
+    /// and [`biot_number`](ThermalNetwork::biot_number) give the same. See `substance_fault`,
+    /// `environment_fault` and `size_fault` for what each is and what it did before.
     ///
     /// A film of `NaN` and an emissivity of `NaN` stepped to `NaN` temperatures with no refusal,
     /// and a negative film, area or emissivity stepped as if it were a smaller one. A film without
     /// limit was refused already, as a Fourier number of infinity, and is named now.
+    ///
+    /// A volume of zero, `NaN` or less was refused by the step as having no heat capacity and
+    /// answered by everything else: `steady_state` solved the network as if the node were fine,
+    /// and `time_constant` said 0 s, `+∞` and −800 s. A thickness, which only the Biot number
+    /// reads, was never asked at all. A node with no thermal properties, which the step refuses as
+    /// having no heat capacity, was solved for as if it did not radiate.
     fn input_fault(&self) -> Option<Violation> {
         self.nodes.iter().find_map(|n| {
-            let fault = crate::substance_fault(&n.substance, false).or_else(|| {
-                n.environment
-                    .as_ref()
-                    .and_then(|e| crate::environment_fault(e, false))
-            })?;
-            Some(Violation::at(
-                format!("{}/{}", self.name, n.label),
-                fault.0,
-                fault.1,
-            ))
+            let site = || format!("{}/{}", self.name, n.label);
+            let fault = crate::substance_fault(&n.substance, false)
+                .or_else(|| {
+                    n.environment
+                        .as_ref()
+                        .and_then(|e| crate::environment_fault(e, false))
+                })
+                .or_else(|| crate::size_fault("the node's volume", n.volume, "cubic metres"))
+                .or_else(|| crate::size_fault("the node's thickness", n.thickness, "metres"));
+            if let Some((what, value)) = fault {
+                return Some(Violation::at(site(), what, value));
+            }
+            (!(n.capacity.is_finite() && n.capacity > 0.0))
+                .then(|| Violation::at(site(), "substance has no heat capacity", n.capacity))
         })
     }
 
@@ -811,9 +858,6 @@ impl Domain for ThermalNetwork {
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
         let h = dt.to_si();
-        if h <= 0.0 {
-            return Ok(());
-        }
         if self.nodes.is_empty() {
             return Err(Violation::at(
                 self.name.clone(),
@@ -824,6 +868,28 @@ impl Domain for ThermalNetwork {
         if let Some(fault) = self.input_fault() {
             return Err(fault);
         }
+        // The step itself. A step of `NaN` seconds went past the `h <= 0` that stood here and
+        // stepped every node to `NaN`; one of −1 s returned there, as success. A step of no length
+        // takes nothing and moves nothing, so the heat on the bus is not its to judge.
+        if let Some((what, value)) = crate::step_fault(dt) {
+            return Err(Violation::at(self.name.clone(), what, value));
+        }
+        if h == 0.0 {
+            return Ok(());
+        }
+        // The heat waiting for it, before any of it is taken: heat that is not a number, and heat
+        // with nowhere to land. The second was refused after the take, with the share already off
+        // the bus and counted as absorbed by a network that refused it.
+        if let Some((what, value)) = crate::heat_fault(bus) {
+            return Err(Violation::at(self.name.clone(), what, value));
+        }
+        if self.absorbing.is_none() && bus.peek(HEAT) != 0.0 {
+            return Err(Violation::at(
+                self.name.clone(),
+                "heat arrived but no node was named to absorb it",
+                bus.peek(HEAT),
+            ));
+        }
 
         // Refuse rather than diverge, and name the node. `F_i` is the fraction of a node's
         // capacity its own update moves in one step; past one the coefficient `1 - F_i` goes
@@ -831,14 +897,8 @@ impl Domain for ThermalNetwork {
         // Fourier number, and the useful difference is that in a network the fast node is not
         // obvious, so the site says which it is.
         for i in 0..self.nodes.len() {
+            // Finite and positive: `input_fault` refused anything else, by the node it is in.
             let c = self.nodes[i].capacity;
-            if !c.is_finite() || c <= 0.0 {
-                return Err(Violation::at(
-                    format!("{}/{}", self.name, self.nodes[i].label),
-                    "substance has no heat capacity",
-                    c,
-                ));
-            }
             let f = h * self.node_conductance(i) / c;
             if f > 1.0 + 1e-12 {
                 return Err(Violation {
@@ -859,13 +919,6 @@ impl Domain for ThermalNetwork {
         // `Exchange::take_share`.
         let gained = bus.take_share(HEAT, dt);
         self.absorbed += gained;
-        if self.absorbing.is_none() && gained != 0.0 {
-            return Err(Violation::at(
-                self.name.clone(),
-                "heat arrived but no node was named to absorb it",
-                gained,
-            ));
-        }
 
         // Jacobi: every flux from the same snapshot, so the answer does not depend on the order
         // links were declared in. Gauss-Seidel would be a different scheme, not a rounding

@@ -170,7 +170,7 @@ fn one_node_agrees_with_the_lumped_equilibrium_rise() {
         ambient(),
         Environment::still_air(ambient(), area),
     );
-    let want = lump.equilibrium_rise(Power::w(power)).to_si();
+    let want = lump.equilibrium_rise(Power::w(power)).unwrap().to_si();
 
     let mut net = ThermalNetwork::new("plate");
     let only = net.node_losing_to(

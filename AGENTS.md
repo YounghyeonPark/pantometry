@@ -168,7 +168,7 @@ the wrong question:
 
 | you want | use | cost |
 | --- | --- | --- |
-| one body, one temperature | `LumpedMass` | one step per frame; check `biot_number() < 0.1` first |
+| one body, one temperature | `LumpedMass` | one step per frame; check `biot_number()? < 0.1` first |
 | a gradient along one thing | `Bar1D` | pays `dt < dx²/2α`; milliseconds in aluminium |
 | several bodies and the **drop between them** | `ThermalNetwork` | one step per frame per node |
 

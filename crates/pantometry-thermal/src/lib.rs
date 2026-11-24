@@ -190,12 +190,55 @@ impl LumpedMass {
 
     /// `hL/k` — whether the lumped approximation is honest here. Under about 0.1 it
     /// is; well past that, the body has an internal gradient this domain cannot see.
-    pub fn biot_number(&self) -> f64 {
-        let Some(thermal) = self.substance.thermal else {
-            return f64::INFINITY;
-        };
-        self.environment.convection_w_per_m2_k * self.thickness.to_si()
-            / thermal.conductivity.to_si()
+    ///
+    /// **Refused for a body [`step`](Domain::step) refuses, with the same refusal.** It answered
+    /// one: a conductivity of −0.6 W·m⁻¹·K⁻¹ gave −0.058, which passes the `< 0.1` a caller asks
+    /// of it, and a thickness of `NaN` or less gave `NaN` or a negative number. A substance with no
+    /// thermal properties is refused as having no heat capacity, as its step is; this returned
+    /// `+∞` for it.
+    ///
+    /// Zero where nothing convects, whatever conducts: no film sets up no gradient. A perfect
+    /// insulator under a film is `+∞`, a body no lumped model describes.
+    pub fn biot_number(&self) -> Result<f64, Violation> {
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
+        let k = self
+            .substance
+            .thermal
+            .map_or(f64::NAN, |t| t.conductivity.to_si());
+        let hl = self.environment.convection_w_per_m2_k * self.thickness.to_si();
+        // `0/0` for an insulator in still air, which is not a number and is not this body.
+        Ok(if hl == 0.0 { 0.0 } else { hl / k })
+    }
+
+    /// The first number this body was given that no body can have, as [`step`](Domain::step)
+    /// refuses it, or `None`; and a substance that says nothing of its heat, which every question
+    /// asked of the body refuses as the step does.
+    ///
+    /// Asked by the step and by every question that answers from the same numbers —
+    /// [`biot_number`](LumpedMass::biot_number), [`time_constant`](LumpedMass::time_constant) and
+    /// [`equilibrium_rise`](LumpedMass::equilibrium_rise) — because they answered for a body the
+    /// step refused. On a body in still air under 5 W, settling 37.81 K up: an emissivity of `NaN`
+    /// answered 71.43 K, one of 1.5 29.49 K, a film of −7 W·m⁻²·K⁻¹ 146.08 K, a film area of `NaN`
+    /// **−293.15 K**, which is absolute zero, and an ambient of −10 K 71.33 K.
+    fn input_fault(&self) -> Option<Violation> {
+        let fault = substance_fault(&self.substance, false)
+            .or_else(|| environment_fault(&self.environment, false))
+            .or_else(|| size_fault("the body's volume", self.volume.to_si(), "cubic metres"))
+            .or_else(|| size_fault("the body's thickness", self.thickness.to_si(), "metres"));
+        if let Some((what, value)) = fault {
+            return Some(Violation::at(&self.name, what, value));
+        }
+        let capacity = self.heat_capacity().to_si();
+        if !(capacity.is_finite() && capacity > 0.0) {
+            return Some(Violation::at(
+                &self.name,
+                "substance has no heat capacity",
+                capacity,
+            ));
+        }
+        None
     }
 
     /// Time constant `C/(hA)` — how long it takes to get most of the way to
@@ -233,13 +276,22 @@ impl LumpedMass {
     ///
     /// Infinite when nothing carries heat away — no convection and no emissivity — which is a
     /// body that never settles rather than one that settles instantly.
-    pub fn time_constant(&self) -> Time {
+    ///
+    /// **Refused for a body [`step`](Domain::step) refuses, with the same refusal.** It answered
+    /// one, with a time a scheduler would use: a specific heat or a volume below zero gave
+    /// −3294 s, a volume of zero 0 s, and a film of `NaN` a time of `NaN`. A substance with no
+    /// thermal properties, which this called `+∞`, is refused as having no heat capacity, as its
+    /// step is.
+    pub fn time_constant(&self) -> Result<Time, Violation> {
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         let capacity = self.heat_capacity().to_si();
         let conductance = self.loss_conductance(self.temperature);
-        if conductance <= 0.0 || !capacity.is_finite() {
-            return Time::from_si(f64::INFINITY);
+        if conductance <= 0.0 {
+            return Ok(Time::from_si(f64::INFINITY));
         }
-        Time::from_si(capacity / conductance)
+        Ok(Time::from_si(capacity / conductance))
     }
 
     /// `d(loss)/dT` at a temperature: convection plus the linearised radiative term.
@@ -256,38 +308,114 @@ impl LumpedMass {
     /// It was over by 2.09× at the top of that range, and the error is always in the
     /// comfortable direction.
     ///
-    /// One positive root, because the right-hand side is strictly increasing in `ΔT` above
-    /// `−Tₐ`. Newton from the convective guess, which is an overestimate and therefore
-    /// approaches from the side where the derivative is largest — three or four steps.
+    /// One root, because the right-hand side is strictly increasing in `ΔT` above `−Tₐ`. Newton
+    /// from the nearer of the two single-path answers — all of the heat by convection, or all of it
+    /// by radiation — which given heat are both overestimates and approach from the side where the
+    /// derivative is largest. With heat taken out they are both underestimates, and the balance
+    /// being convex, the first step lands above the root. A solve that does not converge is
+    /// refused rather than answered.
     ///
-    /// Infinite only when nothing carries heat away at all.
-    pub fn equilibrium_rise(&self, absorbed: Power) -> Temperature {
+    /// # What it refuses
+    ///
+    /// **A body [`step`](Domain::step) refuses, with the same refusal**, and a power that is not
+    /// a number of watts. It answered both: an emissivity of `NaN` 71.43 K where the body settles
+    /// 37.81 K up, a film area of `NaN` −293.15 K, and a power of `NaN` or `−∞` **`+∞`**.
+    ///
+    /// **A balance below absolute zero.** A power taken out is a rise below zero, and the most the
+    /// surroundings can bring in is to a body at absolute zero, `hA·Tₐ + εσA·Tₐ⁴`. Taking more
+    /// than that has no balance, and a kilowatt taken out of this body answered −14 231.87 K.
+    ///
+    /// **A body nothing carries heat away from, given heat**: there is no balance, and it warms or
+    /// cools without limit, as [`ThermalNetwork::steady_state`] refuses it. This answered `+∞`,
+    /// for heat taken out as well. Given none, it keeps the heat it holds, and the rise is the one
+    /// it has: this said zero, which is where it is only when it is at the ambient.
+    pub fn equilibrium_rise(&self, absorbed: Power) -> Result<Temperature, Violation> {
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
         let p = absorbed.to_si();
+        if !p.is_finite() {
+            return Err(Violation::at(
+                &self.name,
+                "the absorbed power must be finite, in watts",
+                p,
+            ));
+        }
         let area = self.environment.area.to_si();
         let ha = self.environment.convection_w_per_m2_k * area;
         let er = self.emissivity() * STEFAN_BOLTZMANN.to_si() * area;
         let ta = self.environment.ambient.to_si();
 
-        if !p.is_finite() || (ha <= 0.0 && er <= 0.0) {
-            return Temperature::from_si(if p == 0.0 { 0.0 } else { f64::INFINITY });
+        if ha <= 0.0 && er <= 0.0 {
+            if p == 0.0 {
+                return Ok(self.rise());
+            }
+            return Err(Violation::at(
+                &self.name,
+                if p > 0.0 {
+                    "nothing carries heat away from this body, so there is no balance: it warms \
+                     without limit"
+                } else {
+                    "nothing brings heat in to this body, so there is no balance: it cools \
+                     without limit"
+                },
+                p,
+            ));
         }
         if p == 0.0 {
-            return Temperature::from_si(0.0);
+            return Ok(Temperature::from_si(0.0));
         }
+        // `(x·x)·(x·x)`, here and in the solve, so the bound and the balance it bounds are the same
+        // arithmetic and neither is the platform's `powi`.
+        let fourth = |x: f64| {
+            let s = x * x;
+            s * s
+        };
+        let most = ha * ta + er * fourth(ta);
+        if p < -most {
+            return Err(Violation::at(
+                &self.name,
+                format!(
+                    "more is taken out of this body than its surroundings can bring in to it at \
+                     absolute zero, {most} W, so there is no balance above absolute zero"
+                ),
+                p,
+            ));
+        }
+        // Held at absolute zero as the solve's answer is below: at the bound `−hA·Tₐ/hA` can round
+        // to a hair under `−Tₐ`, −5.7e-14 K at 20 °C and −2.3e-13 K at 1500 K.
         if er <= 0.0 {
-            return Temperature::from_si(p / ha);
+            return Ok(Temperature::from_si((p / ha).max(-ta)));
         }
 
-        // Start from whichever single-path answer exists; both are above the true root when
-        // the other path is also carrying heat, so Newton descends onto it.
-        let mut x = if ha > 0.0 {
-            p / ha
+        // Start from the nearer of the two single-path answers. Each puts all of the heat through
+        // one path, so given heat each is above the root and the lower is the nearer, and with heat
+        // taken out each is below it and the higher is. The balance is convex in `ΔT` — the clamp
+        // at absolute zero continues it with the slope it has there — so from above Newton descends
+        // onto the root, and from below its first step lands above it.
+        //
+        // It started from the convective answer whenever there was convection, and where radiation
+        // carries nearly all of the heat that is far off: under a film of 1e-9 W·m⁻²·K⁻¹ it ran out
+        // of its sixty-four steps on the way down, and answered a body that settles 46.64 K below
+        // its room 1115.6 K above it, and one given a watt 9797.6 K for 481.5 K.
+        let radiative = (p / er + fourth(ta)).max(0.0).sqrt().sqrt() - ta;
+        let mut x = if ha <= 0.0 {
+            radiative
+        } else if p > 0.0 {
+            radiative.min(p / ha)
         } else {
-            (p / er + ta.powi(4)).max(0.0).powf(0.25) - ta
+            radiative.max(p / ha)
         };
+        let mut converged = false;
         for _ in 0..64 {
             let t = (ta + x).max(0.0);
-            let f = ha * x + er * (t.powi(4) - ta.powi(4)) - p;
+            let f = ha * x + er * (fourth(t) - fourth(ta)) - p;
+            // Balanced to the bit, which is where a body at the bound with no convection starts,
+            // with a slope of nothing to divide by.
+            if f == 0.0 {
+                converged = true;
+                break;
+            }
             let df = ha + 4.0 * er * t * t * t;
             if df <= 0.0 || !f.is_finite() {
                 break;
@@ -295,10 +423,26 @@ impl LumpedMass {
             let step = f / df;
             x -= step;
             if step.abs() <= 1e-12 * (1.0 + x.abs()) {
+                converged = true;
                 break;
             }
         }
-        Temperature::from_si(x)
+        // An unconverged iterate is a plausible temperature for a balance that was not struck, as
+        // `ThermalNetwork::steady_state` says of its own.
+        if !converged {
+            return Err(Violation::at(
+                &self.name,
+                "the balance did not converge in the iterations allowed",
+                p,
+            ));
+        }
+        // Not held at absolute zero, as the convective answer above is: from the convective start
+        // the root came out a rounding below it at the bound, −5.7e-14 K under a film of
+        // 1 W·m⁻²·K⁻¹ and −1.1e-8 K under one of 1e-6. From the nearer start, descending onto the
+        // root from above, it did not once in 135 520 answers, with a hold taken out to look:
+        // 33 880 bodies, rooms from 1 K to 1998.77 K and films from 1e-14 to 1e1 W·m⁻²·K⁻¹, each
+        // at the bound to the bit, a unit short of it, and a part in a trillion and a billion short.
+        Ok(Temperature::from_si(x))
     }
 
     fn emissivity(&self) -> f64 {
@@ -319,26 +463,28 @@ impl Domain for LumpedMass {
     /// up to `2τ` and *accurate* nowhere near it, so the limit reported is the
     /// accuracy one — a scheduler that honours it gets a curve rather than a
     /// staircase.
+    ///
+    /// Infinite for a body its step refuses: it has no limit to say, and `+∞` is what a substance
+    /// with no thermal properties already reported. It said zero for a film without limit, `NaN`
+    /// for a film of `NaN`, and −329 s for a negative specific heat — a time a caller could use.
+    /// The kernel steps any of them once and the step names the fault, so this is for a caller
+    /// reading the limit, not for the schedule.
     fn max_stable_dt(&self, _now: Time) -> Time {
-        self.time_constant() / 10.0
+        self.time_constant()
+            .map_or(Time::from_si(f64::INFINITY), |tau| tau / 10.0)
     }
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
         // First, so a body whose numbers are impossible is told which one rather than that it
         // has no heat capacity — and a film of `NaN` or `+∞`, which has a capacity, is told at all.
-        if let Some((what, value)) = substance_fault(&self.substance, false)
-            .or_else(|| environment_fault(&self.environment, false))
-        {
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
+        // Then the step and the heat waiting for it, before any of the heat is taken.
+        if let Some((what, value)) = step_fault(dt).or_else(|| heat_fault(bus)) {
             return Err(Violation::at(&self.name, what, value));
         }
         let capacity = self.heat_capacity();
-        if !capacity.to_si().is_finite() || capacity.to_si() <= 0.0 {
-            return Err(Violation::at(
-                &self.name,
-                "substance has no heat capacity",
-                capacity.to_si(),
-            ));
-        }
 
         // This step's share of the channel, not all of it. A lumped mass is subcycled under
         // `Schedule::Multirate`, and taking the whole outer step's joules on the first substep
@@ -444,6 +590,10 @@ pub struct Bar1D {
     area: Area,
     /// The boundary this bar offers to other domains, one face per cell, if it has one.
     boundary: Option<Interface>,
+    /// The face area [`Bar1D::exposing`] was given, as given. The boundary holds it clamped:
+    /// `Interface::uniform` reads a negative or `NaN` area as zero, so the number somebody
+    /// mistyped is not there to refuse.
+    face_area: Option<f64>,
     absorbed: f64,
     /// The temperature the stored heat is measured from — see [`Bar1D::stored_heat`].
     reference: f64,
@@ -470,6 +620,7 @@ impl Bar1D {
             dx,
             area,
             boundary: None,
+            face_area: None,
             absorbed: 0.0,
             reference: initial.to_si(),
         }
@@ -494,7 +645,28 @@ impl Bar1D {
     /// conduction at all.
     pub fn exposing(mut self, boundary: impl Into<String>, face_area: Area) -> Bar1D {
         self.boundary = Some(Interface::uniform(boundary, self.cells.len(), face_area));
+        self.face_area = Some(face_area.to_si());
         self
+    }
+
+    /// The first number this bar was given that no bar can have, as [`step`](Domain::step)
+    /// refuses it, or `None`: its substance, its cell length, its cross-section and the area of an
+    /// exposed face. See `size_fault` for what each did before it was asked.
+    fn input_fault(&self) -> Option<Violation> {
+        substance_fault(&self.substance, false)
+            .or_else(|| size_fault("the bar's cell length", self.dx.to_si(), "metres"))
+            .or_else(|| {
+                size_fault(
+                    "the bar's cross-section",
+                    self.area.to_si(),
+                    "square metres",
+                )
+            })
+            .or_else(|| {
+                self.face_area
+                    .and_then(|a| size_fault("the exposed face's area", a, "square metres"))
+            })
+            .map(|(what, value)| Violation::at(&self.name, what, value))
     }
 
     /// The boundary other domains publish onto, if [`Bar1D::exposing`] gave it one.
@@ -582,9 +754,36 @@ impl Domain for Bar1D {
 
     fn step(&mut self, _t: Time, dt: Time, bus: &mut Exchange) -> Result<(), Violation> {
         // First: a negative conductivity or capacity gives a negative Fourier number, which is
-        // under one half and was stepped.
-        if let Some((what, value)) = substance_fault(&self.substance, false) {
+        // under one half and was stepped; and a negative cell length or cross-section, whose
+        // Fourier number is fine, gives a cell a negative capacity, which heat cools.
+        if let Some(fault) = self.input_fault() {
+            return Err(fault);
+        }
+        // Then the step and the heat waiting for it, on the channel and on the faces, before any
+        // of it is taken. A face's joules are looked at one by one, so the refusal names the face
+        // they arrive on.
+        if let Some((what, value)) = step_fault(dt).or_else(|| heat_fault(bus)) {
             return Err(Violation::at(&self.name, what, value));
+        }
+        // On this bar's faces only: a flux on another grid is refused below as one, by `take_on`,
+        // and looked at here it would name a face the bar does not have.
+        let offered = self.boundary.as_ref().and_then(|b| {
+            bus.peek_on(b, HEAT)
+                .filter(|flux| flux.faces() == b.faces())
+        });
+        if let Some(flux) = offered {
+            if let Some((face, joules)) = flux
+                .per_face()
+                .iter()
+                .enumerate()
+                .find(|(_, j)| !j.is_finite())
+            {
+                return Err(Violation::at(
+                    &self.name,
+                    format!("the heat arriving on face {face} must be finite, in joules"),
+                    *joules,
+                ));
+            }
         }
         let f = self.fourier_number(dt);
         if !f.is_finite() {
@@ -1004,6 +1203,68 @@ pub(crate) fn environment_fault(
     None
 }
 
+/// `what`, a size no body can have, with its value, or `None`.
+///
+/// A length, an area or a volume is finite and positive. **Each of these ran, and none of them said
+/// anything**, measured before this existed: a bar whose cell length or cross-section was negative
+/// was given a millijoule and its heated cell **cooled**, 293.1459 K against 293.1541 K, with its
+/// books saying the millijoule had arrived, so no audit could see it; a cross-section of zero put
+/// the cell at `+∞`, one of `NaN` at `NaN`, and one of `+∞` moved nothing, each answered `Ok`. A
+/// block whose cells were a millimetre less than nothing cooled under a milliwatt, to 292.90 K where
+/// it warms to 295.34 K. A lumped body's or a network node's volume of zero, `NaN` or less was
+/// refused by its step as having no heat capacity, and answered by every other question asked of
+/// it: `ThermalNetwork::steady_state` solved the node as if it were fine, and its time constant was
+/// zero, `+∞` or −800 s. A thickness, which only the Biot number reads, was never asked at all.
+///
+/// Zero is refused with the rest. A body of no volume holds no heat and a bar of no section
+/// conducts none, and each is a division by zero in the step rather than a limit a caller can mean.
+pub(crate) fn size_fault(what: &str, value: f64, unit: &str) -> Option<(String, f64)> {
+    (!(value.is_finite() && value > 0.0)).then(|| {
+        (
+            format!("{what} must be finite and positive, in {unit}"),
+            value,
+        )
+    })
+}
+
+/// The step asked for, if no body can take it, with its value, or `None`.
+///
+/// `NaN`, negative or infinite seconds. Measured before this existed: a lumped body and a network
+/// stepped `NaN` seconds to `NaN` temperatures and answered `Ok`; a block stepped −1 s ran its
+/// conduction backwards, from 350 K beside 293 K to **4274.5 K beside −3631.2 K**, and a bar and a
+/// lumped body took the heat waiting on the bus as they did; a network stepped −1 s did nothing and
+/// said so as success; and a bar or a block told `NaN` seconds was refused as a substance with no
+/// diffusivity, which sent its caller to a substance that was fine.
+///
+/// **Zero is a step**, and is allowed. What one does with heat on the bus is the bus's: under a bare
+/// `Exchange` a step of no length takes the whole channel, as [`Exchange::take_share`] says it does
+/// when it is not told an interval.
+pub(crate) fn step_fault(dt: Time) -> Option<(String, f64)> {
+    let h = dt.to_si();
+    (!(h.is_finite() && h >= 0.0)).then(|| {
+        (
+            "the step must be finite and zero or more seconds".to_string(),
+            h,
+        )
+    })
+}
+
+/// Heat waiting on the bus that is not a number of joules, with its value, or `None`.
+///
+/// Looked at before any of it is taken, so a step refused for it leaves it there. Measured before
+/// this existed: `NaN` or `+∞` joules on the channel stepped a lumped body, a bar, a block and a
+/// network to `NaN` or `+∞` and each answered `Ok`. The whole channel and not this step's share,
+/// because a share of a channel that is finite is finite, and of one that is not, is not.
+pub(crate) fn heat_fault(bus: &Exchange) -> Option<(String, f64)> {
+    let waiting = bus.peek(HEAT);
+    (!waiting.is_finite()).then(|| {
+        (
+            "the heat waiting on the bus must be finite, in joules".to_string(),
+            waiting,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1075,19 +1336,19 @@ mod tests {
     /// domain says which situation it is in rather than assuming.
     #[test]
     fn the_lumped_approximation_declares_when_it_applies() {
-        let glass_in_air = lens(20.0);
+        let glass_in_air = lens(20.0).biot_number().unwrap();
         assert!(
-            glass_in_air.biot_number() < 0.1,
-            "still air over 5 mm of glass should be lumpable, Bi = {}",
-            glass_in_air.biot_number()
+            glass_in_air < 0.1,
+            "still air over 5 mm of glass should be lumpable, Bi = {glass_in_air}"
         );
 
         // The same glass in flowing water is not lumpable: h is two orders larger.
         let mut wet = lens(20.0);
         wet.environment.convection_w_per_m2_k = 500.0;
-        assert!(wet.biot_number() > 1.0, "Bi = {}", wet.biot_number());
+        let wet = wet.biot_number().unwrap();
+        assert!(wet > 1.0, "Bi = {wet}");
 
-        // A substance with no thermal data cannot answer at all, and says so.
+        // A substance with no thermal data cannot answer at all, and says so — as its step does.
         let unknown = LumpedMass::new(
             "unknown",
             Substance::bulk("x", Density::g_per_cm3(2.0)),
@@ -1096,7 +1357,11 @@ mod tests {
             Temperature::celsius(20.0),
             Environment::still_air(Temperature::celsius(20.0), lens_area()),
         );
-        assert!(!unknown.biot_number().is_finite());
+        let refusal = unknown.biot_number().unwrap_err();
+        assert_eq!(
+            refusal.quantity, "substance has no heat capacity",
+            "{refusal}"
+        );
     }
 
     /// Newton's law of cooling has a closed form: `ΔT(t) = ΔT₀ exp(-t/τ)`. Integrated
@@ -1108,7 +1373,7 @@ mod tests {
         // one case turns it off to test the convective term alone.
         let mut body = lens(30.0);
         body.substance.thermal.as_mut().unwrap().emissivity = 0.0;
-        let tau = body.time_constant();
+        let tau = body.time_constant().unwrap();
         // 5.3 J/K of heat capacity against 9.6 mW/K of still-air conductance is
         // 549 s — nine minutes. A glass lens is a poor conductor with real heat
         // capacity, so it settles slowly, and that slowness is why its thermal domain
@@ -1200,7 +1465,7 @@ mod tests {
     fn the_equilibrium_agrees_with_stepping_there_at_every_emissivity() {
         for e in [0.0, 0.05, 0.3, 0.9, 1.0] {
             let mut body = radiating_box(e);
-            let quoted = body.equilibrium_rise(Power::w(21.0)).to_si();
+            let quoted = body.equilibrium_rise(Power::w(21.0)).unwrap().to_si();
             let settled = settle(&mut body);
             assert!(
                 (quoted / settled - 1.0).abs() < 1e-6,
@@ -1227,11 +1492,11 @@ mod tests {
     #[test]
     fn the_time_constant_brackets_the_measured_one_and_tightens_when_hot() {
         let cold = radiating_box(0.9);
-        let tau_cold = cold.time_constant().to_si();
+        let tau_cold = cold.time_constant().unwrap().to_si();
 
         let mut body = radiating_box(0.9);
         let settled = settle(&mut body);
-        let tau_hot = body.time_constant().to_si();
+        let tau_hot = body.time_constant().unwrap().to_si();
         assert!(
             tau_hot < tau_cold,
             "hot {tau_hot:.1} s against cold {tau_cold:.1} s"
@@ -1261,7 +1526,11 @@ mod tests {
         assert!(body.max_stable_dt(Time::ZERO) < cold.max_stable_dt(Time::ZERO));
     }
 
-    /// A body with no way to lose heat never settles, rather than settling instantly.
+    /// A body with no way to lose heat never settles, rather than settling instantly: given heat
+    /// it has no balance, and given none it keeps the heat it holds.
+    ///
+    /// Given heat, or heat taken out, this was `+∞` for both; given none, a rise of zero, which is
+    /// where a body is only when it is at the ambient. The body here is 30 K above it.
     #[test]
     fn a_body_that_cannot_lose_heat_has_no_equilibrium() {
         let sealed = LumpedMass::new(
@@ -1269,16 +1538,24 @@ mod tests {
             Substance::aluminium_6061(),
             Volume::from_si(1e-4),
             Length::mm(10.0),
-            Temperature::celsius(20.0),
+            Temperature::celsius(50.0),
             Environment {
                 ambient: Temperature::celsius(20.0),
                 convection_w_per_m2_k: 0.0,
                 area: Area::from_si(0.0),
             },
         );
-        assert!(sealed.equilibrium_rise(Power::w(1.0)).to_si().is_infinite());
-        assert_eq!(sealed.equilibrium_rise(Power::w(0.0)).to_si(), 0.0);
-        assert!(sealed.time_constant().to_si().is_infinite());
+        for (watts, how) in [(1.0, "warms"), (-1.0, "cools")] {
+            let refusal = sealed.equilibrium_rise(Power::w(watts)).unwrap_err();
+            assert!(
+                refusal.quantity.contains(how) && refusal.before == watts,
+                "{watts} W: {refusal}"
+            );
+        }
+        let kept = sealed.equilibrium_rise(Power::w(0.0)).unwrap().to_si();
+        assert_eq!(kept, sealed.rise().to_si(), "it keeps its heat");
+        assert!((kept - 30.0).abs() < 1e-12, "{kept}");
+        assert!(sealed.time_constant().unwrap().to_si().is_infinite());
     }
 
     /// With no convection at all the root is the Stefan-Boltzmann one, exactly.
@@ -1305,7 +1582,7 @@ mod tests {
                 area: Area::from_si(area),
             },
         );
-        let rise = vacuum.equilibrium_rise(Power::w(21.0)).to_si();
+        let rise = vacuum.equilibrium_rise(Power::w(21.0)).unwrap().to_si();
         // Closed form, computed here: T = (P/(eps A sigma) + Ta^4)^(1/4).
         let ta = Temperature::celsius(25.0).to_si();
         let want =
@@ -1326,7 +1603,7 @@ mod tests {
     #[test]
     fn equilibrium_rise_is_the_number_that_matters() {
         let mut body = lens(20.0);
-        let quoted = body.equilibrium_rise(Power::mw(10.0)).to_si();
+        let quoted = body.equilibrium_rise(Power::mw(10.0)).unwrap().to_si();
 
         let mut bus = Exchange::new();
         for k in 0..200_000 {

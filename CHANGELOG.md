@@ -361,6 +361,26 @@ protects nothing.
 
 ### Changed — breaking
 
+- **`LumpedMass::{equilibrium_rise, time_constant, biot_number}` and
+  `ThermalNetwork::{time_constant, biot_number}` return `Result`** (`pantometry-thermal`). Each
+  answered for a body its step refuses — see *A size, a source, a heat or a step no body can have
+  ran* under Fixed — and now refuses it with the step's own `Violation`, word for word.
+  `ThermalNetwork::biot_number` is `Result<Option<f64>, Violation>`, its `None` still saying a node
+  has no film to compare against. Five answers change with the type:
+  - a body with no thermal properties is refused as its step refuses it, where its Biot number and
+    time constant were `+∞`;
+  - a body nothing carries heat away from is refused given heat or heat taken out, where
+    `equilibrium_rise` was `+∞` for both, and given none it is the rise the body has, where it was
+    zero;
+  - a power taken out past what the room can bring to a body at absolute zero is refused, where it
+    was a rise below absolute zero;
+  - a solve that does not converge is refused, where it was the last iterate;
+  - a network node of a perfect insulator under a film has a Biot number of `+∞`, where it was
+    `None`.
+
+  Code that read the number adds `?` or an `expect`, as the five callers in this repository's
+  tests and examples and `AGENTS.md` do.
+
 - **`pantometry_forcefield::components::ALL` is `[(&str, &str); 53]`, was `; 52`.** It is an
   array, so its length is in its type, and code that names the type stops compiling; code that
   iterates it or takes `.len()` does not. `IPH`, phenol, is the fifty-third. The next release is
@@ -631,6 +651,117 @@ protects nothing.
       holds erfc to 3.5 ulp at its 438 reference points, and fails only the table test.
 
 ### Fixed
+
+- **A size, a source, a heat or a step no body can have ran** (`pantometry-thermal`). f98dd0e refused
+  a substance or a film no body can have; the numbers around them were never asked, and the
+  questions a body answers besides its step were not asked anything. Measured before the change,
+  stepped by hand:
+  - **A size.** A bar whose cell length or cross-section was negative was given a millijoule and
+    its heated cell cooled, 293.1459 K against 293.1541 K, with its books saying the millijoule had
+    arrived, so no audit could see it. A cross-section of zero put the cell at `+∞`, `NaN` at
+    `NaN`, `+∞` moved nothing. A block of cells a millimetre less than nothing cooled under a
+    milliwatt, to 292.90 K where it warms to 295.34 K. An exposed face's area of zero, −1 or `NaN`
+    was clamped to zero by the interface and stepped. A cell size or length of zero or `NaN` was
+    refused as a substance with no diffusivity, which sent its caller to a substance that was fine.
+    A node's volume of zero, `NaN` or less was solved for by `ThermalNetwork::steady_state` as if it
+    were fine, and no thickness was asked at all.
+  - **A source.** `+∞` or `−∞` watts in a block's cell stepped it there and answered `Ok`; `NaN`
+    made the cell `NaN`, which the block's warmest and coldest readings step over.
+  - **A heat.** `NaN` or `+∞` joules on the channel, or on a bar's face, stepped every domain to
+    `NaN` or `+∞`. A network with no node to absorb heat refused it after taking it off the bus and
+    counting it as absorbed.
+  - **A step.** `NaN` seconds stepped a lumped body and a network to `NaN`; −1 s ran a block's
+    conduction backwards, from 350 K beside 293 K to 4274.5 K beside −3631.2 K; a network stepped
+    −1 s, or stepped no length with a node no body can be, returned `Ok` having asked nothing.
+  - **A question.** On a body settling 37.81 K up under 5 W, `equilibrium_rise` answered 71.43 K for
+    an emissivity of `NaN`, 29.49 K for 1.5, 146.08 K for a film of −7 W·m⁻²·K⁻¹, −293.15 K for a
+    film area of `NaN`, `+∞` for a power of `NaN` or `−∞`, and −14 231.87 K for a kilowatt taken out
+    where the room can bring 24 W. Its Biot number was −0.058 for a conductivity of −0.6, which
+    passes the `< 0.1` `AGENTS.md` tells a caller to ask; its time constant −3294 s for a volume
+    below zero. A network's time constant was 0 s, `+∞` and −800 s for a node's volume of zero,
+    `NaN` and less, and its Biot number negative for a film of −7.
+  - **And three the reviews found in the questions themselves.** `equilibrium_rise` started its
+    Newton from the convective answer, which where radiation carries nearly all the heat is far off,
+    and ran out of its sixty-four steps without saying so: under a film of 1e-9 W·m⁻²·K⁻¹ a body
+    that settles 46.64 K below its room was answered 1115.6 K above it, and under 1e-8 a body given
+    a watt 9797.6 K for 481.5 K; at the bound itself it answered a rounding below absolute zero,
+    −1.1e-8 K under a film of 1e-6. A network with no film said heat taken out of it warms without
+    limit. And `Solid3D::steady_state` refused a block with no thermal properties or a bad joint as
+    "this block cannot be stepped", where the step names each, and the step's refusal of a joint of
+    −5 carried `+∞`.
+
+  What changed:
+  - `size_fault`, `step_fault` and `heat_fault` beside `substance_fault` and `environment_fault`,
+    asked first in every `step` and `steady_state`: a size finite and positive, a step finite and
+    zero or more seconds, the heat waiting on the channel finite. A bar looks at each face's heat on
+    its own grid and names the face; a flux on another grid is refused as one, by its count. All
+    before anything is taken, so a refused step leaves the bus as it was.
+  - A block's source is checked in `dissipating`, the one place one is written, over every cell,
+    and refused by the cell it is in: the step pays nothing for it.
+  - The side questions refuse what the step refuses, with the step's refusal (Changed — breaking),
+    and so does `Solid3D::steady_state`: a bad joint's refusal carries the joint. `equilibrium_rise`
+    also refuses a power that is not a number and one taken out past `hA·Tₐ + εσA·Tₐ⁴`, the most the
+    room can bring to a body at absolute zero, in the same `(x·x)·(x·x)` as the balance and not the
+    platform's `powi`; starts from the nearer of the two single-path answers, the radiative one by
+    `sqrt(sqrt(·))` and not `powf`; refuses a solve that does not converge; and holds the convective
+    answer at absolute zero where `−hA·Tₐ/hA` rounds a hair under it, −5.7e-14 K at 20 °C. The
+    solve's own root, descending from above, came out below absolute zero in none of 135 520
+    answers at the bound, a unit short of it, and a part in a trillion and a billion short, with a
+    hold taken out to look, so it is given none. Over 26 352 bodies — four rooms from 1 K to 1500 K, films from
+    1e-12 to 1e3 W·m⁻²·K⁻¹, four emissivities, three areas, nine powers — every answer is the root
+    of its balance to 3.25 units in the last place of its terms, and none was refused: the
+    convergence refusal is a guard no measured input reaches.
+  - A lumped body's limit is `+∞` when its step refuses it, where it was zero, `NaN` or −329 s.
+  - A Biot number where nothing convects is zero, where it was `0/0` for a perfect insulator, and a
+    network's for an insulator under a film is `+∞`, as a lumped body's is.
+  - A network asks its numbers before the power it is given and before a step of no length
+    returns, refuses heat it has no node for before it takes it, and says that heat taken out of it
+    cools.
+
+  Tests: `crates/pantometry-thermal/tests/a_size_a_heat_or_a_step_no_body_can_have_is_refused.rs`,
+  ten. Every size each way it can be none — zero, negative, `NaN`, `+∞` — in each domain, on the
+  second node and on the interior one; a source in a cell other than the first, named by three
+  indices that all differ, the first in the cells' order rather than the last written, in a cell
+  emptied after with a source written after that, and written over with a number; heat on the
+  channel, on the third face with a second bad face of another kind after it and heat waiting
+  beside it, and on another grid; each step no body can take; and in each the refusal's words, site
+  and value bit for bit, every temperature — the bar's with a gradient, so a sweep would show —
+  the heat on the bus and on the faces, and every running total as they were. Every question asked
+  of a refused body refuses with the step's refusal, a block's balance included, and a refused
+  lump's limit is `+∞`. Against closed forms: a step of no length in each domain; the balance a part
+  in a billion and a unit in the last place past the bound refused, and at it to the bit, a unit
+  short, a part in a million short, at half and given a watt answered at or above absolute zero as
+  the root of the balance to sixteen units in the last place of its terms, on each loss path alone
+  and under films of 1, 1e-6, 1e-7 and 1e-9, and marched to through the bus to eight units in the
+  last place of the temperature; the Biot number where nothing convects. Through `Simulation`, each
+  refusal comes out as the body gave it. The unit test of a sealed body now holds a body 30 K above
+  its room keeping its rise.
+
+  Fifty-nine sabotages, each failing exactly the tests it claims with every claimed panic line seen
+  and none unclaimed, between a clean control before and after, on the source committed: fifty-seven
+  in one run, and the two whose claimed lines were corrected in a second on the same source. A
+  sixtieth, a hold at absolute zero on the solve's own root, failed nothing; 135 520 answers never
+  needed it, and it was taken out. The 34 shipped scenes are byte for byte what d50c924 writes, each scene run from a
+  binary built at that commit and one built from this one.
+
+  Reviews: numerics-reviewer found the Newton's start, the bound's rounding and tolerances of
+  `1e-12` and `1e-9` that were 10⁴ and up to 10⁶ times what was measured; unearned-pass-hunter, a
+  simulation test whose doc claimed what the kernel's planning makes untestable, a face's refusal
+  that the faces' sum would have passed, a void cell's source a later write would forget, an
+  interior node's thickness never asked, two indices that could swap unseen and a bar with no
+  gradient to show a sweep; silent-failure-hunter, the network's warming wording and its Biot
+  number, the block's balance refusing as the step does not, and a face named on another grid —
+  this change's own. Each was reproduced in Rust first.
+
+  Open: `GpuSolid::mirroring` asks a block nothing and its step asks no step, heat or size, so every
+  refusal here is missing on the device; a network's balance below absolute zero is answered, at
+  −1135.42 K for 100 W taken out of a node its room can bring 20.5 W, and its path conductance there
+  is 0.0700 W/K, which is the next change's with a step marched there; `Solid3D::{heat_capacity, cell_capacities, volume, fourier_number,
+  mode_amplification}`, `Bar1D::fourier_number`, `LumpedMass::heat_capacity` and `Interface::uniform`
+  still answer for a size no body has; `generated_power` counts a source in a cell emptied after
+  it, 5 W where 3.75 W are made; a cell size small enough that its square underflows is refused as
+  a substance with no diffusivity; and a network stepped no length leaves heat that is not a number
+  on the bus unjudged, since it takes none.
 
 - **A part that loses nothing was answered wherever its solve drifted** (`pantometry-thermal`).
   `Solid3D::steady_state` answered `Ok` with fields that are not where the block marches. Measured

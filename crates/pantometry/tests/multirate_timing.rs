@@ -129,7 +129,7 @@ fn multirate_now_beats_staggered_because_a_substep_takes_only_its_share() {
     // The closed form of the continuous problem, for reference.
     let p = plate();
     let c = p.heat_capacity().to_si();
-    let tau = p.time_constant().to_si();
+    let tau = p.time_constant().unwrap().to_si();
     let ha = c / tau;
     let analytic = 2.0 / ha * (1.0 - (-600.0 / tau).exp());
 
