@@ -658,6 +658,97 @@ protects nothing.
 
 ### Fixed
 
+- **A cell carried across its melting point landed past everything it met** (`pantometry-thermal`).
+  A two-phase block's limit charged each cell's row at the capacity it had, the slope of its
+  enthalpy, and a step that crosses the melting point moves the cell's heat at that slope and
+  gives it back at the other phase's: where the phase it leaves holds more — water twice what ice
+  does — the cell came out past everything it exchanged with. Measured before the change, each
+  step at the block's own limit and each `Ok`:
+  - one cell of water at 274.15 K under films that only convect, to a room at 77 K, came to
+    35.71 K, 41 K below anything it met; to 20 K, −80.57 K; to 0 K, −121.37 K; half melted at
+    0 °C, to 56.36 K and −60.68 K;
+  - water at 274 K between two cells of ice at 1 K came to −108.41 K, and the end of a rod of
+    water under a film of 1e5 W/m²·K to a room at 20 K to −31.98 K;
+  - a solid holding twice what its liquid does, at 299 K between cells of its liquid at 1000 K,
+    came to 1675 K.
+
+  Those below absolute zero had been refused since *A temperature below absolute zero was
+  answered*, by a pass over every cell of a two-phase block after its step; the rest were not
+  asked. That pass also refused the one state a caller could set that no limit can bound:
+  `release_mode` wrote temperatures and left each cell the phase it had, so water at 300 K
+  released to 50 K stayed liquid there, and one cell with nothing to meet came out of a step that
+  moved no heat at −19.37 K.
+
+  What changed:
+  - **A cell a step can carry past the coldest thing it meets is held to it.** Its limit is also
+    `dt·(−F) ≤ H(T) − H(T_lo)`, `F` the watts the step moves into it, and `T_lo` the coldest of a
+    neighbour across a face that carries anything, the room behind a face that does, the air in a
+    void it touches and the far end of a clearance that reaches it; at the limit it lands on
+    `T_lo`. A solid that holds more than its liquid is held the same way to the hottest. Within its
+    row a step can do that only where `T_lo` lies more than `L/(C_L − C_S)` below the melting point
+    — for water, 116.70 K — or the hottest more than `L/(C_S − C_L)` above it, for a cell of any
+    fraction, so anywhere else the limit is the rows' to the bit, and a block whose bounds nothing
+    above absolute zero reaches is not asked: octadecane's, in the shipped wax scene, is −630 K.
+    `F` and not the row, because a film or a clearance that radiates carries less than the tangent
+    its row is charged at: charging the tangent, as a first version did, shortened by 4.35% the
+    limit of a liquid at 900 K radiating to 300 K that could not cross.
+  - **A mode released names each cell's phase**, as `set_temperature` does, and what a restore
+    brings back is that.
+  - **The pass after a two-phase step is gone**, since the limit leaves it nothing to find, and a
+    two-phase block is asked of heat taken out as a one-phase one is. In its place, on every debug
+    run, a two-phase step the limit allowed is held to the coldest and the hottest thing in or
+    around its block, save where heat was taken out or put in. A block whose bound something can
+    reach keeps its cells' coldest and hottest from the pass its step already ends with, so a block
+    of water nowhere near 116.70 K does not pass over its cells to learn so: a first version that
+    did, twice a step, cost the limit of a 16³ block 6.8 µs of its 10.6.
+
+  Tests: `crates/pantometry-thermal/tests/a_phase_change_is_bounded_by_what_the_cell_meets.rs`,
+  eight. The limit against its closed form to 1e-14 — the row over the enthalpy's secant where
+  everything a cell meets is at `T_lo` and carries heat linearly, or the stencil's own conductances
+  — a cell stepped at it landing on what it meets to sixteen units in the last place, and the
+  slope's limit refused: under films to rooms from 0 K to 116 K, half melted, between ice along
+  each axis, melting whole and three tenths melted, facing air, across a clearance from a liquid
+  that melts with almost nothing, in a block of two materials, and in air without limit. The limit
+  the slope's to the bit past the cut-off and where a radiating pair cannot carry water to its far
+  end. Only what a cell meets: not a room on another cell, a face that carries nothing, or a far
+  end of a perfect insulator. A mode released, and restored. A rod freezing through in a room at
+  20 K, no cell below the room after any step and the coldest landing on it. The 1b test of a
+  freeze now steps at the limit and is refused at the ice's, in closed form; a two-phase block
+  refused for heat taken out puts its phases back.
+
+  Thirty-five sabotages, each failing exactly the tests it claims with every claimed panic line
+  seen and none unclaimed, between clean controls, in one run on the source committed; six
+  predicted to survive, each a saving of work or the debug check itself. Three earlier runs, on
+  earlier source, mispredicted how six were caught — by the debug check before a test's own line,
+  in a decimal claimed as an exponent, in more tests than claimed — and none survived. The 34
+  shipped scenes are byte for byte what f3a76e1 writes.
+
+  A one-phase block, which reaches none of the bound, steps as it did: in the shipped binary the
+  scenes whose time is a block's, 24, 29 and 30, are within 0.4% to 2.3% of f3a76e1 at the median
+  of twelve runs each, pinned to a P-core and alternated. A test binary timing such a block alone
+  read its step 9% behind, and that was where the code fell, not what it does: the same binary with
+  only `watts_into`, which no one-phase step reaches, taken out is f3a76e1's to 0.1%, and with the
+  film forced inline into the step's books pass in both, this change steps 1.4% ahead of f3a76e1
+  so treated — which costs f3a76e1 itself 4%, so it is not done. A block of water nowhere near
+  116.70 K pays for its limit what f3a76e1 did, 3.38 µs against 3.30 µs at 16³; one the bound is
+  at work in, in a room at 20 K, steps 11% to 14% behind in the same test binary.
+
+  Reviews: physics-checker held the condition necessary and sufficient and the cut-off for every
+  fraction, over 400 000 random states, and found a far end of a clearance that carries nothing
+  counted as met, letting a cell land 40 K past what it met, and `release_mode`. numerics-reviewer
+  found the same far end, the fold over materials and the melting direction untested, and checks
+  that passed by construction: a ratio read twice from one rate, and the 1b test's step refused
+  whatever the limit. unearned-pass-hunter found the rod, the 1b test and the locality test caught
+  only by the debug check before their own assertions could fail, the neighbours along y and z
+  never met, a tangent sabotage that took the clearance out of the row rather than overcharging
+  it, and the debug check one-sided and blind beside a sink. silent-failure-hunter found
+  `release_mode`, the one-sided check and a `NaN` a `max` steps over. Each was reproduced in Rust
+  first, the −19.37 K exactly.
+
+  Open: the debug check is the block's, not each cell's, which the tests hold one by one; a cell a
+  step left not a number gives the bound a rate `max` steps over, as the rest of the step does; a
+  cell filled after a checkpoint comes back from a restore with the phase its old matter had.
+
 - **A temperature below absolute zero was answered** (`pantometry-thermal`, `pantometry-core`). Set
   by a caller, made by a step or solved for by a balance, each ran. Measured before the change:
   - **Set.** A lumped body, a bar, a block and a network started at −10 K each stepped, the lumped
@@ -695,8 +786,9 @@ protects nothing.
     step out, and takes it once the step stands; a bar takes its faces before its channel, as it
     always did, so the bus counts in the order it did. Asked of the cells heat was taken out of —
     the sinks, the faces, and every cell when the bus took heat out — to zero; of every cell of a
-    two-phase block, to the microkelvin, said as a freeze; and of a lumped body stepped past its
-    time constant, said as that.
+    two-phase block, to the microkelvin, said as a freeze, until its limit bounded that, by *A
+    cell carried across its melting point landed past everything it met*; and of a lumped body
+    stepped past its time constant, said as that.
   - **A balance below absolute zero is refused**, naming the coldest node and where it would come
     to. A network's radiation is held below zero at what it is there, so its balance is unchanged
     wherever a temperature means anything and has one root, and a root below zero says there is
@@ -713,7 +805,8 @@ protects nothing.
   books and losses that are not zero, the bus's take and what it counted as taken unchanged, on a
   bar with a gradient, on a face other than the first, on a cell other than the first, and a
   void's placeholder below zero not asked. Ice put back, phases and all; water frozen past zero
-  refused, and above it at half the limit and with a liquid that holds what its solid does. The
+  refused — held above it by its limit since — and above it at half the limit and with a liquid
+  that holds what its solid does. The
   sink that outran its film refused where it crosses, every step before it standing. The reason
   only those cells are asked: a one-phase block with no sink in a room at 0 K, near zero and from
   1000 K where only radiation carries it, every cell a number at or above zero after every step.
@@ -743,9 +836,10 @@ protects nothing.
   flag, and a band of 1e-4 K for every node that answered a balance a part in a million short in a
   room at 77 K. Each was reproduced in Rust first; the freeze to −108.4 K and −120.1 K exactly.
 
-  Open: a two-phase block's limit does not bound a freeze, so where the room is above absolute zero
-  it undershoots it unrefused — water under films to a room at 77 K came to 36.6 K in one step at
-  the limit — and the limit wants the solid's capacity for a cell that can freeze in a step.
+  Open: a two-phase block's limit did not bound a freeze, so where the room was above absolute
+  zero it undershot it unrefused — water under films to a room at 77 K came to 36.6 K in one step
+  at the limit — and holds the cell to what it meets since, by *A cell carried across its melting
+  point landed past everything it met*.
   `path_conductance` near the bound takes its slope across a clamp. Read and not run: a refused
   step part-way through `Simulation::advance` leaves the domains before it stepped, and `Iterative`
   returns without restoring its checkpoint; `set_melted_fraction(NaN)` holds a cell at its melting

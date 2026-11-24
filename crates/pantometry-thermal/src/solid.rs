@@ -815,6 +815,20 @@ pub struct Solid3D {
     /// The one thing that decides whether the sweep has to rebuild its operator each step. A block of
     /// ice does; a block of aluminium, or of ice under the one-phase model, does not.
     two_phase: bool,
+    /// Below this, something a cell exchanges with can freeze it in one step further than the
+    /// capacity it has bounds: `T_m − L/(C_L − C_S)`, the highest of any material whose liquid holds
+    /// more than its solid, and `−∞` where none does. See `charge_crossing`.
+    freeze_below: f64,
+    /// Above this, something a cell exchanges with can melt it in one step further than the
+    /// capacity it has bounds: `T_m + L/(C_S − C_L)`, the lowest of any material whose solid holds
+    /// more than its liquid, and `+∞` where none does.
+    melt_above: f64,
+    /// The coldest and the hottest solid cell, as `resolve` last found them, and `None` once
+    /// anything has moved a cell since, or for a block whose bounds nothing can reach, which never
+    /// reads it. Kept so that a two-phase block nowhere near either bound
+    /// above does not pass over its cells twice a step to learn so: measured, that pass cost the
+    /// limit of a 16³ block of water 6.8 µs of its 10.6, and its step 9%.
+    cells_range: Option<(f64, f64)>,
     /// The previous state the sweep reads, kept between steps so the step does not allocate.
     ///
     /// `let old = self.cells.clone()` allocated and copied the whole grid every step. At 64³ that
@@ -946,6 +960,13 @@ fn worse(worst: f64, rate: f64) -> f64 {
     } else {
         worst.max(rate)
     }
+}
+
+/// `(lo, hi)` widened to take in `t`, by comparison: a `NaN` widens nothing, as `f64::min` and
+/// `max` have it, without the instructions they spend on saying so.
+#[inline]
+fn widened((lo, hi): (f64, f64), t: f64) -> (f64, f64) {
+    (if t < lo { t } else { lo }, if t > hi { t } else { hi })
 }
 
 /// What one phase of a substance conducts, holds per cell and radiates with, `(k, C, ε)`.
@@ -1133,6 +1154,9 @@ impl Solid3D {
             saved_lost: 0.0,
             saved_absorbed: 0.0,
             two_phase: false,
+            freeze_below: f64::NEG_INFINITY,
+            melt_above: f64::INFINITY,
+            cells_range: None,
             old: Vec::new(),
             latent_anywhere: false,
             rise: Vec::new(),
@@ -1189,7 +1213,7 @@ impl Solid3D {
         if self.latent[idx] <= 0.0 {
             return;
         }
-        self.unchecked = true;
+        self.cells_moved();
         let before = self.melted[idx];
         let phi = fraction.clamp(0.0, 1.0);
         self.melted[idx] = phi;
@@ -1305,7 +1329,7 @@ impl Solid3D {
         }
         // A void cell filled is solid again, holding what it held as void, which nothing asked: a
         // cell set to −50 K while void, filled after a step, stepped on from −50 K.
-        self.unchecked = true;
+        self.cells_moved();
         self.resolve_rephasing(&rephase);
         self
     }
@@ -1469,6 +1493,25 @@ impl Solid3D {
                     }
                     _ => false,
                 });
+        // Where a step can carry a cell across its melting point further than the capacity it has
+        // bounds — see `charge_crossing` — from the triples and the latent heat the cells are given.
+        self.freeze_below = f64::NEG_INFINITY;
+        self.melt_above = f64::INFINITY;
+        for (s, ((_, solid, _), (_, liquid, _))) in self.materials.iter().zip(props.iter().copied())
+        {
+            let (Some(f), Some(_)) = (s.fusion, s.thermal) else {
+                continue;
+            };
+            let latent = s.latent_energy(volume).map_or(0.0, |e| e.to_si());
+            if latent > 0.0 {
+                let point = f.melting_point.to_si();
+                if liquid > solid {
+                    self.freeze_below = self.freeze_below.max(point - latent / (liquid - solid));
+                } else if solid > liquid {
+                    self.melt_above = self.melt_above.min(point + latent / (solid - liquid));
+                }
+            }
+        }
 
         // The phase state first, because everything below depends on it.
         //
@@ -1624,10 +1667,18 @@ impl Solid3D {
         self.face_sum = vec![0.0; self.cells.len()];
         self.worst_rate = 0.0;
         let mut nowhere = false;
+        // The cells' range, for a block whose bounds anything can reach, and for no other: a block
+        // of wax, whose bound is −630 K, stepped 8% slower with this taken on every cell.
+        let (freezes, melts) = self.reachable();
+        let ranged = freezes || melts;
+        let mut range = (f64::INFINITY, f64::NEG_INFINITY);
         for k in 0..nz {
             for j in 0..ny {
                 for i in 0..nx {
                     let c = i + nx * (j + ny * k);
+                    if ranged && !self.void[c] {
+                        range = widened(range, self.cells[c]);
+                    }
                     let cap = mixed[c].1;
                     self.capacity[c] = cap;
                     // A void cell has no capacity, and `dx/0` is an infinity that would poison
@@ -1660,6 +1711,7 @@ impl Solid3D {
         if nowhere {
             self.worst_rate = f64::NAN;
         }
+        self.cells_range = ranged.then_some(range);
         self.worst_stale = false;
         self.phase_props = props;
         // Kept rather than dropped, for the film and the clearances. Moving it costs no time —
@@ -3597,9 +3649,37 @@ impl Solid3D {
         self.exposed.iter().map(|(f, e)| (*f, e))
     }
 
-    /// The stability rate at the block's **present** state: conduction, plus each exposed
-    /// cell's loss conductance at that cell's own temperature, plus each clearance end's pairs at
-    /// the hotter of each pair — all of a cell's added into its one row.
+    /// The stability rate at the block's **present** state: [`slope_rate_now`], each cell's row
+    /// charged at the capacity it has, raised where a step can carry a cell across its melting point
+    /// further than that capacity bounds — see `charge_crossing`.
+    ///
+    /// A block none of whose materials can be carried past its capacity — one phase, or a liquid
+    /// holding more than its solid by too little for anything above absolute zero to reach, as
+    /// octadecane's does — is not asked, and its limit is the slope's to the bit.
+    ///
+    /// [`slope_rate_now`]: Solid3D::slope_rate_now
+    fn worst_rate_now(&self) -> f64 {
+        let worst = self.slope_rate_now();
+        let (freezes, melts) = self.reachable();
+        if worst.is_nan() || (!freezes && !melts) {
+            return worst;
+        }
+        self.charge_crossing(worst, freezes, melts)
+    }
+
+    /// Whether anything can reach the block's bound below, and its bound above: nothing a valid
+    /// state holds is below `−ZERO_SLACK`, and no room or air below zero.
+    fn reachable(&self) -> (bool, bool) {
+        (
+            self.freeze_below > -crate::ZERO_SLACK,
+            self.melt_above < f64::INFINITY,
+        )
+    }
+
+    /// The stability rate with every cell's row charged at the capacity it has now — the slope of
+    /// its enthalpy: conduction, plus each exposed cell's loss conductance at that cell's own
+    /// temperature, plus each clearance end's pairs at the hotter of each pair — all of a cell's
+    /// added into its one row.
     ///
     /// State-dependent on purpose, which is what [`Domain::max_stable_dt`] means by "the
     /// largest step this domain can take **from `now`**". A block cooling from 1000 °C is
@@ -3611,7 +3691,7 @@ impl Solid3D {
     /// air it was a pass over every cell, 0.26 to 0.29 of a step. This said
     /// "the boundary cells" while the pass was over every cell, and the step asks for it before it
     /// moves anything, so on a small block that pass was 0.26 to 0.36 of what a step cost.
-    fn worst_rate_now(&self) -> f64 {
+    fn slope_rate_now(&self) -> f64 {
         // Gaps as well as films: a pair of plates facing each other across void may have no
         // conducting face at all, so the radiative exchange is the *only* thing setting their
         // step. Returning early on `exposed` alone handed such a pair an infinite limit, and a
@@ -3728,6 +3808,194 @@ impl Solid3D {
             self.charge(worst, self.every_cell())
         );
         near
+    }
+
+    /// `worst`, raised by every cell a step can carry across its melting point and past the coldest
+    /// or the hottest thing it exchanges with: to the rate at which a step carries the cell's
+    /// enthalpy toward that thing's, so that at the limit it lands on it. See `max_stable_dt`.
+    ///
+    /// `freezes` and `melts` say which of the block's two bounds anything can reach at all. One pass
+    /// over the cells finds the coldest and hottest of them and of the rooms and the air, and a
+    /// block that is nowhere past either bound pays that and nothing more.
+    fn charge_crossing(&self, mut worst: f64, freezes: bool, melts: bool) -> f64 {
+        let cells = self.cells_range.unwrap_or_else(|| self.range_of_cells());
+        // **The kept range held to the cells, on every debug run**: a writer of a cell that does
+        // not say so leaves it stale, and a stale range lets a cell past either bound unasked.
+        if let (true, Some(kept)) = (cfg!(debug_assertions), self.cells_range) {
+            let found = self.range_of_cells();
+            assert!(
+                kept.0.to_bits() == found.0.to_bits() && kept.1.to_bits() == found.1.to_bits(),
+                "{}: a cell moved since `resolve` found the cells' range at {kept:?}, and nothing \
+                 said so; they range over {found:?}",
+                self.name
+            );
+        }
+        let (lo, hi) = self
+            .exposed
+            .values()
+            .map(|env| env.ambient.to_si())
+            .chain(self.air.map(|(ambient, _)| ambient))
+            .fold(cells, |(lo, hi), t| (lo.min(t), hi.max(t)));
+        let freezes = freezes && lo < self.freeze_below;
+        let melts = melts && hi > self.melt_above;
+        if !freezes && !melts {
+            return worst;
+        }
+        for c in 0..self.cells.len() {
+            if !self.void[c] && self.latent[c] > 0.0 {
+                worst = worst.max(self.crossing_rate(c, freezes, melts));
+            }
+        }
+        worst
+    }
+
+    /// The coldest and the hottest solid cell, `(+∞, −∞)` for a block that is all void.
+    fn range_of_cells(&self) -> (f64, f64) {
+        self.cells
+            .iter()
+            .zip(&self.void)
+            .filter(|(_, void)| !**void)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |range, (t, _)| {
+                widened(range, *t)
+            })
+    }
+
+    /// A caller moved a cell: it is asked before a step reads it, and the range `resolve` found of
+    /// the cells no longer holds.
+    fn cells_moved(&mut self) {
+        self.unchecked = true;
+        self.cells_range = None;
+    }
+
+    /// What cell `c` asks of the limit beyond its row: where a step can freeze it past the coldest
+    /// thing it exchanges with, `T_lo`, the rate `−F/(H(T) − H(T_lo))` at which the step carries its
+    /// enthalpy `H` toward that thing's, `F` the watts the step moves into it; where a step can melt
+    /// it past the hottest, `F/(H(T_hi) − H(T))`; and zero where neither.
+    ///
+    /// A step of `dt` leaves the cell at `H⁻¹(H(T) + dt·F)`, which is not below `T_lo` while
+    /// `dt·(−F) ≤ H(T) − H(T_lo)`, and lands on it at equality. Within a step at the cell's row
+    /// limit, `dt·ΣG ≤ C`, that holds in one phase, and across the melting point too unless `T_lo`
+    /// is more than `L/(C_L − C_S)` below it — the same for a liquid cell at any temperature and a
+    /// cell of any fraction, as the algebra of `H(T) + C·(T_lo − T) ≥ H(T_lo)` has it. So only a cell
+    /// with liquid in it, of a liquid holding more than its solid, meeting something past that, is
+    /// asked; and the same, the other way, of a cell with solid in it.
+    ///
+    /// `F` and not the row: a film or a clearance that radiates carries less than the tangent its
+    /// row is charged at, from 900 K to 300 K 0.37 of it, and a bound charging the tangent shortened
+    /// the limit of a cell that could not cross.
+    fn crossing_rate(&self, c: usize, freezes: bool, melts: bool) -> f64 {
+        let (point, latent) = (self.melt_point[c], self.latent[c]);
+        let (solid, liquid) = (self.cap_solid[c], self.cap_liquid[c]);
+        let colder = freezes && liquid > solid && self.melted[c] > 0.0;
+        let warmer = melts && solid > liquid && self.melted[c] < 1.0;
+        if !colder && !warmer {
+            return 0.0;
+        }
+        // Past the cut-off, or the rate found is never the larger: asked to spare the work of what
+        // the step carries, not for the answer. A cell with liquid in it is at or above its melting
+        // point, so what lies past the cut-off is colder than it, and the same the other way.
+        let (coldest, hottest) = self.input_range(c);
+        let colder = colder && coldest < point - latent / (liquid - solid);
+        let warmer = warmer && hottest > point + latent / (solid - liquid);
+        if !colder && !warmer {
+            return 0.0;
+        }
+        let watts = self.watts_into(c);
+        let here = self.enthalpy_joules(c);
+        if colder && watts < 0.0 {
+            -watts / (here - solid * (coldest - point))
+        } else if warmer && watts > 0.0 {
+            watts / (latent + liquid * (hottest - point) - here)
+        } else {
+            0.0
+        }
+    }
+
+    /// The watts a step moves into cell `c` at the present state: what its faces conduct in, less
+    /// what its film and its air take, and what its clearances bring — the sweep's arithmetic and
+    /// the clearances', read off `cells`. Neither a source nor the bus, which a step adds whatever
+    /// its length and which `step` asks of on their own.
+    fn watts_into(&self, c: usize) -> f64 {
+        let (nx, ny, _) = self.counts;
+        let cell = (c % nx, (c / nx) % ny, c / (nx * ny));
+        let mut watts = self.dx.to_si() * self.flux_at(&self.cells, cell, c);
+        if let Ok(n) = self.gap_ends.binary_search_by_key(&c, |end| end.cell) {
+            let end = &self.gap_ends[n];
+            for pair in &self.gap_end_pairs[end.first..end.first + end.count] {
+                let (a, b, coefficient) = self.gaps[*pair];
+                let crossing = self.crossing_at(&self.cells, a, b, coefficient);
+                watts += if a == c {
+                    -crossing.watts * crossing.from_a
+                } else {
+                    crossing.watts * crossing.to_b
+                };
+            }
+        }
+        watts
+    }
+
+    /// The coldest and the hottest of what cell `c` exchanges heat with in a step: each neighbour a
+    /// face that carries anything joins it to, the room behind each of its exposed faces that
+    /// carries anything, the air in the void where it touches it, and the far end of each of its
+    /// clearances. `(+∞, −∞)` for a cell that exchanges with nothing.
+    fn input_range(&self, c: usize) -> (f64, f64) {
+        let (nx, ny, nz) = self.counts;
+        let cell @ (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+        let mut range = (f64::INFINITY, f64::NEG_INFINITY);
+        let mut meet = |t: f64| range = (range.0.min(t), range.1.max(t));
+        let (xr, yr) = ((nx + 1) * (j + ny * k), nx * (j + (ny + 1) * k));
+        if i > 0 && self.kx[i + xr] > 0.0 {
+            meet(self.cells[c - 1]);
+        }
+        if i + 1 < nx && self.kx[i + 1 + xr] > 0.0 {
+            meet(self.cells[c + 1]);
+        }
+        if j > 0 && self.ky[i + yr] > 0.0 {
+            meet(self.cells[c - nx]);
+        }
+        if j + 1 < ny && self.ky[i + nx + yr] > 0.0 {
+            meet(self.cells[c + nx]);
+        }
+        if k > 0 && self.kz[c] > 0.0 {
+            meet(self.cells[c - nx * ny]);
+        }
+        if k + 1 < nz && self.kz[c + nx * ny] > 0.0 {
+            meet(self.cells[c + nx * ny]);
+        }
+        let (conductivity, _, emissivity) = self.derived[c];
+        let here = Temperature::from_si(self.cells[c]);
+        for (face, env) in &self.exposed {
+            if self.exposed_at(*face, cell)
+                && self.face_loss(face, env, here, conductivity, emissivity) > 0.0
+            {
+                meet(env.ambient.to_si());
+            }
+        }
+        if let Some((ambient, _)) = self.air {
+            if self.air_conductance(cell) > 0.0 {
+                meet(ambient);
+            }
+        }
+        // The far end of a clearance, where its centre reaches the pair: through a half cell that
+        // conducts, on a pair that radiates, and not through air without limit, which holds each
+        // surface at the air's own temperature — met above. A far end of a perfect insulator met
+        // here would be a colder thing the cell does not meet, and let it past what it does.
+        let held = self.air.is_some_and(|(_, h)| h == f64::INFINITY);
+        if let Ok(n) = self.gap_ends.binary_search_by_key(&c, |end| end.cell) {
+            let end = &self.gap_ends[n];
+            for pair in &self.gap_end_pairs[end.first..end.first + end.count] {
+                let (a, b, coefficient) = self.gaps[*pair];
+                let far = if a == c { b } else { a };
+                if coefficient > 0.0
+                    && self.derived[c].0 > 0.0
+                    && self.derived[far].0 > 0.0
+                    && !held
+                {
+                    meet(self.cells[far]);
+                }
+            }
+        }
+        range
     }
 
     /// `worst`, raised by each of `cells` whose loss is not zero: its conduction and its loss at
@@ -4111,22 +4379,34 @@ impl Solid3D {
                 .exposed
                 .iter()
                 .filter(|(face, _)| self.exposed_at(**face, cell))
-                .map(|(face, env)| {
-                    let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
-                    let hot = at.to_si().max(env.ambient.to_si());
-                    let h = env.convection_w_per_m2_k
-                        + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * hot.powi(3);
-                    // The mounting, between the film and the half cell — through `outward`, which
-                    // `film_flux` also calls, because the limit and the flux disagreeing about a
-                    // boundary is a defect with no symptom on either side alone.
-                    series_with_half_cell(
-                        self.outward(face, h * share, share),
-                        conductivity,
-                        share,
-                        self.dx.to_si(),
-                    )
-                })
+                .map(|(face, env)| self.face_loss(face, env, at, conductivity, emissivity))
                 .sum::<f64>()
+    }
+
+    /// One exposed face's part of [`loss_conductance_at`](Solid3D::loss_conductance_at), in W/K:
+    /// its film linearised at `at` or at its room, whichever is hotter, with the mounting and the
+    /// half cell of `conductivity` in series.
+    fn face_loss(
+        &self,
+        face: &Face,
+        env: &Environment,
+        at: Temperature,
+        conductivity: f64,
+        emissivity: f64,
+    ) -> f64 {
+        let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
+        let hot = at.to_si().max(env.ambient.to_si());
+        let h =
+            env.convection_w_per_m2_k + 4.0 * emissivity * STEFAN_BOLTZMANN.to_si() * hot.powi(3);
+        // The mounting, between the film and the half cell — through `outward`, which
+        // `film_flux` also calls, because the limit and the flux disagreeing about a
+        // boundary is a defect with no symptom on either side alone.
+        series_with_half_cell(
+            self.outward(face, h * share, share),
+            conductivity,
+            share,
+            self.dx.to_si(),
+        )
     }
 
     /// How many cells along each axis.
@@ -4194,7 +4474,7 @@ impl Solid3D {
     pub fn set_temperature(&mut self, i: usize, j: usize, k: usize, t: Temperature) {
         if let Some(idx) = self.index(i, j, k) {
             self.cells[idx] = t.to_si();
-            self.unchecked = true;
+            self.cells_moved();
             // A temperature is not a state for a substance that melts, so naming one names a
             // phase as well — see `phase_named_by`.
             if self.latent[idx] > 0.0 {
@@ -4225,7 +4505,7 @@ impl Solid3D {
         let rise = joules.to_si() / self.capacity[idx];
         self.add_kelvin(idx, rise);
         self.absorbed += joules.to_si();
-        self.unchecked = true;
+        self.cells_moved();
         self.rephased(idx, before);
     }
 
@@ -4361,8 +4641,24 @@ impl Solid3D {
                 }
             }
         }
+        // **Each cell's phase named by its temperature**, as `set_temperature` names one. It kept
+        // the phase it had: water at 300 K released to 50 K stayed liquid there, an enthalpy below
+        // its solid's at absolute zero, and one cell with nothing to meet came out of a step at
+        // −19.37 K, its books unmoved — a step that moved no heat, which no limit bounds.
+        let mut moved = false;
+        for c in 0..self.cells.len() {
+            if self.latent[c] > 0.0 {
+                let named = phase_named_by(self.cells[c], self.melt_point[c]);
+                moved |= named != self.melted[c];
+                self.melted[c] = named;
+            }
+        }
+        if moved && self.two_phase {
+            self.resolve();
+        }
         self.saved.clone_from(&self.cells);
-        self.unchecked = true;
+        self.saved_melted.clone_from(&self.melted);
+        self.cells_moved();
     }
 
     /// The amplitude of one mode currently present, by projection.
@@ -4650,6 +4946,26 @@ impl Domain for Solid3D {
     /// differ by five orders of magnitude in the step they can take, and a single global step
     /// would make the cheap domain pay the expensive one's bill.
     ///
+    /// # Across a melting point, what the step carries
+    ///
+    /// A row charged at the capacity a cell has, the slope of its enthalpy, bounds a step within one
+    /// phase. A step that carries the cell across its melting point moves its heat at that slope and
+    /// gives it back at the other phase's, and where the phase it leaves holds more — water twice
+    /// what ice does — it lands past everything it exchanges with. Measured at this limit before it
+    /// said otherwise, each step `Ok`: one cell of water under films that only convect, to a room at
+    /// 77 K, came to 35.71 K, 41 K below anything it met, and to a room at 0 K, −121.37 K; a solid
+    /// holding twice what its liquid does, melting between cells of it at 1000 K, came to 1675 K.
+    ///
+    /// So a cell a step can carry past the coldest thing it meets, `T_lo`, is held to
+    /// `dt·(−F) ≤ H(T) − H(T_lo)` as well, `F` the watts the step moves into it, and at the limit
+    /// lands on `T_lo`; and the same to the hottest, the other way. A step within its row can do
+    /// that only where `T_lo` is more than `L/(C_L − C_S)` below the melting point — for water,
+    /// 116.70 K — or the hottest more than `L/(C_S − C_L)` above it, so anywhere else the limit is
+    /// the rows' to the bit, and a block whose bounds nothing above absolute zero reaches is not
+    /// asked: octadecane's is −630 K. `F`, and not the row, because a radiating film or clearance
+    /// carries less than the tangent its row is charged at, from 900 K to 300 K 0.37 of it, and a
+    /// cell that cannot cross is not held as one that can.
+    ///
     /// # Stable is not accurate, and this is only the first
     ///
     /// At **exactly** this step the sharpest mode the grid can hold has an amplification factor of
@@ -4721,11 +5037,15 @@ impl Domain for Solid3D {
         let dts = dt.to_si();
 
         // This step's share of the bus, looked at, and taken once the step stands; and whether
-        // anything can take a cell below absolute zero — heat taken out, or a liquid freezing — for
-        // which the books and the phases the step began with are kept, to put back if it does not
-        // stand. A one-phase block that takes nothing out pays a compare.
+        // anything can take a cell below absolute zero — heat taken out — for which the books and
+        // the phases the step began with are kept, to put back if it does not stand. A block that
+        // takes nothing out pays a compare.
+        //
+        // The cells move from here, so the range `resolve` found of them no longer holds; a
+        // two-phase step finds it again as it ends, and one refused puts back the cells it had.
+        self.cells_range = None;
         let share = bus.peek_share(HEAT, dt);
-        let taking_out = share < 0.0 || !self.sinks.is_empty() || self.two_phase;
+        let taking_out = share < 0.0 || !self.sinks.is_empty();
         let books = (self.lost, self.supplied, self.absorbed);
         if taking_out && self.latent_anywhere {
             self.undo_melted.clone_from(&self.melted);
@@ -4946,37 +5266,25 @@ impl Domain for Solid3D {
         // phases, its books and the bus are as the step found them. A block whose sink outran what
         // its film could bring in stepped twenty thousand times to −354.67 K and answered `Ok`
         // each time. Asked only of the cells heat was taken out of — the sinks, and every cell
-        // when the bus takes heat out — because within its limit everything else in a step is an
-        // average of temperatures that are not below zero: conduction, a film whose room is not,
-        // and a clearance, whose rows the limit sums.
+        // when the bus takes heat out — because within its limit everything else in a step leaves
+        // a cell between the coldest and the hottest of what it exchanges with, none below zero:
+        // conduction, a film whose room is not, a clearance, whose rows the limit sums, and a
+        // cell crossing its melting point, which the limit holds to what it meets — see
+        // `max_stable_dt`.
         //
-        // **Except a liquid that freezes**, whose heat a step moves in enthalpy at its liquid's
-        // capacity and gives back as temperature at its solid's: where the liquid holds more, as
-        // water does ice, a cell that crosses to solid in one step drops by the ratio, and the
-        // limit, read at the phase the cell began in, does not bound it. Water at 1 °C between two
-        // cells of ice at 1 K, stepped at the limit, came to −108.4 K; one cell of it under films
-        // to a room at 0 K, −120.1 K; to a room at 77 K, 36.6 K, below the room. A two-phase block
-        // is asked of every cell, and refused where one goes below absolute zero; where it
-        // undershoots its room and stays above zero, it is not yet asked.
+        // That last was not so, and a two-phase block was asked of every cell. A liquid that holds
+        // more than its solid, as water does ice, came out of a step at its limit past what it
+        // exchanged with, by up to the ratio: water at 1 °C between ice at 1 K came to −108.4 K,
+        // and one cell of it under films to a room at 77 K to 36.6 K. Since the limit bounds it,
+        // the pass found nothing, and it cost a two-phase step 1.1% to 3.3%.
         if taking_out {
-            // To zero where heat was taken out of the cell — every cell, when the bus took it out —
-            // and to the rounding of a limit where only a phase change can have done it. The
-            // sinks first, so a cell found in the second pass is one heat was not taken out of.
-            let below = |c: usize, floor: f64| !self.void[c] && self.cells[c] < floor;
+            let below = |c: usize| !self.void[c] && self.cells[c] < 0.0;
             let found = if share < 0.0 {
-                (0..self.cells.len())
-                    .find(|&c| below(c, 0.0))
-                    .map(|c| (c, true))
+                (0..self.cells.len()).find(|&c| below(c))
             } else {
-                let by_sink = self.sinks.iter().copied().find(|&c| below(c, 0.0));
-                by_sink.map(|c| (c, true)).or_else(|| {
-                    self.two_phase
-                        .then(|| (0..self.cells.len()).find(|&c| below(c, -crate::ZERO_SLACK)))
-                        .flatten()
-                        .map(|c| (c, false))
-                })
+                self.sinks.iter().copied().find(|&c| below(c))
             };
-            if let Some((c, heat)) = found {
+            if let Some(c) = found {
                 let would = self.cells[c];
                 self.cells.copy_from_slice(&old);
                 if self.latent_anywhere {
@@ -4988,21 +5296,49 @@ impl Domain for Solid3D {
                 let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
                 return Err(Violation::at(
                     &self.name,
-                    if heat {
-                        format!(
-                            "the heat taken out in this step would take cell ({i}, {j}, {k}) \
-                             below absolute zero, to this many kelvin"
-                        )
-                    } else {
-                        format!(
-                            "this step would take cell ({i}, {j}, {k}) below absolute zero, to \
-                             this many kelvin: freezing in it, the cell gives up what its liquid \
-                             held into a solid that holds less, further than the block's limit \
-                             bounds"
-                        )
-                    },
+                    format!(
+                        "the heat taken out in this step would take cell ({i}, {j}, {k}) below \
+                         absolute zero, to this many kelvin"
+                    ),
                     would,
                 ));
+            }
+        }
+        // **And held to it, on every debug run of every test that steps a two-phase block**: no
+        // cell comes out of a step the limit allowed colder than the coldest thing in or around
+        // the block — a cell, a room or the air — unless heat was taken out of it, nor hotter than
+        // the hottest unless heat was put in; one that does is a limit that does not bound a phase
+        // change, which is what this was. Past either only by a microkelvin and what the step's
+        // `1 + 6e-12` of its limit allows: that much more enthalpy moved, over the capacity it is
+        // given back at, `6e-12·(C_L/C_S)` of the span at most, and `1e-10` of the largest thing
+        // the step read covers a phase holding up to sixteen times the other's.
+        if cfg!(debug_assertions) && self.two_phase {
+            let around = self
+                .exposed
+                .values()
+                .map(|env| env.ambient.to_si())
+                .chain(self.air.map(|(ambient, _)| ambient));
+            let (lo, hi, largest) = (0..old.len())
+                .filter(|c| !self.void[*c])
+                .map(|c| old[c])
+                .chain(around)
+                .fold(
+                    (f64::INFINITY, f64::NEG_INFINITY, 0.0_f64),
+                    |(lo, hi, l), t| (lo.min(t), hi.max(t), l.max(t.abs())),
+                );
+            let slack = crate::ZERO_SLACK + 1e-10 * largest;
+            let past = |c: usize| {
+                let t = self.cells[c];
+                let colder = share >= 0.0 && self.source[c] >= 0.0 && t < lo - slack;
+                let hotter = share <= 0.0 && self.source[c] <= 0.0 && t > hi + slack;
+                !self.void[c] && (colder || hotter)
+            };
+            if let Some(c) = (0..self.cells.len()).find(|c| past(*c)) {
+                panic!(
+                    "{}: a step within the limit took cell {c} from {} K to {} K, outside {lo} K \
+                     to {hi} K, the coldest and the hottest thing in or around the block",
+                    self.name, old[c], self.cells[c]
+                );
             }
         }
         let taken = bus.take_share(HEAT, dt);
@@ -5087,7 +5423,7 @@ impl Domain for Solid3D {
         self.melted.clone_from(&self.saved_melted);
         // What was saved need not be what the last step read: a cell set below absolute zero,
         // saved, put right and stepped comes back from the checkpoint below it.
-        self.unchecked = true;
+        self.cells_moved();
         self.lost = self.saved_lost;
         self.supplied = self.saved_supplied;
         self.absorbed = self.saved_absorbed;

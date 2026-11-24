@@ -32,8 +32,9 @@
 //! **Only what can take a cell below zero is asked**, and the rest is held to the reason: a block
 //! with no sink and no phase change, in a room at absolute zero, cooling through films and a
 //! clearance at its limit — near zero, and from 1000 K where radiation carries it — never goes
-//! below it. A balance below zero is refused against its closed form, `Tₐ + (P + εσA·Tₐ⁴)/hA` for a
-//! node alone, to the solve's own error.
+//! below it. Nor does a liquid freezing at its block's limit, which the limit bounds and a pass over
+//! every cell of a two-phase block used to refuse. A balance below zero is refused against its
+//! closed form, `Tₐ + (P + εσA·Tₐ⁴)/hA` for a node alone, to the solve's own error.
 
 use pantometry_core::substance::ThermalProps;
 use pantometry_core::units::{
@@ -756,35 +757,93 @@ fn a_refused_step_puts_a_melting_cell_back() {
         free.melted_fraction_at(1, 0, 0) < 0.5,
         "the sweep froze nothing"
     );
-}
 
-/// **A liquid that freezes past absolute zero in one step is refused**, with nothing taken out. A
-/// step moves a cell's heat in enthalpy at its liquid's capacity and gives it back as temperature
-/// at its solid's, and water holds twice what ice does: water at 1 °C between two cells of ice at
-/// 1 K, stepped at its block's limit, froze to −108.4 K, and one cell of it under films to a room
-/// at absolute zero to −120.1 K. Refused, and put back, phases and all. A liquid that holds what
-/// its solid does stays above zero at the same step, and so does water at half the limit.
-#[test]
-fn a_liquid_frozen_past_absolute_zero_is_refused() {
-    let why = "water at 1 C between ice at 1 K";
-    let mut row = Solid3D::new(
-        "ice",
-        two_phase_ice(4182.0),
-        (3, 1, 1),
-        Length::mm(1.0),
-        Temperature::from_si(1.0),
+    // And a block with water as its liquid, whose operator moves with its phases: the only
+    // refusal a two-phase block has is heat taken out, since its limit bounds a freeze, and it
+    // puts back what its sweep moved as a one-phase block's does.
+    let two = || {
+        let mut b = Solid3D::new(
+            "two-phase",
+            two_phase_ice(4182.0),
+            (3, 1, 1),
+            Length::mm(1.0),
+            Temperature::celsius(-1.0),
+        );
+        b.set_melted_fraction(1, 0, 0, 0.5);
+        b
+    };
+    let mut b = two().dissipating(-1e3, |i, _, _| i == 0);
+    let dt = a_step(&b);
+    let refusal = refused_block(
+        "two-phase ice with a sink",
+        &mut b,
+        &mut Exchange::new(),
+        dt,
     );
-    row.set_temperature(1, 0, 0, Temperature::from_si(274.0));
-    let dt = row.max_stable_dt(Time::ZERO);
-    let refusal = refused_block(why, &mut row, &mut Exchange::new(), dt);
-    println!("  {why} -> {refusal}");
     assert!(
         refusal
             .quantity
-            .contains("cell (1, 0, 0) below absolute zero")
-            && refusal.quantity.contains("freezing")
-            && refusal.before < 0.0,
-        "{why}: {refusal}"
+            .contains(&format!("cell (0, 0, 0) {BELOW}")),
+        "{refusal}"
+    );
+    assert_eq!(
+        b.melted_fraction_at(1, 0, 0),
+        0.5,
+        "the two-phase block's mushy cell was not put back"
+    );
+    let mut free = two();
+    free.step(Time::ZERO, dt, &mut Exchange::new()).unwrap();
+    assert!(
+        free.melted_fraction_at(1, 0, 0) < 0.5,
+        "the two-phase sweep froze nothing"
+    );
+}
+
+/// **A liquid freezing at its block's limit stays above absolute zero**, with nothing taken out. A
+/// step moves a cell's heat in enthalpy at its liquid's capacity and gives it back as temperature
+/// at its solid's, and water holds twice what ice does: water at 1 °C between two cells of ice at
+/// 1 K, stepped at its block's limit, froze to −108.4 K, and one cell of it under films to a room
+/// at absolute zero to −120.1 K. A pass over every cell of a two-phase block refused those. The
+/// limit holds such a cell to what it meets now, and bounds it — see
+/// `a_phase_change_is_bounded_by_what_the_cell_meets.rs` — so each stepped at its limit stays at or
+/// above zero, and the step the limit was, the ice's `ρdx²c_S/k_f` in closed form, is refused as
+/// 1.2506 times it. A liquid that holds what its solid does stays above zero, and so does water at
+/// half the limit.
+#[test]
+fn a_liquid_frozen_at_its_limit_stays_above_absolute_zero() {
+    let why = "water at 1 C between ice at 1 K";
+    let row = || {
+        let mut row = Solid3D::new(
+            "ice",
+            two_phase_ice(4182.0),
+            (3, 1, 1),
+            Length::mm(1.0),
+            Temperature::from_si(1.0),
+        );
+        row.set_temperature(1, 0, 0, Temperature::from_si(274.0));
+        row
+    };
+    let mut stepped = row();
+    let dt = stepped.max_stable_dt(Time::ZERO);
+    stepped
+        .step(Time::ZERO, dt, &mut Exchange::new())
+        .expect("water between ice at its limit");
+    for i in 0..3 {
+        let t = stepped.temperature_at(i, 0, 0).to_si();
+        assert!(t >= 0.0, "{why}: cell {i} at {t} K");
+    }
+    // The ice's row, one face to the water: `k_f = 2·k_ice·k_water/(k_ice + k_water)`.
+    let ice = Substance::ice();
+    let thermal = ice.thermal.unwrap();
+    let k_ice = thermal.conductivity.to_si();
+    let k_f = 2.0 * k_ice * 0.6 / (k_ice + 0.6);
+    let was = ice.density.to_si() * 1e-6 * thermal.specific_heat.to_si() / k_f;
+    let refusal = refused_block(why, &mut row(), &mut Exchange::new(), Time::from_si(was));
+    let past = refusal.after / refusal.before;
+    println!("  {why}, at the ice's limit of {was} s -> {refusal}");
+    assert!(
+        refusal.quantity == "Fourier number" && (past - 1.2506).abs() < 1e-4,
+        "{why}: at the ice's limit, {refusal}"
     );
 
     let one = |c_l: f64, room: f64| {
@@ -810,11 +869,11 @@ fn a_liquid_frozen_past_absolute_zero_is_refused() {
     let why = "a cell of water under films to a room at 0 K";
     let mut b = one(4182.0, 0.0);
     let dt = b.max_stable_dt(Time::ZERO);
-    let refusal = refused_block(why, &mut b, &mut Exchange::new(), dt);
-    assert!(
-        refusal.quantity.contains("freezing") && refusal.before < 0.0,
-        "{why}: {refusal}"
-    );
+    b.step(Time::ZERO, dt, &mut Exchange::new()).expect(why);
+    // On the room, which the limit lands the cell on, to the rounding of an enthalpy near the
+    // melting point: measured, one unit in the last place of 273.15 K below it.
+    let t = b.temperature_at(0, 0, 0).to_si();
+    assert!(t >= -16.0 * f64::EPSILON * 273.15, "{why}: at {t} K");
     let ice = Substance::ice().thermal.unwrap().specific_heat.to_si();
     let mut b = one(ice, 0.0);
     let dt = b.max_stable_dt(Time::ZERO);
