@@ -658,6 +658,51 @@ protects nothing.
 
 ### Fixed
 
+- **`verify` left out a block it could not measure without a word, and measured a fed one without
+  its feed** (`pantometry-world`). The battery's arrival solves each thermal block's balance where
+  the run stopped and reports how far the block had still to go. Measured before the change:
+  - **Every refusal was dropped**, and a block with no balance and a balance the solve could not
+    find printed the same nothing. A row of 257 one-cell bodies, each across a clearance from the
+    next, one past the 256 the steady solve couples, left the report with no arrival section at
+    all; so did each of the shipped melting scenes, 20, 21 and 22.
+  - **A block still fed over the bus was measured against a balance without its feed**, which no
+    balance it can be solved for contains: a copper block a 10 W heater had held at its balance for
+    twenty-two time constants read 50.59 K still to come, 100% of what it covered — the distance to
+    the block with the heater off.
+
+  What changed:
+  - **A block with no number says why**, under the arrival heading, which is printed for it too:
+    `not measured:` and the refusal in its own words, which say whether there is no balance or the
+    solve did not find one. `Measured::unsettled` holds each, as a `NotMeasured`. It is not a
+    finding, as an arrival is not: the reason is for a person to read. Scenes 20, 21 and 22 now say
+    that a block that melts has no steady field; the rest are as they were.
+  - **A block fed over the bus in the run's last window is not measured**, and says at how many
+    watts. The window, read off the block each advance, is the bus's own resolution: an element
+    pays a window's heat at once and a block takes it across its substeps. One whose feed stopped
+    before then is measured, since its balance is then where its march goes. **A refusal is the
+    reason given when there is one**, since it holds whatever arrives: scene 20's ice is fed to the
+    end of its run, and saying so would be true of that run's length and not of the ice.
+
+  Held by three battery tests and a fourth made to look at the row. The sealed bar, still with no
+  number, names why; the row of 257 bodies names the solve's bound; a heater of 10 W with 2500 J,
+  spent half-way through the last of three 100 s windows, is fed at the closed form's 5 W over
+  that window — not the run's 8.33 W nor the element's 10 W — to 1.16e-13, under a bound of
+  1.6e-13 from 351 substeps' rounding; and three runs beside it are each a way to be wrong about
+  which block is fed: spent by 150 s and measured, the same 2500 J in 50 s windows whose last
+  brings nothing and measured, and fed with a watt of its own and no face cooled, refused as
+  warming without limit. The bar that is measured is now checked for its own row: the heading says
+  `still to come` too, and the check passed on it. Ten defects planted one at a time: nine caught
+  at every line they print, fourteen in all — among them the feed read over the whole run, read
+  per frame, taken from the last window that brought anything, and given before the refusal; the
+  tenth, a tolerance in place of `!=` for the feed, survives, since a spent element adds exactly
+  nothing.
+
+  Found on the way: two lines of `connected_bodies`' documentation, naming the test that pins it,
+  had lost the test's name and come to sit above the arrival's function. They are back, named.
+
+  Open: a `Bar1D`, a `ThermalNetwork` or a `LumpedMass` has no arrival line, measured or not —
+  the arrival asks only blocks, though a network has a steady state of its own.
+
 - **A cell emptied after its source still counted in the watts generated** (`pantometry-thermal`).
   `Solid3D::generated_power` summed every cell's source, and a step generates in the solid ones
   only, so a cell emptied after `dissipating` had spread over it kept its share in the reading and
@@ -1100,8 +1145,10 @@ protects nothing.
   - **Open.** A sink fed across a clearance by a body still warming can be drawn through zero before
     its heat arrives, and the solve settles on a mirror of a balance that exists: a milliwatt from a
     300 K start is refused this way, where a 1000 K start finds 878.6 K, and the refusal says what
-    was found. `verify` drops every refusal silently, so a block with no balance and a solve that
-    failed print the same nothing. A block fed over the bus is measured as if nothing more arrived.
+    was found. `verify` dropped every refusal silently, so a block with no balance and a solve that
+    failed printed the same nothing, and a block fed over the bus was measured as if nothing more
+    arrived; each says why it has no number since, by *`verify` left out a block it could not
+    measure without a word, and measured a fed one without its feed*.
     `settle` moves a part that loses heat without putting it on the books. An infinite source passed
     the balance, and is refused by name since. `ThermalNetwork::steady_state` refuses every part
     that loses nothing as singular, where it could answer. `step` marched a sink below absolute

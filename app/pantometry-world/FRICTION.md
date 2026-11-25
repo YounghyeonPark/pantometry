@@ -1152,6 +1152,13 @@ breaks it. No threshold separates those from a run cut short, because what separ
 question the scene is asking and this format does not carry one. So `verify` reports the number and
 leaves the judgement to a person.
 
+**A block with no number says why**, which it did not. Every refusal was dropped, so a block with
+no balance and a balance the solve could not find printed the same nothing: a row of 257 bodies
+across clearances, one past the 256 the solve couples, left no arrival section at all. And a block
+still fed over the bus was measured against a balance without its feed, which none it can be solved
+for contains: one a 10 W heater had held at its balance read 50.59 K still to come, 100% of what it
+covered. Both are named now, with the refusal or the watts.
+
 ---
 
 ## 39. The elastic model knew where it stops applying, and nothing checked a scene against it

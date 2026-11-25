@@ -125,9 +125,19 @@ pub struct Measured {
     /// two frames and decide. `Solid3D::steady_state` solves the balance the march converges to —
     /// the same operator, not a second one — so the distance between them is a number.
     ///
-    /// Empty for a domain that has no steady state to be short of: one that melts, or one with
-    /// heat coming in and nowhere for it to go.
+    /// Empty for a block it could not measure, which is in [`unsettled`](Measured::unsettled)
+    /// with the reason instead.
     pub arrival: Vec<(String, f64, f64)>,
+    /// Each thermal block the arrival **could not measure**, and why.
+    ///
+    /// These were dropped, every one, and a block with no balance and a balance the solve
+    /// failed to find printed the same nothing: a row of 257 bodies each across a clearance
+    /// from the next, refused by the steady solve's bound of 256, left the report with no
+    /// arrival section at all, so nothing in it said a balance had been asked for. A block with
+    /// heat still arriving over the bus was measured against a balance that leaves that heat
+    /// out: one a 10 W heater had held at its balance for twenty-two time constants read
+    /// 50.59 K still to come, 100% of what it covered.
+    pub unsettled: Vec<(String, NotMeasured)>,
     /// Each **connected body** in the last frame, as `(domain, cells, peak - coldest)`.
     ///
     /// **Per body, not per domain, and that distinction is load-bearing.** A domain's `peak` and
@@ -214,6 +224,33 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
     let mut worst_transfer: Option<Margin> = None;
     let mut worst_books: Option<Margin> = None;
 
+    // Each thermal block, and the watts it took off the bus over the latest window — the bus's
+    // own resolution, since an element pays a window's heat at once and a block takes it across
+    // its substeps. Read off the block by name rather than off a reading by its label.
+    let blocks: Vec<String> = world
+        .sim
+        .domains()
+        .map(|d| d.name().to_string())
+        .filter(|n| {
+            world
+                .sim
+                .domain_as::<pantometry::thermal::Solid3D>(n)
+                .is_some()
+        })
+        .collect();
+    let absorbed = |world: &World| -> Vec<f64> {
+        blocks
+            .iter()
+            .map(|n| {
+                world
+                    .sim
+                    .domain_as::<pantometry::thermal::Solid3D>(n)
+                    .map_or(0.0, |b| b.absorbed_energy().to_si())
+            })
+            .collect()
+    };
+    let mut feed: BTreeMap<String, f64> = BTreeMap::new();
+
     let mut frames = Vec::with_capacity(scene.frames + 1);
     frames.push(world.capture());
     let mut taken = 0usize;
@@ -231,6 +268,7 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
             }
 
             let before = world.sim.ledger();
+            let held = absorbed(&world);
             // **`World::advance`, not `Simulation::advance`.** This reached past the world to the
             // simulation inside it, which does one of the five things an advance is: it steps the
             // domains. It does not apply a [`stages`](crate::Scene::stages) profile, hand each
@@ -254,6 +292,9 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
                 )
             })?;
             let after = world.sim.ledger();
+            for ((name, was), is) in blocks.iter().zip(held).zip(absorbed(&world)) {
+                feed.insert(name.clone(), (is - was) / dt.to_si());
+            }
 
             for (name, n) in &report.substeps {
                 if let Some(entry) = stability.get_mut(name) {
@@ -358,14 +399,16 @@ fn run_measured(scene: &Scene, files: &dyn Parts, arrival: bool) -> Result<Measu
             e.1 = e.1.max(r.value);
         }
     }
+    let settled = if arrival {
+        how_far_from_settled(&mut world, &span, &feed)
+    } else {
+        (Vec::new(), Vec::new())
+    };
     Ok(Measured {
         diagnostic: diagnostics_of(&world.sim),
         past_yield: world.past_yield(),
-        arrival: if arrival {
-            how_far_from_settled(&mut world, &span)
-        } else {
-            Vec::new()
-        },
+        arrival: settled.0,
+        unsettled: settled.1,
         bodies: frames.last().map(connected_bodies).unwrap_or_default(),
         readings,
         span: span.into_iter().map(|(k, (lo, hi))| (k, hi - lo)).collect(),
@@ -439,28 +482,81 @@ fn representation_scale(unit: &str, magnitude: f64) -> f64 {
     }
 }
 
-/// Public because  pins the set of shipped scenes this names, and a pin against a second
-/// copy of the walk would agree with itself while the two drifted apart.
-///
-/// How far short of its own steady state each thermal block stopped, in kelvin.
+/// Why the arrival has no number for a block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NotMeasured {
+    /// Heat was still arriving over the bus in the run's last coupling window, at this many
+    /// watts over it, and the balance a block is solved for has only its own sources and faces
+    /// in it. How far the block stopped from a balance that leaves its feed out is not a question
+    /// about this run.
+    ///
+    /// The window and not a moment within it, because that is the bus's resolution: an element
+    /// pays a window's heat at once and a block takes it across its substeps, so a block whose
+    /// element ran dry half-way through the last window was fed to its end.
+    FedOverTheBus {
+        /// The watts the block took off the bus over the last window.
+        watts: f64,
+    },
+    /// The block's balance was refused, in the words of the refusal: one that melts, or one
+    /// with heat coming in and nowhere for it to go, has none, and a solve can fail to find
+    /// one that is there. The reason says which; a person reads it.
+    Refused {
+        /// The refusal, as the block gave it.
+        why: String,
+    },
+}
+
+impl std::fmt::Display for NotMeasured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotMeasured::FedOverTheBus { watts } => write!(
+                f,
+                "fed over the bus at {watts:.6e} W in the last window, which the balance it is \
+                 solved for leaves out"
+            ),
+            NotMeasured::Refused { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// How far short of its own steady state each thermal block stopped, in kelvin, and each block
+/// that could not be measured with why.
 ///
 /// Solves each block where it stands and reports how far the solve had to move it. A block that
-/// arrived moves by nothing; one stopped halfway moves by what is left. Domains with no steady
-/// state — melting, or heat with nowhere to go — are left out rather than reported as zero, which
-/// is the difference between "it arrived" and "the question does not apply". An insulated block
-/// is measured against the level its own heat sets, which is where its march goes.
+/// arrived moves by nothing; one stopped halfway moves by what is left. An insulated block is
+/// measured against the level its own heat sets, which is where its march goes.
+///
+/// A block with no number says why instead, which is the difference between "it arrived", "the
+/// question does not apply" and "the question was not answered": one whose balance is refused,
+/// and one with heat still arriving over the bus in the last window, which no balance it can be
+/// solved for contains. One whose feed stopped before the last window is measured, since what it
+/// is solved for is then what its march goes to.
+///
+/// **A refusal is the reason given when there is one**, fed or not: a block that melts has no
+/// balance whatever arrives, and the feed is the reason only for a block that has one. Scene 20's
+/// ice is fed to the end of its run, and saying so would be true of that run's length and not of
+/// the ice.
+///
+/// `feed` is the watts each block took off the bus over the run's last window. A `!=` and not a
+/// tolerance decides it: an element spent before the last window adds exactly nothing, and a
+/// `NaN` is unequal to zero, so it counts as fed rather than as nothing.
 ///
 /// Called after the run, on the world the run left behind, so the block is at the last frame.
+#[allow(clippy::type_complexity)]
 fn how_far_from_settled(
     world: &mut World,
     span: &BTreeMap<(String, &'static str), (f64, f64)>,
-) -> Vec<(String, f64, f64)> {
+    feed: &BTreeMap<String, f64>,
+) -> (Vec<(String, f64, f64)>, Vec<(String, NotMeasured)>) {
     let names: Vec<String> = world
         .simulation()
         .domains()
         .map(|d| d.name().to_string())
         .collect();
-    let mut out = Vec::new();
+    let refused = |refusal: pantometry::core::Violation| NotMeasured::Refused {
+        why: refusal.to_string(),
+    };
+    let (mut out, mut unmeasured) = (Vec::new(), Vec::new());
     for name in names {
         let travel = span
             .get(&(name.clone(), "C"))
@@ -472,13 +568,25 @@ fn how_far_from_settled(
         else {
             continue;
         };
-        if let Ok(moved) = block.settle() {
-            out.push((name, moved, travel));
+        match feed.get(&name).copied().filter(|watts| *watts != 0.0) {
+            // Asked anyway, and only asked: a fed block is not moved to a balance that is not its.
+            Some(watts) => match block.steady_state() {
+                Ok(_) => unmeasured.push((name, NotMeasured::FedOverTheBus { watts })),
+                Err(refusal) => unmeasured.push((name, refused(refusal))),
+            },
+            None => match block.settle() {
+                Ok(moved) => out.push((name, moved, travel)),
+                Err(refusal) => unmeasured.push((name, refused(refusal))),
+            },
         }
     }
-    out
+    (out, unmeasured)
 }
 
+/// Public because `every_scene_that_ships_runs_and_says_something_true` pins the set of shipped
+/// scenes this names, and a pin against a second copy of the walk would agree with itself while
+/// the two drifted apart.
+///
 /// Each connected body in a frame's field panels, as `(domain, cells, peak - coldest)`.
 ///
 /// Six-connected over the cells whose value is finite — a void cell has no temperature and a
@@ -2077,7 +2185,11 @@ the other two refusals (worst step; not comparable to each other — the first i
         //
         // So it reports the number and leaves the judgement to a person, which is what a battery
         // that measures rather than asserts should do when it cannot tell.
-        if !self.base.arrival.is_empty() {
+        //
+        // **And a block with no number says why**, under the same heading: this was printed only
+        // when some block had a number, so a scene whose every block was refused printed no
+        // section, and one whose balance the solve could not find read as one that has none.
+        if !self.base.arrival.is_empty() || !self.base.unsettled.is_empty() {
             let _ = writeln!(
                 out,
                 "\narrival (the balance solved where the run stopped; what moved was still to come)"
@@ -2092,6 +2204,9 @@ the other two refusals (worst step; not comparable to each other — the first i
                     out,
                     "  {domain:<14} {moved:>12.6} K still to come, {share} of the {travel:.4} C it covered"
                 );
+            }
+            for (domain, why) in &self.base.unsettled {
+                let _ = writeln!(out, "  {domain:<14} not measured: {why}");
             }
         }
 

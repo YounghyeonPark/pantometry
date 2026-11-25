@@ -6,7 +6,7 @@
 //! convergence rate is the scheme's own second order, and a hazard the schedule documentation
 //! states in words that a test can arrange in numbers.
 
-use pantometry_world::verify::{verify, Order, SweepOutcome};
+use pantometry_world::verify::{verify, NotMeasured, Order, SweepOutcome};
 use pantometry_world::{DomainSpec, Scene};
 
 fn scene(json: &str) -> Scene {
@@ -1004,9 +1004,15 @@ fn the_battery_says_how_far_a_run_stopped_from_its_balance() {
         "the shorter run should have further to go: {short_moved:.6} against {moved:.6}"
     );
 
-    // And it reaches the report a person reads.
+    // And it reaches the report a person reads: the bar's own row, since the heading says
+    // `still to come` too and is printed whenever any block was asked.
     let report = cut_short.render();
-    assert!(report.contains("still to come"), "{report}");
+    assert!(
+        report
+            .lines()
+            .any(|l| l.trim_start().starts_with("bar") && l.contains(" K still to come")),
+        "{report}"
+    );
 }
 
 /// **An insulated block is measured against the heat it holds**, which is where its march goes.
@@ -1048,13 +1054,23 @@ fn an_insulated_block_is_measured_against_the_heat_it_holds() {
     );
 }
 
-/// **A domain with no steady state to be short of is left out, not reported as arrived.**
+/// The report's line for a block the arrival could not measure, or a panic that shows the report.
+fn not_measured_line(report: &str, domain: &str) -> String {
+    report
+        .lines()
+        .find(|l| l.trim_start().starts_with(domain) && l.contains("not measured: "))
+        .unwrap_or_else(|| panic!("no `not measured` line for {domain}:\n{report}"))
+        .to_string()
+}
+
+/// **A domain with no steady state to be short of is not reported as arrived, and says why.**
 ///
 /// The difference between "it arrived" and "the question does not apply". A block generating heat
 /// with every face insulated warms without limit; reporting it as zero kelvin from its balance
-/// would be a claim that it had one.
+/// would be a claim that it had one. Leaving it out without a word was the other half of that
+/// mistake: this block, and one whose balance the solve failed to find, printed the same nothing.
 #[test]
-fn a_domain_with_no_balance_is_left_out_of_the_arrival() {
+fn a_domain_with_no_balance_says_why_it_has_no_arrival() {
     let s = scene(
         r#"{
   "title": "a sealed bar",
@@ -1075,11 +1091,167 @@ fn a_domain_with_no_balance_is_left_out_of_the_arrival() {
         "a block that warms without limit has no balance to be short of: {:?}",
         b.base.arrival
     );
+    // ` K still to come` is a measured row's; the heading says `still to come` too, and is printed
+    // now for the row that says why there is no number.
     assert!(
-        !b.render().contains("still to come"),
+        !b.render().contains(" K still to come"),
         "the report should not claim an arrival it did not measure:\n{}",
         b.render()
     );
+    match b.base.unsettled.as_slice() {
+        [(domain, NotMeasured::Refused { why })]
+            if domain == "sealed" && why.contains("warms without limit") => {}
+        other => panic!("the sealed bar should be refused as warming without limit: {other:?}"),
+    }
+    let line = not_measured_line(&b.render(), "sealed");
+    assert!(line.contains("warms without limit"), "{line}");
+}
+
+/// **A balance the solve could not find is named, with the reason**, and is not a block that has
+/// none.
+///
+/// A row of 257 one-cell bodies, each across a one-cell clearance from the next, is one part of
+/// 257 bodies, one past the 256 the steady solve couples. It loses heat at one end and is given a
+/// little at the other, so it has a balance; the solve refuses to find it. The battery printed no
+/// arrival section at all for it, so nothing in the report said a balance had been asked for.
+#[test]
+fn a_balance_the_solve_could_not_find_is_named() {
+    let bodies = 257;
+    let cells = 2 * bodies - 1;
+    let voids: Vec<String> = (0..bodies - 1)
+        .map(|n| {
+            format!(
+                r#"{{ "material": "void", "from": [{}, 0, 0], "to": [{}, 1, 1] }}"#,
+                2 * n + 1,
+                2 * n + 2
+            )
+        })
+        .collect();
+    let s = scene(&format!(
+        r#"{{
+  "title": "a row of bodies, each across a clearance from the next",
+  "duration_s": 1.0,
+  "frames": 2,
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    {{ "kind": "block", "name": "row", "cells": [{cells}, 1, 1], "cell_mm": 1.0,
+      "initial_c": 20.0, "material": "copper",
+      "regions": [{}],
+      "dissipation": [{{ "watts": 0.01, "from": [{}, 0, 0], "to": [{cells}, 1, 1] }}],
+      "cooling": [{{ "face": "x-min", "ambient_c": 20.0,
+        "convection_w_per_m2_k": 100.0, "area_cm2": 0.01 }}] }}
+  ]
+}}"#,
+        voids.join(", "),
+        cells - 1
+    ));
+    let b = verify(&s, false).expect("it runs; only its balance is refused");
+    assert!(b.base.arrival.is_empty(), "{:?}", b.base.arrival);
+    match b.base.unsettled.as_slice() {
+        [(domain, NotMeasured::Refused { why })]
+            if domain == "row" && why.contains(&format!("{bodies} bodies")) => {}
+        other => panic!("the row should be refused for its {bodies} bodies: {other:?}"),
+    }
+    let line = not_measured_line(&b.render(), "row");
+    println!("  {line}");
+    assert!(
+        line.contains(&format!("couples {} at most", bodies - 1)),
+        "{line}"
+    );
+}
+
+/// **A block with heat still arriving over the bus is not measured against a balance without it.**
+///
+/// The balance a block is solved for has its own sources and faces in it and nothing from the bus,
+/// so a block a heater feeds was measured against the block with the heater off: one held at its
+/// balance by 10 W for twenty-two time constants read 50.59 K still to come, 100% of what it
+/// covered.
+///
+/// An element of 10 W with 2500 J to spend, over three windows of 100 s, spends 1000 J in each of
+/// the first two and its last 500 J in the third, so the closed form for the last window is
+/// `(2500 − 10·200) / 100` = 5 W — not the run's 8.33 W, which a feed read over the whole run
+/// would give, nor the element's 10 W. The tolerance is the rounding of the block's running total,
+/// under 4096 J and added to once in each of the window's 351 substeps: at most half an ulp at
+/// that size, 2.3e-13 J, each, so 8.0e-11 J, 1.6e-13 of the window's 500 J. Held at `1e-12`.
+///
+/// Three runs beside it, each a way to be wrong about which block is fed:
+/// - **spent by 150 s** with 1500 J, so nothing arrives in the last window and the block is
+///   measured — what a block that was *ever* fed would not be;
+/// - **the same 2500 J in windows of 50 s**, spent at 250 s, so the last window brings nothing
+///   though the last frame, 200 to 300 s, brought 500 J — what a feed read per frame would call
+///   fed at 5 W;
+/// - **fed, and given a watt of its own with no face cooled**, so it warms without limit and has
+///   no balance: the refusal is the reason given, since it holds whatever arrives.
+#[test]
+fn a_block_fed_over_the_bus_is_not_measured_without_its_feed() {
+    let fed = |reserve: f64, window: &str, block: &str| {
+        scene(&format!(
+            r#"{{
+  "title": "a block a heater feeds over the bus",
+  "duration_s": 300.0,
+  "frames": 3,{window}
+  "conservation_tolerance": 1e-6,
+  "domains": [
+    {{ "kind": "heater", "name": "element", "watts": 10.0, "reserve_j": {reserve} }},
+    {{ "kind": "block", "name": "fed", "cells": [2, 2, 2], "cell_mm": 10.0,
+      "initial_c": 20.0, "material": "copper",
+      {block} }}
+  ]
+}}"#
+        ))
+    };
+    let cooled = r#""cooling": [{ "face": "z-max", "ambient_c": 20.0,
+        "convection_w_per_m2_k": 500.0, "area_cm2": 4.0 }]"#;
+    let measured = |b: &pantometry_world::verify::Battery, why: &str| {
+        assert!(b.base.unsettled.is_empty(), "{why}: {:?}", b.base.unsettled);
+        match b.base.arrival.as_slice() {
+            [(domain, moved, _)] if domain == "fed" && moved.is_finite() => {}
+            other => panic!("{why}, so the block should be measured: {other:?}"),
+        }
+    };
+
+    let b = verify(&fed(2500.0, "", cooled), false).expect("it runs");
+    assert!(
+        b.base.arrival.is_empty(),
+        "a block still fed has no arrival without its feed: {:?}",
+        b.base.arrival
+    );
+    let watts = match b.base.unsettled.as_slice() {
+        [(domain, NotMeasured::FedOverTheBus { watts })] if domain == "fed" => *watts,
+        other => panic!("the block should be named as fed over the bus: {other:?}"),
+    };
+    let expected = (2500.0 - 10.0 * 200.0) / 100.0;
+    println!(
+        "  fed at {watts:.15} W in the last window, {:.2e} from the closed form",
+        (watts - expected).abs() / expected
+    );
+    assert!(
+        (watts - expected).abs() <= 1e-12 * expected,
+        "the last window's feed is {expected} W, not {watts} W"
+    );
+    let line = not_measured_line(&b.render(), "fed");
+    assert!(line.contains("fed over the bus"), "{line}");
+    assert!(!b.render().contains(" K still to come"), "{}", b.render());
+
+    let spent = verify(&fed(1500.0, "", cooled), false).expect("it runs");
+    measured(
+        &spent,
+        "an element spent by 150 s feeds nothing in the last window",
+    );
+
+    let windowed = verify(&fed(2500.0, r#" "window_s": 50.0,"#, cooled), false).expect("it runs");
+    measured(
+        &windowed,
+        "an element spent at 250 s feeds nothing in the last 50 s window",
+    );
+
+    let own = r#""dissipation": [{ "watts": 1.0, "from": [0, 0, 0], "to": [2, 2, 2] }]"#;
+    let sealed = verify(&fed(2500.0, "", own), false).expect("it runs; it just never settles");
+    match sealed.base.unsettled.as_slice() {
+        [(domain, NotMeasured::Refused { why })]
+            if domain == "fed" && why.contains("warms without limit") => {}
+        other => panic!("a fed block with no balance should give the refusal: {other:?}"),
+    }
 }
 
 /// **A body asked past the strain its material comes back from is a finding.**
