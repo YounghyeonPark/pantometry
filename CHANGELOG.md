@@ -658,6 +658,43 @@ protects nothing.
 
 ### Fixed
 
+- **A cell emptied after its source still counted in the watts generated** (`pantometry-thermal`).
+  `Solid3D::generated_power` summed every cell's source, and a step generates in the solid ones
+  only, so a cell emptied after `dissipating` had spread over it kept its share in the reading and
+  made none of it. Measured before the change on four 5 mm cells of copper, each against what one
+  step's books record as generated:
+  - 5 W over the four with the last emptied read 5 W, and each step made 3.75 W;
+  - 3 W over three and −2 W in the fourth, the fourth emptied, read 1 W where 3 W were made;
+  - 5 W in one cell, then that cell emptied, read 5 W where nothing was.
+
+  The books balanced in each, since the missing joules were never made, so the reading was the one
+  thing that could show the watts going missing, and it said none had. A scene applies its voids
+  before its sources and was never asked, and the device turns a source into a rise through the
+  cell's mobility, which is zero in a void.
+
+  What changed:
+  - **The reading sums the solid cells**, and so does the steady state's refusal of a balance that
+    does not converge, which named the same 5 W. Folded from `+0.0`, since an empty `f64` sum is
+    `−0.0` on stable and `+0.0` on 1.78.
+  - **The share stays with the place**, as the cell's temperature does, so a cell emptied and
+    filled again generates it again. Emptying does not raise the rest of the spread to cover it,
+    because the block does not keep the box the watts were stated for: empty first, then generate,
+    in the order a scene does. `empty`, `dissipating` and `Coefficients::source` say so.
+
+  Held by a test of five cases — among them a sink that stays solid, which a reading that lost the
+  sign would get wrong — each against its closed form three ways over two steps: the reading,
+  exactly; the joules each step records; and the joules the solid cells took in, off their
+  temperatures. Six defects planted one at a time: five caught at every line they print, twenty-six
+  in all; the sixth, the steady state's refusal value summed over every cell again, survives,
+  because no test in the workspace reaches a balance that does not converge. Planting them found
+  the first version of the test blind to one: heat put in a void cell and not counted is `NaN` in
+  its neighbour a step later, which the block does not refuse, since it checks the cells a caller
+  sets and not its own step's, and a comparison written `> tolerance` passed the `NaN`.
+
+  Open: a void cell that a later `dissipating` selects keeps its earlier share, since `dissipating`
+  skips void, and filling it brings that back: 5 W over four, the last emptied, then 5 W over all
+  four again, made 6.25 W once the cell was filled; turned off with 0 W instead, 1.25 W.
+
 - **A cell carried across its melting point landed past everything it met** (`pantometry-thermal`).
   A two-phase block's limit charged each cell's row at the capacity it had, the slope of its
   enthalpy, and a step that crosses the melting point moves the cell's heat at that slope and
@@ -952,10 +989,11 @@ protects nothing.
   by *A temperature below absolute zero was answered*; `Solid3D::{heat_capacity,
   cell_capacities, volume, fourier_number, mode_amplification}`, `Bar1D::fourier_number`,
   `LumpedMass::heat_capacity` and `Interface::uniform`
-  still answer for a size no body has; `generated_power` counts a source in a cell emptied after
-  it, 5 W where 3.75 W are made; a cell size small enough that its square underflows is refused as
-  a substance with no diffusivity; and a network stepped no length leaves heat that is not a number
-  on the bus unjudged, since it takes none.
+  still answer for a size no body has; `generated_power` counted a source in a cell emptied after
+  it, 5 W where 3.75 W were made, and counts only the solid cells since, by *A cell emptied after
+  its source still counted in the watts generated*; a cell size small enough that its square
+  underflows is refused as a substance with no diffusivity; and a network stepped no length leaves
+  heat that is not a number on the bus unjudged, since it takes none.
 
 - **A part that loses nothing was answered wherever its solve drifted** (`pantometry-thermal`).
   `Solid3D::steady_state` answered `Ok` with fields that are not where the block marches. Measured

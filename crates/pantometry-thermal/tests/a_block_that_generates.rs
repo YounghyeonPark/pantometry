@@ -291,6 +291,126 @@ fn nothing_generates_nothing() {
     assert_eq!(empty.generated_power().to_si(), 0.0);
 }
 
+/// **A cell emptied after a source takes its share with it**, and the power reading says so.
+///
+/// The step skips a void cell and `generated_power` summed every cell, void or not: 5 W over four
+/// cells with the last emptied after read 5 W while each step made 3.75 W, and a sink emptied the
+/// same way read 1 W where 3 W were made. The books balanced in both, which is why the reading is
+/// the check — see `nothing_generates_nothing`.
+///
+/// Each case is held against its closed form, each cell's share summed over the cells still solid,
+/// three ways: the reading; the joules each of two steps records as generated; and the joules the
+/// solid cells took in over each, off their temperatures, which in an isolated block is what was
+/// generated in them and nothing else. Two steps, because heat put in a void cell, which holds
+/// nothing, is infinite there and touches nothing else until the next step's sweep multiplies it
+/// by a face that carries nothing, and `0·∞` is `NaN` in the cell beside it. Nothing refuses that:
+/// a block checks the cells a caller sets, not the ones its own step wrote. So every comparison
+/// here is one a `NaN` fails, which the first version's `> tolerance` was not, and a void cell
+/// heated without being counted passed it whole.
+///
+/// Every share is a binary fraction of a few bits, so the reading is exact. A step's record is a
+/// product by `dt` per cell, a running sum two steps long, a difference and a division: within
+/// sixteen roundings of the shares' gross. What the cells took in is a difference of temperatures
+/// near 293 K, rounded where they are: within sixteen roundings of the heat they hold, over `dt`.
+///
+/// Every failure is collected before anything is asserted, so a defect is seen in every case it
+/// reaches rather than in the first.
+#[test]
+fn a_cell_emptied_after_a_source_takes_its_share_with_it() {
+    let rod = || {
+        Solid3D::new(
+            "part",
+            Substance::copper(),
+            (4, 1, 1),
+            Length::mm(5.0),
+            Temperature::celsius(20.0),
+        )
+    };
+    let mut wrong: Vec<String> = Vec::new();
+    // `left` is the closed form and `gross` the sum of the magnitudes it is made of.
+    let mut check = |what: &str, block: &mut Solid3D, left: f64, gross: f64| {
+        // False for a `NaN` either way round, so a `NaN` is a failure.
+        let near = |x: f64, tolerance: f64| (x - left).abs() <= tolerance;
+        let read = block.generated_power().to_si();
+        if read != left {
+            wrong.push(format!("{what}: reads {read} W where {left} W are left"));
+        }
+        let solid: Vec<usize> = (0..4).filter(|i| !block.is_void(*i, 0, 0)).collect();
+        // The heat the solid cells hold above absolute zero, and its size, for the rounding.
+        let held = |block: &Solid3D| {
+            let capacity = block.cell_capacities();
+            solid.iter().fold((0.0, 0.0), |(heat, size), i| {
+                let joules = capacity[*i] * block.temperature_at(*i, 0, 0).to_si();
+                (heat + joules, size + joules.abs())
+            })
+        };
+        for n in 1..=2 {
+            let (generated, (heat, size)) = (block.generated_energy().to_si(), held(block));
+            let dt = block.max_stable_dt(Time::ZERO);
+            if let Err(e) = block.step(Time::ZERO, dt, &mut Exchange::new()) {
+                wrong.push(format!("{what}: step {n} was refused: {e}"));
+                return;
+            }
+            let recorded = (block.generated_energy().to_si() - generated) / dt.to_si();
+            if !near(recorded, 16.0 * f64::EPSILON * gross) {
+                wrong.push(format!(
+                    "{what}: step {n} recorded {recorded} W where {left} W are left"
+                ));
+            }
+            let took = (held(block).0 - heat) / dt.to_si();
+            if !near(took, 16.0 * f64::EPSILON * size / dt.to_si()) {
+                wrong.push(format!(
+                    "{what}: step {n} put {took} W in the solid cells where {left} W are left"
+                ));
+            }
+        }
+    };
+
+    let mut block = rod()
+        .dissipating(5.0, |_, _, _| true)
+        .empty(|i, _, _| i == 3);
+    check(
+        "the last of four emptied",
+        &mut block,
+        3.0 * 1.25,
+        3.0 * 1.25,
+    );
+
+    let mut block = rod()
+        .dissipating(3.0, |i, _, _| i < 3)
+        .dissipating(-2.0, |i, _, _| i == 3)
+        .empty(|i, _, _| i == 3);
+    check("a sink emptied", &mut block, 3.0, 3.0);
+
+    // A sink that stays, so a reading that lost the sign would show: 1.25 W in two cells and
+    // −2 W in the third.
+    let mut block = rod()
+        .dissipating(5.0, |_, _, _| true)
+        .dissipating(-2.0, |i, _, _| i == 0)
+        .empty(|i, _, _| i == 3);
+    check(
+        "a sink left solid",
+        &mut block,
+        -2.0 + 2.0 * 1.25,
+        2.0 + 2.0 * 1.25,
+    );
+
+    let mut block = rod()
+        .dissipating(5.0, |i, _, _| i == 3)
+        .empty(|i, _, _| i == 3);
+    check("the only cell generating emptied", &mut block, 0.0, 0.0);
+
+    // The share stays with the place, as the cell's temperature does: filled again, with a
+    // different substance, the cell generates its 1.25 W again.
+    let mut block = rod()
+        .dissipating(5.0, |_, _, _| true)
+        .empty(|i, _, _| i == 3);
+    block.fill(Substance::aluminium_6061(), |i, _, _| i == 3);
+    check("the emptied cell filled again", &mut block, 5.0, 5.0);
+
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// **A source shortens the stable step**, or a block generating hard enough would be marched past
 /// what its own arithmetic can carry.
 ///

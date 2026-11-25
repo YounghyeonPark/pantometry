@@ -527,7 +527,9 @@ pub struct Coefficients<'a> {
     /// `dx/Cᵢ` for each cell, which turns a face flux into a rate of temperature. Zero in a void:
     /// nothing moves in a cell that holds nothing.
     pub mobility: &'a [f64],
-    /// Watts generated in each cell.
+    /// Watts a source puts in each cell. A cell emptied after its source was spread keeps its share
+    /// here and generates none of it, which a kernel multiplying by the cell's zero `mobility`
+    /// makes nothing of so long as the share is a number; the step refuses one that is not.
     pub source: &'a [f64],
 }
 
@@ -2182,6 +2184,12 @@ impl Solid3D {
     /// there is nothing there to have one, and `temperature_at` says so rather than returning a
     /// zero somebody would plot.
     ///
+    /// A cell emptied after a source was spread over it **takes its share with it**: the step
+    /// generates nothing there, [`generated_power`](Solid3D::generated_power) stops counting it,
+    /// and the rest of the spread is not raised to make up the difference, because the block does
+    /// not remember which box the watts were stated for. The share stays with the place, as the
+    /// cell's temperature does, so [`fill`](Solid3D::fill)ing the cell again generates it again.
+    ///
     /// # What crosses a gap, and what does not
     ///
     /// **Radiation does.** Two solid cells facing each other along a grid line across a run of
@@ -2599,7 +2607,8 @@ impl Solid3D {
                 f64::INFINITY,
             ));
         }
-        let supplied: f64 = self.source.iter().sum();
+        // What the step generates, which a cell emptied after its source does not.
+        let supplied = self.made_watts();
         // As the step refuses it, by what makes it unsteppable: this said "this block cannot be
         // stepped", for a substance with no thermal properties and for a bad joint alike.
         if self.conduction_rate().is_nan() {
@@ -3558,6 +3567,11 @@ impl Solid3D {
     /// a box drawn around a part and its clearance heats the part at the full rate rather than
     /// losing a share of it to the gap.
     ///
+    /// That holds for the cells that are void when this is called. A cell emptied **after** it
+    /// takes its share with it and the rest are not raised to cover it — see
+    /// [`empty`](Solid3D::empty) — so empty first and generate second, which is the order a scene
+    /// applies its keys in.
+    ///
     /// Selecting no solid cell is not an error here, because a caller building an assembly cell by
     /// cell passes through that state; the watts simply have nowhere to go and none are generated.
     /// A *scene* refuses it, because a scene saying 50 W and meaning none is a different mistake.
@@ -3625,13 +3639,31 @@ impl Solid3D {
         self.source.iter().any(|w| *w != 0.0)
     }
 
-    /// Total watts generated, summed over the cells.
+    /// Total watts generated, summed over the **solid** cells, which are the ones a step generates
+    /// in.
     ///
     /// What a caller gets back is what it asked for, which is worth being able to check: a source
     /// spread over cells and then read back through a different route is exactly where a factor of
     /// the cell count hides.
+    ///
+    /// A cell emptied after a source was spread over it is not counted, because a step generates
+    /// nothing there. This summed every cell: 5 W over four cells with the last emptied after read
+    /// 5 W while each step made 3.75 W, so the one reading that could show watts going missing said
+    /// none had — the books balance either way, since the joules are simply never made.
     pub fn generated_power(&self) -> Power {
-        Power::from_si(self.source.iter().sum())
+        Power::from_si(self.made_watts())
+    }
+
+    /// The watts a step generates: every solid cell's source, and no void one's.
+    ///
+    /// Folded from `+0.0` rather than summed, because an empty `f64` sum is `−0.0` on stable and
+    /// `+0.0` on 1.78, and a block that is all void would read a different zero by toolchain.
+    fn made_watts(&self) -> f64 {
+        self.source
+            .iter()
+            .zip(&self.void)
+            .filter(|(_, void)| !**void)
+            .fold(0.0, |total, (watts, _)| total + watts)
     }
 
     /// Joules generated over the run.
