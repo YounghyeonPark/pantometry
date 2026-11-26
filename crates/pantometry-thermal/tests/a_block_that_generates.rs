@@ -296,7 +296,8 @@ fn nothing_generates_nothing() {
 /// The step skips a void cell and `generated_power` summed every cell, void or not: 5 W over four
 /// cells with the last emptied after read 5 W while each step made 3.75 W, and a sink emptied the
 /// same way read 1 W where 3 W were made. The books balanced in both, which is why the reading is
-/// the check — see `nothing_generates_nothing`.
+/// the check — see `nothing_generates_nothing`. The share stays with the place until a later
+/// source selects it, and that is held here too.
 ///
 /// Each case is held against its closed form, each cell's share summed over the cells still solid,
 /// three ways: the reading; the joules each of two steps records as generated; and the joules the
@@ -407,6 +408,84 @@ fn a_cell_emptied_after_a_source_takes_its_share_with_it() {
         .empty(|i, _, _| i == 3);
     block.fill(Substance::aluminium_6061(), |i, _, _| i == 3);
     check("the emptied cell filled again", &mut block, 5.0, 5.0);
+
+    // **Unless a later source selected it.** That replaces the void cell's share as it replaces a
+    // solid one's, with nothing: `dissipating` skipped void, so the cell kept its 1.25 W and a fill
+    // brought it back — 6 W over the three left, then filled, made 7.25 W, and the source turned
+    // off over all four made 1.25 W.
+    let mut block = rod()
+        .dissipating(5.0, |_, _, _| true)
+        .empty(|i, _, _| i == 3)
+        .dissipating(6.0, |_, _, _| true);
+    // Before the fill too, which is what says the 6 W went over the three solid cells: spread
+    // over all four, 1.5 W each, they come to 6 W only once the fourth is filled.
+    check(
+        "a later source over the emptied cell",
+        &mut block.clone(),
+        3.0 * 2.0,
+        3.0 * 2.0,
+    );
+    block.fill(Substance::aluminium_6061(), |i, _, _| i == 3);
+    check(
+        "a later source over the emptied cell, then filled",
+        &mut block,
+        3.0 * 2.0,
+        3.0 * 2.0,
+    );
+
+    // And a later source elsewhere leaves the emptied cell's share where it was: 3 W in the
+    // first cell, 1.25 W in each of the other three once the fourth is filled.
+    let mut block = rod()
+        .dissipating(5.0, |_, _, _| true)
+        .empty(|i, _, _| i == 3)
+        .dissipating(3.0, |i, _, _| i == 0);
+    block.fill(Substance::aluminium_6061(), |i, _, _| i == 3);
+    check(
+        "a later source elsewhere, then filled",
+        &mut block,
+        3.0 + 3.0 * 1.25,
+        3.0 + 3.0 * 1.25,
+    );
+
+    let mut block = rod()
+        .dissipating(5.0, |_, _, _| true)
+        .empty(|i, _, _| i == 3)
+        .dissipating(0.0, |_, _, _| true);
+    block.fill(Substance::aluminium_6061(), |i, _, _| i == 3);
+    check(
+        "the source turned off over the emptied cell, then filled",
+        &mut block,
+        0.0,
+        0.0,
+    );
+
+    // And a `NaN` an emptied cell held is written over, not refused at the next step: by a source
+    // over the whole block, and by one over that cell alone — which chooses no solid cell, and
+    // returned before it looked for a fault again. Filled after, so what that call left in the
+    // cell is read too: nothing, not the 1 W it was asked for.
+    let mut block = rod()
+        .dissipating(f64::NAN, |i, _, _| i == 3)
+        .empty(|i, _, _| i == 3)
+        .dissipating(3.0, |_, _, _| true);
+    check(
+        "a NaN in an emptied cell, written over",
+        &mut block,
+        3.0,
+        3.0,
+    );
+
+    let mut block = rod()
+        .dissipating(3.0, |i, _, _| i < 3)
+        .dissipating(f64::NAN, |i, _, _| i == 3)
+        .empty(|i, _, _| i == 3)
+        .dissipating(1.0, |i, _, _| i == 3);
+    block.fill(Substance::aluminium_6061(), |i, _, _| i == 3);
+    check(
+        "a NaN in an emptied cell, written over alone, then filled",
+        &mut block,
+        3.0,
+        3.0,
+    );
 
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

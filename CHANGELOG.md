@@ -658,6 +658,33 @@ protects nothing.
 
 ### Fixed
 
+- **A later source left an emptied cell its old share, and filling the cell brought it back**
+  (`pantometry-thermal`). `Solid3D::dissipating` replaces what the cells it selects generated
+  before, and skipped void ones, so a cell emptied after a source kept that share through every
+  later call and generated it again once filled. Measured before the change, on four 5 mm cells of
+  copper:
+  - 5 W over the four, the last emptied, then 5 W over all four again, made 6.25 W once the cell was
+    filled; 0 W over all four in place of the second call, to turn the source off, made 1.25 W;
+  - a `NaN` in a cell emptied and then written over was refused at the next step, by a source over
+    the whole block and by one over that cell alone, which chose no solid cell and returned before
+    it looked for a fault again.
+
+  What changed: a void cell `dissipating` selects is replaced by nothing — it still takes no share
+  of the spread — and the faults and sinks are looked for again whatever was chosen. One it does
+  not select keeps its share. `empty`, `dissipating` and `Coefficients::source` say so. A scene
+  empties before it generates and fills nothing after, so none was asked.
+
+  Held by six more cases of the test that holds an emptied cell's share, each against its closed
+  form through the reading, two steps' books and the heat the solid cells took in: 6 W over the
+  three left, before the fill and after it, 6 W and not 7.25; a later source elsewhere, which
+  leaves the emptied cell its 1.25 W; the source turned off then filled, nothing and not 1.25 W;
+  and each `NaN` written over, stepped, the one over that cell alone filled after so that what the
+  call left there is read. Five defects planted one at a time — the void cell skipped, the early
+  return put back, a void cell given a share of the spread or the new watts, and every void cell
+  replaced whether selected or not — each caught at every line it prints, forty-six in all.
+  unearned-pass-hunter found the two cases a share of the spread passed: the alone case read no
+  value, and the later source was read only after the fill.
+
 - **`verify` left out a block it could not measure without a word, and measured a fed one without
   its feed** (`pantometry-world`). The battery's arrival solves each thermal block's balance where
   the run stopped and reports how far the block had still to go. Measured before the change:
@@ -736,9 +763,11 @@ protects nothing.
   its neighbour a step later, which the block does not refuse, since it checks the cells a caller
   sets and not its own step's, and a comparison written `> tolerance` passed the `NaN`.
 
-  Open: a void cell that a later `dissipating` selects keeps its earlier share, since `dissipating`
-  skips void, and filling it brings that back: 5 W over four, the last emptied, then 5 W over all
-  four again, made 6.25 W once the cell was filled; turned off with 0 W instead, 1.25 W.
+  Open: a void cell that a later `dissipating` selected kept its earlier share, since `dissipating`
+  skipped void, and filling it brought that back: 5 W over four, the last emptied, then 5 W over
+  all four again, made 6.25 W once the cell was filled; turned off with 0 W instead, 1.25 W. It
+  is replaced by nothing since, by *A later source left an emptied cell its old share, and
+  filling the cell brought it back*.
 
 - **A cell carried across its melting point landed past everything it met** (`pantometry-thermal`).
   A two-phase block's limit charged each cell's row at the capacity it had, the slope of its

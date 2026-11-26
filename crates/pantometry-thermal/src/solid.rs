@@ -528,8 +528,9 @@ pub struct Coefficients<'a> {
     /// nothing moves in a cell that holds nothing.
     pub mobility: &'a [f64],
     /// Watts a source puts in each cell. A cell emptied after its source was spread keeps its share
-    /// here and generates none of it, which a kernel multiplying by the cell's zero `mobility`
-    /// makes nothing of so long as the share is a number; the step refuses one that is not.
+    /// here, until a later `dissipating` selects it and leaves it nothing, and generates none of
+    /// it, which a kernel multiplying by the cell's zero `mobility` makes nothing of so long as the
+    /// share is a number; the step refuses one that is not.
     pub source: &'a [f64],
 }
 
@@ -2188,7 +2189,9 @@ impl Solid3D {
     /// generates nothing there, [`generated_power`](Solid3D::generated_power) stops counting it,
     /// and the rest of the spread is not raised to make up the difference, because the block does
     /// not remember which box the watts were stated for. The share stays with the place, as the
-    /// cell's temperature does, so [`fill`](Solid3D::fill)ing the cell again generates it again.
+    /// cell's temperature does, so [`fill`](Solid3D::fill)ing the cell again generates it again —
+    /// unless a later [`dissipating`](Solid3D::dissipating) selected the cell, which replaces its
+    /// share as it replaces a solid cell's, with nothing while the cell is void.
     ///
     /// # What crosses a gap, and what does not
     ///
@@ -3563,14 +3566,19 @@ impl Solid3D {
     /// when its grid refines. That is what makes a source stated this way survive `verify`'s
     /// resolution sweep, and it is the opposite of the choice a per-cell figure would force.
     ///
-    /// Void cells are skipped and do not count toward the spread — nothing generates nothing — so
-    /// a box drawn around a part and its clearance heats the part at the full rate rather than
-    /// losing a share of it to the gap.
+    /// Void cells do not count toward the spread — nothing generates nothing — so a box drawn
+    /// around a part and its clearance heats the part at the full rate rather than losing a share
+    /// of it to the gap.
     ///
     /// That holds for the cells that are void when this is called. A cell emptied **after** it
     /// takes its share with it and the rest are not raised to cover it — see
     /// [`empty`](Solid3D::empty) — so empty first and generate second, which is the order a scene
     /// applies its keys in.
+    ///
+    /// **A void cell this selects is replaced too**, by nothing. It was skipped, and so kept the
+    /// share an earlier call had given it before it was emptied, which filling it brought back:
+    /// 5 W over four cells, the last emptied, then 5 W over all four again, made 6.25 W once the
+    /// cell was filled, and 0 W over all four in place of the second call made 1.25 W.
     ///
     /// Selecting no solid cell is not an error here, because a caller building an assembly cell by
     /// cell passes through that state; the watts simply have nowhere to go and none are generated.
@@ -3586,18 +3594,24 @@ impl Solid3D {
             for j in 0..ny {
                 for i in 0..nx {
                     let c = i + nx * (j + ny * k);
-                    if !self.void[c] && where_(i, j, k) {
+                    if !where_(i, j, k) {
+                        continue;
+                    }
+                    if self.void[c] {
+                        self.source[c] = 0.0;
+                    } else {
                         chosen.push(c);
                     }
                 }
             }
         }
-        if chosen.is_empty() {
-            return self;
-        }
-        let each = watts / chosen.len() as f64;
-        for c in chosen {
-            self.source[c] = each;
+        // Not returned from when nothing solid is chosen, as it was: a void cell replaced above
+        // may have held the fault or a sink that are looked for again below.
+        if !chosen.is_empty() {
+            let each = watts / chosen.len() as f64;
+            for c in chosen {
+                self.source[c] = each;
+            }
         }
         // Over every cell and not only these, because a later call that replaces a bad source
         // with a good one leaves no fault behind, and one that does not leaves the first.
