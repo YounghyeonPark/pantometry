@@ -658,6 +658,76 @@ protects nothing.
 
 ### Fixed
 
+- **A sink fed across a clearance was refused at the mirror of a balance that exists**
+  (`pantometry-thermal`). `Solid3D::steady_state` passes cells through negative temperatures on
+  the way to an answer, and its clearance pairs and radiating films read a negative temperature's
+  fourth power as `T⁴`, even, which gave the balance a mirror root below zero: a sink drawn through
+  zero before its heat arrived settled on it. Measured before the change, from starts of 1, 100,
+  300, 600, 1000 and 1500 K, on sinks fed across a clearance by a body a film warms from a room at
+  1000 K and on sinks that film feeds directly:
+  - of ten sinks with a balance, five runs of sixty were refused below zero, each at the mirror of
+    its sink's surface less its half cell's drop: a milliwatt answered at 878.56 K from five starts
+    was refused at −898.56 K from the sixth;
+  - of six with none, nineteen runs of thirty-six reported not converging, and seventeen ran out of
+    sweeps below zero, anywhere from −0.32 K to −7009.6 K by start.
+
+  What changed: below zero a surface radiates `T·|T|³`, odd, so each term of a cell's balance falls
+  with its own temperature and rises with its neighbours' there as above, and the balance has one
+  root; one below zero says there is none above it. A pair whose colder source is below zero is
+  solved by `crossing_below_zero`, Newton in the same bracket on `g(u) − g(v)` read in three
+  pieces, and its slopes and couplings are `4C|T|³`. A film's secant there is
+  `h + εσ(T⁴ + T∞⁴)/(T∞ − T)`, and a surface below zero — where the balance is still positive at
+  zero — is found by Newton up from the centre, the balance being concave there; a bracket from the
+  room, tried first, took fifty-four steps on a root an ulp above its centre. Every path at or
+  above zero reads what it did, to the bit: the frames of all 34 scenes are unchanged. A refusal
+  the sweeps settled on says the sinks "take more than can reach them", where it added "or more
+  than reaches them in time for this solve"; one where they ran out says so, and only that the
+  cell was below zero. Held at zero instead, as `ThermalNetwork` holds a surface's radiation, the
+  balance is flat there: measured, every sink without one was drawn down until the sweeps ran out,
+  at −970 K to −87 120 K by start, and three runs with a balance were refused.
+
+  Held by a new test of sinks from six starts each, against their chains' closed forms. Six across
+  the clearance and four from the film are answered, every cell within 1e-5 K — or, within 4% of
+  the most the film can bring, within half again the stop's own error `1e-6·ρ/(1 − ρ)` at the
+  film's contraction, which the solve meets to within 7%. Three across and seven from the film with
+  no balance are refused at the chain's root read odd, three milliwatts across at −630.06 K, in
+  the settled words exactly. The sealed pair of ±0.01 W, held only to be below zero, is held to its
+  root, −55.37 K, 0.0145 K from the even one's. Four unit tests below zero, each against an
+  independent reference and each counting its draws into every branch: the crossing against a
+  halving on a surface to eight ulps of what it is made of; its slopes and couplings by central
+  differences on a step sized to the surfaces; the film against a halving on its surface; and the
+  two routes with nothing behind a surface, which no block reaches. Their steps are held by their
+  mean and by sixteen, against fourteen over 10⁵ draws: twelve at most was one sample's tail.
+  Twenty-two defects planted one at a time, each against every test of the crate: twenty caught
+  at every line they were claimed to print, forty in all — the even reading put back in each of
+  the pair's three pieces, its slopes, its couplings and its Newton, and in the film's secant, its
+  routing either way and its Newton; the routes with nothing behind a surface; and the settled
+  words hedged, either way. Two were caught by one check alone: the pair's bracket dropped,
+  predicted to survive, by the step bound, a pair cycling at its rounding for all sixty-four steps;
+  and both surfaces below zero read as the difference of their fourth powers, by the mean, 5.154
+  against 5.1. The two guards taken out survive, as predicted. Eight claims were written after a
+  run showed them, each a further test that failed as well: the two milliwatts from 300 K under
+  three defects, the step bound under the bracket's, and the routes with nothing behind a surface
+  under four.
+
+  Reviews. physics-checker confirmed the one root by an ℓ¹ argument on the slopes averaged between
+  two balances, rather than Gale–Nikaido, whose P-matrix a part that loses nothing never has, and
+  reported no second root in 400 random networks from thirty starts each, where the even reading
+  had several in 125; and "stopped" written for runs that ran out. numerics-reviewer ported every
+  new function to Python and found both step bounds and both `1e-13` floors unearned, the air
+  counted in a source's rounding at `G + H` where its share is `H`, and the stop's error behind
+  every film miss, which put 50 and 52 mW back in the test. unearned-pass-hunter found the settled
+  words checked by a substring the old hedge also contained, the guards' survival measured on four
+  binaries where their documentation says the crate, and three branches no defect was planted in.
+  Each was reproduced before it was acted on.
+
+  Found on the way, and open: the step on a body's level reads a radiating film's slope at the
+  hotter of its cell and the room, not at its surface, so within 4% of the most a film can bring
+  the solve stops up to 1.8e-5 K out, as it did before this, and a sink taking four times that runs
+  out of sweeps; and the block's level in the cap on that step and the common scale of the step the
+  bodies of a part take together, which only the mirror needed, survive being taken out of every
+  test of the crate.
+
 - **A later source left an emptied cell its old share, and filling the cell brought it back**
   (`pantometry-thermal`). `Solid3D::dissipating` replaces what the cells it selects generated
   before, and skipped void ones, so a cell emptied after a source kept that share through every
@@ -1174,9 +1244,11 @@ protects nothing.
   - **Open.** A sink fed across a clearance by a body still warming can be drawn through zero before
     its heat arrives, and the solve settles on a mirror of a balance that exists: a milliwatt from a
     300 K start is refused this way, where a 1000 K start finds 878.6 K, and the refusal says what
-    was found. `verify` dropped every refusal silently, so a block with no balance and a solve that
-    failed printed the same nothing, and a block fed over the bus was measured as if nothing more
-    arrived; each says why it has no number since, by *`verify` left out a block it could not
+    was found; each is answered from every start since, by *A sink fed across a clearance was
+    refused at the mirror of a balance that exists*. `verify` dropped every refusal silently, so a
+    block with no balance and a solve that failed printed the same nothing, and a block fed over
+    the bus was measured as if nothing more arrived; each says why it has no number since, by
+    *`verify` left out a block it could not
     measure without a word, and measured a fed one without its feed*.
     `settle` moves a part that loses heat without putting it on the books. An infinite source passed
     the balance, and is refused by name since. `ThermalNetwork::steady_state` refuses every part

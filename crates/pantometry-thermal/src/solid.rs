@@ -129,6 +129,13 @@ fn series_with_half_cell(film: f64, conductivity: f64, area: f64, dx: f64) -> f6
 /// counting the step that finds nothing left to move: three for aluminium or copper near room
 /// temperature, four or five for a cell of `k = 0.6` at 900 K to 1073 K, and nine and ten for a
 /// black face at 3000 K on an insulator of `k = 0.05`, a millimetre and ten millimetres a cell.
+/// Below zero they rise monotonically onto the root from the centre, in `film_surface_below_zero`:
+/// over 10⁵ faces drawn as the unit test draws them, fourteen at most and 4.70 on average, and
+/// that test holds its eight thousand to sixteen and 4.85. **Far below zero they grow with the
+/// centre's distance**, radiation outweighing what is behind the surface, so each step covers a
+/// share of the way: measured, 17 to 24 at −1e6 K and 53 to 59 at −1e12 K, and this bound is
+/// reached, and is the answer, from −1e13 K to −1e14 K — where a solve has long been drawn down
+/// without end, and is refused.
 const SURFACE_STEPS: usize = 64;
 
 /// The conductance, W/K, from a cell's centre to the room through a face that radiates.
@@ -182,6 +189,16 @@ const SURFACE_STEPS: usize = 64;
 /// while the limit — which reads the film through `series_with_half_cell`, and gets the half cell —
 /// said the step was fine. Measured on four cells of `k = 50` radiating at `ε = 0.5`: `NaN` within
 /// twenty steps at half the limit, and the steady solve reporting that it diverged.
+///
+/// **Below absolute zero a surface radiates `T·|T|³`**, so that its loss keeps rising with it, as
+/// [`crossing`] reads a pair's. No body is there, but the steady solve passes through on the way
+/// to an answer and stops there when there is none above it, and what it reads there decides
+/// which: see [`Solid3D::steady_state`]. The balance is concave below zero and convex above, so
+/// **where it is still positive at zero the surface is below zero**, and
+/// [`film_surface_below_zero`] runs Newton up onto it from the centre, as the loop here runs down
+/// onto a root above zero from the room. Where it is not, the surface is at or above zero, even
+/// with the centre below it, to the rounding of the centre, and is found here exactly as it was;
+/// a centre at or above zero has its surface there always.
 #[inline(never)]
 fn radiating_film(
     behind: f64,
@@ -191,8 +208,8 @@ fn radiating_film(
     centre: f64,
     ambient: f64,
 ) -> f64 {
-    let secant =
-        |t: f64| share * (convection + radiative * (t + ambient) * (t * t + ambient * ambient));
+    // At or above zero, which is where every surface the loop below visits is.
+    let secant = |t: f64| film_secant_above_zero(share, convection, radiative, t, ambient);
     if behind <= 0.0 {
         return 0.0;
     }
@@ -200,7 +217,15 @@ fn radiating_film(
         return behind;
     }
     if !behind.is_finite() {
-        return secant(centre);
+        return film_secant(share, convection, radiative, centre, ambient);
+    }
+    // The balance at a surface at zero: what `behind` brings it from the centre, less what it
+    // sheds there to the room.
+    if centre < 0.0 && -behind * centre > secant(0.0) * ambient {
+        let (surface, _) =
+            film_surface_below_zero(behind, share, convection, radiative, centre, ambient);
+        let through = film_secant(share, convection, radiative, surface, ambient);
+        return through * behind / (through + behind);
     }
     let mut surface = centre.max(ambient);
     for _ in 0..SURFACE_STEPS {
@@ -217,10 +242,77 @@ fn radiating_film(
     through * behind / (through + behind)
 }
 
+/// What a radiating face sheds per kelvin of its surface `t` above the room, W/K: the secant
+/// [`film_secant_above_zero`] at or above absolute zero, and below it
+/// `A·(h + εσ(t⁴ + T∞⁴)/(T∞ − t))`, the secant of `T·|T|³`, which meets it at zero. A surface
+/// that is not a number takes the first.
+fn film_secant(share: f64, convection: f64, radiative: f64, t: f64, ambient: f64) -> f64 {
+    if t < 0.0 {
+        let (t2, a2) = (t * t, ambient * ambient);
+        share * (convection + radiative * (t2 * t2 + a2 * a2) / (ambient - t))
+    } else {
+        film_secant_above_zero(share, convection, radiative, t, ambient)
+    }
+}
+
+/// The secant of a radiating face at a surface `t` at or above absolute zero, W/K:
+/// `A·(h + εσ(t + T∞)(t² + T∞²))`.
+#[inline(always)]
+fn film_secant_above_zero(
+    share: f64,
+    convection: f64,
+    radiative: f64,
+    t: f64,
+    ambient: f64,
+) -> f64 {
+    share * (convection + radiative * (t + ambient) * (t * t + ambient * ambient))
+}
+
+/// The surface of a radiating face below absolute zero, and how many steps it took: where what
+/// `behind` brings it from a centre below zero, `behind·(T_c − T)`, is what it sheds,
+/// `A·h·(T − T∞) + A·εσ(T·|T|³ − T∞⁴)`. For a face whose balance is still positive at zero, so
+/// that the surface lies between the centre and zero.
+///
+/// **Newton up from the centre, which needs no safeguard**, as the one in `radiating_film` needs
+/// none coming down. `behind·(T − T_c)` plus what the surface sheds rises with `T` and is concave
+/// below zero, where what it sheds curves as `12εσA·T|T|`, so Newton from below its root never
+/// crosses it, each step landing between the last and the root, and the first that does not move
+/// up is where rounding has taken over. **A bracket from the room, halved where a step would
+/// leave it, was tried first** and took fifty-four steps on a face whose root was an ulp above a
+/// centre a few millikelvin below zero, in a room at zero: every step landed on the bracket's end,
+/// and was halved. Only `+ − × ÷`.
+fn film_surface_below_zero(
+    behind: f64,
+    share: f64,
+    convection: f64,
+    radiative: f64,
+    centre: f64,
+    ambient: f64,
+) -> (f64, usize) {
+    let mut surface = centre;
+    let mut steps = 0;
+    for _ in 0..SURFACE_STEPS {
+        steps += 1;
+        let sheds = film_secant(share, convection, radiative, surface, ambient);
+        let excess = sheds * (surface - ambient) - behind * (centre - surface);
+        let slope =
+            share * (convection + 4.0 * radiative * surface * surface * surface.abs()) + behind;
+        let next = surface - excess / slope;
+        // `NaN` stops it too, which a bare `next > surface` written as its negation would say.
+        if next.is_nan() || next <= surface {
+            break;
+        }
+        surface = next;
+    }
+    (surface, steps)
+}
+
 /// How many steps `crossing` may take to find what a clearance carries. A bound that is never the
 /// answer: over the eight thousand pairs the unit tests below draw — conductivities from 0.01 to
 /// 500 W/m·K, cells from 0.1 to 30 mm, 200 K to 3000 K, with and without air — eleven at most and
-/// 4.35 on average, and that test holds it to twelve.
+/// 4.35 on average, and that test holds it to twelve. Below zero, in `crossing_below_zero`, over
+/// 86 196 of 10⁵ pairs drawn there whose colder source is below zero: fourteen at most and 5.04
+/// on average, and that test holds its eight thousand to sixteen and 5.1.
 const CROSSING_STEPS: usize = 64;
 
 /// What one pair of a clearance carries, from its end `a` to its end `b`, in a step's arithmetic.
@@ -242,10 +334,14 @@ struct Crossing {
 impl Crossing {
     /// How fast what `a`'s cell gives up through the pair moves with `a`'s own temperature, and
     /// what `b`'s takes with `b`'s, W/K — the slopes the steady solve leans on. From
-    /// `dq·(1 + 4C(u³ r_a + v³ r_b)) = 4C(u³ dT*_a − v³ dT*_b)` and `dT* = f·dT_c`.
+    /// `dq·(1 + 4C(|u|³ r_a + |v|³ r_b)) = 4C(|u|³ dT*_a − |v|³ dT*_b)` and `dT* = f·dT_c`: the
+    /// derivative of `T·|T|³`, which is `T⁴`'s at or above zero — see [`crossing`].
     fn slopes(&self, coefficient: f64) -> (f64, f64) {
         let ((u, v), (ra, rb)) = (self.surfaces, self.behind);
-        let (ua, vb) = (4.0 * coefficient * u * u * u, 4.0 * coefficient * v * v * v);
+        let (ua, vb) = (
+            4.0 * coefficient * u * u * u.abs(),
+            4.0 * coefficient * v * v * v.abs(),
+        );
         let stiff = 1.0 + ua * ra + vb * rb;
         (
             self.from_a * self.from_a * ua / stiff,
@@ -255,12 +351,15 @@ impl Crossing {
 
     /// The other half of the same derivative: how fast what `a`'s cell **takes in** through the
     /// pair rises with `b`'s temperature, and what `b`'s takes in with `a`'s, W/K. From the same
-    /// `dq`: what `a` gives up is `q·f_a`, so its rise with `T_b` is `f_a·f_b·4Cv³/stiff`, and
-    /// `b`'s with `T_a` is `f_a·f_b·4Cu³/stiff`. Without air each is the other end's slope, so a
+    /// `dq`: what `a` gives up is `q·f_a`, so its rise with `T_b` is `f_a·f_b·4C|v|³/stiff`, and
+    /// `b`'s with `T_a` is `f_a·f_b·4C|u|³/stiff`. Without air each is the other end's slope, so a
     /// shift of both ends together moves nothing across, as it must.
     fn couplings(&self, coefficient: f64) -> (f64, f64) {
         let ((u, v), (ra, rb)) = (self.surfaces, self.behind);
-        let (ua, vb) = (4.0 * coefficient * u * u * u, 4.0 * coefficient * v * v * v);
+        let (ua, vb) = (
+            4.0 * coefficient * u * u * u.abs(),
+            4.0 * coefficient * v * v * v.abs(),
+        );
         let stiff = 1.0 + ua * ra + vb * rb;
         let both = self.from_a * self.to_b;
         (both * vb / stiff, both * ua / stiff)
@@ -275,10 +374,20 @@ impl Crossing {
 /// centre the block knows. Behind it is the half cell `G`, and beside it the air `H`; between
 /// them they hold it as a source `T* = T_c − w·(T_c − T_air)`, with `w = H/(G + H)`, behind a
 /// conductance `G + H`. So the surfaces are at `u = T*_a − q/(G_a + H)` and
-/// `v = T*_b + q/(G_b + H)`, and `q = C(u⁴ − v⁴)`: one equation in `q`, decreasing wherever both
-/// surfaces are above absolute zero, whose root lies between nothing and the `q` at which the two
-/// surfaces meet. Of what reaches `a`'s surface, the share `G_a/(G_a + H)` came through its half
-/// cell; the air's own share of the face is `air_conductance`'s, which carries the rest.
+/// `v = T*_b + q/(G_b + H)`, and `q = C(u⁴ − v⁴)`: one equation in `q`, decreasing, whose root
+/// lies between nothing and the `q` at which the two surfaces meet. Of what reaches `a`'s surface,
+/// the share `G_a/(G_a + H)` came through its half cell; the air's own share of the face is
+/// `air_conductance`'s, which carries the rest.
+///
+/// **Below absolute zero a surface radiates `T·|T|³`**, and the equation keeps falling there.
+/// No body is below zero, but the steady solve passes through on the way to its answer and stops
+/// there when none is above, and it read `u⁴ − v⁴` as the two fourth powers, even in `T`: a
+/// surface drawn through zero then took heat as though as warm as its mirror, and a sink fed
+/// across a clearance settled at the mirror of a balance that exists — a milliwatt answered at
+/// 878.56 K from five starts was refused at −898.56 K from the sixth, at 300 K. Read odd, `q` falls with
+/// either surface's distance below the other everywhere, and the slopes below are its own. A pair
+/// whose colder source is at or above zero has both surfaces there and reads exactly what it read;
+/// one below is [`crossing_below_zero`].
 ///
 /// **Newton inside that bracket, halving it where a step would leave it.** The residual is not
 /// convex — its curvature is `12C(u²/G'_a² − v²/G'_b²)`, of either sign — so Newton alone is not
@@ -368,7 +477,11 @@ fn crossing_counted(
     };
     let r = hot_r + cold_r;
     let mut steps = 0;
-    let mut q = if r == 0.0 {
+    let mut q = if cold < 0.0 {
+        let (q, taken) = crossing_below_zero(coefficient, (hot_r, hot), (cold_r, cold), d0);
+        steps = taken;
+        q
+    } else if r == 0.0 {
         // Nothing between either centre and its surface: the centres' own reading, exactly.
         coefficient * d0 * (hot + cold) * (hot * hot + cold * cold)
     } else {
@@ -421,6 +534,71 @@ fn crossing_counted(
         behind: (ra, rb),
     };
     (crossed, steps)
+}
+
+/// What a pair carries from its hotter source `hot` to its colder `cold`, when `cold` is below
+/// absolute zero, and how many steps it took: `crossing_counted`'s equation with each fourth power
+/// read as `T·|T|³`. Each end is `(resistance from its source to its surface, source)`, and `d0`
+/// the sources' difference, formed by the caller.
+///
+/// `C(g(u) − g(v))` is `C·(u − v)(u + v)(u² + v²)` while both surfaces are at or above zero, its
+/// negative while both are below, and `C(u⁴ + v⁴)` while one is on each side, which has nothing
+/// to cancel. Its derivative in `q` is `−4C(|u|³ r_hot + |v|³ r_cold) − 1` everywhere, so the
+/// equation falls the whole way from nothing, where it is positive, to the `q` at which the
+/// surfaces meet, where it is negative, and Newton inside that bracket, halving where a step would
+/// leave it, finds its one root — as above zero, from the same secant. Only `+ − × ÷`.
+fn crossing_below_zero(
+    coefficient: f64,
+    (hot_r, hot): (f64, f64),
+    (cold_r, cold): (f64, f64),
+    d0: f64,
+) -> (f64, usize) {
+    // `g(u) − g(v)` for `u` at or above `v`, given `u − v`.
+    let apart = |u: f64, v: f64, gap: f64| {
+        if v >= 0.0 {
+            gap * (u + v) * (u * u + v * v)
+        } else if u <= 0.0 {
+            -gap * (u + v) * (u * u + v * v)
+        } else {
+            (u * u) * (u * u) + (v * v) * (v * v)
+        }
+    };
+    let r = hot_r + cold_r;
+    let reading = coefficient * apart(hot, cold, d0);
+    if r == 0.0 {
+        return (reading, 0);
+    }
+    let (mut lo, mut hi) = (0.0, d0 / r);
+    // The secant between the two sources, `reading/d0`, in series with what is behind them.
+    let mut q = reading / (1.0 + r * reading / d0);
+    let mut steps = 0;
+    for _ in 0..CROSSING_STEPS {
+        steps += 1;
+        let (u, v) = (hot - q * hot_r, cold + q * cold_r);
+        let gap = d0 - q * r;
+        let excess = coefficient * apart(u, v, gap) - q;
+        if excess > 0.0 {
+            lo = q;
+        } else if excess < 0.0 {
+            hi = q;
+        } else {
+            break;
+        }
+        let slope = -4.0 * coefficient * (u * u * u.abs() * hot_r + v * v * v.abs() * cold_r) - 1.0;
+        let mut next = q - excess / slope;
+        if next == q {
+            break;
+        }
+        // Written out rather than negated, so that a `NaN` step is one that leaves.
+        if next.is_nan() || next <= lo || next >= hi {
+            next = 0.5 * (lo + hi);
+            if next <= lo || next >= hi {
+                break;
+            }
+        }
+        q = next;
+    }
+    (q, steps)
 }
 
 /// How many Gauss-Seidel sweeps [`Solid3D::steady_state`] will take before reporting that it did
@@ -2538,8 +2716,9 @@ impl Solid3D {
     /// cell each, one at 300 °C, settled at 2.7e17 K, the cold ones' first sweep asking for some
     /// 1250 K. A body's step is a quarter of the larger of its own level and the block's, so that a
     /// body near absolute zero is not held near it: of its own alone, a sink fed across a clearance
-    /// found no balance above zero, and in a first form of the step taken together a sealed pair at
-    /// 400 K and 0 K answered 0 K for both.
+    /// found no balance above zero while the pairs read a negative temperature's fourth power as
+    /// even, and in a first form of the step taken together a sealed pair at 400 K and 0 K
+    /// answered 0 K for both. Read odd, as below, no block measured needs it.
     ///
     /// # A part that loses nothing
     ///
@@ -2573,13 +2752,31 @@ impl Solid3D {
     ///
     /// **A balance below absolute zero.** A source of negative watts is a sink, and one that takes
     /// more than can reach it has no steady state; the field that balances it is not one a body
-    /// can have. **Not always one that does not exist**: a sink whose heat comes across a
-    /// clearance from a body still warming can be drawn through zero before that heat arrives,
-    /// and the pairs read the fourth power of a negative temperature as a positive one, so the
-    /// solve settles on a mirror of a balance that is there. Measured: a milliwatt drawn from a
-    /// cell fed that way by a film radiating from a room at 1000 K is refused from a start at
-    /// 300 K and solved, at 878.6 K, from one at 1000 K. The refusal says what was found, not
-    /// that nothing could be; a block started nearer its answer finds it. Within a tenth of a
+    /// can have. **The balance has one root, so one below zero says there is none above it.**
+    /// Below zero a surface radiates `T·|T|³` — a pair's in `crossing`, a film's in
+    /// `radiating_film` — so each term of a cell's balance falls with its own temperature and
+    /// rises with its neighbours' there as above, and a change in one cell moves the others'
+    /// balances by no more in all than it moves its own, the rest being what leaves its part;
+    /// conduction, convection, air and mountings are linear and do so already. Between two fields
+    /// that both balanced, the same holds of the slopes averaged along the way from one to the
+    /// other, and summing their difference's signs against it leaves the difference of one sign
+    /// over a whole part and none of it leaving: which a part that loses anything cannot have,
+    /// and one that loses nothing cannot without holding other heat than it does. **Read even**,
+    /// as the fourth power of a negative temperature,
+    /// the pairs and films gave the balance a mirror below zero, and a sink fed across a clearance
+    /// by a body a film warms from a room at 1000 K, drawn through zero before that heat arrived,
+    /// settled on it. Measured on sinks fed that way and on sinks a film feeds directly, from six
+    /// starts each: of ten with a balance, five runs of sixty were refused — a milliwatt answered
+    /// at 878.56 K from five starts was refused at −898.56 K from the sixth, at 300 K — and of six
+    /// without one, nineteen runs of thirty-six reported not converging and seventeen ran out of
+    /// sweeps below zero anywhere from −0.32 K to −7009.6 K. Read odd, every run with a balance is
+    /// answered, and
+    /// every sink without one is refused at one temperature from all six starts — three milliwatts
+    /// across the clearance at −630.06 K. **Held at zero below it**, as
+    /// `ThermalNetwork::steady_state` holds a surface's radiation, the balance is flat there
+    /// instead: measured, every sink without one was drawn down until the sweeps ran out, at
+    /// −970 K to −87 120 K by start, and three runs with a balance were refused. A refusal where
+    /// the sweeps ran out says so, and says only what was found. Within a tenth of a
     /// millikelvin below zero is the solve's own error around a room at absolute zero, and is
     /// answered as zero.
     ///
@@ -2699,7 +2896,7 @@ impl Solid3D {
         // what is relaxed is the body, and the factor is the one for a Poisson operator that long.
         // A body of two cells in a row of twenty-nine was over-relaxed by 1.81, as if it were
         // twenty-nine long, and its first sweep took a cell from 573 K to −114 K; past zero, its
-        // pairs read the fourth power of a negative temperature, which is a positive one, and
+        // pairs then read the fourth power of a negative temperature as a positive one, and
         // ten such bodies came to a balance with the first at −383.9 K and the rest at +383.9 K;
         // with fields below zero refused, they are refused as diverging. A body as long as its
         // block keeps the factor it had.
@@ -2729,16 +2926,25 @@ impl Solid3D {
         let mut gain = vec![0.0; t.len()];
         let mut slope = vec![0.0; t.len()];
 
-        // What a part's sinks did to `c`, said as what was found rather than as what must be so: a
-        // sink drawing a cell through zero before the heat that would feed it arrives leaves the
-        // solve at a mirror of a balance that does exist, and both look like this.
-        let drawn_below = |c: usize| {
+        // What a part's sinks did to `c`. Where the sweeps settled, it is the balance's one root,
+        // so the sinks take more than can reach them; this said "or more than reaches them in
+        // time for this solve" while the pairs' even fourth powers gave it a mirror to settle on.
+        // Where they had not, it is only what was found.
+        let drawn_below = |c: usize, settled: bool| {
             let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
-            format!(
-                "no balance above absolute zero was found: cell ({i}, {j}, {k}) came to below \
-                 it, drawn down by the sinks in its part, which take more than can reach them or \
-                 more than reaches them in time for this solve"
-            )
+            if settled {
+                format!(
+                    "no balance above absolute zero was found: cell ({i}, {j}, {k}) came to \
+                     below it, drawn down by the sinks in its part, which take more than can \
+                     reach them"
+                )
+            } else {
+                format!(
+                    "no balance above absolute zero was found: cell ({i}, {j}, {k}) was below \
+                     it, drawn down by the sinks in its part, where {STEADY_SWEEPS} sweeps had \
+                     not settled"
+                )
+            }
         };
 
         for round in 0..STEADY_SWEEPS {
@@ -2871,7 +3077,8 @@ impl Solid3D {
             // radiating 0.4 W through a pair asked for 93 000 K and the solve reported
             // diverging. Holding each step to a quarter of the body's own level makes the
             // approach geometric — a factor of 1.25 a sweep, so any starting point is tens of
-            // sweeps away — and cannot pass through zero.
+            // sweeps away — and cannot pass through zero. The block's level, which `cap` takes
+            // where it is the larger, can.
             let mut level = vec![0.0; count];
             let mut size = vec![0.0_f64; count];
             for (c, v) in t.iter().enumerate() {
@@ -2886,13 +3093,16 @@ impl Solid3D {
             // `NaN` reaches it with every input a block can have.
             //
             // **A quarter of the larger of its own level and the block's.** Of its own alone, a
-            // body near absolute zero is held near it. Measured: a sink of two milliwatts fed
-            // across a clearance by a body a film warms, from a start at 300 K, found no balance
-            // above zero, where with this it settles near 685 K; and in a first form of the step
-            // the bodies of a part take together, before its rows were brought to one, a sealed
-            // pair at 400 K and 0 K answered 0 K for both, the cold one held still while the warm
-            // one was swept down to it. A block of one body is its own reference, so its bound is
-            // the one it had.
+            // body near absolute zero is held near it. Measured while the pairs read a negative
+            // temperature's fourth power as even: a sink of two milliwatts fed across a clearance
+            // by a body a film warms, from a start at 300 K, found no balance above zero, where
+            // with this it settled near 685 K; and in a first form of the step the bodies of a
+            // part take together, before its rows were brought to one, a sealed pair at 400 K and
+            // 0 K answered 0 K for both, the cold one held still while the warm one was swept down
+            // to it. **Read odd, nothing measured needs it**: that sink settles at 684.85 K from
+            // every start with it and without it, and every test of this crate passes without it.
+            // It stays until it is taken out on its own. A block of one body is its own reference,
+            // so its bound is the one it had.
             let reference = cell_level(&t, &body);
             let cap = |b: usize| {
                 let own = (level[b] / size[b].max(1.0)).abs();
@@ -2940,10 +3150,12 @@ impl Solid3D {
             // step is held to a quarter of each body's level as one: every body's share of it
             // scaled together, so that what it says about their differences is kept. That bound
             // was written for the step a body took alone, and the 93 000 K it measured is not what
-            // the step taken together asks for; what still needs it is a sink fed across a
-            // clearance from a body a film warms. Measured, two milliwatts drawn from a cell of
-            // `k = 0.05` that a radiating film feeds through a clearance, from a start at 300 K:
-            // a balance near 685 K with the bound, and not converging without it.
+            // the step taken together asks for; what needed it was a sink fed across a clearance
+            // from a body a film warms. Measured while the pairs read a negative temperature's
+            // fourth power as even, two milliwatts drawn from a cell of `k = 0.05` that a
+            // radiating film feeds through a clearance, from a start at 300 K: a balance near
+            // 685 K with the bound, and not converging without it. Read odd, 684.85 K from every
+            // start either way, and every test of this crate passes without it.
             for (p, bodies) in members.iter().enumerate() {
                 if bodies.len() < 2 {
                     continue;
@@ -3071,8 +3283,9 @@ impl Solid3D {
                 // solve wandered and reported not converging.
                 //
                 // **And in a part with no sink it is the solve that went wrong**, which is said as
-                // that. Nothing there can be colder than its coldest ambient, at or above zero; a
-                // field below it is a root of the pairs' fourth powers that no body has. Asked of
+                // that. Nothing there can be colder than its coldest ambient, at or above zero, and
+                // the balance's one root is not; a field below it is one the sweeps stopped at
+                // without its being a root. It was a root of the pairs' even fourth powers. Asked of
                 // the coldest solid cell, which in a part with a sink is the one the sinks draw
                 // down, wherever the first cell happens to be.
                 //
@@ -3090,7 +3303,7 @@ impl Solid3D {
                     return Err(Violation::at(
                         &self.name,
                         if sinks {
-                            drawn_below(c)
+                            drawn_below(c, true)
                         } else {
                             format!(
                                 "the steady-state balance diverged, to cell ({i}, {j}, {k}) \
@@ -3119,14 +3332,7 @@ impl Solid3D {
         if let Some(c) = coldest
             .filter(|c| t[*c] < -BELOW_ZERO && body[*c].is_some_and(|b| parts[part[b]].sinks))
         {
-            return Err(Violation::at(
-                &self.name,
-                format!(
-                    "{}, where {STEADY_SWEEPS} sweeps had not settled",
-                    drawn_below(c)
-                ),
-                t[c],
-            ));
+            return Err(Violation::at(&self.name, drawn_below(c, false), t[c]));
         }
         Err(Violation::at(
             &self.name,
@@ -6113,6 +6319,404 @@ mod tests {
         }
     }
 
+    /// `T·|T|³`, what a surface below absolute zero radiates.
+    fn odd_fourth(t: f64) -> f64 {
+        (t * t) * (t * t) * t.signum()
+    }
+
+    /// The watts a pair's crossing can be resolved to, in ulps: an ulp of `a`'s surface `u` moves
+    /// what crosses by `G_a + H` times it, the fourth powers round by an ulp of `C·u⁴` and `C·v⁴`,
+    /// and **each source rounds by an ulp of its centre and of its air's share**, which is what
+    /// `crossing` forms it from, `T − w(T − T_air)`: what crosses moves by at most `G + H` times
+    /// the source, and the air's part of the source is `w·T_air`, so `(G + H)·|T| + H·T_air`. The
+    /// first is an ulp of `u` where the centre is near its surface, as every pair `a_pair` draws
+    /// has it; a centre at −2435 K beside air at 974 K has a source of 54 K, and the ulps of 2435 K
+    /// are forty-five of 54 K. Counted as `(G + H)·T_air`, as first written, pairs with both
+    /// sources within a kelvin of zero were allowed more than all they carry.
+    fn resolved(
+        c: f64,
+        (ga, ta): (f64, f64),
+        (gb, tb): (f64, f64),
+        air: Option<(f64, f64)>,
+        (u, v): (f64, f64),
+    ) -> f64 {
+        let (h, room) = air.unwrap_or((0.0, 0.0));
+        let fourth = |t: f64| (t * t) * (t * t);
+        (ga + h) * (u.abs() + ta.abs())
+            + (gb + h) * tb.abs()
+            + 2.0 * h * room
+            + c * (fourth(u) + fourth(v))
+    }
+
+    /// One pair drawn as [`a_pair`] draws one, with its centres moved below absolute zero: `b`'s
+    /// alone on a third of them, both on a third, `a`'s alone on the rest, each from 0 to 3000 K
+    /// from zero and a fifth of them within two kelvin of it, and the other end at what `a_pair`
+    /// gave it. The air, where there is any, is at or above zero, as a block's is, so a source it
+    /// warms may not be below zero after all: [`a_crossing_below_zero_lands_on_its_root`] counts
+    /// how many are.
+    fn a_pair_below_zero(index: u64) -> Pair {
+        let (c, (ga, ta), (gb, tb), air) = a_pair(index);
+        let mut rng = pantometry_core::Rng::for_index(0x0b31_0e20, index);
+        let mut below = || {
+            if rng.unit() < 0.2 {
+                -rng.range(0.0, 2.0)
+            } else {
+                -rng.range(0.0, 3000.0)
+            }
+        };
+        let (ta, tb) = match index % 3 {
+            0 => (ta, below()),
+            1 => (below(), below()),
+            _ => (below(), tb),
+        };
+        (c, (ga, ta), (gb, tb), air)
+    }
+
+    /// **Below absolute zero `crossing` lands on the root of the balance it solves, read odd, and in
+    /// a few steps.** The same reference as [`a_crossing_lands_on_its_root_in_a_few_steps`] — a
+    /// halving on `a`'s surface, which `crossing` never solves for — with each fourth power read as
+    /// `T·|T|³`. Read so, the residual rises with `u` everywhere, so the halving needs no care about
+    /// where `v` passes through zero. Held to eight ulps of what it is made of, as [`resolved`]
+    /// counts them, which here includes each source's own rounding. **And the draws reach what they
+    /// are for**: a pair whose colder source is below zero, with its surfaces at the root both
+    /// below zero, one on each side, or both lifted to or above it by what crosses — the three
+    /// readings `crossing_below_zero` has — counted and held to a share of the draws each, since a
+    /// sabotage of one passes on draws that never reach it.
+    #[test]
+    fn a_crossing_below_zero_lands_on_its_root() {
+        let (mut most, mut taken, mut worst) = (0, 0, 0.0_f64);
+        let (mut below, mut astride, mut both, mut lifted) = (0, 0, 0, 0);
+        let pairs = 8000;
+        for index in 0..pairs {
+            let (c, (ga, ta), (gb, tb), air) = a_pair_below_zero(index);
+            let (h, room) = air.unwrap_or((0.0, 0.0));
+            let source = |g: f64, t: f64| (g * t + h * room) / (g + h);
+            let (sa, sb) = (source(ga, ta), source(gb, tb));
+            let (crossed, steps) = super::crossing_counted(c, (ga, ta), (gb, tb), air);
+            let (u, v) = crossed.surfaces;
+            if sa.min(sb) < 0.0 {
+                below += 1;
+                most = most.max(steps);
+                taken += steps;
+                if u.max(v) < 0.0 {
+                    both += 1;
+                } else if u.min(v) < 0.0 {
+                    astride += 1;
+                } else {
+                    lifted += 1;
+                }
+            }
+
+            let across = |u: f64| ga * (ta - u) - h * (u - room);
+            let far = |q: f64| (gb * tb + h * room + q) / (gb + h);
+            let residual = |u: f64| c * (odd_fourth(u) - odd_fourth(far(across(u)))) - across(u);
+            let meet = ((ga + h) * sa + (gb + h) * sb) / (ga + gb + 2.0 * h);
+            let (mut lo, mut hi) = (sa.min(meet), sa.max(meet));
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if residual(mid) > 0.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            let u = 0.5 * (lo + hi);
+            let reference = across(u);
+            let v = far(reference);
+            // Eight ulps and no floor of a share of what crosses, which no effect here earns.
+            let allowed = 8.0 * f64::EPSILON * resolved(c, (ga, ta), (gb, tb), air, (u, v));
+            let miss = (crossed.watts - reference).abs();
+            worst = worst.max(miss / allowed);
+            assert!(
+                miss <= allowed,
+                "pair {index}: crossing gives {:e} W where its balance has its root at {reference:e} \
+                 W, {miss:e} apart against {allowed:e}, in {steps} steps: {:?}, sources {sa} K and \
+                 {sb} K, surfaces {u} K and {v} K",
+                crossed.watts,
+                (c, (ga, ta), (gb, tb), air)
+            );
+        }
+        println!(
+            "  {pairs} pairs, {below} with a source below zero: {most} steps at most there, {:.2} on \
+             average; of those, {both} with both surfaces below zero, {astride} with one each \
+             side and {lifted} with neither; the worst miss {worst:.2} of what it is allowed",
+            taken as f64 / below.max(1) as f64
+        );
+        for (what, count, least) in [
+            ("a source below zero", below, pairs / 2),
+            ("both surfaces below zero", both, pairs / 10),
+            ("a surface each side of zero", astride, pairs / 10),
+            (
+                "a source below zero and neither surface",
+                lifted,
+                pairs / 100,
+            ),
+        ] {
+            assert!(count >= least, "{count} pairs of {pairs} with {what}");
+        }
+        // **The steps by their mean, and by a most with room**: twelve at most here is one draw's
+        // tail, and over 10⁵ draws fourteen pairs took thirteen or fourteen; an ulp of an input
+        // moves a step count, and these draws go through the platform's `pow`. The mean is what
+        // moves with a defect that only slows the root: both below zero read as `v⁴ − u⁴`, its
+        // two fourth powers cancelling, lands on it within the allowance and took 5.15 to 5.20
+        // on average where this takes 5.02, and 5.04 over 10⁵.
+        let mean = taken as f64 / below as f64;
+        assert!(
+            most <= 16 && mean <= 5.1,
+            "{most} steps at most and {mean:.3} on average, where the documentation says fourteen \
+             and 5.04 over 10⁵ pairs, held to sixteen and 5.1"
+        );
+    }
+
+    /// **Below absolute zero the slopes and couplings are still the derivatives of what crosses**:
+    /// [`a_crossings_slopes_are_its_derivatives`] and
+    /// [`a_crossings_couplings_are_its_cross_derivatives`] on pairs below zero, the derivative of
+    /// `T·|T|³` being `4|T|³`. A slope read as `4T³` there is negative, and the steady solve would
+    /// step a cell the wrong way.
+    #[test]
+    fn below_zero_a_crossings_slopes_and_couplings_are_its_derivatives() {
+        let (mut worst, mut floored, mut below, mut floor_share) = (0.0_f64, 0, 0, 0.0_f64);
+        for index in 0..2000 {
+            let (c, (ga, ta), (gb, tb), air) = a_pair_below_zero(index);
+            let pair = super::crossing(c, (ga, ta), (gb, tb), air);
+            if pair.surfaces.0.min(pair.surfaces.1) < 0.0 {
+                below += 1;
+            }
+            let (at_a, at_b) = pair.slopes(c);
+            let (by_b, by_a) = pair.couplings(c);
+            let at = |t_a: f64, t_b: f64| super::crossing(c, (ga, t_a), (gb, t_b), air);
+            // **A step that moves neither surface by more than a ten-thousandth of itself**, since
+            // the fourth powers are of the surfaces and the difference is good to the square of
+            // that. A ten-thousandth of the centre was not: a half cell of 1e-4 W/K holding a
+            // surface at 49 K behind a centre at 2131 K was differenced across 0.43% of its
+            // surface, and a step of `b`'s that moved `a`'s, at −30.87 K behind 7.6e-4 W/K, by
+            // 3.4% of it missed by 2.3e-6. Found from a trial step, what crossing moves being
+            // linear in it at this size, and relative to each surface however near zero: held to
+            // a kelvin's ten-thousandth there, two surfaces at −0.40 K and −0.094 K missed by
+            // 1.1e-6. A microkelvin is the floor, where a slope is `4C·1e-18` W/K.
+            let (u, v) = pair.surfaces;
+            let step = |moved: &dyn Fn(f64) -> (f64, f64), t: f64| {
+                let trial = 1e-6 * t.abs().max(1.0);
+                let (u1, v1) = moved(t + trial);
+                let shift =
+                    ((u1 - u).abs() / u.abs().max(1e-6)).max((v1 - v).abs() / v.abs().max(1e-6));
+                if shift > 0.0 {
+                    trial * 1e-4 / shift
+                } else {
+                    trial
+                }
+            };
+            let da = step(&|t| at(t, tb).surfaces, ta);
+            let db = step(&|t| at(ta, t).surfaces, tb);
+            let central =
+                |f: &dyn Fn(f64) -> f64, t: f64, d: f64| (f(t + d) - f(t - d)) / (2.0 * d);
+            let gives = |t: f64| {
+                let p = at(t, tb);
+                p.watts * p.from_a
+            };
+            let takes = |t: f64| {
+                let p = at(ta, t);
+                p.watts * p.to_b
+            };
+            let a_takes = |t: f64| {
+                let p = at(ta, t);
+                -p.watts * p.from_a
+            };
+            let b_takes = |t: f64| {
+                let p = at(t, tb);
+                p.watts * p.to_b
+            };
+            // **The rounding of what crosses, over the interval it is differenced across**: of what
+            // crosses and its fourth powers, and of the moved centre's source, which moves what
+            // crosses by its slope; what rounds alike at both ends of the difference cancels. A
+            // surface near zero is moved by a ten-thousandth of a kelvin, and what crosses is set
+            // by the other end: a slope of 4.2e-9 W/K was differenced from 1.57 W, and an ulp of
+            // that over the step is 1.1e-12 W/K.
+            let fourth = |t: f64| (t * t) * (t * t);
+            let room = air.map_or(0.0, |(_, t)| t);
+            let rounding = |by: f64, t: f64, d: f64| {
+                8.0 * f64::EPSILON
+                    * (c * (fourth(u) + fourth(v)) + pair.watts.abs() + by.abs() * (t.abs() + room))
+                    / d
+            };
+            let h = air.map_or(0.0, |(h, _)| h);
+            for (what, derivative, by, t, d, g) in [
+                ("a's slope", at_a, central(&gives, ta, da), ta, da, ga),
+                ("b's slope", at_b, -central(&takes, tb, db), tb, db, gb),
+                (
+                    "a's coupling to b",
+                    by_b,
+                    central(&a_takes, tb, db),
+                    tb,
+                    db,
+                    gb,
+                ),
+                (
+                    "b's coupling to a",
+                    by_a,
+                    central(&b_takes, ta, da),
+                    ta,
+                    da,
+                    ga,
+                ),
+            ] {
+                let apart = (derivative - by).abs();
+                let floor = rounding(by, t, d);
+                let allowed = 1e-6 * by.abs() + floor;
+                worst = worst.max(apart / allowed);
+                if floor > 1e-6 * by.abs() {
+                    floored += 1;
+                }
+                // **And the floor admits nothing the solve would notice**: a millionth of what
+                // holds the moved end's surface, `G + H`, beside which the steady solve's diagonal
+                // reads a pair's slope. Measured, 1.9e-8 of it at most.
+                floor_share = floor_share.max(floor / (g + h));
+                assert!(
+                    floor <= 1e-6 * (g + h),
+                    "pair {index}: {what}'s floor is {floor:e} W/K, against {:e} W/K holding its \
+                     surface",
+                    g + h
+                );
+                assert!(
+                    derivative >= 0.0 && apart <= allowed,
+                    "pair {index}: {what} is {derivative:e} W/K and what crosses moves by {by:e} \
+                     W/K, {apart:e} apart: {:?}, surfaces {:?}",
+                    (c, (ga, ta), (gb, tb), air),
+                    pair.surfaces
+                );
+            }
+        }
+        // The rounding is what is allowed on a few derivatives only, or this holds nothing: 772
+        // of them, measured — 483 at a pair with a surface within 10 K of zero, and the other 289
+        // each a derivative through the end whose surface is the nearer zero, where `4C|T|³` is
+        // next to nothing beside what the other end sends. Held to a tenth.
+        println!(
+            "  8000 derivatives at 2000 pairs, {below} with a surface below zero: the worst \
+             {worst:.3} of what it is allowed, {floored} held to the rounding rather than to 1e-6, \
+             the rounding {floor_share:.1e} at most of what holds the surface"
+        );
+        assert!(
+            floored <= 800,
+            "{floored} of 8000 derivatives held only to the rounding of what crosses, where 772 \
+             were"
+        );
+        // And on pairs that are below zero: the slopes are those of the surfaces, which a pair
+        // whose sources are below zero can lift above it.
+        assert!(
+            below >= 1000,
+            "{below} pairs of 2000 with a surface below zero"
+        );
+    }
+
+    /// **A film whose cell is below absolute zero lands on the root of its surface's balance, in a
+    /// few steps.** A face drawn as a block can have one: a half cell of 0.01 to 500 W/m·K and 0.1
+    /// to 30 mm, behind a mounting of 10² to 10⁵ W/m²·K on half of them; convection of none on a
+    /// third and 1 to 10⁴ W/m²·K on the rest; an emissivity from 0.02 to one; a room at absolute
+    /// zero on a fifth and up to 3000 K on the rest; and the centre 0 to 3000 K below zero, a fifth
+    /// within two kelvin of it. The reference halves on the surface between the centre and the room
+    /// where what `behind` brings it is what it sheds, `A·h·(T − T∞) + A·εσ(T·|T|³ − T∞⁴)`, which
+    /// rises with `T`; the film is held to what that sheds to eight ulps of the terms it is made
+    /// of, or 1e-13 of it, and where that surface is below zero, `film_surface_below_zero` to the
+    /// twelve steps its bound documents. **And the draws reach what they are for**: a surface below
+    /// zero, counted, as well as one lifted to or above it, which the loop above zero finds.
+    #[test]
+    fn a_film_below_zero_lands_on_its_root() {
+        let sigma = super::STEFAN_BOLTZMANN.to_si();
+        let (mut most, mut taken, mut worst, mut below) = (0, 0, 0.0_f64, 0);
+        let faces = 8000;
+        for index in 0..faces {
+            let mut rng = pantometry_core::Rng::for_index(0xf11e_0b31, index);
+            let mut decade = |lo: f64, hi: f64| 10f64.powf(rng.range(lo, hi));
+            let dx = decade(-4.0, -1.5);
+            let k = decade(-2.0, 2.7);
+            let mount = decade(2.0, 5.0);
+            let h = decade(0.0, 4.0);
+            let share = dx * dx;
+            let half = 2.0 * k * dx;
+            let behind = if index % 2 == 0 {
+                half
+            } else {
+                1.0 / (1.0 / half + 1.0 / (mount * share))
+            };
+            let convection = if index % 3 == 0 { 0.0 } else { h };
+            let radiative = rng.range(0.02, 1.0) * sigma;
+            // A fifth, and not a tenth, which would be even indices only and so never behind a
+            // mounting.
+            let ambient = if index % 5 == 0 {
+                0.0
+            } else {
+                rng.range(0.0, 3000.0)
+            };
+            let centre = if rng.unit() < 0.2 {
+                -rng.range(0.0, 2.0)
+            } else {
+                -rng.range(0.0, 3000.0)
+            };
+            let film = super::radiating_film(behind, share, convection, radiative, centre, ambient);
+
+            let a4 = (ambient * ambient) * (ambient * ambient);
+            let sheds =
+                |t: f64| share * (convection * (t - ambient) + radiative * (odd_fourth(t) - a4));
+            let residual = |t: f64| sheds(t) - behind * (centre - t);
+            let (mut lo, mut hi) = (centre, ambient);
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if residual(mid) > 0.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            let t = 0.5 * (lo + hi);
+            let reference = sheds(t);
+            let mut steps = 0;
+            if t < 0.0 {
+                below += 1;
+                steps = super::film_surface_below_zero(
+                    behind, share, convection, radiative, centre, ambient,
+                )
+                .1;
+                most = most.max(steps);
+                taken += steps;
+            }
+            let fourth = (t * t) * (t * t);
+            // Eight ulps of the terms and no floor of a share of what crosses, which no effect
+            // here earns: with one of 1e-13, it was the allowance on three faces in four.
+            let allowed = 8.0
+                * f64::EPSILON
+                * (behind * (centre.abs() + t.abs())
+                    + share * (convection * (t.abs() + ambient) + radiative * (fourth + a4)));
+            let flux = film * (centre - ambient);
+            let miss = (flux - reference).abs();
+            worst = worst.max(miss / allowed);
+            assert!(
+                miss <= allowed,
+                "face {index}: the film carries {flux:e} W where its surface's balance has its root \
+                 at {reference:e} W, {miss:e} apart against {allowed:e}, in {steps} steps"
+            );
+        }
+        println!(
+            "  {faces} faces, {below} with the surface below zero: {most} steps at most there, \
+             {:.2} on average; the worst miss {worst:.2} of what it is allowed",
+            taken as f64 / below.max(1) as f64
+        );
+        // Both ways through: a centre below zero whose surface is lifted to or above it as well.
+        for (what, count) in [("below zero", below), ("at or above zero", faces - below)] {
+            assert!(
+                count >= faces / 4,
+                "{count} faces of {faces} with the surface {what}"
+            );
+        }
+        // The steps by their mean, and by a most with room, as for the pair: over 10⁵ faces,
+        // fourteen at most and 4.70 on average.
+        let mean = taken as f64 / below as f64;
+        assert!(
+            most <= 16 && mean <= 4.85,
+            "{most} steps at most and {mean:.3} on average, where the documentation says fourteen \
+             and 4.70 over 10⁵ faces, held to sixteen and 4.85"
+        );
+    }
+
     /// **Air without limit holds both surfaces at its own temperature**, so nothing crosses and
     /// nothing moves with either centre. `∞/∞` is not a share, and taken as one it made both
     /// surfaces not a number and the steady solve report that it diverged.
@@ -6144,5 +6748,43 @@ mod tests {
             pair.watts
         );
         assert_eq!(pair.surfaces, (900.0, 600.0));
+    }
+
+    /// **Nothing behind a surface below zero is its centre's reading, odd**: a pair whose half
+    /// cells conduct without limit carries `C(g(T_a) − g(T_b))` between its centres, `g(T) =
+    /// T·|T|³`, on each side of zero and with both below it; a film with nothing behind its face
+    /// carries the odd secant at the centre, `A(h + εσ(T⁴ + T∞⁴)/(T∞ − T))`. No block reaches
+    /// either — it refuses a conductivity without limit by name — so this is the only thing that
+    /// does.
+    #[test]
+    fn nothing_behind_a_surface_below_zero_is_its_centres_odd_reading() {
+        let c = 4.6e-14;
+        for (ta, tb) in [
+            (900.0, -600.0),
+            (-600.0, 900.0),
+            (-300.0, -800.0),
+            (0.0, -50.0),
+        ] {
+            let pair = super::crossing(c, (f64::INFINITY, ta), (f64::INFINITY, tb), None);
+            let centres = c * (odd_fourth(ta) - odd_fourth(tb));
+            assert!(
+                (pair.watts / centres - 1.0).abs() < 1e-15,
+                "{ta} K and {tb} K: {} W against the centres' {centres} W",
+                pair.watts
+            );
+            assert_eq!(pair.surfaces, (ta, tb));
+        }
+        let (share, h, radiative) = (1e-6, 10.0, 0.9 * super::STEFAN_BOLTZMANN.to_si());
+        for (centre, room) in [(-300.0, 1000.0), (-1500.0, 300.0), (-0.5, 0.0)] {
+            let film = super::radiating_film(f64::INFINITY, share, h, radiative, centre, room);
+            let room4 = (room * room) * (room * room);
+            let secant =
+                share * (h + radiative * (odd_fourth(centre).abs() + room4) / (room - centre));
+            assert!(
+                (film / secant - 1.0).abs() < 1e-15,
+                "a centre at {centre} K in a room at {room} K: {film} W/K against the secant's \
+                 {secant} W/K"
+            );
+        }
     }
 }

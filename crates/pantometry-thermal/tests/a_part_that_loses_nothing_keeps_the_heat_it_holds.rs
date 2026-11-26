@@ -725,9 +725,11 @@ fn a_clearance_carries_what_crosses_it_between_bodies() {
 
     // A sink fed only across a clearance, from a body a film warms by radiating to a room at
     // 1000 K, from a start at 300 K: its own cell runs down while the heat that would feed it is
-    // still arriving, and a step on the bodies' levels held to a quarter of them is what keeps it
-    // above zero long enough. Measured without the quarter: not converging. A milliwatt here,
-    // from the same start, is refused — see the doc of `steady_state`.
+    // still arriving. While the pairs read a negative temperature's fourth power as even, a step
+    // on the bodies' levels held to a quarter of them was what kept it above zero long enough —
+    // measured without the quarter, not converging — and a milliwatt here, from the same start,
+    // was refused at the mirror of its balance. Read odd, it needs neither, and every start finds
+    // the balance: `a_sink_is_answered_by_what_it_takes_not_where_it_starts`.
     let mut b = Solid3D::new(
         "block",
         stuff(1000.0, 5.0, 0.9),
@@ -1117,10 +1119,15 @@ fn a_balance_below_absolute_zero_is_refused() {
     let below = |why: &str, b: &Solid3D, cell: &str| -> f64 {
         let e = refused(why, b);
         println!("  {why:56} -> {e}");
+        // A balance the sweeps settled on, said without the hedge the mirror needed: "or more than
+        // reaches them in time for this solve" ended it, and "where 2000 sweeps had not settled"
+        // ends one they ran out before.
         assert!(
             e.quantity
                 .contains("no balance above absolute zero was found")
-                && e.quantity.contains("sinks")
+                && e.quantity.ends_with(
+                    "drawn down by the sinks in its part, which take more than can reach them"
+                )
                 && e.quantity.contains(cell),
             "{why}: refused for the wrong reason: {e}"
         );
@@ -1129,14 +1136,36 @@ fn a_balance_below_absolute_zero_is_refused() {
 
     // Two bodies that see only each other, a hundredth of a watt in one and out of the other.
     // Their heat sets a mean of 40 °C, and a pair carrying 0.01 W needs `u⁴ − v⁴` of 2.2e11 K⁴,
-    // which no two temperatures above zero averaging 313 K have.
+    // which no two temperatures above zero averaging 313 K have. **Refused at the balance's one
+    // root**, each fourth power read as `T·|T|³`: four equal cells holding 4 × 313.15 K, each body
+    // 0.2 K across from its source or sink to the cell beside the clearance and each surface 0.1 K
+    // from its cell, so the two surfaces sum to 626.3 K and `C(u⁴ + v⁴) = 0.01` with `v` below
+    // zero; the sink's cell is `v − 0.3`. Read even, `u⁴ − v⁴`, it was 0.0145 K colder.
     let mut b = row(5, black())
         .empty(|i, _, _| i == 2)
         .dissipating(-0.01, |i, _, _| i == 0)
         .dissipating(0.01, |i, _, _| i == 4);
     set(&mut b, 0, 100.0);
     let at = below("a sink that radiation cannot feed", &b, "(0, 0, 0)");
-    assert!(at < 0.0, "carries {at}, not below zero");
+    let c = STEFAN_BOLTZMANN.to_si() * 1e-6 / (1.0 / 0.9 + 1.0 / 0.9 - 1.0);
+    let sum = 2.0 * 313.15;
+    let fourth = |t: f64| (t * t) * (t * t);
+    // `C(u⁴ + v⁴)` with `u = sum − v` falls as `v` rises from `−sum/2` towards zero.
+    let (mut lo, mut hi) = (-0.5 * sum, 0.0);
+    for _ in 0..200 {
+        let v = 0.5 * (lo + hi);
+        if c * (fourth(sum - v) + fourth(v)) > 0.01 {
+            lo = v;
+        } else {
+            hi = v;
+        }
+    }
+    sits(
+        "the sink's cell, at the root below zero",
+        &[at],
+        &[0],
+        0.5 * (lo + hi) - 0.3,
+    );
 
     // A cooled bar whose sink, at the far end from its film, takes a hundredth of a watt where the
     // film brings `hA·T∞` = 2.7e-3 W at most: the sink's cell at
