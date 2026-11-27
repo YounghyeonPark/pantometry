@@ -890,8 +890,9 @@ fn a_liquid_frozen_at_its_limit_stays_above_absolute_zero() {
 /// **A sink that outruns its film is refused at the step that would cross zero**, and every step
 /// before it ran: a block whose 50 mW sink outran the 2 mW its film could bring in stepped twenty
 /// thousand times to −354.67 K. The refused step leaves the block, its books — which by then are
-/// not zero — and the bus as they were. Its balance is refused as having none above absolute
-/// zero, where it was refused as not converging.
+/// not zero — and the bus as they were. **Its balance is refused at its one root below absolute
+/// zero**, where it was refused as not converging, and then as having run out of sweeps while the
+/// steady solve read its film's slope at the room.
 #[test]
 fn a_sink_that_outruns_its_film_is_refused_where_it_crosses_zero() {
     let mut b = Solid3D::new(
@@ -904,12 +905,37 @@ fn a_sink_that_outruns_its_film_is_refused_where_it_crosses_zero() {
     .losing_from(Face::XMax, film(7.0, 1e-6, Temperature::celsius(0.0)))
     .dissipating(-0.05, |_, _, _| true);
     let refusal = b.steady_state().unwrap_err();
+    // The root: the film's surface `s` where `hA(T∞ − s) + εσA(T∞⁴ − s·|s|³)` brings the 50 mW
+    // in, found by halving, and the first cell 2 K below it — half a cell of `k = 50` carrying all
+    // of it, 0.5 K, then three faces carrying three quarters, a half and a quarter, 0.75, 0.5 and
+    // 0.25 K.
+    let (room, area) = (Temperature::celsius(0.0).to_si(), 1e-6);
+    let brings = |s: f64| {
+        7.0 * area * (room - s)
+            + 0.5
+                * STEFAN_BOLTZMANN.to_si()
+                * area
+                * ((room * room) * (room * room) - s * s * s * s.abs())
+    };
+    let (mut lo, mut hi) = (-1e4, room);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if brings(mid) > 0.05 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let root = 0.5 * (lo + hi) - 2.0;
     assert!(
-        refusal
+        refusal.quantity.starts_with(
+            "no balance above absolute zero was found: cell (0, 0, 0) came to below it"
+        ) && refusal
             .quantity
-            .contains("no balance above absolute zero was found")
-            && refusal.quantity.contains("sweeps had not settled"),
-        "{refusal}"
+            .ends_with("which take more than can reach them")
+            && (refusal.before - root).abs() <= 1e-5,
+        "refused at {} K where its root is {root} K: {refusal}",
+        refusal.before
     );
     let dt = a_step(&b);
     let mut bus = Exchange::new();

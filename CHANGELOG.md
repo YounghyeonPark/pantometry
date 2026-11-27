@@ -658,6 +658,116 @@ protects nothing.
 
 ### Fixed
 
+- **The steady solve read a radiating film's slope at its room, and answered fields it had not
+  balanced** (`pantometry-thermal`). `Solid3D::steady_state` sweeps its cells and then takes a
+  Newton step on each body's level, and for both it took a film's slope from the stability limit:
+  the tangent at the hotter of the cell and its room, which for a cell below its room reads
+  `4εσA·T∞³` where the film moves by `4εσA·|s|³` at its surface. And a round that moved the field
+  by less than a microkelvin was a balance, whatever had held it to that. Measured before the
+  change:
+  - **near a film's limit, slow**: on sinks a film from a room at 1000 K feeds, each round left
+    about `1 − |s|³/T∞³` of the level to go, and the stop at a microkelvin left `ρ/(1 − ρ)` of one —
+    1.75e-5 K at 50 mW, 1.85e-5 K at 52 mW, more than the 1e-5 K the steady-state tests hold a cell
+    to, so that 52a9b70's test of them held them to that prediction instead;
+  - **far past it, not at all**: from a little past `|s|³ = 2T∞³` — `εσA·T∞⁴(1 + 2^{4/3})`, 3.52
+    times the most a film can bring — each round overshot by more than it corrected: 180 mW
+    settled, and 185, 190 and 200 mW ran out of sweeps, two hundred anywhere from −1186.6 K to
+    −1434.4 K by start against its root's −1321.1 K. A cell its film alone holds reported that it
+    did not converge from 1 W to 100 W; the radiating sinks of the block `step` refuses where they
+    cross zero ran out of sweeps from 2 mW to 100 W, nine of nine;
+  - **where a film is much of its cell's diagonal, slow**: 16 cells of 1.76 W/m·K and a centimetre,
+    9.92 W drawn from the one a film from 1200 K warms, stopped 1.19e-5 K out, and 32 2.43e-5 K;
+  - **a cell nothing moved, answered**: in a room at absolute zero a film with no convection has no
+    slope at a surface of zero, and a lone cell drawing 10 mW was passed over by the sweep and the
+    level step alike and answered where it started — at 0 K, 1e-300 K and 1e-120 K, 665.43 K above
+    its root — and one heated by 10 mW at 0 K, 665.43 K below its balance;
+  - **a level held short, answered**: the step on a body's level is a quarter of the larger of its
+    own level and the block's at most, so a block near absolute zero takes steps as small as it is:
+    two cells from 0 K in a room at 20 K were answered at 4.59e-7 K, four at 2.3e-7 K to 3.7e-7 K,
+    eight in a room at 10 K at 1.0e-8 K to 2.8e-8 K, and two bodies across a clearance, a film on
+    each, at 2.7e-7 K to 4.4e-7 K, every one where it balances at its room.
+
+  What changed:
+  - **The step on a body's level reads `loss_slope_at`**, the derivative of what each face
+    carries. A radiating face's is `radiating_film_slope`: `behind` in series with
+    `A·(h + 4εσ·s²|s|)` at the surface `film_surface` finds, the first half of `radiating_film`
+    taken out for both to read. A face that does not radiate reads what the limit charges, summed
+    as it sums, to the bit.
+  - **The sweep reads the tangent at and above zero, where it bounds the slope, and the larger of
+    the two below.** The slope alone, tried first, is Newton on each cell, and from below a convex
+    `T⁴` a Newton step overshoots, over-relaxed by more: a strip of 64 cells radiating from four
+    sides did not converge from 300 K or 150 K to its 631.00 K, a lone cell did not from 0 K or
+    1e-6 K to a room at 300 K, and a heated cell in a room at 0 K came to exactly zero from 1e-12 K
+    to 3e-3 K and was refused there. The tangent alone left a cell its film alone holds
+    unconverged from 2 W. At and above zero the slope is not worked out, so the sweep reads what
+    it always read there, to the bit; the larger everywhere gave the same scene fields.
+  - **A cell left out of balance with nothing to move it by is refused**, naming it and carrying
+    the watts, where the round that moved nothing else stopped.
+  - **A round is a balance when what its level steps asked for is below a microkelvin**, before
+    the quarter held them, as well as what moved.
+
+  The limit and the march are untouched: the film step's bits are identical, its time within 1%
+  either way pinned, and the frames of all 34 scenes unchanged. Of the shipped scenes' steady
+  fields, which `verify` reads, 15 and 19 are bit-identical, 23's within 1.29e-8 K and the rest
+  within 2.7e-11 K, and every line `verify`'s arrival prints is the same.
+
+  Held by the test of sinks: every film-fed sink held to 1e-5 K from all six starts — 50 mW within
+  5.1e-7 K, 50.98 mW, 53 µW short of the most the film can bring, within 4.1e-7 K — and from 52 mW
+  to a watt refused at their roots; a cell its film alone holds refused at its root from 1 W to
+  100 W from four starts; 16 cells where a film is much of the diagonal within 6.19e-6 K; and the
+  cell at absolute zero refused from every start, as nothing to move from zero and four starts
+  near it, as diverging from 1e-40 K and at its root from 1e-3 K, 1 K and 300 K. The outrunning
+  sink is refused at its root, −1093.81 K, in the settled words; the unsettled ones are held by a
+  bar of four hundred insulating cells whose sweeps run out, its film linear and so untouched by
+  this. By a new test of starts far below a balance, every cell against its closed form: the
+  strip, from 150, 300 and 600 K; lone cells from near zero to rooms at 20 K and 300 K; the heated
+  cell at 665.43 K from 1e-12 K to 1 K, and refused by name from zero; and the rows and the two
+  bodies above at their rooms. Unit tests: a radiating face's slope against central differences
+  of what it carries over four thousand faces, and its faces with no surface to find, and nothing
+  reaching one, exactly; every cell's slope against `film_flux` itself differenced on a block with
+  a mounted radiating face, air in a void on a cooled face, a cell of `k = 0` and a room of its own
+  for each film, at most what the limit charges at or above zero; and a block of no radiating face
+  reading the limit's slope to the bit, the test showing that it can see the order of a sum.
+
+  Twenty-five defects planted one at a time, each against every test of the crate: twenty-four
+  caught at every line they were claimed to print, fifty-one in all, and no test failing that was
+  neither claimed nor allowed. The level step back at the limit, by the sinks of 50, 52 and
+  185 mW; the sweep at the tangent alone, by a cell its film alone holds at 2 W; at the slope
+  alone, by the strip, the lone cell and the heated cell; both at the limit, as the solve was, by
+  six; a round settled on what moved, or either level step's ask not read, by the rows and the two
+  bodies; the slope read at the centre or at the hotter of centre and room, without the half cell
+  or the mounting, its cube signed, the two faces with no surface to find, and the guard on
+  nothing reaching a surface, by the unit tests; a linear face's slope dropped, or its air summed
+  last, by the bit test; the cell nothing moves answered, a balanced one named, the last one named,
+  its index swapped or its temperature carried for its watts, by the refusals; and two of the
+  mirror's, kept. The twenty-fifth is a probe, not a defect: wherever the sweep does not work the
+  slope out it was worked out and held to at most the tangent, to four ulps, and every steady
+  solve of the crate's tests passed through it, as predicted.
+
+  Reviews, in three rounds. The first found the cell nothing moved, which the films' slope in the
+  sweep reached from more starts. The second found that slope alone in the sweep a regression —
+  the strip and the lone cells above, each reproduced in Rust before the sweep read the larger —
+  and the level step's quarter taken for a balance near zero. The third: numerics-reviewer ported
+  the solve to Python and reproduced every figure in the changed prose but one, the band in which
+  a sink in a room at 0 K reports diverging — from 5e-99 K to 5e-23 K, measured, not from 1e-100 K
+  to 1e-25 K, and refused as stuck either side; and found the asked step without a scale for
+  rounding near 0 K — a row carrying a nanowatt through itself in a room at 2 µK asks for 1e4 K to
+  1e12 K a round from rounding alone, and is answered when its total rounds to zero, a few
+  microkelvin from its balance in nine runs here and 344 of its port, below what a cell is held
+  to; recorded, not acted on. physics-checker solved every new closed form's discrete equations by
+  bisection or dense Newton of its own, each exact, and found the cell's own clamp described by
+  the wrong slope. unearned-pass-hunter found a predicted survival that proved nothing, made a
+  probe of the bound since; the guard on nothing reaching a surface seen by no test; the two
+  bodies' test blind to whether they had a clearance; and the voids it skipped uncounted. Each was
+  reproduced before it was acted on.
+
+  Open: a row of 32 cells where a film is much of its cell's diagonal stops 1.23e-5 K out, the
+  sweep reading the film at the tangent; and a body only a clearance reaches, from exactly 0 K, has
+  no slope to its pair, so the step its part takes together is judged singular and not taken, and
+  two such bodies under a film from a room at 20 K are answered at 3.3e-7 K and 6.6e-40 K — from a
+  room at 300 K, not converging. Found on the way: `ThermalNetwork::steady_state` has no such
+  defect — its Newton reads a surface's slope at the node's own temperature.
+
 - **A sink fed across a clearance was refused at the mirror of a balance that exists**
   (`pantometry-thermal`). `Solid3D::steady_state` passes cells through negative temperatures on
   the way to an answer, and its clearance pairs and radiating films read a negative temperature's
@@ -721,12 +831,13 @@ protects nothing.
   binaries where their documentation says the crate, and three branches no defect was planted in.
   Each was reproduced before it was acted on.
 
-  Found on the way, and open: the step on a body's level reads a radiating film's slope at the
-  hotter of its cell and the room, not at its surface, so within 4% of the most a film can bring
-  the solve stops up to 1.8e-5 K out, as it did before this, and a sink taking four times that runs
-  out of sweeps; and the block's level in the cap on that step and the common scale of the step the
-  bodies of a part take together, which only the mirror needed, survive being taken out of every
-  test of the crate.
+  Found on the way: the step on a body's level read a radiating film's slope at the hotter of its
+  cell and the room, not at its surface, so within 4% of the most a film can bring the solve
+  stopped up to 1.8e-5 K out, as it did before this, and a sink taking four times that ran out of
+  sweeps — answered since, by *The steady solve read a radiating film's slope at its room, and
+  answered fields it had not balanced*. Open: the block's level in the cap on that step and the
+  common scale of the step the bodies of a part take together, which only the mirror needed,
+  survive being taken out of every test of the crate.
 
 - **A later source left an emptied cell its old share, and filling the cell brought it back**
   (`pantometry-thermal`). `Solid3D::dissipating` replaces what the cells it selects generated

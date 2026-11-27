@@ -208,8 +208,6 @@ fn radiating_film(
     centre: f64,
     ambient: f64,
 ) -> f64 {
-    // At or above zero, which is where every surface the loop below visits is.
-    let secant = |t: f64| film_secant_above_zero(share, convection, radiative, t, ambient);
     if behind <= 0.0 {
         return 0.0;
     }
@@ -219,13 +217,35 @@ fn radiating_film(
     if !behind.is_finite() {
         return film_secant(share, convection, radiative, centre, ambient);
     }
+    let (surface, below) = film_surface(behind, share, convection, radiative, centre, ambient);
+    let through = if below {
+        film_secant(share, convection, radiative, surface, ambient)
+    } else {
+        film_secant_above_zero(share, convection, radiative, surface, ambient)
+    };
+    through * behind / (through + behind)
+}
+
+/// Where a radiating face's surface sits, for a finite `behind` above nothing and a finite film,
+/// and whether it was found below absolute zero — see [`radiating_film`], which this is the
+/// first half of, and [`radiating_film_slope`], which reads the same surface.
+#[inline(always)]
+fn film_surface(
+    behind: f64,
+    share: f64,
+    convection: f64,
+    radiative: f64,
+    centre: f64,
+    ambient: f64,
+) -> (f64, bool) {
+    // At or above zero, which is where every surface the loop below visits is.
+    let secant = |t: f64| film_secant_above_zero(share, convection, radiative, t, ambient);
     // The balance at a surface at zero: what `behind` brings it from the centre, less what it
     // sheds there to the room.
     if centre < 0.0 && -behind * centre > secant(0.0) * ambient {
         let (surface, _) =
             film_surface_below_zero(behind, share, convection, radiative, centre, ambient);
-        let through = film_secant(share, convection, radiative, surface, ambient);
-        return through * behind / (through + behind);
+        return (surface, true);
     }
     let mut surface = centre.max(ambient);
     for _ in 0..SURFACE_STEPS {
@@ -238,8 +258,40 @@ fn radiating_film(
         }
         surface = next;
     }
-    let through = secant(surface);
-    through * behind / (through + behind)
+    (surface, false)
+}
+
+/// How fast what a radiating face carries, `radiating_film(…)·(T_c − T∞)`, rises with its cell's
+/// centre, W/K: `behind` in series with the tangent of what the surface sheds, **at the surface**,
+/// `A·(h + 4εσ·s²|s|)` — the derivative of `T·|T|³` on either side of zero.
+///
+/// From the surface's balance `behind·(T_c − s) = L(s)`: a rise of the centre moves the surface by
+/// `behind/(behind + L′)` of it, and what crosses by `L′` times that. **The tangent at the hotter of
+/// the centre and the room**, which `face_loss` charges and the stability limit needs as a bound,
+/// is not this: for a cell below its room it reads `T∞³` where the surface is at `|s|³`, and
+/// [`Solid3D::steady_state`] took it for the slope. A centre with nothing behind its surface has
+/// the surface's own tangent, and a film without limit carries `behind` itself.
+fn radiating_film_slope(
+    behind: f64,
+    share: f64,
+    convection: f64,
+    radiative: f64,
+    centre: f64,
+    ambient: f64,
+) -> f64 {
+    let tangent = |s: f64| share * (convection + 4.0 * radiative * s * s * s.abs());
+    if behind <= 0.0 {
+        return 0.0;
+    }
+    if convection == f64::INFINITY {
+        return behind;
+    }
+    if !behind.is_finite() {
+        return tangent(centre);
+    }
+    let (surface, _) = film_surface(behind, share, convection, radiative, centre, ambient);
+    let at = tangent(surface);
+    behind * at / (behind + at)
 }
 
 /// What a radiating face sheds per kelvin of its surface `t` above the room, W/K: the secant
@@ -2706,7 +2758,15 @@ impl Solid3D {
     /// # Bodies, and the bodies a clearance joins
     ///
     /// **The slow mode is a body's level**, and each body that is a part on its own takes a step
-    /// on it every round: what it loses over the slope of what it loses. **The bodies a clearance
+    /// on it every round: what it loses over the slope of what it loses — **its films' own slope, at
+    /// their surfaces**. It was the stability limit's tangent, at the hotter of each cell and its
+    /// room, which reads a cell below its room as though its film were at the room: a sink fed by a
+    /// radiating film stopped up to 1.75e-5 K from its balance near the most the film could bring,
+    /// and one taking more than about three and a half times that ran out of sweeps, each round
+    /// overshooting by more than it corrected. The sweep's diagonal reads the tangent at and above
+    /// zero, where it bounds the slope, and the larger of the two below: the slope alone is Newton
+    /// on each cell, which overshoots from below, and a strip radiating from four sides did not
+    /// converge from 300 K to its 631.00 K. **The bodies a clearance
     /// joins take that step together**, Newton on all their levels at once, with what each pair
     /// carries moving with both its ends. Each body taking its own closes an exchange from both
     /// sides and moves it twice: two radiating bodies under a film too weak to hold them came to
@@ -2718,7 +2778,11 @@ impl Solid3D {
     /// body near absolute zero is not held near it: of its own alone, a sink fed across a clearance
     /// found no balance above zero while the pairs read a negative temperature's fourth power as
     /// even, and in a first form of the step taken together a sealed pair at 400 K and 0 K
-    /// answered 0 K for both. Read odd, as below, no block measured needs it.
+    /// answered 0 K for both. Read odd, as below, no block measured needs it. **A round whose step
+    /// was held short has not settled**, however little it moved: two cells from 0 K in a room at
+    /// 20 K, a step on their level a quarter of what little level they had, were answered at
+    /// 4.59e-7 K. A round is a balance when what its steps asked for is below a microkelvin, as
+    /// well as what they moved.
     ///
     /// # A part that loses nothing
     ///
@@ -2782,6 +2846,12 @@ impl Solid3D {
     ///
     /// **A block that melts.** The state of a mushy cell is its enthalpy and not its temperature,
     /// so "the field at which every cell balances" is not a statement about temperature alone.
+    ///
+    /// **A cell left out of balance with nothing to move it by.** A film with no convection to a
+    /// room at absolute zero has no slope where its surface is at zero, and a cell held by nothing
+    /// else is passed over there by every step the solve takes; a round that moves nothing else
+    /// stops. A lone cell drawing 10 mW in a room at 0 K was answered at 0 K, 665.43 K above its
+    /// root, from a start at zero. It is refused, naming the cell and carrying the watts.
     ///
     /// **Not converging**, which is a real answer and is not this one.
     ///
@@ -2958,6 +3028,8 @@ impl Solid3D {
             }
 
             let mut moved: f64 = 0.0;
+            // The first cell this sweep left out of balance with nothing to move it by.
+            let mut stuck: Option<(usize, f64)> = None;
             for k in 0..nz {
                 for j in 0..ny {
                     for i in 0..nx {
@@ -2970,14 +3042,27 @@ impl Solid3D {
                         let r = self.flux_at(&t, (i, j, k), c) * dx + self.source[c] + gain[c];
                         // The diagonal: the face conductances this cell has, plus the slope of
                         // everything that leaves it. `face_sum` is conductivities, so it is the
-                        // conductance divided by `dx`.
-                        let d = self.face_sum[c] * dx
-                            + self.loss_conductance_at(Temperature::from_si(t[c]), (i, j, k))
-                            + slope[c];
+                        // conductance divided by `dx`. **The limit's tangent, and below zero the
+                        // films' slope where it is the larger** — see the step on a body's level,
+                        // below. At or above zero the tangent is the larger, to the rounding, so the
+                        // slope is not worked out there.
+                        let tangent =
+                            self.loss_conductance_at(Temperature::from_si(t[c]), (i, j, k));
+                        let film = if t[c] < 0.0 {
+                            tangent.max(self.loss_slope_at(t[c], (i, j, k), c))
+                        } else {
+                            tangent
+                        };
+                        let d = self.face_sum[c] * dx + film + slope[c];
                         // A cell with no conductance anywhere has no equation to solve, and a
                         // `NaN` one has no answer. Written out rather than as a negated
-                        // comparison, which clippy asks for and is the clearer reading.
+                        // comparison, which clippy asks for and is the clearer reading. **One
+                        // left out of balance is kept**, for the exit to refuse: nothing here
+                        // moves it, and a round that moves nothing else stops.
                         if d.is_nan() || d <= 0.0 {
+                            if r != 0.0 && stuck.is_none() {
+                                stuck = Some((c, r));
+                            }
                             continue;
                         }
                         let mut step = body[c].map_or(1.0, |b| omega[b]) * r / d;
@@ -3020,6 +3105,37 @@ impl Solid3D {
             // resists one is exactly what leaves the block. `Σr / Σ(loss slope)` is that balance,
             // and applying it kills the mode in a step. At the solution the residual is zero and
             // so is the shift, so this cannot move a converged field.
+            //
+            // **The loss slope is what the films do, at their surfaces** — `loss_slope_at`. It was
+            // the stability limit's tangent, at the hotter of each cell and its room, which for a
+            // body below its room reads `4εσA·T∞³` where the film moves by `4εσA·|s|³`: each round
+            // then left about `1 − |s|³/T∞³` of the level still to go. Measured, on a sink a
+            // radiating film from a room at 1000 K feeds: near the most the film can bring the
+            // solve stopped 1.75e-5 K out at 50 mW, a round contracting by 0.946 and the stop at a
+            // microkelvin leaving `ρ/(1 − ρ)` of one; from a little past `|s|³ = 2T∞³` each round
+            // overshot by more than it corrected — 180 mW settled, and 185, 190 and 200 mW ran out
+            // of sweeps — and a watt drawn from one cell reported that it did not converge. A
+            // radiating sink with no balance, beside a film of 7 W/m²·K or none, ran out of sweeps
+            // from 2 mW to 100 W, nine of nine. Now each settles, at 50 mW 5.1e-7 K out.
+            //
+            // **The sweep's diagonal is the larger of that slope and the tangent.** The tangent
+            // bounds the films' slope wherever a surface is no further from zero than the hotter
+            // of its cell and its room, so a cell at or above zero reads what the sweep always
+            // read, to the bit, and one below zero the larger. Each alone fails somewhere. The
+            // tangent alone reads a
+            // cell far below zero at a fraction of its film: a watt drawn from a cell a film from
+            // 1000 K alone holds was refused at its root, and two, five and a hundred reported not
+            // converging. The slope alone is Newton on each cell, and from below a convex `T⁴` a
+            // Newton step overshoots, over-relaxed by more: a strip of 64 cells radiating from four
+            // sides did not converge from 300 K or 150 K to its 631.00 K, nor a lone cell from
+            // 0 K or 1e-6 K to a room at 300 K, nor one from 1e-6 K to a room at 20 K; and a
+            // heated cell in a room at 0 K, from 1e-12 K to 3e-3 K, came to exactly zero, where
+            // nothing has a slope, and was refused 665.43 K from its balance. What the larger
+            // costs is where the tangent reads a film as more of its cell's diagonal than it is:
+            // on a row of 32 cells of 1.76 W/m·K and a centimetre drawing 9.92 W from the one a
+            // film from 1200 K warms, the stop leaves 1.23e-5 K, as it did with the tangent in
+            // the sweep alone, where the slope alone left 6.19e-6 K and the tangent in both
+            // places 2.43e-5 K.
             let mut total = vec![0.0; count];
             let mut resist = vec![0.0; count];
             for k in 0..nz {
@@ -3028,8 +3144,7 @@ impl Solid3D {
                         let c = i + nx * (j + ny * k);
                         let Some(b) = body[c] else { continue };
                         total[b] += self.flux_at(&t, (i, j, k), c) * dx + self.source[c];
-                        resist[b] +=
-                            self.loss_conductance_at(Temperature::from_si(t[c]), (i, j, k));
+                        resist[b] += self.loss_slope_at(t[c], (i, j, k), c);
                     }
                 }
             }
@@ -3044,7 +3159,7 @@ impl Solid3D {
             // object and the exchange changes, move both together and it does not. A pair inside
             // one body cancels, exactly as a conducting face does — without air. With it, what the
             // air takes between the two surfaces is the body's loss and stays in its total. Its
-            // slope under a shift is left to `loss_conductance_at`'s air, which carries all of it
+            // slope under a shift is left to `loss_slope_at`'s air, which carries all of it
             // where the two ends conduct alike and a few percent less where they do not: a slope
             // sets how fast the solve gets there, not where it stops.
             //
@@ -3129,6 +3244,9 @@ impl Solid3D {
                 }
             }
             let mut shift = vec![0.0; count];
+            // The most any level's step asked for this round, before it was held to `cap`: the
+            // exit reads it beside what moved.
+            let mut asked: f64 = 0.0;
             // A body that is a part on its own takes its own step: what it loses, over the slope
             // of what it loses.
             for b in 0..count {
@@ -3136,7 +3254,9 @@ impl Solid3D {
                     continue;
                 }
                 let cap = cap(b)?;
-                shift[b] = (total[b] / resist[b]).clamp(-cap, cap);
+                let wanted = total[b] / resist[b];
+                asked = asked.max(wanted.abs());
+                shift[b] = wanted.clamp(-cap, cap);
             }
             // **The bodies of a part of several take one step together**: Newton on their levels,
             // each body's balance against its own slope and the couplings of its pairs to the
@@ -3220,6 +3340,7 @@ impl Solid3D {
                 let mut scale: f64 = 1.0;
                 for (s, b) in bodies.iter().enumerate() {
                     let cap = cap(*b)?;
+                    asked = asked.max(step[s].abs());
                     if step[s].abs() > cap {
                         scale = scale.min(cap / step[s].abs());
                     }
@@ -3273,7 +3394,46 @@ impl Solid3D {
                     f64::INFINITY,
                 ));
             }
-            if round > 0 && moved < 1e-6 {
+            // **And a level held short has not settled, however little it moved.** Its step is a
+            // quarter of the larger of its own level and the block's, so a block near absolute
+            // zero takes steps as small as it is. Measured: two cells from 0 K in a room at 20 K
+            // were answered at 4.59e-7 K, where they balance at 20 K; four at 2.3e-7 K to
+            // 3.7e-7 K, eight in a room at 10 K at 1.0e-8 K to 2.8e-8 K, and two bodies across a
+            // clearance, a film on each, at 2.7e-7 K to 4.4e-7 K. What a step asked for has to be
+            // below a microkelvin as well as what it moved. A cell's own quarter, in the sweep, is
+            // not read: it binds only where the slope of a cell's pairs is more than its faces and
+            // films carry, which near zero, where a pair's slope is all but nothing, is a cell with
+            // neither — a body of one cell, whose level's step is read. **Nor is a step judged
+            // singular**, which
+            // asks for nothing and is not taken: a body only a clearance reaches has no slope to
+            // its pair at exactly 0 K, and two such bodies from there, a film on the first from a
+            // room at 20 K, are answered at 3.3e-7 K and 6.6e-40 K still — recorded as open.
+            if round > 0 && moved < 1e-6 && asked < 1e-6 {
+                // **A cell nothing moved is not balanced by that.** A cell whose every slope is
+                // zero — no face that conducts, no pair, and a film with no convection to a room
+                // at absolute zero, its surface at zero where `T·|T|³` is flat — is passed over
+                // by the sweep and by the step on its level, and a round that moves nothing else
+                // stops. Measured: a lone cell drawing 10 mW in a room at 0 K was answered at
+                // 0 K from a start at zero, 665.43 K from its root below it; and from starts of
+                // 1e-12 K and 1e-6 K the first sweep throws it — to −4.9e46 K from 1e-12 K — and
+                // the next, reading the films' slope there, back to exactly zero. From 5e-99 K
+                // to 5e-23 K, measured, that first throw is past where a fourth power overflows,
+                // and the round reports the balance diverged: a refusal too, if a poorer word for
+                // it. From 3e-99 K down the cell's slope is below the least `f64`, and it is
+                // refused as left with nothing to move it by.
+                if let Some((c, r)) = stuck {
+                    let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+                    return Err(Violation::at(
+                        &self.name,
+                        format!(
+                            "no balance was found: cell ({i}, {j}, {k}) is left {r:e} W out of \
+                             balance at {:e} K, where nothing it exchanges has a slope to move it \
+                             by",
+                            t[c]
+                        ),
+                        r,
+                    ));
+                }
                 // **A balance below absolute zero is not one.** A source of negative watts is a
                 // sink, and a sink can take more out of a part than can reach it: in a part that
                 // loses nothing, the level the heat it holds sets leaves the sink's cells below
@@ -4623,6 +4783,12 @@ impl Solid3D {
     /// air.** `worst_rate_now` visits only those faces' cells and, with air, `facing_air`, and a
     /// term reaching any other cell must widen that pass, or the limit leaves it out. Its debug
     /// assertion is what says so.
+    ///
+    /// **A bound, and not the slope**: below the room it is more than a radiating film's, and it
+    /// bounds it wherever the surface is no further from zero than the hotter of the cell and the
+    /// room — every cell at or above zero. The steady solve reads
+    /// [`loss_slope_at`](Solid3D::loss_slope_at) instead in the step on a body's level, and in its
+    /// sweep the larger of the two for a cell below zero.
     fn loss_conductance_at(&self, at: Temperature, cell: (usize, usize, usize)) -> f64 {
         let (nx, ny, _) = self.counts;
         let (conductivity, _, emissivity) = self.derived[cell.0 + nx * (cell.1 + ny * cell.2)];
@@ -4632,6 +4798,51 @@ impl Solid3D {
                 .iter()
                 .filter(|(face, _)| self.exposed_at(**face, cell))
                 .map(|(face, env)| self.face_loss(face, env, at, conductivity, emissivity))
+                .sum::<f64>()
+    }
+
+    /// How fast what cell `c`'s films and air carry away rises with its own temperature `t`, W/K:
+    /// the derivative of [`film_flux`](Solid3D::film_flux), read off the same faces, shares,
+    /// half cells and mountings, for the step [`steady_state`](Solid3D::steady_state) takes on a
+    /// body's level, and for its sweep below zero, where it can be the larger. A face that does
+    /// not radiate is linear, and its slope is what [`face_loss`](Solid3D::face_loss) charges;
+    /// summed as [`loss_conductance_at`](Solid3D::loss_conductance_at) sums, so that a cell none
+    /// of whose faces radiates reads it to the bit. One that radiates is
+    /// [`radiating_film_slope`]'s.
+    /// **Not a bound**, as `loss_conductance_at` is for the stability limit: wherever a surface is
+    /// no further from zero than the hotter of its cell and its room it is at most that, and less
+    /// unless the surface is at the hotter one; further below zero, it is more.
+    fn loss_slope_at(&self, t: f64, cell: (usize, usize, usize), c: usize) -> f64 {
+        let (conductivity, _, emissivity) = self.derived[c];
+        let dx = self.dx.to_si();
+        let at = Temperature::from_si(t);
+        self.air_conductance(cell)
+            + self
+                .exposed
+                .iter()
+                .filter(|(face, _)| self.exposed_at(**face, cell))
+                .map(|(face, env)| {
+                    if emissivity == 0.0 {
+                        return self.face_loss(face, env, at, conductivity, emissivity);
+                    }
+                    let share = env.area.to_si() / self.cells_on(*face).max(1) as f64;
+                    let half = 2.0 * conductivity * share / dx;
+                    let behind = if !half.is_finite() {
+                        self.outward(face, f64::INFINITY, share)
+                    } else if half > 0.0 {
+                        self.outward(face, half, share)
+                    } else {
+                        0.0
+                    };
+                    radiating_film_slope(
+                        behind,
+                        share,
+                        env.convection_w_per_m2_k,
+                        emissivity * STEFAN_BOLTZMANN.to_si(),
+                        t,
+                        env.ambient.to_si(),
+                    )
+                })
                 .sum::<f64>()
     }
 
@@ -6714,6 +6925,329 @@ mod tests {
             most <= 16 && mean <= 4.85,
             "{most} steps at most and {mean:.3} on average, where the documentation says fourteen \
              and 4.70 over 10⁵ faces, held to sixteen and 4.85"
+        );
+    }
+
+    /// **A radiating face's slope is the derivative of what it carries**, `radiating_film(…)·(T_c −
+    /// T∞)` against its centre, by central differences, over faces drawn as
+    /// [`a_film_below_zero_lands_on_its_root`] draws them but with the centre anywhere from 3000 K
+    /// below zero to 3000 K above it, a fifth of them within two kelvin of zero, and the room from
+    /// zero to 3000 K. The step moves the surface by a ten-thousandth of itself, since the fourth
+    /// power is of the surface, and the difference is held to 1e-6 of the slope or the rounding of
+    /// what crosses over the step. **And where it bounds it, the limit's tangent is no less**:
+    /// where the surface is no further from zero than the hotter of centre and room, the slope is
+    /// at most `behind` in series with `A·(h + 4εσ·max(T_c, T∞)³)`, which is what the steady solve's
+    /// sweep reads and the stability limit charges. The draws reach every route: the surface below
+    /// zero, at or above it with the centre below, and the centre above zero, each counted.
+    #[test]
+    fn a_films_slope_is_the_derivative_of_what_it_carries() {
+        let sigma = super::STEFAN_BOLTZMANN.to_si();
+        let (mut worst, mut floored) = (0.0_f64, 0);
+        let (mut below, mut lifted, mut above) = (0, 0, 0);
+        let faces = 4000;
+        for index in 0..faces {
+            let mut rng = pantometry_core::Rng::for_index(0x51_0be5, index);
+            let mut decade = |lo: f64, hi: f64| 10f64.powf(rng.range(lo, hi));
+            let dx = decade(-4.0, -1.5);
+            let k = decade(-2.0, 2.7);
+            let mount = decade(2.0, 5.0);
+            let h = decade(0.0, 4.0);
+            let share = dx * dx;
+            let half = 2.0 * k * dx;
+            let behind = if index % 2 == 0 {
+                half
+            } else {
+                1.0 / (1.0 / half + 1.0 / (mount * share))
+            };
+            let convection = if index % 3 == 0 { 0.0 } else { h };
+            let radiative = rng.range(0.02, 1.0) * sigma;
+            let ambient = if index % 5 == 0 {
+                0.0
+            } else {
+                rng.range(0.0, 3000.0)
+            };
+            let size = if rng.unit() < 0.2 {
+                rng.range(0.0, 2.0)
+            } else {
+                rng.range(0.0, 3000.0)
+            };
+            // Drawn, not by index, which would tie the centre's side to the mounting's.
+            let centre = if rng.unit() < 0.5 { size } else { -size };
+            let (surface, _) =
+                super::film_surface(behind, share, convection, radiative, centre, ambient);
+            if centre >= 0.0 {
+                above += 1;
+            } else if surface < 0.0 {
+                below += 1;
+            } else {
+                lifted += 1;
+            }
+
+            let carries = |t: f64| {
+                super::radiating_film(behind, share, convection, radiative, t, ambient)
+                    * (t - ambient)
+            };
+            let slope =
+                super::radiating_film_slope(behind, share, convection, radiative, centre, ambient);
+            // The surface moves by at most what the centre does, so a ten-thousandth of the
+            // surface, or a microkelvin where it is nearer zero than that.
+            let d = 1e-4 * surface.abs().max(1e-2);
+            let by = (carries(centre + d) - carries(centre - d)) / (2.0 * d);
+            let fourth = (surface * surface) * (surface * surface);
+            let a4 = (ambient * ambient) * (ambient * ambient);
+            let rounding = 8.0
+                * f64::EPSILON
+                * (carries(centre).abs()
+                    + behind * (centre.abs() + surface.abs())
+                    + share * (convection * (surface.abs() + ambient) + radiative * (fourth + a4)))
+                / d;
+            let apart = (slope - by).abs();
+            let allowed = 1e-6 * by.abs() + rounding;
+            worst = worst.max(apart / allowed);
+            if rounding > 1e-6 * by.abs() {
+                floored += 1;
+            }
+            assert!(
+                slope >= 0.0 && apart <= allowed,
+                "face {index}: the slope is {slope:e} W/K and what crosses moves by {by:e} W/K, \
+                 {apart:e} apart against {allowed:e}: centre {centre} K, room {ambient} K, surface \
+                 {surface} K"
+            );
+            let hot = centre.max(ambient);
+            if surface.abs() <= hot {
+                let tangent = share * (convection + 4.0 * radiative * hot * hot * hot);
+                let bound = behind * tangent / (behind + tangent);
+                assert!(
+                    slope <= bound * (1.0 + 4.0 * f64::EPSILON),
+                    "face {index}: the slope {slope:e} W/K is more than the limit's {bound:e} W/K: \
+                     centre {centre} K, room {ambient} K, surface {surface} K"
+                );
+            }
+        }
+        println!(
+            "  {faces} faces, {below} with the surface below zero, {lifted} lifted to or above it \
+             and {above} with the centre above: the worst {worst:.3} of what it is allowed, \
+             {floored} held to the rounding"
+        );
+        for (what, count) in [
+            ("the surface below zero", below),
+            ("the surface lifted to or above it", lifted),
+            ("the centre above zero", above),
+        ] {
+            assert!(count >= faces / 10, "{count} faces of {faces} with {what}");
+        }
+        // 263 of them, measured: held to a tenth, or this holds nothing.
+        assert!(
+            floored <= faces / 10,
+            "{floored} of {faces} slopes held only to the rounding, where 263 were"
+        );
+        // The three faces with no surface to find, which no draw above reaches: nothing behind it,
+        // the surface's own tangent at the centre, read odd; a film without limit, the half cell;
+        // nothing reaching it, nothing.
+        let (share, h, radiative) = (1e-6, 10.0, 0.9 * sigma);
+        for centre in [-300.0, 0.5, 900.0] {
+            let own = share * (h + 4.0 * radiative * centre * centre * centre.abs());
+            let at = super::radiating_film_slope(f64::INFINITY, share, h, radiative, centre, 600.0);
+            assert_eq!(at.to_bits(), own.to_bits(), "nothing behind, {centre} K");
+            let held =
+                super::radiating_film_slope(0.1, share, f64::INFINITY, radiative, centre, 600.0);
+            assert_eq!(held, 0.1, "a film without limit, {centre} K");
+            let none = super::radiating_film_slope(0.0, share, h, radiative, centre, 600.0);
+            assert_eq!(none, 0.0, "nothing behind the surface carries, {centre} K");
+        }
+        // And nothing reaching a surface at zero in a room at zero, where its own tangent is zero
+        // too: nothing over nothing, but for the guard. Above, the tangent is not zero, and the
+        // series gives zero with the guard or without it.
+        let none = super::radiating_film_slope(0.0, share, 0.0, radiative, 0.0, 0.0);
+        assert_eq!(
+            none, 0.0,
+            "nothing reaches the surface, at zero in a room at zero"
+        );
+    }
+
+    /// **A cell none of whose faces radiates reads the slope the limit charges, to the bit**, so
+    /// that the steady solve of a block with no radiating face takes the steps it took before the
+    /// step on a body's level read its films' own slope: on a block of three cells a side, films on
+    /// three faces — one behind a mounting — and air in a void on one of them, every solid cell at
+    /// five temperatures either side of the room.
+    #[test]
+    fn a_cell_that_does_not_radiate_reads_the_limits_slope() {
+        use pantometry_core::units::Area;
+        let film = |h: f64| super::Environment {
+            ambient: Temperature::celsius(20.0),
+            convection_w_per_m2_k: h,
+            area: Area::from_si(9e-6),
+        };
+        let block = Solid3D::new(
+            "block",
+            Substance::copper().with_emissivity(0.0),
+            (3, 3, 3),
+            Length::from_si(1e-3),
+            Temperature::celsius(20.0),
+        )
+        // On a cooled face, so that (0, 1, 0) and (1, 2, 0) have air and two films: three terms,
+        // whose order a sum rounds by.
+        .empty(|i, j, k| (i, j, k) == (1, 1, 0))
+        .air_in(Temperature::celsius(20.0), 25.0)
+        .losing_from(Face::XMin, film(10.0))
+        .losing_from(Face::YMax, film(1e4))
+        .losing_from(Face::ZMin, film(300.0))
+        .mounted_on(Face::ZMin, 2e3);
+        let mut read = 0;
+        for k in 0..3 {
+            for j in 0..3 {
+                for i in 0..3 {
+                    if block.is_void(i, j, k) {
+                        continue;
+                    }
+                    let c = i + 3 * (j + 3 * k);
+                    for t in [-50.0, 1.0, 293.15, 400.0, 2000.0] {
+                        let limit = block.loss_conductance_at(Temperature::from_si(t), (i, j, k));
+                        let slope = block.loss_slope_at(t, (i, j, k), c);
+                        assert_eq!(
+                            slope.to_bits(),
+                            limit.to_bits(),
+                            "cell ({i}, {j}, {k}) at {t} K: {slope:e} W/K against {limit:e} W/K"
+                        );
+                        read += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(read, 26 * 5, "every solid cell read");
+        // **And it can see an order**: the same terms summed the other way, the air first and
+        // then each face, round differently on at least one cell, or this compares nothing a
+        // change of order would move. `face_loss` reads no temperature where nothing radiates, so
+        // one temperature serves.
+        let mut differs = 0;
+        for k in 0..3 {
+            for j in 0..3 {
+                for i in 0..3 {
+                    if block.is_void(i, j, k) {
+                        continue;
+                    }
+                    let c = i + 3 * (j + 3 * k);
+                    let (conductivity, _, emissivity) = block.derived[c];
+                    let at = Temperature::from_si(400.0);
+                    let other = block
+                        .exposed
+                        .iter()
+                        .filter(|(face, _)| block.exposed_at(**face, (i, j, k)))
+                        .fold(block.air_conductance((i, j, k)), |sum, (face, env)| {
+                            sum + block.face_loss(face, env, at, conductivity, emissivity)
+                        });
+                    let limit = block.loss_conductance_at(at, (i, j, k));
+                    if other.to_bits() != limit.to_bits() {
+                        differs += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            differs >= 1,
+            "no cell rounds the other order differently, so this cannot see one"
+        );
+    }
+
+    /// **A cell's slope is the derivative of what its films and air carry**, `film_flux` itself
+    /// differenced at the cell, on a block that reaches every route of `loss_slope_at` that a
+    /// block which can be solved has, a conductivity without limit being refused by name: faces
+    /// that radiate with no convection, with convection, and behind a mounting; a cell of
+    /// `k = 0` on a radiating face, whose film carries nothing; air in a void on a cooled face;
+    /// corner cells with three films, each from a room of its own; and cells below zero, below
+    /// every room, between them and above them. **And
+    /// where it bounds it, the limit's tangent is no less**: at or above zero the slope is at most
+    /// what `loss_conductance_at` charges. Counted: the mounted radiating faces and the cell of
+    /// `k = 0` are reached.
+    #[test]
+    fn a_cells_slope_is_the_derivative_of_what_its_films_carry() {
+        use pantometry_core::substance::ThermalProps;
+        use pantometry_core::units::{
+            Area, Density, SpecificHeat, ThermalConductivity, ThermalExpansion,
+        };
+        let stuff = |k: f64| {
+            Substance::bulk("stuff", Density::from_si(2000.0)).with_thermal(ThermalProps {
+                conductivity: ThermalConductivity::w_per_m_k(k),
+                specific_heat: SpecificHeat::j_per_kg_k(900.0),
+                expansion: ThermalExpansion::ppm_per_k(10.0),
+                emissivity: 0.9,
+            })
+        };
+        // A room of its own for each, so that a face read at another's room is seen.
+        let film = |h: f64, room: f64| super::Environment {
+            ambient: Temperature::from_si(room),
+            convection_w_per_m2_k: h,
+            area: Area::from_si(9e-6),
+        };
+        let mut block = Solid3D::new(
+            "block",
+            stuff(0.2),
+            (3, 3, 3),
+            Length::from_si(1e-3),
+            Temperature::from_si(300.0),
+        )
+        .empty(|i, j, k| (i, j, k) == (1, 1, 0))
+        .air_in(Temperature::from_si(350.0), 25.0)
+        .losing_from(Face::XMin, film(0.0, 250.0))
+        .losing_from(Face::YMax, film(50.0, 300.0))
+        .losing_from(Face::ZMin, film(10.0, 400.0))
+        .mounted_on(Face::ZMin, 2e3);
+        block.fill(stuff(0.0), |i, j, k| (i, j, k) == (0, 0, 1));
+        let dx = 1e-3;
+        let (mut mounted, mut insulated, mut worst) = (0, 0, 0.0_f64);
+        for k in 0..3 {
+            for j in 0..3 {
+                for i in 0..3 {
+                    if block.is_void(i, j, k) {
+                        continue;
+                    }
+                    let c = i + 3 * (j + 3 * k);
+                    let cell = (i, j, k);
+                    if k == 0 && block.derived[c].0 > 0.0 {
+                        mounted += 1;
+                    }
+                    if block.derived[c].0 == 0.0 {
+                        insulated += 1;
+                    }
+                    for t in [-600.0, 150.0, 320.0, 900.0] {
+                        let carries = |at: f64| {
+                            let mut field = vec![300.0; 27];
+                            field[c] = at;
+                            block.film_flux(&field, cell, c) * dx
+                        };
+                        let d = 1e-4 * f64::abs(t);
+                        let (above, below) = (carries(t + d), carries(t - d));
+                        let by = (above - below) / (2.0 * d);
+                        let slope = block.loss_slope_at(t, cell, c);
+                        // An ulp or so of what crosses at each end, over the step.
+                        let floor = 16.0 * f64::EPSILON * above.abs().max(below.abs()) / d;
+                        let apart = (slope - by).abs();
+                        let allowed = 1e-6 * by.abs() + floor;
+                        worst = worst.max(apart / allowed);
+                        assert!(
+                            apart <= allowed,
+                            "cell {cell:?} at {t} K: the slope is {slope:e} W/K and what its films \
+                             carry moves by {by:e} W/K, {apart:e} apart"
+                        );
+                        if t >= 0.0 {
+                            let limit = block.loss_conductance_at(Temperature::from_si(t), cell);
+                            assert!(
+                                slope <= limit * (1.0 + 4.0 * f64::EPSILON),
+                                "cell {cell:?} at {t} K: the slope {slope:e} W/K is more than \
+                                 the limit's {limit:e} W/K"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "  26 cells at four temperatures, {mounted} behind the mounting, {insulated} of k = 0: \
+             the worst {worst:.3} of what it is allowed"
+        );
+        assert!(
+            mounted >= 5 && insulated == 1,
+            "{mounted} mounted, {insulated} insulated"
         );
     }
 
