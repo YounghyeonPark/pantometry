@@ -658,6 +658,124 @@ protects nothing.
 
 ### Fixed
 
+- **A step judged singular was taken for a balance, and left a body near absolute zero where it
+  was** (`pantometry-thermal`). `Solid3D::steady_state` takes one Newton step on the levels of
+  the bodies a clearance joins, through a solve that calls a pivot singular below 1e-14 of the
+  largest entry. Judged singular, the step was not taken and asked for nothing, so a round the
+  sweeps moved by less than a microkelvin was a balance. It is singular two ways. A body whose
+  every slope is a pair's or a radiating film's with no convection, `4C·|T|³`, has next to none
+  near absolute zero, and beside a warmer one its column is nothing; and under a film so weak that
+  the part's level has a slope below 1e-14 of its pairs', each body's row reads its pair's slope,
+  which a shift of the whole part does not move, and the rows cancel. Measured before the change,
+  on rows of 1 mm cells, a film on an end body and a clearance between each two:
+  - two bodies of two cells were answered within 2.1e-12 K of zero in a room at 1 K, and with the
+    first at 3.27e-7 K in a room at 20 K, from 1e-12 K and below, and did not converge in a room at
+    300 K; three bodies, a second of one cell, and the film on the second alone, the same from 0 K;
+  - not only from a start at zero: the first at its room of 20 K and the second at 0 K, the second
+    was answered at 2.97e-7 K; and a last body of emissivity 1e-15, next to nothing to its pair, at
+    3.6e-22 K, or not converging from starts with the other two apart;
+  - a nanowatt generated in the second body in a room at 0 K was answered at 4e-8 K at most, where
+    it balances at 14.24 K, a milliwatt in a second body of one cell in a room at 20 K at 0 K, where
+    it balances at 450.43 K, a picowatt under a convective film at 4e-11 K, where it balances at
+    2.15 K, 1e-20 W in a body of emissivity 1e-15 up to 303 K below its balance, and a milliwatt
+    in a second body of one cell from 1e-12 K, beside a first at its room of 1e-6 K under a film of
+    10 W/m²·K, at 1.6e-12 K where it balances at 383.61 K;
+  - under a film of 1e-21 m², its slope 1.1e-15 of the clearance's, two bodies were answered where
+    they started, 280 K and 300 K from their room, and a microwatt through them did not converge;
+  - and two bodies from 0 K in a room at 1e-3 K or 1e-4 K were answered within 2.1e-24 K of zero:
+    `film_surface` starts from the room, so a cell below the rounding of its room has its surface at
+    exactly zero, its film reads no slope, and the rows cancel to nothing.
+
+  Of 123 such cases first measured, the 81 that never reached that branch were answered right or
+  refused as having no balance, which they have not; of the 42 that did, 21 were answered wrong and
+  11 did not converge. No test of the crate in a part that loses reached it.
+
+  What changed: `network::solve` says which column it failed at, as `solve_or_column`, `solve`
+  reading it as before. Where the step is judged singular in a part that loses, the row of the
+  body whose own slope is the largest is replaced by the part's balance — the bodies' own slopes
+  and of each pair what neither end keeps, against what crosses the part's boundary, each kind
+  summed on its own: what its cells generate, what its films and air take, what its pairs bring —
+  and every row is brought to one: in exact arithmetic the same step, and no longer the difference
+  of rows that cancel. Where that is singular still, the body at the column it failed at takes the
+  step a body alone takes, held and asked as it is, and the rest are solved again — unless its own
+  total is within 1e-12 of the largest flow in its part, ten thousand roundings of it, where it is
+  balanced and takes none; one out of balance by more, with no slope to step on, has not settled.
+  The step where it is not singular is untouched: the steady fields of the seven thermal blocks
+  the scenes solve are bit-identical, the three refused as melting the same, and the frames of all
+  34 unchanged.
+
+  Four forms were reviewed and measured wrong first, and each case that showed it is in the new
+  test. One took out every body whose column held nothing above 1e-14 and refused rows that
+  cancel: it refused the weak film at its own balance, answered before, its step being zero, and a
+  body whose column was just above 1e-14 and whose pivot below. The next took out the body the
+  rows' solve failed at, at 1e-10 of the largest entry, and summed the part's balance from its
+  cells' fluxes: a microwatt through the weak film was answered 4.0e-3 K to 100 K wrong where it
+  was refused, the film rounded away in its cell's conduction, and a third body of emissivity
+  1e-11 to 3e-14 was taken out though it was not nothing. The third put the balance always in the
+  first body's row: a body held only by a weak pair, whose column only its own row sees, was taken
+  out when its row was the one replaced, and four layouts refused or answered a kelvin out were
+  answered up to 3624 K out. The fourth read a body taken out with no slope against an exact zero,
+  and stepped a body at a balance of 0 K on what rounding left of its total: a picowatt shared by
+  two cells in a room at 0 K did not converge, and a nanowatt drawn across a clearance of
+  emissivity 1e-11, started at its closed form, was refused as below zero, each answered before.
+
+  Held by a new test, every cell against its closed form — the room, or the chain from the heat
+  generated through the bodies and clearances to the film — within 2.3e-6 K, over 115 cases in
+  twelve tests: bodies from absolute zero and from beside warm ones, in either order; heat from a
+  picowatt to a milliwatt beyond a clearance, through rows that cancel and from a body nothing
+  moves, and into a block within a microkelvin of zero; a body whose pivot is nothing and whose
+  column is not; the weak film from six starts at three areas; a warm body and a body held only by
+  a weak pair beside rows that cancel; a body with nothing to move it; a balance started at, or
+  started from what it was answered, with the film on either body; and the cold rooms.
+
+  A sabotage harness took the change apart 28 ways, each run against every test of the crate: 25
+  are caught, each by the panic lines it was claimed to give and by no others, and three survive
+  for a reason. What neither end of a pair keeps is exactly nothing without air in a void, and no
+  test here has air. The pairs' share of the part's largest flow binds only away from a balance,
+  since at one no pair carries more than the part's cells generate and its films take, summed. And
+  a body taken out that asks nothing for its own step still moves by what it asks, or by a quarter
+  of the larger of its level and the block's, a move the stop reads unless both are within 4 µK of
+  zero; a block at 1e-6 K and at 1e-7 K, added to try that, is answered without the ask. The pairs
+  to a body taken out, left out of the part's balance, survived the first pass, and are caught
+  since the test gained the nanowatt with the film on the other body, which that refused.
+
+  The fourth form was reviewed through a port to Python, which measured what rounding does to a
+  body at a balance of 0 K: of 418 starts, 85 were thrown from it, a nanowatt across emissivity
+  1e-11 refused as below zero at −576.5 K from its closed form and at −274.58 K from where it had
+  been answered; and a picowatt shared by two cells, read against an exact zero, did not converge.
+  The rule that a body taken out within 1e-12 of its part's largest flow is balanced came from
+  that port, where it left 9 of the 85. Those two cases are in the test, each answered; the
+  review's other four are open, below.
+
+  Found on the way: the two guards 52a9b70 found that only the mirror needed — the block's level in
+  the cap on a body's step, and the common scale of the step the bodies of a part take together —
+  are needed again, each taken out as that commit's harness took it out. Without the first, a
+  second body of one cell from 0 K in a room at 20 K did not converge, nor did a microwatt
+  generated in it; without the second, two bodies from 0 K in a room at 1e-3 K did not converge,
+  with the second of emissivity 1e-15 under a film of 1e-18 m² they diverged, and a microwatt
+  generated in the second of two, from 0 K in a room at 0 K, did not converge.
+
+  Open: a part that loses nothing, judged singular, still asks for nothing — a sealed pair at
+  20 K and 0 K is answered with the cold one at 2.6e-7 K, where both balance at 10 K, as before
+  this; what a body taken out loses is still summed from its cells' fluxes, as the step where it
+  is not singular sums it, and keeps their rounding; and the part's balance keeps that of its
+  sources, `ε·Σ|p|`. Where a sink's cell balances at exactly 0 K, four layouts are answered worse
+  than before, measured here from the review's inputs and one of this change's: a nanowatt across
+  emissivity 1e-11 with a film of 1e-6 m² on the warm body, started a millikelvin above its
+  balance, refused at −9.5 K where it was answered within 3.0e-6 K; two bodies of emissivity
+  1e-13 sharing a milliwatt under a film of 1e-25 m², not converging from 0 K and 1 K where they
+  were answered; three of emissivities 1e-11, 1e-15 and 1e-8 sharing a picowatt, from the
+  review's start, 6.6e-3 K out where they were answered; and three of 1e-3, 1e-3 and 0.9 sharing
+  a microwatt, 5.9e-3 K out where they were refused, a balance existing. Four sharing a picowatt,
+  11.52 K out before, are refused. Of the port's 85 starts the 9 left are 1e-12 off their answer,
+  where a real imbalance over a slope next to nothing still throws a body by the block's level. A
+  balance set by less than ten thousand roundings of the part's largest flow is below what the
+  rule reads: a nanowatt drawn into a body of emissivity 1e-11, with 1e-4 W flowing within the
+  other, balances at 7.89 K and is answered at 0 K, as before. No case here has air in a void or a
+  pair within one body, so the arms that read them are reached by none; the stop is a microkelvin
+  in any room, and in a room at 1e-5 K that is a tenth of the answer; and the extra solves, taken
+  only where the step is singular, are not timed. Each is its own item.
+
 - **The steady solve read a radiating film's slope at its room, and answered fields it had not
   balanced** (`pantometry-thermal`). `Solid3D::steady_state` sweeps its cells and then takes a
   Newton step on each body's level, and for both it took a film's slope from the stability limit:
@@ -762,11 +880,12 @@ protects nothing.
   reproduced before it was acted on.
 
   Open: a row of 32 cells where a film is much of its cell's diagonal stops 1.23e-5 K out, the
-  sweep reading the film at the tangent; and a body only a clearance reaches, from exactly 0 K, has
-  no slope to its pair, so the step its part takes together is judged singular and not taken, and
-  two such bodies under a film from a room at 20 K are answered at 3.3e-7 K and 6.6e-40 K — from a
-  room at 300 K, not converging. Found on the way: `ThermalNetwork::steady_state` has no such
-  defect — its Newton reads a surface's slope at the node's own temperature.
+  sweep reading the film at the tangent. Found on the way: a body only a clearance reaches, from
+  exactly 0 K, has no slope to its pair, so the step its part takes together was judged singular
+  and not taken, and two such bodies under a film from a room at 20 K were answered at 3.3e-7 K
+  and 6.6e-40 K — answered since, by *A step judged singular was taken for a balance, and left a
+  body near absolute zero where it was*; and `ThermalNetwork::steady_state` has no such defect —
+  its Newton reads a surface's slope at the node's own temperature.
 
 - **A sink fed across a clearance was refused at the mirror of a balance that exists**
   (`pantometry-thermal`). `Solid3D::steady_state` passes cells through negative temperatures on
@@ -835,9 +954,10 @@ protects nothing.
   cell and the room, not at its surface, so within 4% of the most a film can bring the solve
   stopped up to 1.8e-5 K out, as it did before this, and a sink taking four times that ran out of
   sweeps — answered since, by *The steady solve read a radiating film's slope at its room, and
-  answered fields it had not balanced*. Open: the block's level in the cap on that step and the
+  answered fields it had not balanced*. And the block's level in the cap on that step and the
   common scale of the step the bodies of a part take together, which only the mirror needed,
-  survive being taken out of every test of the crate.
+  survived being taken out of every test of the crate — needed again since, by *A step judged
+  singular was taken for a balance, and left a body near absolute zero where it was*.
 
 - **A later source left an emptied cell its old share, and filling the cell brought it back**
   (`pantometry-thermal`). `Solid3D::dissipating` replaces what the cells it selects generated

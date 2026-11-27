@@ -20,7 +20,8 @@
 //! 1.3e-7 K to 5.5e-7 K, eight in a room at 10 K at 1.0e-8 K to 2.8e-8 K, two in a room at 1 K at
 //! 2.9e-12 K, and two bodies across a clearance, a film on each, at 2.7e-7 K to 4.4e-7 K — each
 //! where its balance is its room. That was before either change, and the slope alone answered the
-//! rows the same. One that is still answered so is recorded as open, below.
+//! rows the same. Two bodies with a film on the first alone were answered so for another reason,
+//! and are in `a_step_judged_singular_is_not_a_balance`.
 
 use pantometry_core::substance::ThermalProps;
 use pantometry_core::units::{
@@ -208,10 +209,10 @@ fn a_block_near_zero_is_not_answered_by_a_step_held_short() {
 /// from a room at 20 K — every solid cell at the room. They were answered at 2.7e-7 K to
 /// 4.4e-7 K.
 ///
-/// **With a film on the first alone it is not, and that is recorded as open**: the second body,
-/// which only the clearance reaches, has no slope to its pair at exactly 0 K, the step the two
-/// take together is judged singular and not taken, and the round is a balance — 3.3e-7 K and
-/// 6.6e-40 K, measured, and from a room at 300 K not converging. From 1e-3 K it is answered.
+/// **With a film on the first alone the step was not held short but not taken**: the second body,
+/// which only the clearance reaches, has next to no slope to its pair near 0 K, and the step the
+/// two take together was judged singular — answered at 3.27e-7 K and 6.60e-40 K. That is
+/// `a_step_judged_singular_is_not_a_balance`.
 #[test]
 fn bodies_a_clearance_joins_near_zero_are_not_answered_by_a_step_held_short() {
     let b = Solid3D::new(

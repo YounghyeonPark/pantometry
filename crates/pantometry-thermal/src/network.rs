@@ -891,6 +891,13 @@ fn emissivity_of(node: &NodeState) -> f64 {
 /// `Solid3D::steady_state` solves with it too: the levels of the bodies a clearance joins, a
 /// handful of unknowns for the same reason a network is a handful of nodes.
 pub(crate) fn solve(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> {
+    solve_or_column(a, b, n).ok()
+}
+
+/// [`solve`], saying where it failed: the column — the unknown, since only rows are swapped —
+/// whose best pivot was singular. `Solid3D::steady_state` reads it to tell a body nothing moves
+/// from rows that cancel.
+pub(crate) fn solve_or_column(a: &mut [f64], b: &mut [f64], n: usize) -> Result<Vec<f64>, usize> {
     for col in 0..n {
         let (mut best, mut best_at) = (a[col * n + col].abs(), col);
         for row in col + 1..n {
@@ -904,7 +911,7 @@ pub(crate) fn solve(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> 
         // because the conductances are in milliwatts per kelvin".
         let scale = a.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
         if best <= scale * 1e-14 {
-            return None;
+            return Err(col);
         }
         if best_at != col {
             for k in 0..n {
@@ -932,7 +939,7 @@ pub(crate) fn solve(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec<f64>> 
         }
         x[row] = acc / a[row * n + row];
     }
-    Some(x)
+    Ok(x)
 }
 
 impl Domain for ThermalNetwork {
