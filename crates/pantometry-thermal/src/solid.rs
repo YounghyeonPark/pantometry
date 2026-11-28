@@ -3006,6 +3006,9 @@ impl Solid3D {
         // surfaces and all, so this is the balance it converges to.
         let mut gain = vec![0.0; t.len()];
         let mut slope = vec![0.0; t.len()];
+        // The coldest and the hottest of the cells each cell's pairs reach, as the round starts.
+        let mut near_cold = vec![f64::INFINITY; t.len()];
+        let mut near_hot = vec![f64::NEG_INFINITY; t.len()];
 
         // What a part's sinks did to `c`. Where the sweeps settled, it is the balance's one root,
         // so the sinks take more than can reach them; this said "or more than reaches them in
@@ -3028,6 +3031,10 @@ impl Solid3D {
             }
         };
 
+        // The refusal a part that stopped below absolute zero would have had, kept while a body
+        // the balance cannot tell from one at zero is lifted to it — see the exit — and given in
+        // place of any refusal that comes after.
+        let mut deferred: Option<Violation> = None;
         for round in 0..STEADY_SWEEPS {
             for (a, b, coefficient) in &self.gaps {
                 let pair = self.crossing_at(&t, *a, *b, *coefficient);
@@ -3036,6 +3043,10 @@ impl Solid3D {
                 gain[*b] += pair.watts * pair.to_b;
                 slope[*a] += at_a;
                 slope[*b] += at_b;
+                near_cold[*a] = near_cold[*a].min(t[*b]);
+                near_hot[*a] = near_hot[*a].max(t[*b]);
+                near_cold[*b] = near_cold[*b].min(t[*a]);
+                near_hot[*b] = near_hot[*b].max(t[*a]);
             }
 
             let mut moved: f64 = 0.0;
@@ -3077,6 +3088,58 @@ impl Solid3D {
                             continue;
                         }
                         let mut step = body[c].map_or(1.0, |b| omega[b]) * r / d;
+                        // **A cell that generates nothing is moved no further than between what it
+                        // exchanges with**: its own balance, its neighbours as they are, lies between
+                        // the coldest and the hottest of the cells its faces and pairs reach and the
+                        // rooms its films and air face, every exchange falling with its own
+                        // temperature. Its step reads a pair at its own end, `4C·|T|³`, nothing at
+                        // absolute zero, where what the pair carries falls as `T⁴`: a cell of
+                        // emissivity 1e-11 at 0 K, a film of 1e-25 m² with convection all its slope,
+                        // fed 9e-20 W across a clearance from a cell at 20 K, was stepped to 6.8e4 K,
+                        // where it balances below 20 K, and the bodies beside it were thrown by
+                        // thousands of kelvin round after round. Where the step's target lies
+                        // between them it is the step it was, to the bit; beyond them, it is the
+                        // nearer of them, not over-relaxed.
+                        if self.source[c] == 0.0 {
+                            let (mut cold, mut hot) = (near_cold[c], near_hot[c]);
+                            let mut reach = |v: f64| {
+                                cold = cold.min(v);
+                                hot = hot.max(v);
+                            };
+                            let (xr, yr) = ((nx + 1) * (j + ny * k), nx * (j + (ny + 1) * k));
+                            if i > 0 && self.kx[i + xr] > 0.0 {
+                                reach(t[c - 1]);
+                            }
+                            if i + 1 < nx && self.kx[i + 1 + xr] > 0.0 {
+                                reach(t[c + 1]);
+                            }
+                            if j > 0 && self.ky[i + yr] > 0.0 {
+                                reach(t[c - nx]);
+                            }
+                            if j + 1 < ny && self.ky[i + nx + yr] > 0.0 {
+                                reach(t[c + nx]);
+                            }
+                            if k > 0 && self.kz[c] > 0.0 {
+                                reach(t[c - nx * ny]);
+                            }
+                            if k + 1 < nz && self.kz[c + nx * ny] > 0.0 {
+                                reach(t[c + nx * ny]);
+                            }
+                            for (face, env) in &self.exposed {
+                                if self.exposed_at(*face, (i, j, k)) {
+                                    reach(env.ambient.to_si());
+                                }
+                            }
+                            if let Some((air, _)) = self.air {
+                                if self.air_conductance((i, j, k)) > 0.0 {
+                                    reach(air);
+                                }
+                            }
+                            let target = t[c] + r / d;
+                            if cold <= hot && (target < cold || target > hot) {
+                                step = target.clamp(cold, hot) - t[c];
+                            }
+                        }
                         // **A cell held mostly by its pairs takes a quarter of its level at most**,
                         // as a body does below and for the same reason: a pair's slope is
                         // `4C·T³`, a poor guide far from the answer, and over-relaxed it is a
@@ -3101,6 +3164,8 @@ impl Solid3D {
             for v in gain.iter_mut().chain(slope.iter_mut()) {
                 *v = 0.0;
             }
+            near_cold.fill(f64::INFINITY);
+            near_hot.fill(f64::NEG_INFINITY);
             // Converged when a whole sweep moves the field by less than a microkelvin. Absolute
             // rather than relative to the span: a block settling *at* ambient has no span to be
             // relative to, and a microkelvin is four orders below anything any scene here asserts.
@@ -3147,17 +3212,36 @@ impl Solid3D {
             // film from 1200 K warms, the stop leaves 1.23e-5 K, as it did with the tangent in
             // the sweep alone, where the slope alone left 6.19e-6 K and the tangent in both
             // places 2.43e-5 K.
+            //
+            // **What each body is out of balance by is read off what crosses its boundary**, each
+            // kind summed on its own: what its cells generate, less what its films and air take,
+            // and then its pairs. It was its cells' net fluxes summed, whose conduction cancels
+            // over a body only to the rounding of its largest face, and a body whose level nothing
+            // else holds was stepped on that rounding: two bodies of emissivity 1e-13, a film of
+            // 1e-25 m² on the first, a milliwatt generated in the last cell of the second and drawn
+            // from its first, the second's only path a pair of 2.8e-27 W/K⁴ near absolute zero,
+            // did not converge from 0 K or 1 K — every round asking 1e10 K and more, on totals of
+            // some 5e-21 W — and from 1e-6 K were refused as below zero, where they balance with
+            // the sink's cell at 0 K. In exact arithmetic it is the same total.
             let mut total = vec![0.0; count];
             let mut resist = vec![0.0; count];
+            let mut shed = vec![0.0; count];
+            let films = !self.exposed.is_empty() || self.air.is_some();
             for k in 0..nz {
                 for j in 0..ny {
                     for i in 0..nx {
                         let c = i + nx * (j + ny * k);
                         let Some(b) = body[c] else { continue };
-                        total[b] += self.flux_at(&t, (i, j, k), c) * dx + self.source[c];
+                        total[b] += self.source[c];
+                        if films {
+                            shed[b] += self.film_flux(&t, (i, j, k), c) * dx;
+                        }
                         resist[b] += self.loss_slope_at(t[c], (i, j, k), c);
                     }
                 }
+            }
+            for b in 0..count {
+                total[b] -= shed[b];
             }
             // **A clearance's pair is a body's balance, not only its stiffness.** `flux_at` carries
             // conduction and the films; the pair exchange the sweep applies beside it has to be
@@ -3402,15 +3486,16 @@ impl Solid3D {
             };
             // The largest flow in part `p`: what any of its cells generates, what any of its films
             // and air take, what any of its pairs carries. A body's total is a sum of such flows,
-            // so what rounding leaves of it is read against this. For a step judged singular.
-            let largest_flow = |p: usize| -> f64 {
+            // so what rounding leaves of it is read against this. For a step judged singular, and
+            // for a part stopped below zero; on the field `t` it is given.
+            let largest_flow = |t: &[f64], p: usize| -> f64 {
                 let mut largest: f64 = 0.0;
                 for z in 0..nz {
                     for j in 0..ny {
                         for i in 0..nx {
                             let c = i + nx * (j + ny * z);
                             if body[c].is_some_and(|b| part[b] == p) {
-                                let shed = self.film_flux(&t, (i, j, z), c) * dx;
+                                let shed = self.film_flux(t, (i, j, z), c) * dx;
                                 largest = largest.max(self.source[c].abs()).max(shed.abs());
                             }
                         }
@@ -3418,11 +3503,95 @@ impl Solid3D {
                 }
                 for (pa, pb, coefficient) in &self.gaps {
                     if body[*pa].is_some_and(|b| part[b] == p) {
-                        let watts = self.crossing_at(&t, *pa, *pb, *coefficient).watts;
+                        let watts = self.crossing_at(t, *pa, *pb, *coefficient).watts;
                         largest = largest.max(watts.abs());
                     }
                 }
                 largest
+            };
+            // **A body taken out of a step judged singular in a part that loses is moved to its own
+            // balance**, the others where they are in `work`: the level at which what crosses its
+            // boundary — what its cells generate, what its films and air take, what its pairs carry
+            // — comes to nothing, found by widening a bracket from where it is and halving it. That
+            // falls with its level, each film and pair taking more from a hotter body, so a bracket
+            // that closes holds the one root. Within 1e-12 of the part's largest flow it is balanced
+            // and stays; where no bracket closes, nothing is found. `work` is left with it moved.
+            let own_root = |b: usize, work: &mut Vec<f64>, largest: f64| {
+                let cells: Vec<usize> = (0..work.len()).filter(|c| body[*c] == Some(b)).collect();
+                let pairs: Vec<usize> = (0..self.gaps.len())
+                    .filter(|g| {
+                        let (pa, pb, _) = self.gaps[*g];
+                        body[pa] == Some(b) || body[pb] == Some(b)
+                    })
+                    .collect();
+                let own = |work: &[f64]| {
+                    let (mut made, mut shed, mut crossed) = (0.0, 0.0, 0.0);
+                    for c in &cells {
+                        made += self.source[*c];
+                        if films {
+                            let at = (c % nx, (c / nx) % ny, c / (nx * ny));
+                            shed += self.film_flux(work, at, *c) * dx;
+                        }
+                    }
+                    for g in &pairs {
+                        let (pa, pb, coefficient) = self.gaps[*g];
+                        let pair = self.crossing_at(work, pa, pb, coefficient);
+                        if body[pa] == Some(b) {
+                            crossed -= pair.watts * pair.from_a;
+                        }
+                        if body[pb] == Some(b) {
+                            crossed += pair.watts * pair.to_b;
+                        }
+                    }
+                    made - shed + crossed
+                };
+                let first = own(work);
+                if first.abs() <= 1e-12 * largest {
+                    return Ok(Some(0.0));
+                }
+                let base: Vec<f64> = cells.iter().map(|c| work[*c]).collect();
+                let at = |by: f64, work: &mut Vec<f64>| {
+                    for (n, c) in cells.iter().enumerate() {
+                        work[*c] = base[n] + by;
+                    }
+                    own(work)
+                };
+                let up = if first > 0.0 { 1.0 } else { -1.0 };
+                let mut width = cap(b)?.max(1e-3);
+                let (mut low, mut high) = (0.0_f64, f64::NAN);
+                for _ in 0..2100 {
+                    let f = at(up * width, work);
+                    if f.is_nan() {
+                        break;
+                    }
+                    if f * up <= 0.0 {
+                        high = up * width;
+                        break;
+                    }
+                    low = up * width;
+                    width *= 2.0;
+                    if !width.is_finite() {
+                        break;
+                    }
+                }
+                if high.is_nan() {
+                    at(0.0, work);
+                    return Ok(None);
+                }
+                for _ in 0..300 {
+                    let mid = 0.5 * (low + high);
+                    if mid == low || mid == high {
+                        break;
+                    }
+                    if at(mid, work) * up > 0.0 {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                }
+                let moved = 0.5 * (low + high);
+                at(moved, work);
+                Ok::<_, Violation>(Some(moved))
             };
             // The rows of the bodies `chosen` of a part that loses nothing, for a step judged
             // singular there: their balances against their slopes and couplings, **with the heat
@@ -3576,7 +3745,7 @@ impl Solid3D {
                     // 4e-5 K. This form answers each, and three bodies from 20 K, 300 K and 300 K
                     // the step as it was answered where they started, at their level of 206.67 K.
                     Err(_) if closed_part => {
-                        let largest = largest_flow(p);
+                        let largest = largest_flow(&t, p);
                         let mut rest = bodies.to_vec();
                         let mut keep = held[p];
                         loop {
@@ -3684,8 +3853,9 @@ impl Solid3D {
                         // summed — nor a body taken out asking its own step, which moves it by
                         // what it asks or by a quarter of the larger of its level and the block's,
                         // a move the stop reads unless both are within 4 µK of zero.
-                        let largest = largest_flow(p);
+                        let largest = largest_flow(&t, p);
                         let mut rest = bodies.to_vec();
+                        let mut out = Vec::new();
                         loop {
                             let (mut a, mut rhs) = level(&rest);
                             match crate::network::solve_or_column(&mut a, &mut rhs, rest.len()) {
@@ -3698,19 +3868,40 @@ impl Solid3D {
                                     break;
                                 }
                                 Err(failed) => {
-                                    let b = rest.remove(failed);
-                                    if total[b].abs() > 1e-12 * largest {
-                                        match alone(b)? {
-                                            Some((wanted, step)) => {
-                                                asked = asked.max(wanted.abs());
-                                                shift[b] = step;
-                                            }
-                                            None => asked = f64::INFINITY,
-                                        }
-                                    }
+                                    out.push(rest.remove(failed));
                                     if rest.is_empty() {
                                         break;
                                     }
+                                }
+                            }
+                        }
+                        // **The bodies taken out are moved to their own balances** — see
+                        // `own_root` — the rest's step first, those gaining heat first, each seeing
+                        // those before it moved. A body taken out stepped on its own slope, a quarter
+                        // of the block's level at most, a slope next to nothing near absolute zero.
+                        // Measured: four bodies of emissivities 0.5, 0.9, 0.001 and 1e-13, a picowatt
+                        // generated in the third and drawn from the second, from 1 K and 0 K, were
+                        // refused as below zero where the third balances at 11.52 K — the sink
+                        // stepped down by its quarter a round and the source up by as little, until
+                        // the sink was drawn through zero; and three of emissivities 1e-11, 1e-15 and
+                        // 1e-8 sharing a picowatt, from where a review started them, were answered
+                        // 6.6e-3 K out. The source taken first, at its balance, the sink beside it
+                        // reads as balanced; taken the other way, the sink would go to its own
+                        // balance with nothing yet reaching it.
+                        if !out.is_empty() {
+                            let mut work = t.clone();
+                            for (c, v) in work.iter_mut().enumerate() {
+                                if let Some(b) = body[c].filter(|b| rest.contains(b)) {
+                                    *v += shift[b];
+                                }
+                            }
+                            out.sort_by(|x, y| total[*y].total_cmp(&total[*x]));
+                            for b in out {
+                                if let Some(moved) = own_root(b, &mut work, largest)? {
+                                    asked = asked.max(moved.abs());
+                                    shift[b] = moved;
+                                } else {
+                                    asked = f64::INFINITY;
                                 }
                             }
                         }
@@ -3762,6 +3953,38 @@ impl Solid3D {
             // Before the exit rather than after it: `moved.max(NaN)` is `moved`, so a field that
             // had stopped being a number could stop moving and be returned.
             if t.iter().any(|v| !v.is_finite()) {
+                if let Some(kept) = deferred.take() {
+                    return Err(kept);
+                }
+                // **A sink's part drawn down until its step overflows has no balance found above
+                // zero, and is refused as that**, naming the first of its sinks' cells. Its step is
+                // a quarter of the larger of its own level and the block's, so where every body of
+                // a block falls toward zero together the sink's cell cannot cross it: it falls by a
+                // quarter a round while its step asks for more without end, until that is not a
+                // number. Measured: a cell drawing a microwatt across a clearance of emissivity
+                // 1e-13 from a cell its film holds at 0 K, from 1000 K, came to 7e-97 K in 475
+                // rounds, its step then asking 1.3e308 K, and was refused as having diverged, where
+                // the one balance it has is 1.15e5 K below zero; with the other body stepped short
+                // of its own balance it crossed zero and was refused as below it. A cell a first
+                // sweep throws past where a fourth power overflows is refused the same way.
+                let blown = t.iter().position(|v| !v.is_finite()).unwrap_or(0);
+                let sink = body[blown].filter(|b| parts[part[*b]].sinks).and_then(|b| {
+                    (0..t.len()).find(|c| {
+                        self.source[*c] < 0.0 && body[*c].is_some_and(|d| part[d] == part[b])
+                    })
+                });
+                if let Some(c) = sink {
+                    let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
+                    return Err(Violation::at(
+                        &self.name,
+                        format!(
+                            "no balance above absolute zero was found: cell ({i}, {j}, {k}) was \
+                             drawn down by the sinks in its part until the step on its level \
+                             overflowed"
+                        ),
+                        f64::NEG_INFINITY,
+                    ));
+                }
                 return Err(Violation::at(
                     &self.name,
                     "the steady-state balance diverged",
@@ -3792,10 +4015,13 @@ impl Solid3D {
                 // 1e-12 K and 1e-6 K the first sweep throws it — to −4.9e46 K from 1e-12 K — and
                 // the next, reading the films' slope there, back to exactly zero. From 5e-99 K
                 // to 5e-23 K, measured, that first throw is past where a fourth power overflows,
-                // and the round reports the balance diverged: a refusal too, if a poorer word for
-                // it. From 3e-99 K down the cell's slope is below the least `f64`, and it is
-                // refused as left with nothing to move it by.
+                // and it is refused as drawn down by its sinks until its step overflowed — once as
+                // having diverged, a poorer word for it. From 3e-99 K down the cell's slope is
+                // below the least `f64`, and it is refused as left with nothing to move it by.
                 if let Some((c, r)) = stuck {
+                    if let Some(kept) = deferred.take() {
+                        return Err(kept);
+                    }
                     let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
                     return Err(Violation::at(
                         &self.name,
@@ -3828,12 +4054,53 @@ impl Solid3D {
                 // −8.8e-7 K and was refused as having diverged, where its answer is 0 K: the stop
                 // leaves microkelvin either side, and on this side it is below a bound nothing
                 // crosses. `BELOW_ZERO` is ten times what the tests here hold a cell to.
+                //
+                // **A body the balance cannot tell from one at zero is lifted to it, once.** Where
+                // a sink's part stops below zero, each body whose coldest cell lies below it by no
+                // more than its level can read — 1e-12 of its part's largest flow over its slope,
+                // the rule a body taken out is balanced by — is shifted so that cell is at zero, the
+                // refusal kept, and the solve goes on: a level it cannot read stops there as a
+                // balance, and one it can is drawn back down and refused as it would have been, the
+                // kept refusal given for whatever refuses after. Measured: three bodies of
+                // emissivities 0.001, 0.001 and 0.9 sharing a microwatt, the sink under a film of
+                // convection that carries nothing at the balance, from the closed form with the
+                // sink 0.1 K up, were refused as below zero, its level one f64 reads only to
+                // ±0.037 K. Held to no depth, a lift took a correct refusal 3e5 K below zero from
+                // 43 rounds to 2000 in a review's port of this solve, and lifted a lone cell
+                // drawing 10 mW in a room at 0 K, which, the refusal not kept, was refused as left
+                // with nothing to move it by, where what it has is no balance above zero. Held to
+                // what a body cannot read, no test here needs the refusal kept.
                 let coldest = (0..t.len())
                     .filter(|c| body[*c].is_some())
                     .min_by(|a, b| t[*a].total_cmp(&t[*b]));
                 if let Some(c) = coldest.filter(|c| t[*c] < -BELOW_ZERO) {
+                    if let Some(kept) = deferred.take() {
+                        return Err(kept);
+                    }
                     let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
                     let sinks = body[c].is_some_and(|b| parts[part[b]].sinks);
+                    if sinks && round + 1 < STEADY_SWEEPS {
+                        let mut low = vec![0.0_f64; count];
+                        for (c, v) in t.iter().enumerate() {
+                            if let Some(b) = body[c] {
+                                low[b] = low[b].min(*v);
+                            }
+                        }
+                        let unread = |b: usize| {
+                            let depth = 1e-12 * largest_flow(&t, part[b]);
+                            low[b] < -BELOW_ZERO && -low[b] * resist[b] <= depth
+                        };
+                        if (0..count).any(unread) {
+                            let lift: Vec<bool> = (0..count).map(unread).collect();
+                            deferred = Some(Violation::at(&self.name, drawn_below(c, true), t[c]));
+                            for (c, v) in t.iter_mut().enumerate() {
+                                if let Some(b) = body[c].filter(|b| lift[*b]) {
+                                    *v -= low[b];
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     return Err(Violation::at(
                         &self.name,
                         if sinks {
@@ -3860,6 +4127,9 @@ impl Solid3D {
         // sweeps run out before anything settles: −50 mW out of a block whose film can bring it
         // 2 mW was refused as not converging. Said as what it is, as the converged case says it,
         // where the coldest cell of a part with a sink has gone below absolute zero.
+        if let Some(kept) = deferred.take() {
+            return Err(kept);
+        }
         let coldest = (0..t.len())
             .filter(|c| body[*c].is_some())
             .min_by(|a, b| t[*a].total_cmp(&t[*b]));

@@ -417,9 +417,10 @@ fn a_film_that_is_much_of_its_cells_diagonal_is_answered() {
 ///   1e-300 K and 1e-120 K, where its slope is below the least `f64`, and from 1e-12 K and 1e-6 K,
 ///   thrown as before and brought back to exactly zero by the next sweep, which reads the film's
 ///   slope there;
-/// - **as diverging** from 5e-99 K to 5e-23 K, measured, where that first throw is past where
-///   `T⁴` overflows; a refusal, and a poorer word for it, which is recorded as open — from 3e-99 K
-///   down the slope is below the least `f64` and it is refused as stuck, as from 1e-120 K here;
+/// - **as drawn down by its sinks until its step overflowed** from 5e-99 K to 5e-23 K, measured,
+///   where that first throw is past where `T⁴` overflows; refused there once as diverging, a poorer
+///   word for it — from 3e-99 K down the slope is below the least `f64` and it is refused as
+///   stuck, as from 1e-120 K here;
 /// - **at its root**, settled, from 1e-3 K, 1 K and 300 K.
 #[test]
 fn a_cell_nothing_can_move_is_refused() {
@@ -460,7 +461,9 @@ fn a_cell_nothing_can_move_is_refused() {
                  K, where nothing it exchanges has a slope to move it by"
             )
             && e.before == -0.01;
-        let diverged = e.quantity == "the steady-state balance diverged";
+        let overflowed = e.quantity
+            == "no balance above absolute zero was found: cell (0, 0, 0) was drawn down by the \
+                sinks in its part until the step on its level overflowed";
         let settled = e.quantity.starts_with(
             "no balance above absolute zero was found: cell (0, 0, 0) came to below it",
         ) && e.quantity.ends_with("which take more than can reach them")
@@ -470,7 +473,7 @@ fn a_cell_nothing_can_move_is_refused() {
         let right = if start >= 1e-3 {
             settled
         } else if start == 1e-40 {
-            diverged
+            overflowed
         } else {
             stuck
         };

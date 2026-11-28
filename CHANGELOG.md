@@ -658,6 +658,139 @@ protects nothing.
 
 ### Fixed
 
+- **A level near absolute zero was read off what rounding left of it, and stepped on a slope next
+  to nothing** (`pantometry-thermal`). Three defects in `Solid3D::steady_state` at the edge of
+  what its balance can read, found measuring the four layouts e8dba4a recorded as answered worse
+  than before. Measured before the change, on rows of 1 mm cells, a film on an end body and a
+  clearance between each two:
+  - **Each body's total was its cells' net fluxes summed**, whose conduction cancels over a body
+    only to the rounding of its largest face. Two bodies of emissivity 1e-13, a film of 1e-25 m²
+    on the first, a milliwatt generated in the last cell of the second and drawn from its first —
+    the second's only path a pair of 2.8e-27 W/K⁴ near absolute zero — did not converge from 0 K
+    or 1 K, every round asking 1e10 K and more on totals of some 5e-21 W, and from 1e-6 K were
+    refused as below zero, where they balance with the sink's cell at 0 K.
+  - **A body taken out of a step judged singular stepped on its own slope**, held to a quarter of
+    the block's level, a slope next to nothing near absolute zero. Four bodies of emissivities
+    0.5, 0.9, 0.001 and 1e-13, a picowatt generated in the third and drawn from the second, from
+    1 K and 0 K, were refused as below zero where the third balances at 11.52 K: the sink stepped
+    down by its quarter a round and the source up by as little, until the sink was drawn through
+    zero. Three of emissivities 1e-11, 1e-15 and 1e-8 sharing a picowatt, from where a review
+    started them, were answered 6.6e-3 K out.
+  - **A stop below zero was refused however little below**, where the balance could not tell the
+    level from zero. Three bodies of emissivities 0.001, 0.001 and 0.9 sharing a microwatt, the
+    last a sink under a film whose convection carries nothing at the balance, from the closed
+    form with the sink 0.1 K up, were refused as below zero, its level one f64 reads only to
+    ±0.037 K.
+
+  What changed: each body's total is read off what crosses its boundary, each kind summed on its
+  own — what its cells generate, less what its films and air take, then its pairs — in exact
+  arithmetic the same total. A body taken out of a step judged singular in a part that loses is
+  moved to its own balance, the others as they are: the level at which what crosses its boundary
+  comes to nothing, found by widening a bracket and halving it, the bodies taken out in turn,
+  those gaining heat first, each seeing those before it moved. Where a sink's part stops below
+  zero, each body whose coldest cell lies below it by no more than its level can read — 1e-12 of
+  its part's largest flow over its slope, the rule a body taken out is balanced by — is lifted to
+  zero once, the refusal kept and given if anything after refuses.
+
+  Two more came with that. **The sweep moved a cell that generates nothing past everything it
+  exchanges with.** It reads a pair at its own end as `4C·|T|³`, nothing at 0 K: a cell of
+  emissivity 1e-11 at 0 K under a film of 1e-25 m², fed 9e-20 W across a clearance from a cell at
+  20 K, was stepped to 6.8e4 K, where it balances below 20 K, and the bodies beside it thrown by
+  thousands of kelvin round after round. The step as it was wandered back and converged; a body
+  moved to its own balance took the thrown cell for where to go, and did not. Such a cell's step
+  goes no further now than between what it exchanges with — its faces' neighbours, its films'
+  rooms, the air, its pairs' other ends — and is not over-relaxed there; where its target lies
+  between them the step is the one it was, to the bit. **And a sink's part drawn down until its
+  step overflowed was refused as having diverged.** A body's step is a quarter of the larger of
+  its own level and the block's, so where a part with no balance above zero falls toward it
+  together the sink's cell cannot cross it: with the other body moved to its own balance, a cell
+  drawing a microwatt across a clearance of emissivity 1e-13 from one its film holds at 0 K came
+  from 1000 K to 7e-97 K in 475 rounds, its step then asking 1.3e308 K, where its one balance is
+  1.15e5 K below zero and the step as it was refused it as below zero. Such a part is refused now
+  as having no balance above absolute zero, naming the sink's cell — as is the lone cell drawing
+  10 mW in a room at 0 K from 5e-99 K to 5e-23 K, whose refusal as diverging d799107 recorded as
+  open.
+
+  The scenes: of the seven thermal blocks they solve, five are bit-identical and two within
+  2.8e-13 K, the order the totals are summed in; the three refused as melting are the same, and
+  the frames of all 34 unchanged.
+
+  Four forms were reviewed through a port of the solve to Python and measured wrong first. Taking
+  the levels the clearances join in `T·|T|³` rather than `T` answered the four bodies, and of 3000
+  random parts that lose, 162 answered right before were not — 95 did not converge, 36 were
+  answered wrong, 12 refused as below zero with no sink — six of them reproduced in Rust: a body's
+  column in W/K⁴ beside another's in W/K, the rows brought to one and the columns not. A lift of
+  any depth took a correct refusal 3.06e5 K below zero from 43 rounds to 2000, and 12 of 594 more
+  than 100 longer; held to what a body cannot read, a median of none and 23 at most over 840.
+  Moving a body taken out to its own balance with nothing else changed did not converge on 35
+  layouts the step as it was answered: one went from 0 K to 1.89e6 K in a step, the block's level
+  with it to 6e5 K, every body's cap loosened, and the field swung by 1e16 K. Bounding that move
+  by what the body exchanges with, and holding one that generates nothing to its cap, left 11 of
+  34 such parts with nothing generated not converging, all eleven reproduced in Rust, where the
+  first sweep had thrown a cell to 6.8e4 K — the bound in the sweep above, with which neither was
+  needed.
+
+  The form here was reviewed through the same port, against each balance solved at 80 digits. Of
+  the 7032 closed parts and 120 chains of heat drawn through that earlier reviews ran, every
+  verdict is the same; of 4551 parts with nothing generated that the step as it was answered at
+  0 K, every one is answered. Of the 3000 that lose, 83 differ: 17 not converging and 2 answered
+  wrong are answered right, 3 refused as below zero are answered, 8 refused under a wrong message
+  are refused as below zero, and 15 move within the tolerance; 4 refused are answered and 8
+  answered stay wrong, each within what f64 reads of the body that is out; 21 have no balance
+  above zero and are refused either way; 2 are open, below; and 3 refused as below zero were
+  refused as diverged, the overflow above, which Rust then refused as below zero again. The
+  sweep's bound never bound in 72 layouts of a front diffusing through a body, nor moved a count
+  of rounds: for a cell whose faces conduct or convect, its target is a weighted mean of what it
+  exchanges with. Over the 2078 layouts both answer the median count of rounds is the same; two
+  take more than 100 more, 128 to 1076 and 184 more, both from the totals and the lift.
+
+  e8dba4a's entry, two below, recorded four layouts where a sink's cell balances at exactly 0 K as
+  answered worse than before it, and measured again only one was. The nanowatt across emissivity
+  1e-11, refused at −9.5 K, has no balance above zero for the inputs it is given: its room in f64
+  is 0.69 of a rounding below the decimal one, its one balance has the first body at −0.981 K, and
+  a rounding either way puts that at +0.50 K or −1.18 K — so the refusal is right, and the answer
+  before it was not a balance. The three sharing a picowatt, 6.6e-3 K out, and the three sharing
+  a microwatt, 5.9e-3 K out, were out in a body whose level f64 reads no better, and the second
+  was refused before, not answered. The two of emissivity 1e-13, not converging, were worse: they
+  are the first defect here.
+
+  Held by five new tests: the three sharing a microwatt from four starts, the sink's cells within
+  0.04 K of zero above it and the rest within 1e-5 K; the two of emissivity 1e-13 from seven; the
+  four sharing a picowatt, the third and fourth within 1e-5 K and the first two, whose level
+  2.8e-33 W/K⁴ of film holds beside a picowatt, at or above zero, and the three from the review's
+  start; six parts the sweep threw, every cell at its room; and two sinks' parts drawn down
+  together, refused word for word as drawn down until the step on their level overflowed, at
+  −∞. The test of the lone cell reads its new refusal.
+
+  A sabotage harness took the change apart 45 ways, each run against every test of the crate: 28
+  are caught, each by the panic lines it was claimed to give and by no others, and 17 survive for
+  a reason. Four are the same by another road: a root's move is not held, so the stop reads it as
+  what moved; a lift on the last round gives the refusal it kept, the one it replaced; a part with
+  no sink has no cell for the overflow's search, whose condition its filter is; and a cell nothing
+  moves is a body and a part of its own, its level read to four times what its film carries, so
+  never lifted. Six change no verdict here: a bracket widened from a millikelvin, or halved ten
+  times and rooted again the next round; the sweep's bound clamped to its colder end; and a lift
+  as deep as any, a million times deeper, or of every body below zero, drawn back down and
+  refused by the refusal kept. Seven are of what no test reaches: a lift followed by a refusal —
+  at the stop, when the sweeps run out, where the field overflows, or with no refusal kept — a
+  body taken out whose bracket does not close, and an overflow beside another part. The test of
+  the parts drawn down together read only the refusal's first words and let its value be +∞; it
+  reads all of it and −∞ now, which catches the sweep's bound left unreset too, by the words
+  alone: that layout is then refused at its root, 1.15e5 K below zero, rather than where its step
+  overflowed. The air in a void is reached by none of the tests pinned before; one of the
+  clearance's own file is pinned for it now.
+
+  Open: two parts that lose, a nanowatt or a picowatt drawn through three bodies under a film of
+  1e-21 m², are refused as below zero where a balance with the sink's cell at about 0 K exists,
+  and the step as it was did not converge; a body taken out is balanced against 1e-12 of its
+  part's largest flow, not its own, so one of emissivity 1e-13 balancing at 2.45 K beside a
+  picowatt was answered at 2.2e-22 K in the port, by the step as it was and by a first form of
+  this; that a body's boundary total falls with its level, which the bracket relies on, holds for
+  every term but a pair within one body with air in its void, which can rise with it and which no
+  case here has; two lifted layouts converge in 559 and 1076 rounds in the port, within reach of
+  the 2000 at which the kept refusal is given; and the refusal of a sealed part below zero still
+  blames its sinks. Each is its own item.
+
 - **A part that loses nothing, its step judged singular, was taken for a balance**
   (`pantometry-thermal`). Where the step the bodies a clearance joins take together was judged
   singular in a part that loses nothing, `Solid3D::steady_state` moved the part as a whole by the
@@ -850,10 +983,12 @@ protects nothing.
   1e-13 sharing a milliwatt under a film of 1e-25 m², not converging from 0 K and 1 K where they
   were answered; three of emissivities 1e-11, 1e-15 and 1e-8 sharing a picowatt, from the
   review's start, 6.6e-3 K out where they were answered; and three of 1e-3, 1e-3 and 0.9 sharing
-  a microwatt, 5.9e-3 K out where they were refused, a balance existing. Four sharing a picowatt,
-  11.52 K out before, are refused. Of the port's 85 starts the 9 left are 1e-12 off their answer,
-  where a real imbalance over a slope next to nothing still throws a body by the block's level. A
-  balance set by less than ten thousand roundings of the part's largest flow is below what the
+  a microwatt, 5.9e-3 K out where they were refused, a balance existing; measured again two
+  entries above, only the second of the four was worse. Four sharing a picowatt, 11.52 K out
+  before, are refused, and are answered two entries above. Of the port's 85 starts the 9 left
+  are 1e-12 off their answer, where a real imbalance over a slope next to nothing still throws a
+  body by the block's level.
+  A balance set by less than ten thousand roundings of the part's largest flow is below what the
   rule reads: a nanowatt drawn into a body of emissivity 1e-11, with 1e-4 W flowing within the
   other, balances at 7.89 K and is answered at 0 K, as before. No case here has air in a void or a
   pair within one body, so the arms that read them are reached by none; the stop is a microkelvin

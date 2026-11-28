@@ -1105,3 +1105,261 @@ fn heat_through_a_part_that_loses_nothing_is_answered() {
         );
     }
 }
+
+/// Every solid cell of `b` started at `cells`, `void` naming the empty ones.
+fn started(mut b: Solid3D, void: &[bool], cells: &[f64]) -> Solid3D {
+    for (i, v) in cells.iter().enumerate() {
+        if !void[i] {
+            b.set_temperature(i, 0, 0, Temperature::from_si(*v));
+        }
+    }
+    b
+}
+
+/// How far from 0 K the sink body of [`a_sink_at_a_balance_of_zero_is_not_refused`] may be read,
+/// K: the band over which its own total — its microwatt in and out cancelling — does not change by
+/// a rounding, ±0.037 K, computed at 80 digits by a review of this change. Within it the balance
+/// cannot tell its level from zero, and a refusal as below zero is no more a reading of it.
+const SINK_READ: f64 = 0.04;
+
+/// **A sink at a balance of zero is not refused as below it**, judged singular: three bodies of
+/// emissivities 0.001, 0.001 and 0.9, a microwatt generated in the second and drawn from the
+/// third, whose film of 1e-21 m² with convection of 10 W/m²·K from a room at 0 K carries nothing
+/// at the balance, its sink's cells at exactly 0 K — exact, the first two being held only through
+/// pairs that carry nothing. The first two to `SHAPE`; the third at or above zero, within
+/// `SINK_READ`. Measured before the change: from 300 K, 1 mK and 1000 K answered 5.9e-3 K out;
+/// from the closed form with the third 0.1 K up, refused as below zero.
+#[test]
+fn a_sink_at_a_balance_of_zero_is_not_refused() {
+    let p = 1e-6;
+    let t4 = odd_root(fourth(p / HALF) + p / pair(0.001, EMISSIVITY)) + p / HALF;
+    let want = [t4, t4, f64::NAN, t4, t4, f64::NAN, 0.0, 0.0];
+    let mut froms = vec![[300.0, 300.0, 0.0, 0.001, 0.001, 0.0, 1000.0, 1000.0]];
+    for up in [1e-3, 1e-2, 0.1] {
+        froms.push([t4, t4, 0.0, t4, t4, 0.0, up, up]);
+    }
+    for from in froms {
+        let (b, void) = bodies(
+            &[2, 2, 2],
+            &[0.001, 0.001, EMISSIVITY],
+            Face::XMax,
+            film(0.0, 10.0, 1e-21),
+            &[0.0, 0.0, 0.0],
+        );
+        let b = started(b, &void, &from)
+            .dissipating(p, |i, _, _| i == 4)
+            .dissipating(-p, |i, _, _| i == 6);
+        let why = format!("a microwatt into a sink at 0 K behind a film, from {from:?} K");
+        let t = b
+            .steady_state()
+            .unwrap_or_else(|e| panic!("{why}: there is a balance to strike: {e}"));
+        for c in [0, 1, 3, 4] {
+            let miss = t[c] - want[c];
+            assert!(
+                miss.abs() <= SHAPE,
+                "{why}: cell {c} {miss:+.3e} K from {} K",
+                want[c]
+            );
+        }
+        for c in [6, 7] {
+            assert!(
+                (-1e-4..=SINK_READ).contains(&t[c]),
+                "{why}: the sink's cell {c} at {:e} K, beyond what its balance reads of zero",
+                t[c]
+            );
+        }
+        println!(
+            "  {why}: the first two at {} K, the sink at {:e} K",
+            t[0], t[6]
+        );
+    }
+}
+
+/// **A level its cells' conduction cancels in is read off its boundary**, judged singular: two
+/// bodies of emissivity 1e-13, the first of two cells under a film of 1e-25 m² with convection of
+/// 10 W/m²·K from a room at 0 K, the second of three, a milliwatt generated in its last cell and
+/// drawn from its first. The second's only path out is a pair of 2.8e-27 W/K⁴ near absolute zero,
+/// and its level is held by nothing else: what its cells' net fluxes sum to is the rounding of the
+/// milliwatt they conduct, 5e-21 W, over a slope next to nothing. Measured before the change: from
+/// 0 K and 1 K not converging, every round asking 1e10 K and more; from 1e-6 K refused as below
+/// zero; and from the closed form with the second 1e-3 K to 0.1 K up, not converging or refused.
+#[test]
+fn a_level_its_cells_cancel_in_is_read_off_its_boundary() {
+    let p = 1e-3;
+    let want = [0.0, 0.0, f64::NAN, 0.0, p / WHOLE, 2.0 * p / WHOLE];
+    let mut froms = Vec::new();
+    for start in [0.0, 1e-6, 1.0] {
+        froms.push([start, start, 0.0, start, start, start]);
+    }
+    for up in [1e-3, 1e-2, 5e-2, 0.1] {
+        froms.push([0.0, 0.0, 0.0, up, want[4] + up, want[5] + up]);
+    }
+    for from in froms {
+        let (b, void) = bodies(
+            &[2, 3],
+            &[1e-13, 1e-13],
+            Face::XMin,
+            film(0.0, 10.0, 1e-25),
+            &[0.0, 0.0],
+        );
+        let b = started(b, &void, &from)
+            .dissipating(-p, |i, _, _| i == 3)
+            .dissipating(p, |i, _, _| i == 5);
+        let why = format!("a milliwatt within a body near 0 K, from {from:?} K");
+        let worst = answered(&why, &b, &void, &want);
+        println!("  {why}: {worst:.2e} K from it");
+    }
+}
+
+/// **A body taken out of a step judged singular is moved to its own balance**, the level at which
+/// what crosses its boundary comes to nothing, not stepped on a slope next to nothing. Four bodies
+/// of emissivities 0.5, 0.9, 0.001 and 1e-13, a film of 1e-25 m² with no convection from a room at
+/// 0 K on the first, a picowatt generated in the third and drawn from the second, from 1 K, 0 K,
+/// 0 K and 0 K: the third and fourth to `SHAPE` at 11.52 K; the first two, whose common level only
+/// that film holds — εσA of 2.8e-33 W/K⁴ beside a picowatt, so that what f64 reads of it spans
+/// kelvin — at or above zero. And three of emissivities 1e-11, 1e-15 and 1e-8, a film of 1e-21 m²
+/// with convection of 10 W/m²·K on the last, a picowatt generated in the first and drawn from the
+/// second, from where a review started them, the first at 11524 K: every cell to `SHAPE`. Measured
+/// before the change: the four refused as below zero, the sink stepped down by a quarter of the
+/// block's level a round and the source up by as little until the sink was drawn through zero; the
+/// three answered 6.6e-3 K out. Started from the closed form with the second 1e-3 K to 0.1 K up,
+/// the three are answered where they start, or 7.5e-3 K out, as before: its level a balance in f64
+/// over that span, and no body taken out.
+#[test]
+fn a_body_taken_out_is_moved_to_its_own_balance() {
+    let p = 1e-12;
+    let t5 = odd_root(fourth(p / HALF) + p / pair(EMISSIVITY, 0.001)) + p / HALF;
+    let t6 = t5 + p / WHOLE;
+    let want = [0.0, f64::NAN, 0.0, 0.0, f64::NAN, t5, t6, f64::NAN, t6];
+    let (b, _) = bodies(
+        &[1, 2, 2, 1],
+        &[0.5, EMISSIVITY, 0.001, 1e-13],
+        Face::XMin,
+        film(0.0, 0.0, 1e-25),
+        &[1.0, 0.0, 0.0, 0.0],
+    );
+    let b = b
+        .dissipating(-p, |i, _, _| i == 3)
+        .dissipating(p, |i, _, _| i == 6);
+    let why = "a picowatt across emissivities 0.9 and 0.001, from 1 K and 0 K";
+    let t = b
+        .steady_state()
+        .unwrap_or_else(|e| panic!("{why}: there is a balance to strike: {e}"));
+    for c in [5, 6, 8] {
+        let miss = t[c] - want[c];
+        assert!(
+            miss.abs() <= SHAPE,
+            "{why}: cell {c} {miss:+.3e} K from {} K",
+            want[c]
+        );
+    }
+    for c in [0, 2, 3] {
+        assert!(t[c] >= -1e-4, "{why}: cell {c} at {:e} K", t[c]);
+    }
+    println!(
+        "  {why}: the third at {} K, {t5} K; the first two at {:e} K",
+        t[5], t[0]
+    );
+    let t2 = odd_root(fourth(p / HALF) + p / pair(1e-11, 1e-15)) + p / HALF;
+    let t1 = t2 + p / WHOLE;
+    let want = [t1, t1, t2, f64::NAN, 0.0, 0.0, f64::NAN, 0.0];
+    let froms = [[
+        11524.12400014308,
+        11524.12401165568,
+        11524.124000120011,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        3.8725919187219105e-121,
+    ]];
+    for from in froms {
+        let (b, void) = bodies(
+            &[3, 2, 1],
+            &[1e-11, 1e-15, 1e-8],
+            Face::XMax,
+            film(0.0, 10.0, 1e-21),
+            &[0.0, 0.0, 0.0],
+        );
+        let b = started(b, &void, &from)
+            .dissipating(p, |i, _, _| i == 1)
+            .dissipating(-p, |i, _, _| i == 4);
+        let why = format!("a picowatt across emissivities 1e-11 and 1e-15, from {from:?} K");
+        let worst = answered(&why, &b, &void, &want);
+        println!("  {why}: {worst:.2e} K from it, the first at {t1} K");
+    }
+}
+
+/// **A cell that generates nothing is not swept past what it exchanges with**: bodies of one or two
+/// cells near absolute zero whose only losses are films of 1e-21 m² or 1e-25 m² with convection of
+/// 10 W/m²·K from a room at 0 K, nothing generated, every cell at the room. A cell's sweep reads a
+/// pair at its own end as `4C·|T|³`, nothing at 0 K, so a cell at 0 K fed across a clearance was
+/// stepped by what it is fed over its film's slope alone: measured, one of emissivity 1e-11 fed
+/// 9e-20 W from a neighbour at 20 K was stepped to 6.8e4 K in the first round, and the bodies beside
+/// it thrown by thousands of kelvin after. The step as it was answered these, wandering there and
+/// back; with a body taken out of a singular step moved to its own balance, a first form of this
+/// change took the thrown neighbour for where to go, and none of the eleven converged. The middle
+/// one of the first, moved from 0 K to its own balance at 427 K, had the last one's sweep throw it
+/// to 1.9e6 K, and the field swung by 1e16 K.
+#[test]
+fn a_cell_that_generates_nothing_is_not_swept_past_what_it_exchanges_with() {
+    const E: f64 = EMISSIVITY;
+    /// Each body's cells and emissivity, the film's face and area, and each body's start, K.
+    type Swept = (&'static [usize], &'static [f64], Face, f64, &'static [f64]);
+    #[rustfmt::skip]
+    let cases: [Swept; 6] = [
+        (&[1, 1, 1], &[1e-11, 1e-11, 0.001], Face::XMax, 1e-21, &[1000.0, 0.0, 0.0]),
+        (&[1, 1, 1], &[E, 1e-11, 0.001], Face::XMax, 1e-21, &[0.0, 20.0, 1000.0]),
+        (&[2, 1, 1], &[E, 0.001, E], Face::XMax, 1e-21, &[0.0, 0.0, 1000.0]),
+        (&[1, 1, 2], &[1e-11, E, 1e-11], Face::XMin, 1e-25, &[0.0, 20.0, 0.0]),
+        (&[1, 1, 2], &[1e-11, 0.001, 1e-11], Face::XMin, 1e-25, &[1000.0, 0.0, 0.0]),
+        (&[1, 1, 2], &[0.001, 0.001, 0.001], Face::XMin, 1e-25, &[1000.0, 0.0, 0.0]),
+    ];
+    for (sizes, emissivity, face, area, starts) in cases {
+        let (b, void) = bodies(sizes, emissivity, face, film(0.0, 10.0, area), starts);
+        let why = format!(
+            "bodies of {sizes:?} cells, emissivities {emissivity:?}, a film of {area:e} m2 on \
+             {face:?}, from {starts:?} K"
+        );
+        let worst = answered(&why, &b, &void, &at_room(&void, 0.0));
+        println!("  {why}: {worst:.2e} K from the room");
+    }
+}
+
+/// **A sink's part drawn down toward zero together is refused as having no balance above it**:
+/// two bodies of one cell, a radiating film from a room at 0 K on the first, the second drawing a
+/// microwatt or a picowatt across a clearance one of whose faces is of emissivity 1e-13 — no film
+/// from a room at zero can bring it, so it has no balance above zero, its one balance far below.
+/// With the first moved to its own balance every round, both fell toward zero together, the sink's
+/// step held to a quarter of a level that went with them, until it asked 1.3e308 K and the field
+/// was not a number: refused as having diverged, where the step as it was refused it as below zero.
+/// Both are drawn down until that step overflows, and are refused as that, naming the sink's cell,
+/// at `−∞`.
+#[test]
+fn a_sinks_part_drawn_down_together_is_refused_as_below_zero() {
+    for (emissivity, p, starts) in [
+        ([EMISSIVITY, 1e-13], 1e-6, [0.0, 1000.0]),
+        ([1e-13, EMISSIVITY], 1e-12, [20.0, 1.0]),
+    ] {
+        let (b, _) = bodies(
+            &[1, 1],
+            &emissivity,
+            Face::XMin,
+            film(0.0, 0.0, AREA),
+            &starts,
+        );
+        let b = b.dissipating(-p, |i, _, _| i == 2);
+        let why = format!("{p:e} W drawn across emissivities {emissivity:?}, from {starts:?} K");
+        let e = b
+            .steady_state()
+            .expect_err(&format!("{why}: no balance above absolute zero"));
+        assert!(
+            e.quantity
+                == "no balance above absolute zero was found: cell (2, 0, 0) was drawn down by \
+                    the sinks in its part until the step on its level overflowed"
+                && e.before == f64::NEG_INFINITY,
+            "{why}: refused as having no balance above absolute zero: {e}"
+        );
+        println!("  {why}: {}", e.quantity);
+    }
+}
