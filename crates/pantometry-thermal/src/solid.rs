@@ -2790,7 +2790,10 @@ impl Solid3D {
     /// to none near absolute zero, and two bodies across a clearance, a film on the first from a
     /// room at 20 K, were answered at 3.27e-7 K from 0 K, the step not taken; under a film whose
     /// slope is below 1e-14 of its pairs', the part's level is all but invisible in each body's
-    /// row, and two such bodies were answered where they started, 280 K from their room.
+    /// row, and two such bodies were answered where they started, 280 K from their room. In a part
+    /// that loses nothing it is the heat the part holds that stands in for that row: two sealed
+    /// bodies from 20 K and 0 K, the step not taken, were answered at 20 K and 2.6e-7 K, where both
+    /// balance at 10 K.
     ///
     /// # A part that loses nothing
     ///
@@ -3293,9 +3296,9 @@ impl Solid3D {
                 }
                 Ok((scale, most))
             };
-            // The balances of the bodies `chosen`, of one part that loses, against their slopes
-            // and the couplings between them: the rows the step they take together solves, built
-            // as it builds them below. For a step judged singular there.
+            // The balances of the bodies `chosen`, of one part, against their slopes and the
+            // couplings between them: the rows the step they take together solves, built as it
+            // builds them below. For a step judged singular there.
             let losing = |chosen: &[usize]| -> (Vec<f64>, Vec<f64>) {
                 let k = chosen.len();
                 let at = |b: usize| chosen.iter().position(|c| *c == b);
@@ -3397,6 +3400,68 @@ impl Solid3D {
                 }
                 (a, rhs)
             };
+            // The largest flow in part `p`: what any of its cells generates, what any of its films
+            // and air take, what any of its pairs carries. A body's total is a sum of such flows,
+            // so what rounding leaves of it is read against this. For a step judged singular.
+            let largest_flow = |p: usize| -> f64 {
+                let mut largest: f64 = 0.0;
+                for z in 0..nz {
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            let c = i + nx * (j + ny * z);
+                            if body[c].is_some_and(|b| part[b] == p) {
+                                let shed = self.film_flux(&t, (i, j, z), c) * dx;
+                                largest = largest.max(self.source[c].abs()).max(shed.abs());
+                            }
+                        }
+                    }
+                }
+                for (pa, pb, coefficient) in &self.gaps {
+                    if body[*pa].is_some_and(|b| part[b] == p) {
+                        let watts = self.crossing_at(&t, *pa, *pb, *coefficient).watts;
+                        largest = largest.max(watts.abs());
+                    }
+                }
+                largest
+            };
+            // The rows of the bodies `chosen` of a part that loses nothing, for a step judged
+            // singular there: their balances against their slopes and couplings, **with the heat
+            // `keep` they are to put back in place of the balance of the body whose own slope is
+            // the largest**, the first of them where two are alike, and every row brought to one.
+            // Their balances add to the part's net source, which in a part that loses nothing and
+            // has a balance is nothing, so one of them says nothing the others do not; the one
+            // whose slope is the largest is the one the others carry without cancelling, a body
+            // held only by a weak pair having its column seen in its own row alone — as `level`
+            // takes the place of the same row in a part that loses. No slack, then, which the step
+            // where it is not singular gives every balance.
+            let sealed = |chosen: &[usize], keep: f64| -> (Vec<f64>, Vec<f64>) {
+                let k = chosen.len();
+                let (mut a, mut rhs) = losing(chosen);
+                let capacity = chosen.iter().fold(0.0, |sum, b| sum + body_capacity[*b]);
+                let r0 = (0..k).fold(0, |best, s| {
+                    if a[s * k + s].abs() > a[best * k + best].abs() {
+                        s
+                    } else {
+                        best
+                    }
+                });
+                for (s, b) in chosen.iter().enumerate() {
+                    a[r0 * k + s] = body_capacity[*b] / capacity;
+                }
+                rhs[r0] = keep / capacity;
+                for r in 0..k {
+                    let most = a[r * k..(r + 1) * k]
+                        .iter()
+                        .fold(0.0_f64, |m, v| m.max(v.abs()));
+                    if most > 0.0 && most.is_finite() {
+                        for v in &mut a[r * k..(r + 1) * k] {
+                            *v /= most;
+                        }
+                        rhs[r] /= most;
+                    }
+                }
+                (a, rhs)
+            };
             // **The bodies of a part of several take one step together**: Newton on their levels,
             // each body's balance against its own slope and the couplings of its pairs to the
             // others', and in a part that loses nothing the heat it holds as one more equation.
@@ -3471,11 +3536,78 @@ impl Solid3D {
                 }
                 let step = match crate::network::solve_or_column(&mut a, &mut rhs, n) {
                     Ok(step) => step,
-                    // Judged singular all the same: a part that loses nothing still keeps its
-                    // heat, moving as a whole, and the sweeps do the rest.
+                    // **In a part that loses nothing, judged singular, the balances are brought to
+                    // one scale and solved again, and a body nothing moves steps alone.** The part
+                    // was moved as a whole by the heat it holds, which it already held, and the
+                    // step asked for nothing, so the next round stopped. Each balance above is over
+                    // its body's own slope, and a body near absolute zero has next to none: two
+                    // bodies of two cells across a clearance, sealed, from 20 K and 0 K, were
+                    // answered at 20 K and 2.6e-7 K, where both balance at 10 K, the cold one's
+                    // slope 2e-33 W/K beside the warm one's coupling to it of 1.5e-9 W/K, and its
+                    // row's entries up to 7e23 against the heat row's halves. Measured on bodies of
+                    // one to three cells, two and three of them, from 0 K to 300 K: of twenty-one,
+                    // fifteen answered so, among them 300 K and 1.7e-13 K where both balance at
+                    // 150 K, the second of emissivity 1e-11, three bodies from 0 K, 0 K and 20 K
+                    // left where they started, and one three times as dense as the other at 20 K
+                    // and 3.9e-7 K where both balance at 15 K; and a sixteenth, from 1e-6 K and
+                    // 0 K, at 1e-6 K and 7e-37 K, within the microkelvin the stop leaves of its
+                    // 5e-7 K. A body of one cell its sweep moves, and they were answered.
+                    //
+                    // **So the heat stands in for the balance of the body whose own slope is the
+                    // largest**, and every row is brought to one, as `sealed` builds them: in exact
+                    // arithmetic the same step, the balances of a part that loses nothing adding
+                    // to its net source, which where it has a balance is nothing. Where that is
+                    // singular still, the body at the column the solve failed at is taken out as in
+                    // a part that loses, below: balanced within 1e-12 of the part's largest flow,
+                    // stepping alone where it is not, the heat it takes left out of what the rest
+                    // put back, and not settled where it has no slope to step on.
+                    //
+                    // A first form kept the slack and brought every balance over the part's largest
+                    // slope or coupling alike. Measured wrong first, in a port of this solve to
+                    // Python and then here: a first body of emissivity 1e-15, its column below
+                    // 1e-14 of the rest, left the solve failing at the last body of the strong
+                    // ones, whose own shift their rows do not see, which was taken out though it
+                    // moves. Three bodies of one cell from 20 K, 0 K and 0 K, answered at their
+                    // level by the step as it was, did not converge, nor did five more such; three
+                    // of two cells from 20 K, 0 K and 300 K, refused as not converging by the step
+                    // as it was, were answered with the first at 132.81 K and the rest at 93.60 K,
+                    // where all balance at 106.67 K, and two more such; and four of one cell, the
+                    // first a million times as dense, left the last at 0 K where all balance at
+                    // 4e-5 K. This form answers each, and three bodies from 20 K, 300 K and 300 K
+                    // the step as it was answered where they started, at their level of 206.67 K.
                     Err(_) if closed_part => {
-                        for b in bodies {
-                            shift[*b] = held[p] / part_capacity[p];
+                        let largest = largest_flow(p);
+                        let mut rest = bodies.to_vec();
+                        let mut keep = held[p];
+                        loop {
+                            let (mut a, mut rhs) = sealed(&rest, keep);
+                            let n = rest.len();
+                            match crate::network::solve_or_column(&mut a, &mut rhs, n) {
+                                Ok(step) => {
+                                    let (scale, most) = together(&rest, &step)?;
+                                    asked = asked.max(most);
+                                    for (s, b) in rest.iter().enumerate() {
+                                        shift[*b] = scale * step[s];
+                                    }
+                                    break;
+                                }
+                                Err(failed) => {
+                                    let b = rest.remove(failed);
+                                    if total[b].abs() > 1e-12 * largest {
+                                        match alone(b)? {
+                                            Some((wanted, step)) => {
+                                                asked = asked.max(wanted.abs());
+                                                shift[b] = step;
+                                                keep -= body_capacity[b] * step;
+                                            }
+                                            None => asked = f64::INFINITY,
+                                        }
+                                    }
+                                    if rest.is_empty() {
+                                        break;
+                                    }
+                                }
+                            }
                         }
                         continue;
                     }
@@ -3552,24 +3684,7 @@ impl Solid3D {
                         // summed — nor a body taken out asking its own step, which moves it by
                         // what it asks or by a quarter of the larger of its level and the block's,
                         // a move the stop reads unless both are within 4 µK of zero.
-                        let mut largest: f64 = 0.0;
-                        for z in 0..nz {
-                            for j in 0..ny {
-                                for i in 0..nx {
-                                    let c = i + nx * (j + ny * z);
-                                    if body[c].is_some_and(|b| part[b] == p) {
-                                        let shed = self.film_flux(&t, (i, j, z), c) * dx;
-                                        largest = largest.max(self.source[c].abs()).max(shed.abs());
-                                    }
-                                }
-                            }
-                        }
-                        for (pa, pb, coefficient) in &self.gaps {
-                            if body[*pa].is_some_and(|b| part[b] == p) {
-                                let watts = self.crossing_at(&t, *pa, *pb, *coefficient).watts;
-                                largest = largest.max(watts.abs());
-                            }
-                        }
+                        let largest = largest_flow(p);
                         let mut rest = bodies.to_vec();
                         loop {
                             let (mut a, mut rhs) = level(&rest);
@@ -3663,10 +3778,10 @@ impl Solid3D {
             // not read: it binds only where the slope of a cell's pairs is more than its faces and
             // films carry, which near zero, where a pair's slope is all but nothing, is a cell with
             // neither — a body of one cell, whose level's step is read. **A step judged singular
-            // in a part that loses asks for what is taken in its place** — see the step the bodies
-            // of a part take together, above. In a part that loses nothing it asks for nothing
-            // still: a sealed pair at 20 K and 0 K is answered with the cold one at 2.6e-7 K, where
-            // both balance at 10 K — recorded as open.
+            // asks for what is taken in its place**, in a part that loses and in one that loses
+            // nothing — see the step the bodies of a part take together, above. Where it asked
+            // for nothing, a sealed pair at 20 K and 0 K was answered with the cold one at
+            // 2.6e-7 K, where both balance at 10 K.
             if round > 0 && moved < 1e-6 && asked < 1e-6 {
                 // **A cell nothing moved is not balanced by that.** A cell whose every slope is
                 // zero — no face that conducts, no pair, and a film with no convection to a room

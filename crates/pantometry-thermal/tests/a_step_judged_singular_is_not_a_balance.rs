@@ -55,6 +55,15 @@
 //! 0 K did not converge, and a body at a balance of 0 K was thrown from it by what rounding left
 //! of its total, a nanowatt started at its closed form refused as below zero — each answered
 //! before. Now a body taken out is balanced within 1e-12 of the largest of the part's flows.
+//!
+//! **A part that loses nothing**, judged singular, was moved as a whole by the heat it already
+//! held and asked for nothing: each balance of its step was over its own body's slope, next to
+//! nothing near absolute zero, and two sealed bodies from 20 K and 0 K were answered at 20 K and
+//! 2.6e-7 K where both balance at 10 K. Now the heat it is to put back stands in for the balance
+//! of the body whose own slope is the largest, every row is brought to one, and a body nothing
+//! moves is taken out as in a part that loses. A first form kept the slack and brought every
+//! balance over the part's largest slope or coupling alike, and a weak first body made it take out
+//! a body that moves; those cases are here too.
 
 use pantometry_core::substance::ThermalProps;
 use pantometry_core::units::{
@@ -267,6 +276,67 @@ fn at_room(void: &[bool], at: f64) -> Vec<f64> {
     void.iter()
         .map(|v| if *v { f64::NAN } else { at })
         .collect()
+}
+
+/// A layout for [`sealed`]: each body's cells, its emissivity, how many times as dense as
+/// [`stuff`] it is, and its start, K.
+type Layout = (
+    &'static [usize],
+    &'static [f64],
+    &'static [f64],
+    &'static [f64],
+);
+
+/// A layout for [`drawn`]: each body's cells, its emissivity and how many times as dense it is,
+/// the watts generated in the first cell and drawn from the last, and each body's start, K.
+type Drawn = (
+    &'static [usize],
+    &'static [f64],
+    &'static [f64],
+    f64,
+    &'static [f64],
+);
+
+/// Bodies of `sizes` cells in a row, an empty cell between each two and **no film anywhere**, so a
+/// part that loses nothing: body `n` of emissivity `emissivity[n]`, `denser[n]` times as dense as
+/// [`stuff`] and so of that many times its capacity, from `starts[n]`; and which cells are empty.
+fn sealed(
+    sizes: &[usize],
+    emissivity: &[f64],
+    denser: &[f64],
+    starts: &[f64],
+) -> (Solid3D, Vec<bool>) {
+    let mut owner = Vec::new();
+    for (n, cells) in sizes.iter().enumerate() {
+        if n > 0 {
+            owner.push(usize::MAX);
+        }
+        owner.resize(owner.len() + cells, n);
+    }
+    let void: Vec<bool> = owner.iter().map(|o| *o == usize::MAX).collect();
+    let empty = void.clone();
+    let mut b = Solid3D::new(
+        "sealed",
+        stuff(EMISSIVITY),
+        (void.len(), 1, 1),
+        Length::from_si(DX),
+        Temperature::from_si(starts[0]),
+    )
+    .empty(move |i, _, _| empty[i]);
+    for n in 0..sizes.len() {
+        if emissivity[n] != EMISSIVITY || denser[n] != 1.0 {
+            let dense = Substance::bulk("dense", Density::from_si(1000.0 * denser[n]))
+                .with_thermal(stuff(emissivity[n]).thermal.expect("stuff is thermal"));
+            let of = owner.clone();
+            b.fill(dense, move |i, _, _| of[i] == n);
+        }
+        for (i, o) in owner.iter().enumerate() {
+            if *o == n {
+                b.set_temperature(i, 0, 0, Temperature::from_si(starts[n]));
+            }
+        }
+    }
+    (b, void)
 }
 
 /// **Bodies a clearance joins are answered from absolute zero**, every cell at its room: two of
@@ -754,5 +824,284 @@ fn a_cold_room_is_answered_from_absolute_zero() {
         let why = format!("two bodies from 0 K, a room at {at:e} K");
         let worst = answered(&why, &b, &void, &at_room(&void, at));
         println!("  {why}: {worst:.2e} K from it");
+    }
+}
+
+/// **A part that loses nothing is answered at the level its heat sets**, judged singular: bodies a
+/// clearance joins and nothing else reaches, every cell at the heat the starts hold over the
+/// part's capacity, `Σ C·T₀ / Σ C`. Each balance of the step they take together was over its own
+/// body's slope, and a body near absolute zero has next to none, so its row's entries came to as
+/// much as 7e23 beside the heat row's halves, the step was judged singular, and the part was moved
+/// as a whole by the heat it already held: nothing, and the step asked for nothing. Measured before
+/// the change, of the cases here: two bodies of two cells from 20 K and 0 K answered at 20 K and
+/// 2.6e-7 K where both balance at 10 K, and the other way round; from 1 K and 0 K at 1 K and
+/// 1.6e-12 K, from 1e-3 K at 1e-3 K and 7.0e-25 K; with the second at 1e-12 K or 1e-6 K, at 20 K
+/// and 2.6e-7 K or 1.26e-6 K; the second of emissivity 1e-11, from 300 K at 300 K and 1.7e-13 K
+/// where they balance at 150 K; a first of three cells, at 20 K and 8.9e-8 K where they balance at
+/// 15 K; three bodies, one or two of them from 20 K, the warm ones left there and the others within
+/// 3.3e-7 K of zero; and one of three times the other's density, at 20 K and 3.9e-7 K where they
+/// balance at 15 K, or at 5 K with the dense one cold. Fifteen of the eighteen were answered so.
+/// Two others, a first body of one cell, its sweep moving it, were answered, and reach the step
+/// all the same; and two bodies of one cell at absolute zero, with nothing to move them and
+/// nothing to move, were answered at it, as they must be by a body taken out as balanced.
+#[test]
+fn a_part_that_loses_nothing_is_answered_at_the_level_its_heat_sets() {
+    const E: f64 = EMISSIVITY;
+    let cases: [Layout; 18] = [
+        (&[1, 1], &[E, E], &[1.0, 1.0], &[0.0, 0.0]),
+        (&[1, 1], &[E, E], &[1.0, 1.0], &[20.0, 0.0]),
+        (&[1, 3], &[E, E], &[1.0, 1.0], &[20.0, 0.0]),
+        (&[2, 2], &[E, E], &[1.0, 1.0], &[20.0, 0.0]),
+        (&[2, 2], &[E, E], &[1.0, 1.0], &[0.0, 20.0]),
+        (&[2, 2], &[E, E], &[1.0, 1.0], &[1.0, 0.0]),
+        (&[2, 2], &[E, E], &[1.0, 1.0], &[1e-3, 0.0]),
+        (&[2, 2], &[E, E], &[1.0, 1.0], &[20.0, 1e-12]),
+        (&[2, 2], &[E, E], &[1.0, 1.0], &[20.0, 1e-6]),
+        (&[2, 2], &[E, 1e-11], &[1.0, 1.0], &[300.0, 0.0]),
+        (&[2, 2], &[E, 1e-11], &[1.0, 1.0], &[20.0, 0.0]),
+        (&[3, 1], &[E, E], &[1.0, 1.0], &[20.0, 0.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0, 1.0, 1.0], &[20.0, 0.0, 0.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0, 1.0, 1.0], &[0.0, 20.0, 0.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0, 1.0, 1.0], &[0.0, 0.0, 20.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0, 1.0, 1.0], &[20.0, 20.0, 0.0]),
+        (&[2, 2], &[E, E], &[3.0, 1.0], &[20.0, 0.0]),
+        (&[2, 2], &[E, E], &[1.0, 3.0], &[20.0, 0.0]),
+    ];
+    for (sizes, emissivity, denser, starts) in cases {
+        at_the_level_its_heat_sets(sizes, emissivity, denser, starts);
+    }
+}
+
+/// [`sealed`] is answered with every solid cell at the level the heat its starts hold sets,
+/// `Σ C·T₀ / Σ C`, each body's capacity its cells times how much denser it is.
+fn at_the_level_its_heat_sets(sizes: &[usize], emissivity: &[f64], denser: &[f64], starts: &[f64]) {
+    let (b, void) = sealed(sizes, emissivity, denser, starts);
+    let (mut heat, mut capacity) = (0.0, 0.0);
+    for n in 0..sizes.len() {
+        let c = denser[n] * sizes[n] as f64;
+        heat += c * starts[n];
+        capacity += c;
+    }
+    let level = heat / capacity;
+    let why = format!(
+        "bodies of {sizes:?} cells, emissivities {emissivity:?}, {denser:?} as dense, sealed, \
+         from {starts:?} K"
+    );
+    let worst = answered(&why, &b, &void, &at_room(&void, level));
+    println!("  {why}: {worst:.2e} K from {level} K");
+}
+
+/// **A weak body in a part that loses nothing is answered**, judged singular: three or four
+/// bodies, sealed, one of them of emissivity 1e-15 or 1e-11, its pair next to nothing beside the
+/// others', and every cell at the level the heat the starts hold sets. A first form of this change
+/// kept the step's slack and brought every balance over the part's largest slope or coupling
+/// alike: with the weak body first, its column below 1e-14 of theirs, the solve failed at the last
+/// of the strong ones, whose own shift their rows do not see, and it was taken out though it
+/// moves. Measured on that form: the six of one cell from 20 K or 300 K, the weak one first, did
+/// not converge, and two more from 0 K, 0 K and 20 K or 300 K; the three of two cells, the weak
+/// one first, were answered up to 2812 K out; and four of one cell, the first a million times as
+/// dense and the weak one last, left the last at 0 K where all balance at 4e-5 K. Measured on the
+/// step as it was: those three of two cells refused as not converging, and the two from 0 K, 0 K
+/// and the third warm, and two with the weak one last; three of two cells from 20 K, 300 K and
+/// 300 K, the weak one first, answered where they started, where all balance at 206.67 K, as the
+/// first form answered them too; and four of two cells, one a million times as dense, the weak one
+/// of emissivity 1e-11 last, answered 20 K to 300 K out; and two of one, one, one and two cells,
+/// the third of emissivity 1e-15 and the last a million times as dense, from a microkelvin, a
+/// microkelvin, 0 K and 20 K or 300 K, answered with the first three left within a microkelvin of
+/// zero, where all balance at 20.00 K and 300.00 K. Those two need the step a body taken out
+/// takes: without it they do not converge.
+#[test]
+fn a_weak_body_in_a_part_that_loses_nothing_is_answered() {
+    const E: f64 = EMISSIVITY;
+    const W: f64 = 1e-15;
+    // One layout to a line, as a table.
+    #[rustfmt::skip]
+    let cases: [Layout; 23] = [
+        (&[1, 1, 1], &[W, E, E], &[1.0; 3], &[20.0, 0.0, 0.0]),
+        (&[1, 1, 1], &[W, E, E], &[1.0; 3], &[300.0, 0.0, 0.0]),
+        (&[1, 1, 1], &[W, E, E], &[1.0; 3], &[300.0, 20.0, 20.0]),
+        (&[1, 1, 1, 1], &[W, E, E, E], &[1.0; 4], &[20.0, 0.0, 0.0, 0.0]),
+        (&[1, 1, 1, 1], &[W, E, E, E], &[1.0; 4], &[300.0, 0.0, 0.0, 0.0]),
+        (&[1, 1, 1, 1], &[W, E, E, E], &[1.0; 4], &[300.0, 20.0, 20.0, 20.0]),
+        (&[1, 1, 1], &[W, E, E], &[1.0; 3], &[0.0, 0.0, 20.0]),
+        (&[1, 1, 1], &[W, E, E], &[1.0; 3], &[0.0, 0.0, 300.0]),
+        (&[2, 2, 2], &[W, E, E], &[1.0; 3], &[20.0, 0.0, 300.0]),
+        (&[2, 2, 2, 2], &[W, E, E, E], &[1.0; 4], &[0.0, 0.0, 0.0, 300.0]),
+        (&[2, 2, 2], &[W, E, E], &[1e6, 1.0, 1.0], &[20.0, 0.0, 300.0]),
+        (&[1, 1, 1, 1], &[E, E, E, W], &[1e6, 1.0, 1.0, 1.0], &[0.0, 20.0, 20.0, 0.0]),
+        (&[2, 2, 2], &[W, E, E], &[1.0; 3], &[20.0, 300.0, 300.0]),
+        (&[1, 1, 1], &[E, E, W], &[1.0; 3], &[0.0, 20.0, 0.0]),
+        (&[2, 2, 2], &[E, E, W], &[1.0; 3], &[300.0, 0.0, 20.0]),
+        (&[1, 1, 1], &[E, E, W], &[1.0, 1.0, 1e6], &[0.0, 0.0, 20.0]),
+        (&[1, 1, 1], &[E, E, W], &[1.0; 3], &[0.0, 0.0, 20.0]),
+        (&[1, 1, 1, 1], &[E, E, E, W], &[1.0; 4], &[0.0, 0.0, 0.0, 300.0]),
+        (&[2, 2, 2, 2], &[E, E, E, 1e-11], &[1.0, 1.0, 1.0, 1e6], &[0.0, 0.0, 0.0, 300.0]),
+        (&[2, 2, 2, 2], &[E, E, E, 1e-11], &[1e6, 1.0, 1.0, 1.0], &[0.0, 1e-6, 0.0, 20.0]),
+        (&[2, 2, 2, 2], &[E, E, E, 1e-11], &[1e6, 1.0, 1.0, 1.0], &[0.0, 1e-6, 0.0, 300.0]),
+        (&[1, 1, 1, 2], &[E, E, W, E], &[1.0, 1.0, 1.0, 1e6], &[1e-6, 1e-6, 0.0, 20.0]),
+        (&[1, 1, 1, 2], &[E, E, W, E], &[1.0, 1.0, 1.0, 1e6], &[1e-6, 1e-6, 0.0, 300.0]),
+    ];
+    for (sizes, emissivity, denser, starts) in cases {
+        at_the_level_its_heat_sets(sizes, emissivity, denser, starts);
+    }
+}
+
+/// [`sealed`] with `p` W generated in its first cell and drawn from its last.
+fn drawn(
+    sizes: &[usize],
+    emissivity: &[f64],
+    denser: &[f64],
+    p: f64,
+    starts: &[f64],
+) -> (Solid3D, Vec<bool>) {
+    let (b, void) = sealed(sizes, emissivity, denser, starts);
+    let last = void.len() - 1;
+    let b = b
+        .dissipating(p, |i, _, _| i == 0)
+        .dissipating(-p, move |i, _, _| i == last);
+    (b, void)
+}
+
+/// The cells of [`drawn`] at the level the heat its starts hold sets, K, the empty ones `NaN`: the
+/// chain `p` crosses — a cell's face, half of one, the clearance's fourth powers, read odd below
+/// zero as the pairs read them, half a cell and a cell's face, to each next body — from the first
+/// body's last cell, found by bisection on it, on which every cell rises; each cell's heat its
+/// temperature times how much denser its body is.
+fn through(
+    sizes: &[usize],
+    emissivity: &[f64],
+    denser: &[f64],
+    p: f64,
+    starts: &[f64],
+) -> Vec<f64> {
+    let chain = |x: f64| {
+        let first = sizes[0];
+        let mut t: Vec<f64> = (0..first)
+            .map(|i| x + (first - 1 - i) as f64 * p / WHOLE)
+            .collect();
+        let mut cell = x;
+        for n in 1..sizes.len() {
+            let near = cell - p / HALF;
+            let odd = if near < 0.0 {
+                -fourth(near)
+            } else {
+                fourth(near)
+            };
+            let far = odd_root(odd - p / pair(emissivity[n - 1], emissivity[n]));
+            cell = far - p / HALF;
+            t.extend([f64::NAN, cell]);
+            for _ in 1..sizes[n] {
+                cell -= p / WHOLE;
+                t.push(cell);
+            }
+        }
+        t
+    };
+    let mut weight = Vec::new();
+    for (n, cells) in sizes.iter().enumerate() {
+        if n > 0 {
+            weight.push(0.0);
+        }
+        weight.resize(weight.len() + cells, denser[n]);
+    }
+    let held = |t: &[f64]| {
+        t.iter()
+            .zip(&weight)
+            .filter(|(v, _)| !v.is_nan())
+            .map(|(v, w)| v * w)
+            .sum::<f64>()
+    };
+    let mut heat = 0.0;
+    for n in 0..sizes.len() {
+        heat += sizes[n] as f64 * denser[n] * starts[n];
+    }
+    let (mut low, mut high) = (-1e4_f64, 1e4_f64);
+    assert!(held(&chain(low)) < heat && held(&chain(high)) > heat);
+    for _ in 0..200 {
+        let mid = 0.5 * (low + high);
+        if held(&chain(mid)) < heat {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    chain(0.5 * (low + high))
+}
+
+/// **Heat through a part that loses nothing is answered**, judged singular, and refused where it
+/// has no balance above absolute zero: two to four bodies, sealed, a femtowatt to a microwatt
+/// generated in the first cell and drawn from the last, every cell on the chain it crosses at the
+/// level the heat the starts hold sets — of which `SHAPE` reads the level and the clearances, a
+/// face's `p/WHOLE` and a half cell's `p/HALF` being below it. Where the chain at that level leaves
+/// a cell below zero it is refused as that. Measured on the step as it was: two bodies from 40 K
+/// and 0 K, and the other way round, answered as now; three from 40 K, 0 K and 0 K with a picowatt
+/// not converging; three from 300 K with a nanowatt, and four with a microwatt, refused as below
+/// zero, where they balance with their coldest cells at 99.99 K and 51.05 K; and of the six with
+/// no balance above zero, four answered — from 1 K with a nanowatt through two bodies and through
+/// three, a picowatt across emissivity 1e-11 from 40 K, and a picowatt between two bodies of one
+/// cell, the first a million times as dense, from 0 K and 1 nK, with every cell within a nanokelvin
+/// of zero — and two refused, as now. The last two are near zero because only there does the
+/// step's ask decide the verdict: a step held to its cap moves by the cap, so one the stop can take
+/// for a balance is one of a block within a few microkelvin of zero; and four bodies of one cell
+/// from 0 K and 1e-12 K, a femtowatt through them, are refused only because a body taken out asks
+/// for its step.
+#[test]
+fn heat_through_a_part_that_loses_nothing_is_answered() {
+    const E: f64 = EMISSIVITY;
+    #[rustfmt::skip]
+    let balanced: [Drawn; 5] = [
+        (&[2, 2], &[E, E], &[1.0; 2], 1e-9, &[40.0, 0.0]),
+        (&[2, 2], &[E, E], &[1.0; 2], 1e-9, &[0.0, 40.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0; 3], 1e-12, &[40.0, 0.0, 0.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0; 3], 1e-9, &[300.0, 0.0, 0.0]),
+        (&[2, 2, 2, 2], &[E, E, E, E], &[1.0; 4], 1e-6, &[300.0, 0.0, 0.0, 0.0]),
+    ];
+    for (sizes, emissivity, denser, p, starts) in balanced {
+        let want = through(sizes, emissivity, denser, p, starts);
+        let coldest = want
+            .iter()
+            .filter(|v| !v.is_nan())
+            .fold(f64::INFINITY, |m, v| m.min(*v));
+        assert!(coldest > 0.0, "a balance above absolute zero: {want:?}");
+        let (b, void) = drawn(sizes, emissivity, denser, p, starts);
+        let why = format!(
+            "{p:e} W through bodies of {sizes:?} cells, emissivities {emissivity:?}, \
+             {denser:?} as dense, sealed, from {starts:?} K"
+        );
+        let worst = answered(&why, &b, &void, &want);
+        println!("  {why}: {worst:.2e} K from it, its coldest cell at {coldest} K");
+    }
+    #[rustfmt::skip]
+    let unbalanced: [Drawn; 6] = [
+        (&[2, 2], &[E, E], &[1.0; 2], 1e-9, &[0.0, 0.0]),
+        (&[2, 2], &[E, E], &[1.0; 2], 1e-9, &[1.0, 0.0]),
+        (&[2, 2], &[E, 1e-11], &[1.0; 2], 1e-12, &[40.0, 0.0]),
+        (&[2, 2, 2], &[E, E, E], &[1.0; 3], 1e-9, &[1.0, 0.0, 0.0]),
+        (&[1, 1], &[E, E], &[1e6, 1.0], 1e-12, &[0.0, 1e-9]),
+        (&[1, 1, 1, 1], &[E, E, E, E], &[1.0; 4], 1e-15, &[0.0, 0.0, 0.0, 1e-12]),
+    ];
+    for (sizes, emissivity, denser, p, starts) in unbalanced {
+        let want = through(sizes, emissivity, denser, p, starts);
+        let coldest = want
+            .iter()
+            .filter(|v| !v.is_nan())
+            .fold(f64::INFINITY, |m, v| m.min(*v));
+        assert!(coldest < 0.0, "no balance above absolute zero: {want:?}");
+        let why = format!(
+            "{p:e} W through bodies of {sizes:?} cells, emissivities {emissivity:?}, \
+             {denser:?} as dense, sealed, from {starts:?} K"
+        );
+        let (b, _) = drawn(sizes, emissivity, denser, p, starts);
+        let e = b.steady_state().expect_err(&format!(
+            "{why}: no balance above absolute zero, its coldest cell at {coldest} K"
+        ));
+        assert!(
+            e.quantity.contains("no balance above absolute zero"),
+            "{why}: refused as below absolute zero: {e}"
+        );
+        println!(
+            "  {why}: refused, its coldest cell at {coldest} K: {}",
+            e.quantity
+        );
     }
 }

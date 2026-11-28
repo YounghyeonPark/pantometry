@@ -658,6 +658,90 @@ protects nothing.
 
 ### Fixed
 
+- **A part that loses nothing, its step judged singular, was taken for a balance**
+  (`pantometry-thermal`). Where the step the bodies a clearance joins take together was judged
+  singular in a part that loses nothing, `Solid3D::steady_state` moved the part as a whole by the
+  heat it held — which it already held, so by nothing — and the step asked for nothing, so the
+  next round stopped. Each balance of that step is over its own body's slope, and a body near
+  absolute zero has next to none, `4C·|T|³`: beside a warm body's coupling to it its row's entries
+  came to 1e21 and more, and the heat row's were below the solve's 1e-14 of them. Measured before
+  the change, on rows of 1 mm cells with no film anywhere:
+  - two bodies of two cells from 20 K and 0 K were answered at 20 K and 2.6e-7 K, where both
+    balance at 10 K, and the other way round; from 1 K and 0 K at 1 K and 1.6e-12 K, from 1e-3 K
+    at 1e-3 K and 7.0e-25 K, and with the second at 1e-12 K or 1e-6 K at 20 K and 2.6e-7 K or
+    1.26e-6 K;
+  - the second of emissivity 1e-11, from 300 K and 0 K, at 300 K and 1.7e-13 K where both balance
+    at 150 K; a first body of three cells beside one of one at 20 K and 8.9e-8 K where they
+    balance at 15 K; and one three times as dense as the other at 20 K and 3.9e-7 K where both
+    balance at 15 K, or at 20 K and 1.3e-7 K where they balance at 5 K with the dense one cold;
+  - three bodies, one or two of them from 20 K, the warm ones left where they started and the
+    others within 3.3e-7 K of zero; three of two cells from 20 K, 300 K and 300 K, the first of
+    emissivity 1e-15, where they started, where all balance at 206.67 K; and four whose third is
+    of emissivity 1e-15 and last a million times as dense, the first three from a microkelvin and
+    0 K, left there beside the last at 20 K or 300 K;
+  - and with heat generated in the first cell and drawn from the last: of 120 such layouts of two
+    to four bodies, a picowatt to a milliwatt, 24 with no balance above absolute zero were
+    answered, and 12 with one refused — 7 as not converging and 5 as below zero, among them three
+    bodies from 300 K and 0 K that balance with their coldest cell at 99.99 K.
+
+  Of twenty-one layouts with no heat generated first measured, fifteen were answered so, and a
+  sixteenth from 1e-6 K within the microkelvin the stop leaves; a body of one cell, which its own
+  sweep moves, was answered.
+
+  What changed: where that step is judged singular in a part that loses nothing, the heat the
+  part is to put back stands in for the balance of the body whose own slope is the largest, every
+  row is brought to one, and the step is solved again — in exact arithmetic the same step, the
+  balances of such a part adding to its net source, which where it has a balance is nothing, as
+  the part's own balance stands in for the same row in a part that loses. Where that is singular
+  still, the body at the column the solve failed at is taken out as it is there: balanced within
+  1e-12 of the part's largest flow, stepping alone where it is not, the heat it takes left out of
+  what the rest put back. The step where it is not singular is untouched: the steady fields of
+  the seven thermal blocks the scenes solve, and the three refused as melting, are bit-identical,
+  with a positive control, and the frames of all 34 unchanged. Of the 120 layouts with heat drawn
+  through, the 24 with a balance are answered within 8.5e-14 K of the chain it crosses and the 96
+  without are refused as below zero.
+
+  A first form was reviewed and measured wrong first: it kept the step's slack and brought every
+  balance over the part's largest slope or coupling alike, and with a first body of emissivity
+  1e-15, its column below 1e-14 of the rest's, the solve failed at the last of the strong ones,
+  whose shift their rows do not see, which was taken out though it moves. Measured here, of the
+  layouts the review's port of the solve to Python found: six the step as it was answered did not
+  converge; three it refused as not converging were answered up to 2812 K out; and four of one
+  cell, the first a million times as dense, were left 4e-5 K out where all balance at 4e-5 K. In
+  the port 73 of 2520 layouts with a body of emissivity 1e-15 or a million times as dense were
+  answered worse than by the step as it was. Of the 7032 layouts the port then ran on this form,
+  none was answered worse than by the step as it was, none more than 1e-6 K from its balance, and
+  every one without a balance above zero was refused as that.
+
+  Held by three new tests: 18 layouts with no heat generated at the level the heat the starts
+  hold sets, `Σ C·T₀ / Σ C`, fifteen of them answered wrong before; 23 with a body of emissivity
+  1e-15 or 1e-11, thirteen answered wrong or refused before and thirteen wrong or not converging
+  by the first form; and heat drawn through two to four bodies on the chain it crosses at that
+  level, five answered and six refused as below zero, of which three were refused and four
+  answered before. Within 1.8e-8 K, over 52 cases.
+
+  A sabotage harness took the change apart 17 ways, each run against every test of the crate: 13
+  are caught, each by the panic lines it was claimed to give and by no others, and four survive
+  for a reason. At the stop the step is next to nothing, so what the heat row weighs each body's
+  share by does not move where it stops, `held` being read from the cells' own capacities; for
+  the same reason the heat a body taken out takes, booked wrong, is put back the next round; a body
+  taken out with no slope is reached only in parts with no balance above zero, refused as that
+  either way; and every total the 1e-12 rule judged was exactly nothing or the size of the part's
+  largest flow, so it reads the same without the pairs in that flow. What the rest's step and a
+  body taken out ask for decide a verdict only within a few microkelvin of zero, where a step held
+  to its cap moves by less than the stop, and the cases that hold them are there: a picowatt
+  between two bodies from 0 K and 1 nK, and a femtowatt through four from 0 K and 1e-12 K, each
+  with no balance above zero.
+
+  Found on the way: the refusal of a sealed part whose sinks leave a cell below absolute zero says
+  they "take more than can reach them", where the sink takes exactly what reaches it and what the
+  part lacks is the heat to carry it above zero — 24.23 K summed over the four cells of two bodies
+  a nanowatt crosses. Open: a sealed level of 1e-5 K or less is below what the tests' 1e-5 K can
+  see, and the stop's microkelvin answers one of 5e-7 K at 7.5e-7 K and 2.5e-7 K; the 1e-12 rule
+  for a body taken out reads, in such a part, as a test of exactly zero; a take-out leaving no body
+  is reached by none, one body left being its heat row alone; and the extra solves, taken only
+  where the step is singular, are not timed. Each is its own item.
+
 - **A step judged singular was taken for a balance, and left a body near absolute zero where it
   was** (`pantometry-thermal`). `Solid3D::steady_state` takes one Newton step on the levels of
   the bodies a clearance joins, through a solve that calls a pivot singular below 1e-14 of the
@@ -755,8 +839,8 @@ protects nothing.
   with the second of emissivity 1e-15 under a film of 1e-18 m² they diverged, and a microwatt
   generated in the second of two, from 0 K in a room at 0 K, did not converge.
 
-  Open: a part that loses nothing, judged singular, still asks for nothing — a sealed pair at
-  20 K and 0 K is answered with the cold one at 2.6e-7 K, where both balance at 10 K, as before
+  Open: a part that loses nothing, judged singular, still asked for nothing — a sealed pair at
+  20 K and 0 K was answered with the cold one at 2.6e-7 K, where both balance at 10 K, as before
   this; what a body taken out loses is still summed from its cells' fluxes, as the step where it
   is not singular sums it, and keeps their rounding; and the part's balance keeps that of its
   sources, `ε·Σ|p|`. Where a sink's cell balances at exactly 0 K, four layouts are answered worse
@@ -774,7 +858,8 @@ protects nothing.
   other, balances at 7.89 K and is answered at 0 K, as before. No case here has air in a void or a
   pair within one body, so the arms that read them are reached by none; the stop is a microkelvin
   in any room, and in a room at 1e-5 K that is a tenth of the answer; and the extra solves, taken
-  only where the step is singular, are not timed. Each is its own item.
+  only where the step is singular, are not timed. Each is its own item, the first answered since
+  by *A part that loses nothing, its step judged singular, was taken for a balance*.
 
 - **The steady solve read a radiating film's slope at its room, and answered fields it had not
   balanced** (`pantometry-thermal`). `Solid3D::steady_state` sweeps its cells and then takes a
